@@ -13,12 +13,12 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkoutCommits } from "../lib/checkout-commits.js";
 import { runCli } from "../lib/run-cli.js";
 import { stateAxes } from "../axes.js";
 
@@ -61,11 +61,12 @@ test("mandu version from a checkout: its commit, an old shim first on PATH, an o
     npm_config_prefix: join(dir, "npm-global"),
   };
   try {
-    const head = spawnSync("git", ["-C", REPO, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
+    const commits = checkoutCommits(REPO);
+    assert.ok(commits.source, "the checkout has source provenance");
     const j = await runCli(["version", "--json"], env);
     assert.equal(j.code, 0, j.stderr);
     const rep = JSON.parse(j.stdout) as {
-      self: { kind: string; root: string; commitsFrom: string; sourceCommit: string; version: string };
+      self: { kind: string; root: string; commitsFrom: string; sourceCommit: string; publicCommit: string | null; version: string };
       path: Array<{ path: string; kind: string; root: string | null; version: string | null; running: boolean }>;
       services: { running: boolean; version: string; verdict: string; sockMode: string; pid: number };
       env: Record<string, string>;
@@ -73,7 +74,8 @@ test("mandu version from a checkout: its commit, an old shim first on PATH, an o
     };
     assert.equal(rep.self.kind, "checkout-source");
     assert.equal(rep.self.commitsFrom, "git");
-    assert.equal(rep.self.sourceCommit, head);
+    assert.equal(rep.self.sourceCommit, commits.source);
+    assert.equal(rep.self.publicCommit, commits.public);
     assert.deepEqual(rep.path[0], { path: shim, realPath: shim, kind: "checkout-shim", root: oldRepo, version: "0.2.0-beta.3", running: false });
     assert.equal(rep.services.running, true);
     assert.equal(rep.services.version, "0.2.0-beta.3");
@@ -88,7 +90,7 @@ test("mandu version from a checkout: its commit, an old shim first on PATH, an o
     const t = await runCli(["version"], env);
     assert.equal(t.code, 0, t.stderr);
     assert.match(t.stdout, new RegExp(`^mandu ${rep.self.version.replace(/\./g, "\\.")}\n`));
-    assert.match(t.stdout, new RegExp(`commit: +source ${head.slice(0, 12)}`));
+    assert.match(t.stdout, new RegExp(`commit: +source ${commits.source.slice(0, 12)}`));
     assert.match(t.stdout, /arbiter: +Mandu 0\.2\.0-beta\.3: ANOTHER RELEASE than this mandu/);
     assert.match(t.stdout, new RegExp(`the source checkout ${oldRepo} \\(0\\.2\\.0-beta\\.3\\), through its mandu-run\\.sh`));
     assert.match(t.stdout, new RegExp(`${rep.problems.length} problems?:`));

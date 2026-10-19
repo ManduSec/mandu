@@ -168,6 +168,9 @@ test("probeGitSandbox (linux): off by MANDU_GIT_SANDBOX=0; Mandu's own root-owne
   assert.deepEqual(probe.args.slice(-3), ["--", "git", "--version"], "the probe runs git inside, not just bwrap");
   assert.equal(probeGitSandbox({ ...linux, env: {}, rootOwned: () => true, runOk: () => false }), null, "no working bwrap: none (the hardened git runs as is)");
   assert.deepEqual(probeGitSandboxOutcome({ ...linux, env: {}, rootOwned: () => true, runOk: () => false }), { sandbox: null, transient: false }, "a final none");
+  assert.deepEqual(probeGitSandboxOutcome({ ...linux, env: {}, rootOwned: () => false, systemBwrap: () => null,
+    run: () => { throw new Error("no candidate: no process to run"); } }), { sandbox: null, transient: false },
+  "an absent distribution bwrap is a final none without invoking the runner");
   assert.equal(probeGitSandbox({ platform: "win32", env: {}, runOk: () => true, executable: () => true, resolveGit: () => "/git" }), null, "another platform: none");
   // A run that could not be judged (a timeout, no free process) makes a none
   // that is not final; one that worked still wins.
@@ -179,7 +182,8 @@ test("probeGitSandbox (linux): off by MANDU_GIT_SANDBOX=0; Mandu's own root-owne
 
 test("probe runners retain the sandboxed git version and transient verdict on Linux and macOS", () => {
   for (const platform of ["linux", "darwin"]) {
-    const deps = { platform, env: {}, rootOwned: () => false, executable: () => true, resolveGit: () => "/resolved/git" };
+    const deps = { platform, env: {}, rootOwned: () => false, systemBwrap: () => "/mock/bwrap",
+      executable: () => true, resolveGit: () => "/resolved/git" };
     let clock = 0;
     let runs = 0;
     const get = gitSandboxCache({
@@ -191,6 +195,7 @@ test("probe runners retain the sandboxed git version and transient verdict on Li
     });
     assert.equal(get(), null, `${platform}: an inconclusive run never counts as success`);
     const attempts = runs;
+    assert.ok(attempts > 0, `${platform}: the candidate was actually probed`);
     assert.equal(get(), null);
     assert.equal(runs, attempts, "retry waits for backoff");
     clock += GIT_SANDBOX_RETRY_MS.first;

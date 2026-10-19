@@ -33,6 +33,8 @@ import { main } from "../lib/launch-in-dir.js";
 import { sourceArbiterArgs, waitForPaths } from "../lib/arbiter-ready.js";
 import { stopGroup } from "../lib/tmp-dir.js";
 import { openaiTextSse } from "../../src/demo/stand-in-model.js";
+import { probeUserns } from "../../src/userns.js";
+import { systemBwrapBin } from "../../src/bwrap-path.js";
 import { stateAxes } from "../axes.js";
 
 stateAxes("secrets"); // the shipped default: the file is twinned only with confidentiality on
@@ -42,6 +44,10 @@ const ARBITER_DIR = resolve(HERE, "..", "..", "..", "arbiter");
 /** A made-up OpenAI-shaped key, never a real one. */
 const FAKE_KEY = "sk-proj-MANDUFAKEcodexSAVEDkey0123456789abcdefABCDEF";
 const SKIP = process.platform !== "linux" ? "Linux only (macOS read-blocks a confined file)" : false;
+// These two cases deliberately disable the kernel guard and prove the mount
+// binding itself. The other cases (including env keys) need no namespace.
+const BIND_SKIP = SKIP || (systemBwrapBin() === null || !probeUserns()
+  ? "saved-file twin bind requires bubblewrap and working unprivileged user namespaces" : false);
 
 interface Seen { path: string; auth: string | undefined; body: string }
 
@@ -155,7 +161,7 @@ async function launch(home: string, argv: string[], extraEnv: Record<string, str
   }
 }
 
-test("stand-in codex: the agent's world reads the twin, the upstream gets the real key as Bearer, no body carries it", { skip: SKIP, timeout: 300_000 }, async () => {
+test("stand-in codex: the agent's world reads the twin, the upstream gets the real key as Bearer, no body carries it", { skip: BIND_SKIP, timeout: 300_000 }, async () => {
   const { home, file } = codexHome("h-key", { OPENAI_API_KEY: FAKE_KEY, tokens: null, last_refresh: null });
   const out = join(tmp, "key-out.json");
   seen.length = 0;
@@ -207,7 +213,7 @@ function findCodex(): string | null {
 }
 const CODEX = findCodex();
 
-test("the REAL codex exec: it sends the placeholder it reads, the upstream gets the real key as Bearer, no request body carries it", { skip: SKIP || (CODEX === null ? "no codex binary: set MANDU_CODEX_BIN or put codex on PATH" : false), timeout: 300_000 }, async () => {
+test("the REAL codex exec: it sends the placeholder it reads, the upstream gets the real key as Bearer, no request body carries it", { skip: BIND_SKIP || (CODEX === null ? "no codex binary: set MANDU_CODEX_BIN or put codex on PATH" : false), timeout: 300_000 }, async () => {
   const { home, file } = codexHome("h-real", { OPENAI_API_KEY: FAKE_KEY, tokens: null, last_refresh: null });
   // `codex exec` reads more input from a stdin that is not a terminal; a
   // wrapper NAMED codex (so the launcher routes it as Codex) closes it.

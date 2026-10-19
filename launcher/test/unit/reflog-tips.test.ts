@@ -317,8 +317,16 @@ test("one object store, two work trees: the tips, the base and each walk once; O
 });
 
 test("probeGitSandbox keeps the probe's `git --version` output, so the launch asks the version no second time", { skip: process.platform !== "linux" }, () => {
-  const got = probeGitSandbox({ env: {}, rootOwned: () => false, run: () => ({ ok: true, stdout: "git version 9.9.9\n" }) });
+  const deps = { env: {}, rootOwned: () => false, systemBwrap: () => "/mock/bwrap" };
+  let runs = 0;
+  const got = probeGitSandbox({ ...deps, run: (file, args) => {
+    runs++;
+    assert.equal(file, "/mock/bwrap");
+    assert.deepEqual(args.slice(-3), ["--", "git", "--version"]);
+    return { ok: true, stdout: "git version 9.9.9\n" };
+  } });
   assert.equal(got?.gitVersion, "git version 9.9.9\n");
-  const odd = probeGitSandbox({ env: {}, rootOwned: () => false, run: () => ({ ok: true, stdout: "" }) });
+  assert.equal(runs, 1, "the version is retained from the one successful probe");
+  const odd = probeGitSandbox({ ...deps, run: () => ({ ok: true, stdout: "" }) });
   assert.equal(odd?.gitVersion, undefined, "no version printed: the caller asks");
 });

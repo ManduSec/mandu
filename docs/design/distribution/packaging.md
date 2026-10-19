@@ -1751,6 +1751,8 @@ problem rule, the incident's shape, an npm package with no record);
 checkout: its live commit, a bootstrap shim first on PATH, a stand-in older
 arbiter asked over its socket, `--json`, `--version`, `--help`);
 `launcher/test/component/npm-pack.test.ts` (the packed tarball records the
-checkout's HEAD; the installed `mandu version --json` reports the npm
-install, that commit, its own bin first on PATH and no problems, and names
+checkout's provenance: source HEAD in the internal repository, source
+snapshot trailer plus public HEAD in a public checkout, or explicit release
+build overrides; the installed `mandu version --json` reports the npm
+install, both commits, its own bin first on PATH and no problems, and names
 `MANDU_DEV_REPO` when it is set).

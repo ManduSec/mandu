@@ -119,6 +119,8 @@ test("with the protection service stopped, every refusal on the product page say
   // channel is the MANDU_ADMIN_SOCK path form of its adminTarget.
   const surfaces = await makeApprovalsArbiter(socketPath, () => ({ socketPath: adminPath }));
   assert.ok(surfaces, "the adapter connects to the running arbiter");
+  let modelSelections = 0;
+  let modelCalls = 0;
   const dashboard = new DashboardServer({
     source: new ArbiterEventSource({ socketPath, humanSocketPath: humanPath }),
     approvalsArbiter: surfaces.arbiter,
@@ -126,6 +128,15 @@ test("with the protection service stopped, every refusal on the product page say
     postureArbiter: surfaces.posture,
     auditArbiter: surfaces.audit,
     policyDocArbiter: surfaces.policyDoc,
+    // Describe resolves a model before reading the rules. Supply that
+    // prerequisite without depending on a developer's logged-in agent.
+    assistantModel: async () => {
+      modelSelections++;
+      return { async complete() {
+        modelCalls++;
+        throw new Error("a stopped arbiter must prevent the model call");
+      } };
+    },
     fileBrowserHome: home,
     configEnv: { MANDU_HOME: join(tmp, "mandu-home") },
     log: () => {},
@@ -201,6 +212,8 @@ test("with the protection service stopped, every refusal on the product page say
       doc.getElementById("describe-form").dispatchEvent(new w.Event("submit", { cancelable: true }));
       await waitWhile(() => text(doc, "describe-result") === "");
       assert.equal(text(doc, "describe-result"), UNREACHABLE_WORDS, "Describe what you want");
+      assert.equal(modelSelections, 1, "Describe passed the configured-model prerequisite");
+      assert.equal(modelCalls, 0, "the failed rules read stops before any model call");
       assert.deepEqual(links(doc.getElementById("describe-result")), [START]);
       assert.doesNotMatch(text(doc, "page-rules"), DIAL);
       rendered.push(doc.body.textContent ?? "");

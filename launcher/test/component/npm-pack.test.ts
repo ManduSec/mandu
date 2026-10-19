@@ -19,6 +19,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createServer } from "node:http";
+import { checkoutCommits } from "../lib/checkout-commits.js";
 import { once } from "node:events";
 import { PKG_ROOT, npmCacheDir, npmEnv, packPrivate } from "../lib/pack-private.js";
 
@@ -140,11 +141,13 @@ test("the tarball records its commit, and the installed `mandu version` reports 
   // packaging.md §11.7: an install has no git, so the build records the
   // commit in dist/build-info.json; `mandu version` reads it back.
   const info = JSON.parse(spawnSync("tar", ["-xzOf", tarball, "package/dist/build-info.json"], { encoding: "utf8" }).stdout) as Record<string, unknown>;
-  // The commit the build was told, as build-info.mjs reads it: the release
-  // pack of an exported tree, which has no git, names it; a checkout is HEAD.
-  const head = process.env["MANDU_BUILD_SOURCE_COMMIT"]?.trim().toLowerCase()
-    || spawnSync("git", ["-C", join(PKG_ROOT, ".."), "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
-  assert.equal(info["sourceCommit"], head, "the source commit is the one the build was told, else the checkout's HEAD");
+  // Public snapshots name the internal source in their commit trailer;
+  // their own HEAD is the public commit. A git-less release pack names both.
+  const commits = checkoutCommits(join(PKG_ROOT, ".."));
+  const source = process.env["MANDU_BUILD_SOURCE_COMMIT"]?.trim().toLowerCase() || commits.source;
+  const publicCommit = process.env["MANDU_BUILD_PUBLIC_COMMIT"]?.trim().toLowerCase() || commits.public;
+  assert.equal(info["sourceCommit"], source, "the source commit is the build override, snapshot trailer, or source HEAD");
+  assert.equal(info["publicCommit"], publicCommit, "the public commit is the build override or public HEAD");
   assert.equal(info["version"], JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version);
 
   const bin = join(installed, "node_modules", ".bin");
@@ -162,7 +165,7 @@ test("the tarball records its commit, and the installed `mandu version` reports 
   const r = spawnSync(join(bin, "mandu"), ["version", "--json"], { cwd: installed, encoding: "utf8", timeout: 60_000, env });
   assert.equal(r.status, 0, `mandu version failed:\n${r.stdout}\n${r.stderr}`);
   const rep = JSON.parse(r.stdout) as {
-    self: { kind: string; root: string; invoked: string; commitsFrom: string; sourceCommit: string | null };
+    self: { kind: string; root: string; invoked: string; commitsFrom: string; sourceCommit: string | null; publicCommit: string | null };
     path: Array<{ path: string; kind: string; running: boolean }>;
     services: { running: boolean } | null;
     problems: Array<{ id: string }>;
@@ -171,14 +174,15 @@ test("the tarball records its commit, and the installed `mandu version` reports 
   assert.equal(realpathSync(rep.self.root), realpathSync(pkg));
   assert.equal(rep.self.invoked, join(bin, "mandu"));
   assert.equal(rep.self.commitsFrom, "build-info");
-  assert.equal(rep.self.sourceCommit, head);
+  assert.equal(rep.self.sourceCommit, source);
+  assert.equal(rep.self.publicCommit, publicCommit);
   assert.deepEqual(rep.path.map((e) => [e.path, e.kind, e.running]), [[join(bin, "mandu"), "npm", true]]);
   assert.equal(rep.services?.running, false);
   assert.deepEqual(rep.problems, [], JSON.stringify(rep.problems));
 
   // The text form, and `--version` is still the one line.
   const text = spawnSync(join(bin, "mandu"), ["version"], { cwd: installed, encoding: "utf8", timeout: 60_000, env });
-  assert.match(text.stdout, new RegExp(`commit: +source ${head.slice(0, 12)}`));
+  assert.match(text.stdout, new RegExp(`commit: +source ${source?.slice(0, 12)}`));
   const one = spawnSync(join(bin, "mandu"), ["--version"], { cwd: installed, encoding: "utf8", timeout: 30_000, env });
   assert.equal(one.stdout, `mandu ${String(info["version"])}\n`);
 

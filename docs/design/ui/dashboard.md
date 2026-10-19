@@ -6654,7 +6654,10 @@ and where it goes, the look-alikes kept), and
 the production adapter; the arbiter stops; the served page's Allow once on
 a card drawn before, Settings › Sensitivity labels, Keys Mandu found and
 Describe each say the sentence with its link, and no value, token or socket
-path shows).
+path shows). The stack fixture supplies Describe's configured-model
+prerequisite through `assistantModel`, so this refusal proof needs no host
+agent CLI or API key. It also asserts that the stopped arbiter prevents any
+model completion call.
 
 *A connection cut on its way (2026-10-11).* A request already sent when
 the service stops gets no failed dial: the arbiter client rejects it with

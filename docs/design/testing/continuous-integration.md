@@ -2626,6 +2626,13 @@ Choices worth stating:
   alike, and never SKIPs it to green
   ([`test-organization.md`](test-organization.md) §8.11), so the log of a
   red run already says why.
+- **Git sandbox probe unit tests do not require a host sandbox.** The
+  version-retention and retry cases inject the candidate binary lookup as
+  well as the process runner. A host without bubblewrap must still exercise
+  the simulated Linux probe, just as it exercises the simulated macOS
+  probe. A separate absent-candidate case asserts a final `null` sandbox
+  without invoking any runner. Real confinement stays in the kernel and
+  macOS live suites (§12.2); no production probe is bypassed.
 
 **macOS, before it moved off GitHub.** A `macos-latest` workflow ran
 `scripts/test-all.sh --kind unit,component,stack,sandbox`, which on darwin

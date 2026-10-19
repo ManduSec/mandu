@@ -15,6 +15,7 @@ import { join } from "node:path";
 import {
   BUILD_INFO_NAME, SNAPSHOT_TRAILER, commitOrNull, gitFacts, readBuildInfo, resolveBuildInfo, writeBuildInfo, type GitRun,
 } from "../../scripts/build-info.mjs";
+import { checkoutCommits } from "../lib/checkout-commits.js";
 import { stateAxes } from "../axes.js";
 
 stateAxes("off"); // build metadata only: no arbiter, no axis in play
@@ -105,14 +106,18 @@ test("gitFacts against real git: a snapshot commit's trailer, then a commit on t
     mkdirSync(join(dir, "launcher"));
     writeFileSync(join(dir, "launcher", "package.json"), JSON.stringify({ version: "0.2.0-beta.7" }));
     git("add", "-A");
-    git("commit", "-q", "-m", `Mandu snapshot of ${S.slice(0, 12)}\n\n${SNAPSHOT_TRAILER}: ${S}`);
+    git("commit", "-q", "-m", "test: source checkout");
+    assert.deepEqual(checkoutCommits(dir), { source: git("rev-parse", "HEAD"), public: null });
+    git("commit", "-q", "--allow-empty", "-m", `Mandu snapshot of ${S.slice(0, 12)}\n\n${SNAPSHOT_TRAILER}: ${S}`);
     const snap = git("rev-parse", "HEAD");
+    assert.deepEqual(checkoutCommits(dir), { source: S, public: snap });
     assert.deepEqual(gitFacts(dir), { repo: "public", sourceCommit: S, publicCommit: snap, publicAhead: 0, dirty: false });
 
     writeFileSync(join(dir, "README.md"), "local work\n");
     git("add", "-A");
     git("commit", "-q", "-m", "docs: local work");
     const head = git("rev-parse", "HEAD");
+    assert.deepEqual(checkoutCommits(dir), { source: S, public: head });
     writeFileSync(join(dir, "README.md"), "uncommitted\n");
     const f = gitFacts(dir);
     assert.deepEqual(f, { repo: "public", sourceCommit: S, publicCommit: head, publicAhead: 1, dirty: true });

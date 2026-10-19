@@ -944,6 +944,12 @@ secret-discovery.md §1.10). Now, on Linux:
    origin, never toward the ChatGPT base. Where no forwarder runs, the
    launch grants nothing, so the helper keeps a key it can use.
 
+The saved-file twin component tests disable the kernel guard and therefore
+require bubblewrap with working unprivileged user namespaces for the twin
+bind. They skip explicitly when that capability is absent (including GitHub's
+restricted runners); the environment-key, opt-out and ChatGPT cases still run.
+This is a test prerequisite, not a change to runtime fallback or protection.
+
 The launch says it: `mandu: <auth.json> is a placeholder in Codex's world;
 the model proxy puts its key back in the auth header to <host> only`.
 
