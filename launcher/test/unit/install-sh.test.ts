@@ -18,7 +18,7 @@ import { tmpDir } from "../lib/tmp-dir.js";
 const INSTALL = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "scripts", "install.sh");
 const OS = process.platform === "darwin" ? "darwin" : "linux";
 const ARCH = process.arch === "arm64" ? "arm64" : "x64";
-const TOOLS = ["sh", "awk", "sed", "tar", "gzip", "mkdir", "rm", "mktemp", "dirname", "uname", "id", "chmod", "cat", "env", "sha256sum", "shasum", "curl", "wget", "printf"];
+const TOOLS = ["sh", "awk", "sed", "tar", "gzip", "mkdir", "rm", "mktemp", "dirname", "uname", "id", "chmod", "cat", "env", "sha256sum", "shasum", "curl", "wget", "printf", "touch"];
 
 /** A PATH holding only the tools the script needs, plus `extra` (name → script). */
 function sandboxPath(root: string, extra: Record<string, string> = {}): string {
@@ -87,6 +87,7 @@ test("no Node on PATH: the pinned Node is downloaded, verified, and the wrapper 
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /verified node-v22\.22\.1-.*sha256 [0-9a-f]{64}/);
   assert.match(r.out, /installed mandu 0\.1\.0-stub/);
+  assert.ok(existsSync(join(root, "p/pkg/lib/node_modules/@mandusec/mandu/.mandu-installer")), "the installer records its release channel");
   const wrapper = readFileSync(join(root, "b", "mandu"), "utf8");
   assert.ok(wrapper.includes(join(root, "p", "node", "bin", "node")), "the wrapper pins the installed Node, not PATH's");
   assert.match(r.out, /add .* to your PATH/);

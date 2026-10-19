@@ -30,8 +30,9 @@ mandu codex      # Codex, protected
 ```
 
 Mandu uses your agent's own login and needs no API key of its own. Log in the
-usual way first (run `claude` once and log in; for Codex, set `CODEX_API_KEY` or
-`OPENAI_API_KEY`, since `mandu codex` does not use a `codex login` sign-in yet). The first
+usual way first (run `claude` once and log in; for Codex, run `codex login`
+with a ChatGPT plan or a saved key, or set `CODEX_API_KEY` or
+`OPENAI_API_KEY`). The first
 launch starts everything it needs and prints one line with the mode it runs
 in, plus the address of the dashboard where requests that need your OK wait.
 
@@ -45,24 +46,24 @@ Mandu has one main setting, the mode. Out of the box it runs `secrets`.
 | Mode | What it means for you |
 |---|---|
 | `secrets` (the default) | Credential files (`.env`, `~/.aws/credentials`, SSH keys, any file you mark secret) and secret-named environment variables reach the AI only as placeholders. Programs that need the real value (`psql`, `aws`, `ssh`, `git`) still get it, and anything that would carry a secret to a place it does not belong needs your OK. |
-| `injection` (preview) | Web pages, files from outside and tool output are masked before the AI reads them, so instructions hidden in them cannot steer it. |
-| `full` (preview) | Both of the above. |
 | `off` | Nothing is enforced; Mandu only records what happens. |
 
 **What `secrets` mode does not do:** it does not mask untrusted text. A web
 page, an issue comment or a file from someone else reaches the AI as written,
 so an instruction hidden in it (a prompt injection) can still steer the agent,
 for example into sending out your source code, which is not a registered
-secret. If your agent reads content you do not trust, use `full`.
+secret.
 
 ```sh
 mandu mode                 # the running mode and the saved one
-mandu mode full            # save a mode, then `mandu stop` and launch again
-mandu --mode full claude   # one launch only
+mandu mode off             # save another mode
+mandu stop                 # the mode applies from the next start
+mandu claude
 ```
 
-The `injection` and `full` modes are preview until their benchmark results are
-published.
+The modes that mask untrusted content, `injection` and `full`, are frozen and
+experimental. They run only with `MANDU_EXPERIMENTAL_INTEGRITY=1` set; every
+entry point refuses them otherwise.
 
 ## Requirements
 

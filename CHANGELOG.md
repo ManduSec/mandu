@@ -12,6 +12,10 @@ internal pilot and was never published.)
 
 ### New in 0.2.0-beta.7
 
+- npm-installed Mandu recommends the matching npm version when an update
+  is available, keeping updates in the same install channel. The npm
+  quickstart now documents supported Codex login and protection modes.
+
 - Fewer questions on a fresh install: a key whose format names the
   service that issued it (a Stripe `sk_live_…`/`sk_test_…` key, a GitHub
   `ghp_…` token, a Notion `ntn_…` token, an OpenAI `sk-proj-…` key, Slack,

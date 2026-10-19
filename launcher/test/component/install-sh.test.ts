@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { updateChannel } from "../../src/update-check.js";
 import { PKG_ROOT, packPrivate } from "../lib/pack-private.js";
 
 const INSTALL = join(PKG_ROOT, "..", "scripts", "install.sh");
@@ -50,6 +51,7 @@ test("install.sh --package <tarball> installs a working `mandu` for the user, no
   const s = spawnSync(mandu, ["status"], { encoding: "utf8", timeout: 30_000, env: { ...process.env, MANDU_ARBITER_SOCK: join(tmp, "nope.sock"), MANDU_RUNTIME_DIR: join(tmp, "rt") } });
   assert.equal(s.status, 0, s.stdout + s.stderr);
   // The package lives in the installer's own prefix, not the system npm's.
+  assert.equal(updateChannel({ mode: "installed", pkgRoot: join(prefix, "pkg/lib/node_modules/@mandusec/mandu") }), "release", "the real installer preserves its update channel");
   assert.ok(existsSync(join(prefix, "pkg", "lib", "node_modules", "@mandusec", "mandu", "bin", "mandu.mjs")));
 });
 

@@ -3442,13 +3442,26 @@ function proposalCard(p) {
       S.proposalTyped.set(p.id, input.value);
       allow.disabled = input.value !== 'ALLOW';
     });
-    const why = p.warnings && p.warnings.length ? 'Read the warning above before you allow this.' : 'This change has no limit on one side.';
-    foot.append(el('span', { class: 'dim', text: why, style: 'margin-right:auto;font-size:14px' }), input);
+    foot.append(wideWhy(p.overBroadWhy, p.warnings && p.warnings.length), input);
   }
   actions.append(allow, notNow);
   foot.append(actions);
   card.append(foot);
   return card;
+}
+
+/** The foot line of a wide change, before its Type ALLOW field: what it
+ *  opens, one sentence per wide edit as the server words it, and why it
+ *  asks for the typed word (dashboard.md §4.25 *A wide change says what is
+ *  open*). With a warning, the line about it, as before; an older server
+ *  that sends no sentences, the old words. */
+function wideWhy(why, warned) {
+  const line = el('span', { class: 'dim wide-why', style: 'margin-right:auto;font-size:14px' });
+  const list = Array.isArray(why) ? why : [];
+  list.forEach((parts, i) => line.append(i ? ' ' : '', fitWords(parts)));
+  const tail = warned ? 'Read the warning above before you allow this.' : list.length ? 'Type ALLOW if you mean it.' : 'This change has no limit on one side.';
+  line.append((list.length ? ' ' : '') + tail);
+  return line;
 }
 
 async function decideProposal(p, verdict, card) {
@@ -7308,6 +7321,8 @@ function renderSuggestion(s) {
     const li = el('li', { class: row.loosens ? 'loosens' : '' });
     for (const p of row.parts || []) li.append(p.kind === 'code' ? nameCode(p.text) : document.createTextNode(p.text));
     if (row.loosens) li.append(el('span', { class: 'tag-loosens', text: 'loosens protection' }));
+    // A wide row says so beside its words; the foot says what it opens.
+    if (row.overBroad) li.append(el('span', { class: 'tag-loosens tag-wide', text: 'Wide: type ALLOW' }));
     if (row.tryable) {
       const btn = el('button', { type: 'button', class: 'btn small try-row', text: 'Try it' });
       btn.addEventListener('click', () => tryRow(s, i, li, btn));
@@ -7339,7 +7354,7 @@ function renderSuggestion(s) {
     apply.disabled = true;
     const input = el('input', { type: 'text', class: 'proposal-confirm', placeholder: 'Type ALLOW to confirm', 'aria-label': 'Type ALLOW to confirm this wide change' });
     input.addEventListener('input', () => { apply.disabled = input.value !== 'ALLOW'; });
-    foot.append(el('span', { class: 'dim', text: 'One of these changes has no limit on one side.', style: 'margin-right:auto;font-size:14px' }), input);
+    foot.append(wideWhy(s.overBroadWhy, false), input);
   }
   const actions = el('div', { class: 'ask-actions' });
   actions.append(discard, apply);

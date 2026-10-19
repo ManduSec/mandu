@@ -9,7 +9,9 @@
  *     even when the reason is word-for-word a row-like sentence;
  *   - every delta facet has plain "This would let" copy of its own (the
  *     arbiter's inspector-prose `detail` is not used);
- *   - over-broad rows (no limit on one side) are flagged for the typed ALLOW;
+ *   - over-broad rows (no limit on one side) are flagged for the typed ALLOW,
+ *     and `overBroadWhy` says what each wide edit opens in its row's words
+ *     (at most two, then "And N more"), without changing that flag;
  *   - the change history words, Undo availability;
  *   - a file under the dashboard's home folder reads `~/…` in a row, a
  *     would-let line and a history row, as on the Rules page; any other path
@@ -25,6 +27,7 @@ import {
   editRow,
   editWords,
   isOverBroad,
+  overBroadWhy,
   relaxLine,
   relaxWords,
   toChangeRow,
@@ -199,6 +202,77 @@ test("over-broad: an allow with no from or to *, a wildcard origin, a connect to
   assert.equal(isOverBroad([{ op: "trust-origin", kind: "url", pattern: "https://*.example.com/" }]), true);
   assert.equal(isOverBroad([{ op: "allow-connect", host: "*" }]), true);
   assert.equal(isOverBroad([{ op: "lock-path", path: "/x", level: "no-model" }]), false);
+});
+
+test("over-broad: the truth table is pinned (overBroadWhy adds words, never a gate)", () => {
+  const cases: Array<[unknown, boolean]> = [
+    [{ op: "release", mode: "allow", to: { host: "api.example.com" } }, true],
+    [{ op: "release", mode: "allow", from: { host: "*" }, to: { host: "api.example.com" } }, true],
+    [{ op: "release", mode: "allow", from: { host: "docs.python.org" }, to: { host: "*" } }, true],
+    [{ op: "release", mode: "allow", from: { host: "docs.python.org" }, to: { host: "api.example.com" } }, false],
+    [{ op: "release", mode: "block", to: { host: "*" } }, false],
+    [{ op: "release", mode: "audit" }, false],
+    [{ op: "trust-origin", kind: "url", pattern: "https://*.example.com/" }, true],
+    [{ op: "trust-origin", kind: "url", pattern: "https://example.com/" }, false],
+    [{ op: "allow-connect", host: "*" }, true],
+    [{ op: "allow-connect", host: "*", port: 443 }, true],
+    [{ op: "allow-connect", host: "*.example.org" }, true],
+    [{ op: "allow-connect", host: "db.internal", port: 5432 }, false],
+    [{ op: "remove-connect", host: "*" }, false],
+    [{ op: "add-model", name: "lab", url: "http://203.0.113.9:8000", local: true }, true],
+    [{ op: "add-model", name: "ollama", url: "http://127.0.0.1:11434", local: true }, false],
+    [{ op: "lock-path", path: "/x", level: "no-model" }, false],
+    [null, false],
+  ];
+  for (const [edit, wide] of cases) {
+    assert.equal(isOverBroad([edit]), wide, JSON.stringify(edit));
+    assert.equal(overBroadWhy([edit]).length > 0, wide && (edit as { op: string }).op !== "add-model", `a sentence exactly when wide, the far model excepted: ${JSON.stringify(edit)}`);
+  }
+});
+
+test("overBroadWhy: one sentence per wide edit, in its row's words", () => {
+  const said = (edit: unknown) => overBroadWhy([edit]).map(text);
+  assert.deepEqual(said({ op: "allow-connect", host: "*" }), ["This lets your agent's programs connect to any address."]);
+  assert.deepEqual(said({ op: "allow-connect", host: "*", port: 443 }), ["This lets your agent's programs connect to any address on port 443."]);
+  assert.deepEqual(said({ op: "allow-connect", host: "*.example.org" }), ["This lets your agent's programs connect to any address that matches *.example.org."]);
+  assert.deepEqual(said({ op: "allow-connect", host: "*.example.org", port: "*" }), ["This lets your agent's programs connect to any address that matches *.example.org on any port."], "a port of * in words, as in its row");
+  assert.deepEqual(said({ op: "allow-connect", host: "*", port: "*" }), ["This lets your agent's programs connect to any address on any port."]);
+  const sub = overBroadWhy([{ op: "allow-connect", host: "*.example.org" }])[0]!;
+  assert.deepEqual(sub.filter((p) => p.kind === "code").map((p) => p.text), ["*.example.org"], "the pattern is a name, as in its row");
+  assert.deepEqual(said({ op: "release", mode: "allow", to: { host: "api.example.com" } }), ["This lets masked data from anywhere be sent to api.example.com."]);
+  assert.deepEqual(said({ op: "release", mode: "allow", from: { host: "*" }, to: { host: "api.example.com" } }), ["This lets masked data from anywhere be sent to api.example.com."]);
+  assert.deepEqual(said({ op: "release", mode: "allow", from: { host: "docs.python.org" }, to: { host: "*" } }), ["This lets masked data from docs.python.org be sent anywhere."]);
+  assert.deepEqual(said({ op: "release", mode: "allow", to: { host: "*" } }), ["This lets masked data from anywhere be sent anywhere."], "both sides open: one sentence");
+  assert.deepEqual(said({ op: "trust-origin", kind: "url", pattern: "https://*.example.com/" }), ["This change has no limit on one side."], "the frozen integrity axis keeps its words");
+  // The card's own row says the same place.
+  assert.match(text(editRow({ op: "allow-connect", host: "*" })), /connect to any address$/);
+  assert.match(text(editRow({ op: "release", mode: "allow", from: { host: "docs.python.org" }, to: { host: "*" } })), /from docs\.python\.org to anywhere$/);
+  for (const line of [...said({ op: "allow-connect", host: "*" }), ...said({ op: "release", mode: "allow", to: { host: "*" } })]) assert.doesNotMatch(line, FORBIDDEN, line);
+});
+
+test("overBroadWhy: a mixed list keeps edit order, at most two and then And N more; not wide is []", () => {
+  const connect = { op: "allow-connect", host: "*" };
+  const sendAny = { op: "release", mode: "allow", from: { host: "docs.python.org" }, to: { host: "*" } };
+  const noFrom = { op: "release", mode: "allow", to: { host: "api.example.com" } };
+  const sub = { op: "allow-connect", host: "*.example.org" };
+  const narrow = { op: "lock-path", path: "/x", level: "no-model" };
+  assert.deepEqual(overBroadWhy([narrow, sendAny, narrow, connect]).map(text), [
+    "This lets masked data from docs.python.org be sent anywhere.",
+    "This lets your agent's programs connect to any address.",
+  ]);
+  assert.deepEqual(overBroadWhy([connect, sendAny, noFrom]).map(text), [
+    "This lets your agent's programs connect to any address.",
+    "This lets masked data from docs.python.org be sent anywhere.",
+    "And 1 more wide change.",
+  ]);
+  assert.equal(text(overBroadWhy([connect, sendAny, noFrom, sub]).at(-1)!), "And 2 more wide changes.");
+  assert.deepEqual(overBroadWhy([narrow, { op: "release", mode: "block", to: { host: "*" } }, { op: "allow-connect", host: "db.internal", port: 5432 }]), []);
+  assert.deepEqual(overBroadWhy([]), []);
+  assert.deepEqual(overBroadWhy([{ op: "add-model", name: "lab", url: "http://203.0.113.9:8000", local: true }]), [], "the far model has its warning instead");
+  const card = toProposalCard(proposal({ edits: [connect, narrow] }));
+  assert.equal(card.overBroad, true);
+  assert.deepEqual(card.overBroadWhy.map(text), ["This lets your agent's programs connect to any address."], "the card sends the sentences");
+  assert.deepEqual(toProposalCard(proposal({ edits: [narrow] })).overBroadWhy, []);
 });
 
 test("a proposal waiting only because of the tightening cap says so", () => {

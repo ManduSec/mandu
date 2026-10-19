@@ -30,7 +30,7 @@
  * says models are changed in Settings › Models, and an answer or an Apply
  * carrying one is refused ({@link modelEditProblems}); the arbiter refuses it again.
  */
-import { editWords, isOverBroad, relaxWords, type Part } from "./view-model/policy-proposals.js";
+import { editWords, isOverBroad, overBroadWhy, relaxWords, type Part } from "./view-model/policy-proposals.js";
 
 /** The narrow arbiter surface the assistant needs (reads, data socket). */
 export interface AssistantArbiter {
@@ -73,8 +73,13 @@ export const NOTE_MAX = 1000;
 export interface Suggestion {
   model: string;
   note: string | null;
-  /** `tryable`: the row names a website or a release, so "Try it" can probe it. */
-  rows: Array<{ parts: Part[]; loosens: boolean; overBroad: boolean; tryable: boolean }>;
+  /** `tryable`: the row names a website or a release, so "Try it" can probe it.
+   *  `overBroadWhy`: what the row opens when it is wide (policy-proposals.ts
+   *  `overBroadWhy`), else empty. */
+  rows: Array<{ parts: Part[]; loosens: boolean; overBroad: boolean; overBroadWhy: Part[][]; tryable: boolean }>;
+  /** The foot's sentences: what the wide rows open, at most two and "And N
+   *  more" (empty when no row is wide). */
+  overBroadWhy: Part[][];
   loosens: Array<{ line: Part[] }>;
   edits: unknown[];
   /** The loosenings the person is shown, as `facet\0subject` keys: Apply is
@@ -167,7 +172,7 @@ export async function suggestRules(
   const modelEdits = modelEditProblems(edits);
   if (modelEdits.length > 0) throw new AssistantAnswerError(MODELS_ELSEWHERE, modelEdits);
   if (edits.length === 0) {
-    return { model: answer.model, note: note ?? "Nothing to change.", rows: [], loosens: [], edits: [], expected: [] };
+    return { model: answer.model, note: note ?? "Nothing to change.", rows: [], overBroadWhy: [], loosens: [], edits: [], expected: [] };
   }
   const preview = await deps.arbiter.policyPreview(edits);
   if (!preview.ok) throw new AssistantAnswerError("the assistant's suggestion is not a valid rule change", preview.problems);
@@ -175,7 +180,8 @@ export async function suggestRules(
   return {
     model: answer.model,
     note,
-    rows: edits.map((e, i) => ({ parts: editWords(e, home), loosens: preview.perEdit[i]?.loosens ?? true, overBroad: isOverBroad([e]), tryable: tryProbe(e) !== null })),
+    rows: edits.map((e, i) => ({ parts: editWords(e, home), loosens: preview.perEdit[i]?.loosens ?? true, overBroad: isOverBroad([e]), overBroadWhy: overBroadWhy([e]), tryable: tryProbe(e) !== null })),
+    overBroadWhy: overBroadWhy(edits),
     loosens: preview.relaxations.map((r) => ({ line: relaxWords(r, home) })),
     edits,
     expected: preview.relaxations.map(relaxKey),

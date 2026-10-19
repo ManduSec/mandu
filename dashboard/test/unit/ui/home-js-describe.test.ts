@@ -112,6 +112,56 @@ test("describe: a wide change needs ALLOW before Apply, and keeps needing it aft
   assert.equal(apply.disabled, true);
 });
 
+test("describe: a wide row says so beside its words, and the foot says what it opens (dashboard.md §4.25 *A wide change says what is open*)", async () => {
+  const opens = [{ kind: "text", text: "This lets your agent's programs connect to any address." }];
+  const wide = {
+    ...SUGGESTION,
+    rows: [SUGGESTION.rows[0], { parts: [{ kind: "text", text: "Let your agent's programs connect to any address" }], loosens: true, overBroad: true, overBroadWhy: [opens] }],
+    overBroadWhy: [opens],
+    edits: [SUGGESTION.edits[0], { op: "allow-connect", host: "*" }],
+  };
+  const { doc, window } = load({ url: RULES_URL, routes: { "POST policy/assistant": wide } });
+  await tick();
+  await describe(doc, window, "Let it reach anything.");
+  await tick();
+  const items = [...doc.querySelectorAll("#describe-result .suggestion-rows li")] as any[];
+  assert.deepEqual(items.map((li) => li.querySelector(".tag-wide")?.textContent ?? null), [null, "Wide: type ALLOW"], "only the wide row is marked");
+  const why = doc.querySelector("#describe-result .wide-why") as any;
+  assert.equal(why.textContent, "This lets your agent's programs connect to any address. Type ALLOW if you mean it.");
+  assert.ok(why.classList.contains("dim"));
+  assert.equal(why.nextElementSibling, doc.querySelector("#describe-result .proposal-confirm"), "the line sits before the field");
+  const apply = [...doc.querySelectorAll("#describe-result button")].find((b: any) => b.textContent === "Apply") as any;
+  assert.equal(apply.disabled, true, "Apply still waits for the typed word");
+});
+
+test("approvals: a wide change's foot names what it opens, a code part kept whole, and the warning case keeps its line", async () => {
+  const card = (id: string, over: Record<string, unknown>) => ({
+    id, status: "pending", requester: "Your agent", byAgent: true, session: null, createdAt: Date.now() - 60_000,
+    rows: [[{ kind: "text", text: "Always allow sending masked data from " }, { kind: "code", text: "docs.python.org" }, { kind: "text", text: " to anywhere" }]],
+    wouldLet: [], capped: false, overBroad: true, warnings: [], reason: null, ...over,
+  });
+  const sendAny = [{ kind: "text", text: "This lets masked data from " }, { kind: "code", text: "docs.python.org" }, { kind: "text", text: " be sent anywhere." }];
+  const proposals = [
+    card("pp-000001", { overBroadWhy: [sendAny, [{ kind: "text", text: "And 1 more wide change." }]] }),
+    card("pp-000002", { overBroadWhy: [], warnings: [[{ kind: "text", text: "lab would count as your own model" }]] }),
+    card("pp-000003", {}),
+  ];
+  const { doc, window } = load({ url: "http://127.0.0.1:4500/mandu/approvals", routes: { "GET policy/proposals?status=pending": { proposals } } });
+  await tick();
+  const foot = (id: string) => doc.querySelector(`#approvals-proposals [data-id="${id}"] .wide-why`) as any;
+  assert.equal(foot("pp-000001").textContent, "This lets masked data from docs.python.org be sent anywhere. And 1 more wide change. Type ALLOW if you mean it.");
+  assert.equal(foot("pp-000001").querySelector("code").textContent, "docs.python.org", "the host is a name, as in the row");
+  assert.equal(foot("pp-000002").textContent, "Read the warning above before you allow this.", "the warning case as before");
+  assert.equal(foot("pp-000003").textContent, "This change has no limit on one side.", "an older server's card: the old words");
+  const first = doc.querySelector('#approvals-proposals [data-id="pp-000001"]') as any;
+  const allow = first.querySelector(".proposal-allow");
+  const input = first.querySelector(".proposal-confirm");
+  assert.equal(allow.disabled, true, "Allow waits for the typed word");
+  input.value = "ALLOW";
+  input.dispatchEvent(new window.Event("input"));
+  assert.equal(allow.disabled, false);
+});
+
 test("describe: 409 on Apply shows the server's words and Describe it again re-runs the same sentence", async () => {
   const { doc, window, calls } = load({ url: RULES_URL, routes: { "POST policy/assistant": SUGGESTION, "POST policy/assistant/apply": { status: 409, body: { error: "the rules changed since the preview; applying would now loosen more than shown" } } } });
   await tick();

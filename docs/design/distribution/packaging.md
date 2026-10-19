@@ -1593,12 +1593,18 @@ build heard of a new one only from us.
 (launch-banner.ts passes it through unchanged, under the mode line):
 
 ```
-mandu: ! Mandu 0.2.0 is out (you have 0.2.0-beta.3); to update: curl -fsSL https://github.com/ManduSec/mandu/releases/download/v0.2.0/install.sh | sh
-mandu: ! Mandu 0.2.0-beta.4 is out with SECURITY fixes (you have 0.2.0-beta.3); update now: curl -fsSL …/v0.2.0-beta.4/install.sh | sh
+mandu: ! Mandu 0.2.0 is out (you have 0.2.0-beta.3); to update: npm install -g @mandusec/mandu@0.2.0
+mandu: ! Mandu 0.2.0-beta.4 is out with SECURITY fixes (you have 0.2.0-beta.3); update now: npm install -g @mandusec/mandu@0.2.0-beta.4
 ```
 
-The install line is that release's own copy of `install.sh` (§11.4), which
-installs exactly that release's tarball after checking its SHA-256.
+The npm install line pins the advertised version, so a different npm dist-tag
+cannot send the user to another release. Installed packages use npm unless
+`scripts/install.sh` wrote `.mandu-installer` in that package's root; the
+installer's packages and opted-in source checkouts keep that release's own
+`install.sh` line (§11.4), which verifies the tarball's SHA-256. The marker is
+local installation state and is never packed. Both launch notices and doctor
+use this channel, including cached/offline answers. Installations made by an
+older curl installer have no marker and use npm advice until reinstalled.
 `mandu doctor` adds `version <v>` and one row to its "Installed" section:
 ✓ newest, · a newer release, ✗ a newer release with security fixes, or why
 it did not ask.
@@ -1659,11 +1665,10 @@ which always asks afresh, is not affected. The answer is advisory either
 way: it changes no protection, and a forged "newer release" can only print
 the fixed install line for a version tag on the real repository.
 
-Not done: the npm channel's update line (`npm install -g @mandusec/mandu`).
-npm installs exist from `0.2.0-beta.6` (§11.4), but the notice still asks
-the GitHub repository's releases and prints the release's `install.sh`
-line, so an npm install hears of no new version while that repository is
-private.
+The release list still comes from GitHub for every channel. Publish the npm
+package before the matching GitHub release so the advertised exact version is
+available. A private or unavailable GitHub release list cannot announce a new
+npm version; npm registry polling is not implemented.
 
 ### 11.6 What this does not do
 

@@ -40,7 +40,7 @@
  *
  * Mandu-new (no reference origin).
  */
-import { closeSync, constants as fsc, fstatSync, mkdirSync, openSync, readFileSync, readSync } from "node:fs";
+import { existsSync, closeSync, constants as fsc, fstatSync, mkdirSync, openSync, readFileSync, readSync } from "node:fs";
 import { request as httpRequest, Agent as HttpAgent } from "node:http";
 import { request as httpsRequest, Agent as HttpsAgent } from "node:https";
 import { homedir } from "node:os";
@@ -48,6 +48,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { manduPath } from "./generated/mandu-paths.js";
 import { publishFile } from "./safe-file.js";
+import type { Layout } from "./services/layout.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -172,18 +173,28 @@ export function newerRelease(current: string, releases: readonly ReleaseInfo[]):
   return newest === null ? null : { newest: newest.version, security };
 }
 
+export type UpdateChannel = "npm" | "release";
+
+/** Keep the update in the current distribution channel. The curl installer
+ * marks its package; unmarked installed packages come from npm. Source
+ * checkouts retain the release installer advice when checks are opted in. */
+export function updateChannel(layout: Pick<Layout, "mode" | "pkgRoot">, exists: (path: string) => boolean = existsSync): UpdateChannel {
+  return layout.mode === "installed" && !exists(resolve(layout.pkgRoot, ".mandu-installer")) ? "npm" : "release";
+}
+
 /** How to install `version`: its own release copy of install.sh, which
  *  installs exactly that release's tarball after checking its SHA-256
  *  (packaging.md §11.4). Pure. */
-export function installLine(version: string): string {
+export function installLine(version: string, channel: UpdateChannel = "release"): string {
+  if (channel === "npm") return `npm install -g @mandusec/mandu@${version}`;
   return `curl -fsSL https://github.com/${RELEASE_REPO}/releases/download/v${version}/install.sh | sh`;
 }
 
 /** The launch's one notice line (launch-banner.ts passes it through as is). Pure. */
-export function updateNotice(current: string, a: UpdateAnswer): string {
+export function updateNotice(current: string, a: UpdateAnswer, channel: UpdateChannel = "release"): string {
   return a.security
-    ? `mandu: ! Mandu ${a.newest} is out with SECURITY fixes (you have ${current}); update now: ${installLine(a.newest)}`
-    : `mandu: ! Mandu ${a.newest} is out (you have ${current}); to update: ${installLine(a.newest)}`;
+    ? `mandu: ! Mandu ${a.newest} is out with SECURITY fixes (you have ${current}); update now: ${installLine(a.newest, channel)}`
+    : `mandu: ! Mandu ${a.newest} is out (you have ${current}); to update: ${installLine(a.newest, channel)}`;
 }
 
 /** Does `note` come from updateNotice? (launch-banner.ts compactNotice) */
@@ -400,14 +411,14 @@ export interface LaunchUpdateCheck {
 /** A launch's update check: the notice from the cache, and a background
  *  refresh when the cache is older than a day. Never throws, never waits. */
 export function launchUpdateCheck(
-  opts: { env: Env; version: string; installed: boolean; interactive: boolean },
+  opts: { env: Env; version: string; installed: boolean; interactive: boolean; channel?: UpdateChannel },
   deps: UpdateCheckDeps = realUpdateCheckDeps,
 ): LaunchUpdateCheck {
   try {
     if (!updateCheckGate(opts.env, opts).on) return { notice: null, refresh: null };
     const cache = deps.read(updateCachePath(opts.env));
     const answer = cache !== null && cache.releasesAt !== null ? newerRelease(opts.version, cache.releases) : null;
-    const notice = answer === null ? null : updateNotice(opts.version, answer);
+    const notice = answer === null ? null : updateNotice(opts.version, answer, opts.channel);
     const refresh = cache !== null && cacheFresh(cache, deps.now())
       ? null
       : refreshUpdateCache(opts.env, LAUNCH_FETCH_TIMEOUT_MS, deps, cache, true).then(() => undefined, () => undefined);
@@ -422,14 +433,14 @@ export function launchUpdateCheck(
 export type UpdateFacts =
   | { version: string; state: "off"; why: string }
   | { version: string; state: "current"; fresh: boolean; at: number }
-  | { version: string; state: "newer"; fresh: boolean; at: number; answer: UpdateAnswer }
+  | { version: string; state: "newer"; fresh: boolean; at: number; answer: UpdateAnswer; channel?: UpdateChannel }
   | { version: string; state: "unknown" };
 
 /** Doctor's answer: always a fresh check (so a forged cache cannot hide a
  *  release from it), falling back to the cached list when the check fails.
  *  `interactive`: doctor's stdout is a terminal. */
 export async function doctorUpdateFacts(
-  opts: { env: Env; version: string; installed: boolean; interactive: boolean },
+  opts: { env: Env; version: string; installed: boolean; interactive: boolean; channel?: UpdateChannel },
   deps: UpdateCheckDeps = realUpdateCheckDeps,
 ): Promise<UpdateFacts> {
   const { version } = opts;
@@ -442,7 +453,7 @@ export async function doctorUpdateFacts(
   const answer = newerRelease(version, entry.releases);
   return answer === null
     ? { version, state: "current", fresh, at: entry.releasesAt }
-    : { version, state: "newer", fresh, at: entry.releasesAt, answer };
+    : { version, state: "newer", fresh, at: entry.releasesAt, answer, channel: opts.channel };
 }
 
 /** Doctor's rows for the facts (glyphs as doctor.ts draws them). Pure. */
@@ -454,8 +465,8 @@ export function updateRows(f: UpdateFacts, glyph: { ok: string; no: string; dot:
     case "unknown": return [`  ${glyph.dot} newer release: could not ask GitHub (offline, or the release list is not public yet)`];
     case "current": return [`  ${glyph.ok} Mandu ${f.version} is the newest release${stale(f.fresh, f.at)}`];
     case "newer": return f.answer.security
-      ? [`  ${glyph.no} Mandu ${f.answer.newest} is out with SECURITY fixes (you have ${f.version})${stale(f.fresh, f.at)}; update now: ${installLine(f.answer.newest)}`]
-      : [`  ${glyph.dot} Mandu ${f.answer.newest} is out (you have ${f.version})${stale(f.fresh, f.at)}; to update: ${installLine(f.answer.newest)}`];
+      ? [`  ${glyph.no} Mandu ${f.answer.newest} is out with SECURITY fixes (you have ${f.version})${stale(f.fresh, f.at)}; update now: ${installLine(f.answer.newest, f.channel)}`]
+      : [`  ${glyph.dot} Mandu ${f.answer.newest} is out (you have ${f.version})${stale(f.fresh, f.at)}; to update: ${installLine(f.answer.newest, f.channel)}`];
   }
 }
 

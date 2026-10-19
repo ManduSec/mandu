@@ -104,6 +104,10 @@ export interface ProposalCardVM {
   capped: boolean;
   /** Needs the typed word ALLOW before Allow enables. */
   overBroad: boolean;
+  /** What the wide change opens, one sentence per wide edit
+   *  ({@link overBroadWhy}); empty for most changes. Words only: the
+   *  typed ALLOW is asked by `overBroad`. */
+  overBroadWhy: Part[][];
   /** Warnings about what the change names (a model of "your own" at an
    *  address off this machine); empty for most changes. */
   warnings: Part[][];
@@ -480,6 +484,38 @@ export function isOverBroad(edits: readonly unknown[]): boolean {
   }) || farOwnModels(edits).length > 0;
 }
 
+/** At most this many {@link overBroadWhy} sentences, then "And N more". */
+export const OVER_BROAD_WHY_MAX = 2;
+
+/** What a wide change opens, one sentence per wide edit in edit order, in
+ *  the words of its row (dashboard.md §4.25 *A wide change says what is
+ *  open*): at most {@link OVER_BROAD_WHY_MAX}, then "And N more wide
+ *  changes." Presentation only: {@link isOverBroad} alone decides that the
+ *  typed ALLOW is asked. A wildcard trusted origin (the frozen integrity
+ *  axis) keeps the old words; a far "your own" model has its warning and no
+ *  sentence. Empty for a change that is not wide. */
+export function overBroadWhy(edits: readonly unknown[]): Part[][] {
+  const all: Part[][] = [];
+  for (const raw of edits) {
+    const e = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    if (e.op === "release" && e.mode === "allow") {
+      const from = e.from && typeof e.from === "object" ? str((e.from as Record<string, unknown>).host) : "";
+      const to = e.to && typeof e.to === "object" ? str((e.to as Record<string, unknown>).host) : "";
+      const anyFrom = from === "" || from === "*";
+      if (!anyFrom && to !== "*") continue;
+      all.push([t("This lets masked data from "), anyFrom ? t("anywhere") : c(from), t(" be sent "), ...(to === "*" ? [t("anywhere.")] : [t("to "), c(to), t(".")])]);
+    } else if (e.op === "trust-origin" && str(e.pattern).includes("*")) {
+      all.push([t("This change has no limit on one side.")]);
+    } else if (e.op === "allow-connect" && str(e.host).startsWith("*")) {
+      const where = str(e.host) === "*" ? connectTarget(e.host, e.port) : [t("any address that matches "), ...connectTarget(e.host, e.port)];
+      all.push([t("This lets your agent's programs connect to "), ...where, t(".")]);
+    }
+  }
+  if (all.length <= OVER_BROAD_WHY_MAX) return all;
+  const more = all.length - OVER_BROAD_WHY_MAX;
+  return [...all.slice(0, OVER_BROAD_WHY_MAX), [t(`And ${more} more wide ${more === 1 ? "change" : "changes"}.`)]];
+}
+
 export function requesterOf(requestedBy: string): string {
   // "file": a held change to policy.yaml; who wrote the file is unknown, so
   // it is never called "you" (§4.25j).
@@ -513,6 +549,7 @@ export function toProposalCard(p: PolicyProposalRow, view: PatternView = {}): Pr
     wouldLet: (p.relaxes ?? []).map((r) => relaxWords(r, view.home ?? "")),
     capped: (p.relaxes ?? []).length === 0,
     overBroad: isOverBroad(edits),
+    overBroadWhy: overBroadWhy(edits),
     warnings: changeWarnings(edits),
     reason: typeof p.reason === "string" && p.reason !== "" ? p.reason : null,
     createdAt: p.createdAt,

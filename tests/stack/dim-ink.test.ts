@@ -6,8 +6,7 @@
  *
  * Until 2026-10-16 app.css had no page-wide `.dim` rule, only a row's
  * (`--ink-4`) and two scoped ones, so a `.dim` anywhere else drew in its
- * parent's ink, mostly the full `--ink`: Approvals' "This change has no
- * limit on one side.", Your rules' Patterns and Places captions, an opened
+ * parent's ink, mostly the full `--ink`: Approvals' wide-change foot, Your rules' Patterns and Places captions, an opened
  * rule's "Your rule, this file only", Add a rule's "This folder:", Keys
  * Mandu found's not-offered line and its empty list. jsdom draws nothing but
  * runs the cascade and inherits `color` as a browser does, so the served
@@ -25,8 +24,10 @@
  *       `--ink-4` in a row and `--ink-3` anywhere else, never the full or
  *       the second ink; the lines above and the folder's count of its
  *       rules are among them;
- *   K2  Approvals, light and dark: the wide change's "This change has no
- *       limit on one side." reads `--ink-3`, as every `.dim` there does;
+ *   K2  Approvals, light and dark: the wide change's foot ("This lets
+ *       your agent's programs connect to any address. Type ALLOW if you
+ *       mean it.", §4.25 *A wide change says what is open*) reads
+ *       `--ink-3`, as every `.dim` there does;
  *   K3  the oracle: no page or answer read here carries the file's value or
  *       a minted token; policy.yaml is as it was, and the change still
  *       waits;
@@ -224,7 +225,7 @@ test("the product page over the real arbiter: every secondary line reads the not
 
     // ── K2: Approvals ──
     await servedProductPage(base, "/approvals", (doc: Doc) => !!doc.querySelector("#approvals-proposals .proposal-confirm"), async (doc: Doc) => {
-      check(doc, "Approvals", [/^This change has no limit on one side\.$/]);
+      check(doc, "Approvals", [/^This lets your agent's programs connect to any address\. Type ALLOW if you mean it\.$/]);
       // ── K4: the card's labels ──
       readsAA(doc, "Approvals", "#approvals-proposals .proposal-k", ["This would let", "Your agent says"]);
       noValue(doc.body.textContent, "the rendered Approvals page");

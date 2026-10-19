@@ -16,7 +16,7 @@ import {
   APPLE_GIT_SHIM, hardenedGitArgs, hardenedGitEnv, isSeatbeltGitSandbox, probeGitSandboxOutcome, resolveGitBinary, SANDBOX_EXEC, type GitSandboxProbe,
 } from "./hardened-git.js";
 import { resolveArbiterSock } from "./arbiter-sock.js";
-import type { Layout, LayoutMode } from "./services/layout.js";
+import { Layout, type LayoutMode } from "./services/layout.js";
 import type { AgentLine } from "./generated/agents.js";
 import {
   bindOnlyLines,
@@ -67,7 +67,7 @@ import { cloudLocalModelEntries, hasModelsSection, localModelLevelLines, policyF
 import { addressReach, endpointApiBase, endpointPlacement, helperEndpointName, hostClass, isCloudBackedModel, isPlainHttpLocal, parseOrigin, systemLookup, type AddressReach, readModelEndpoints, selectTllmEndpoint, tllmUpstream, type HostClass, type ModelEndpointsRead, type ModelWire } from "./model-endpoints.js";
 import { ndjsonCall } from "./secret-setup.js";
 import { homeRows, realHomeFacts, type HomeFacts } from "./doctor-home.js";
-import { doctorUpdateFacts, launcherVersion, updateRows, type UpdateFacts } from "./update-check.js";
+import { doctorUpdateFacts, launcherVersion, updateChannel, updateRows, type UpdateFacts } from "./update-check.js";
 import { commitWords, gatherVersionReport, realVersionDeps, type Problem, type VersionReport } from "./version-report.js";
 import { expandTrust, isTrusted, mountDestination, readTrustLookups, visibleRemoteMounts, type RemoteMountFacts, type TrustLookup } from "./remote-mounts.js";
 
@@ -589,7 +589,7 @@ export const realDoctorDeps: DoctorDeps = {
   listDir: (dir) => { try { return readdirSync(dir); } catch { return null; } },
   readPlistJson: realReadPlistJson,
   updateFacts: (env, installed) =>
-    doctorUpdateFacts({ env, version: launcherVersion(), installed, interactive: process.stdout.isTTY === true }),
+    doctorUpdateFacts({ env, version: launcherVersion(), installed, interactive: process.stdout.isTTY === true, channel: updateChannel(Layout.detect(import.meta.url, env)) }),
 };
 
 /** Did the user turn the whole-agent guard off for launches? The launch's

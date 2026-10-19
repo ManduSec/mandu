@@ -14,10 +14,12 @@
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createServer } from "node:http";
+import { once } from "node:events";
 import { PKG_ROOT, npmCacheDir, npmEnv, packPrivate } from "../lib/pack-private.js";
 
 let tmp: string;
@@ -85,6 +87,35 @@ test("the tarball ships LICENSE and NOTICE (Apache-2.0 §4(d)), the in-tree copi
     assert.ok(list.includes(f), `${f} missing from tarball`);
     const shipped = readFileSync(join(installed, "node_modules", "@mandusec", "mandu", f), "utf8");
     assert.equal(shipped, readFileSync(join(PKG_ROOT, f), "utf8"), f);
+  }
+});
+
+test("npm-installed doctor recommends the exact npm release from the public release list", async () => {
+  const server = createServer((_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify([{ tag_name: "v99.0.0", draft: false, body: "" }]));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const child = spawn(join(installed, "node_modules/.bin/mandu"), ["doctor"], {
+      cwd: installed, env: npmEnv(tmp, {
+        HOME: tmp, MANDU_HOME: join(tmp, "update-home"), MANDU_MODE: "off",
+        MANDU_UPDATE_CHECK: "1", MANDU_UPDATE_CHECK_URL: `http://127.0.0.1:${address.port}/releases`,
+      }), stdio: ["ignore", "pipe", "pipe"], timeout: 60_000,
+    });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (part) => { stdout += part; });
+    child.stderr.on("data", (part) => { stderr += part; });
+    const [code] = await once(child, "close");
+    assert.equal(code, 0, stderr);
+    assert.match(stdout, /to update: npm install -g @mandusec\/mandu@99\.0\.0/);
+    assert.doesNotMatch(stdout, /to update: curl/);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 

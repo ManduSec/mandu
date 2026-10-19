@@ -163,6 +163,25 @@ test("suggestRules: rows from the grammar, marked per edit; expected = the previ
   assert.match(seen[0]!.system, /SCHEMA-MARKER/);
 });
 
+test("suggestRules: each wide row carries what it opens, and the suggestion the foot's sentences (dashboard.md §4.25 *A wide change says what is open*)", async () => {
+  const edits = [
+    { op: "lock-path", path: "~/work/.env", level: "no-model" },
+    { op: "allow-connect", host: "*" },
+    { op: "release", from: { host: "docs.python.org" }, to: { host: "*" }, mode: "allow" },
+  ];
+  const preview: PreviewResult = { ok: true, relaxations: [], tightenings: [], perEdit: [{ loosens: false }, { loosens: true }, { loosens: true }] };
+  const s = await suggestRules({ arbiter: fakeArbiter({ preview }).arbiter as never, model: model(JSON.stringify({ edits })) }, "let it reach anything");
+  const said = (list: Array<Array<{ text: string }>>) => list.map((parts) => parts.map((p) => p.text).join(""));
+  assert.deepEqual(s.rows.map((r) => r.overBroad), [false, true, true]);
+  assert.deepEqual(s.rows.map((r) => said(r.overBroadWhy)), [
+    [],
+    ["This lets your agent's programs connect to any address."],
+    ["This lets masked data from docs.python.org be sent anywhere."],
+  ]);
+  assert.deepEqual(said(s.overBroadWhy), ["This lets your agent's programs connect to any address.", "This lets masked data from docs.python.org be sent anywhere."]);
+  assert.deepEqual(s.edits, edits, "the words change, nothing Apply sends does");
+});
+
 test("suggestRules: no channel ⇒ unconfigured before the arbiter is read; an invalid suggestion ⇒ problems", async () => {
   const { arbiter, calls } = fakeArbiter();
   await assert.rejects(

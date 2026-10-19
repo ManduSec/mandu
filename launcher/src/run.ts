@@ -112,7 +112,7 @@ import { agentOwnCredentialFiles, codexKeyRefusal, gooseKeyringNote, launchLogin
 import {
   launchPreviewNotice, launchVersionCheck, opencode2Enabled, opencodeGeneration, opencodeLaunchRefusal, probeAgentVersionWhy,
 } from "./agent-versions.js";
-import { launchUpdateCheck, launcherVersion } from "./update-check.js";
+import { launchUpdateCheck, launcherVersion, updateChannel } from "./update-check.js";
 import { opencode1LaunchArgv, opencode2LaunchArgv } from "./opencode-argv.js";
 import { opencode2ConfidentialityMissing, opencode2ConfidentialityRefusal, opencode2ConfidentialityUnenforced, probeGuardNotify } from "./opencode2-confidentiality.js";
 import {
@@ -407,7 +407,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
   // than a day is refreshed in the background, never waited on. Off in CI,
   // from a source checkout, off a terminal, and under MANDU_UPDATE_CHECK=0.
   const updateCheck = launchUpdateCheck({
-    env, version: launcherVersion(), installed: layout.mode === "installed", interactive: process.stderr.isTTY === true,
+    env, version: launcherVersion(), installed: layout.mode === "installed", interactive: process.stderr.isTTY === true, channel: updateChannel(layout),
   });
   if (updateCheck.notice !== null) { const n = updateCheck.notice; showNote(n, undefined, true); }
 

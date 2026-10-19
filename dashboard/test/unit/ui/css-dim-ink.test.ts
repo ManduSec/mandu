@@ -10,8 +10,9 @@
  * parent's ink, mostly the full `--ink`. A headless Chromium over a real
  * arbiter and dashboard (Rules with Add a rule, Keys Mandu found and every
  * row opened; Approvals with a wide rule change; Home, History, Settings)
- * found these in the full ink: Approvals' "This change has no limit on one
- * side.", Your rules' Patterns and Places captions and its empty line, an
+ * found these in the full ink: Approvals' wide-change foot (then "This
+ * change has no limit on one side.", since 2026-10-19 what the change
+ * opens, §4.25 *A wide change says what is open*), Your rules' Patterns and Places captions and its empty line, an
  * opened rule's "Your rule, this file only" and where it came from, Add a
  * rule's "This folder:", Keys Mandu found's not-offered line and empty
  * list, Describe's status. A folder's count of its rules ("5 rules") and
@@ -107,6 +108,7 @@ const WIDE = {
   rows: [[{ kind: "text", text: "Let your agent's programs connect to " }, { kind: "code", text: "*" }]],
   wouldLet: [[{ kind: "text", text: "Your agent's programs could connect to " }, { kind: "code", text: "*:443" }]],
   capped: false, overBroad: true, reason: "probe",
+  overBroadWhy: [[{ kind: "text", text: "This lets your agent's programs connect to any address." }]],
 };
 
 /** Rules with Keys Mandu found and Add a rule opened, and /etc/app.conf's
@@ -148,7 +150,7 @@ const FOUND: Array<[string, RegExp]> = [
   ["Rules", /^This folder:$/],
   ["Rules", /^Asking a model to suggest rules is not offered yet: it is still being tested\.$/],
   ["Rules", /^No suggestions\. Press Scan for keys/],
-  ["Approvals", /^This change has no limit on one side\.$/],
+  ["Approvals", /^This lets your agent's programs connect to any address\. Type ALLOW if you mean it\.$/],
 ];
 
 test("D1: every .dim with words reads --ink-4 in a row and --ink-3 anywhere else, never the full or the second ink, light and dark", async () => {

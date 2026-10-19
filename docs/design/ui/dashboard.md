@@ -2544,6 +2544,24 @@ stays on the API (`assertion-verdicts.test.ts`).
   (continuous-integration.md §6) never writes its sessions into the live event
   store, so nothing sets `origin: "ci"` today; CI results are the ⚑ CI tab
   (§4.27). The chip code stays.
+- **A batch heading keeps its name** (2026-10-19). The heading was one
+  row where only the title could shrink, and every chip beside it kept its
+  width. At the default 260 px list a CI batch ("claude e2e run" with `P`,
+  `CI`, `🐳 docker`, `2✓`, `2` and "Jul 16 · 1m 25s") needs 285 px in a
+  234 px box, so headless Chromium drew its title 0 px wide, cut the time
+  after "Jul 16", and the 🗑 sat over what was left. Every CI batch read as
+  the same row of chips. Now the heading is two groups on a wrapping row:
+  the name (caret, status, title) and the rest (chips, count, time). When
+  both do not fit, the rest moves to a line of its own under the name,
+  pinned right; when it is too wide even for that line, the time goes
+  under the chips. A long name alone on its line ends in an ellipsis
+  there. A heading that fits stays one line, as before. A heading with a
+  time and a 🗑 keeps the 🗑's width free at its right, so the 🗑 never
+  covers the time. Clicks and the keyboard focus stay on the heading.
+  Drill groups and day groups, which have no time, are unchanged. Tests:
+  `app-js-sidebar.test.ts` and the inspector's stack test
+  `batch-head-room` (a real Chromium at 761 and 1280 px windows and a
+  600 px list).
 
 The sessions poll's change signature includes run state, counts and statuses
 (plus a ~15 s time bucket while anything runs), so a finishing run re-renders
@@ -5960,7 +5978,10 @@ that loosens it (policy-surface.md §8.3); the ask lands on Approvals.
   default `secrets` mode a page the agent read may have written it). **Not
   now** is the primary button. A change with no limit on one side (an allow
   with no `from` or `to: *`, a wildcard trusted origin, a connect to any
-  address) keeps **Allow** disabled until ALLOW is typed. An Allow answered
+  address) keeps **Allow** disabled until ALLOW is typed. Its foot says
+  what the change opens, in its row's words, and why it asks for the
+  word: "This lets your agent's programs connect to any address. Type
+  ALLOW if you mean it." (*A wide change says what is open*). An Allow answered
   `refiled` (the policy moved and approving would now give up more) shows
   "The rules changed since your agent asked; here is the updated request".
   A request that is not the agent's (your own, left waiting when its
@@ -8898,6 +8919,60 @@ the agent's heading and line back. The oracle finds no locked file's value
 and no token in a page or an answer. It fails on the old view model at
 "You wants to change a rule".
 
+**A wide change says what is open (2026-10-19).** A wide rule change asks
+you to type ALLOW before **Allow** works. Until now the only reason its
+card gave was "This change has no limit on one side.", the code's own
+wording (`isOverBroad`'s comment). A seeded headless Chromium at 1280 and
+390 px, with the agent asking the real `policyPropose` for `allow-connect
+host: *`, drew the row "Let your agent's programs connect to any address"
+and, at the foot beside the field, that phrase: it named neither the open
+side nor why the word was asked. Describe's suggestion card said "One of
+these changes has no limit on one side." without saying which one.
+
+Now `overBroadWhy(edits)` (`view-model/policy-proposals.ts`, pure, beside
+`isOverBroad`) gives one sentence per wide edit, in edit order, from the
+row grammar's own words (`connectTarget`, the release row's "masked data
+from … to …"):
+
+- a connect to `*`: "This lets your agent's programs connect to any
+  address." (with a port, "any address on port 443");
+- a connect to `*.example.org`: "… connect to any address that matches
+  `*.example.org`.";
+- an allowed send with no source or `from: *`: "This lets masked data from
+  anywhere be sent to `api.example.com`."; with `to: *`: "… from
+  `docs.python.org` be sent anywhere." (both open: one sentence);
+- a wildcard trusted origin, on the frozen integrity axis, keeps the old
+  words; a far "your own" model gives no sentence, since its warning says
+  it.
+
+At most two sentences, then "And N more wide changes." `toProposalCard`
+sends them as `overBroadWhy`; the Approvals foot (`home.js wideWhy`) draws
+them, each name whole (`fitWords`), then "Type ALLOW if you mean it." A
+card with a warning keeps "Read the warning above before you allow this.",
+after any sentence another wide edit of it gives; a card with no sentences
+(an older server) keeps the old words. On Describe each row carries its
+own `overBroadWhy` and the suggestion the foot's; a wide row gets the
+marker **"Wide: type ALLOW"** beside its words, and the foot says what the
+wide rows open, the same way.
+
+Presentation only: `isOverBroad` keeps its truth table (pinned in a test),
+Allow and Apply stay disabled until ALLOW is typed exactly, and nothing
+posted, no route and no arbiter answer changed.
+
+Tests: `policy-proposals-view-model.test.ts` (each case, order and the
+cap, `[]` when not wide, the truth table pinned against the sentences);
+`policy-assistant.test.ts` (each row and the foot carry their sentences,
+the edits unchanged); `home-js-describe.test.ts` (the Describe marker and
+foot; the Approvals foot with the cap, the warning case and an older
+server's card, Allow still waiting for the word); `css-dim-ink.test.ts`
+and stack `dim-ink.test.ts` (the new foot reads the note's ink). Stack
+`tests/stack/wide-change-why.test.ts` (`secrets`) runs a real arbiter, the
+production adapter and a real dashboard, signed in: the agent asks for a
+connect to any address and a send to anywhere; each Approvals foot names
+what it opens, Allow stays off until ALLOW is typed exactly, Allow records
+the approval and Not now the denial, and no page or answer carries the
+locked file's value or a token.
+
 **Shipping.** The npm bundle copies both directories beside the bundled
 server (`dist/dashboard/public`, `dist/dashboard/dev`; the manifest's
 `assetDirs`), and `resolveStaticDir` finds them (`../public` from source,
@@ -11246,7 +11321,8 @@ every row opened; Approvals with a wide change from the real
 found these in the full `--ink`:
 
 - Approvals (and *Describe what you want*): a wide change's foot "This
-  change has no limit on one side.";
+  change has no limit on one side." (since 2026-10-19 it says what the
+  change opens, *A wide change says what is open*);
 - Your rules: the *Patterns* and *Places* captions, and the empty line "No
   file or folder has a rule of yours yet." (the page's other empty states
   are `--ink-3`);

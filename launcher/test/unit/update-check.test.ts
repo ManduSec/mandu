@@ -19,7 +19,7 @@ import { join } from "node:path";
 import {
   cacheFresh, compareVersions, doctorUpdateFacts, installLine, isUpdateNotice, launchUpdateCheck, newerRelease,
   parseReleases, parseVersion, readUpdateCache, refreshUpdateCache, releasesUrl, RELEASES_URL, SECURITY_MARKER,
-  UPDATE_CHECK_INTERVAL_MS, updateCachePath, updateCheckGate, updateNotice, updateRows, writeUpdateCache,
+  UPDATE_CHECK_INTERVAL_MS, updateCachePath, updateCheckGate, updateNotice, updateRows, writeUpdateCache, updateChannel,
   type UpdateCache, type UpdateCheckDeps,
 } from "../../src/update-check.js";
 import { compactNotice, isAttentionNote } from "../../src/launch-banner.js";
@@ -97,6 +97,23 @@ test("newerRelease: SECURITY when any release after the running one carries the 
   ];
   assert.deepEqual(newerRelease("0.2.0-beta.2", rel), { newest: "0.2.0-beta.4", security: true }, "beta.3 fixed leaks");
   assert.deepEqual(newerRelease("0.2.0-beta.3", rel), { newest: "0.2.0-beta.4", security: false }, "the one already installed does not count");
+});
+
+test("update commands stay in the installed channel and pin the advertised npm version", () => {
+  const pkgRoot = join(dir, "installed");
+  const installed = { mode: "installed" as const, pkgRoot };
+  assert.equal(updateChannel(installed), "npm");
+  assert.equal(updateChannel({ ...installed, mode: "dev" }), "release");
+  mkdirSync(pkgRoot);
+  writeFileSync(join(pkgRoot, ".mandu-installer"), "");
+  assert.equal(updateChannel(installed), "release");
+  assert.equal(installLine("0.2.0-beta.4", "npm"), "npm install -g @mandusec/mandu@0.2.0-beta.4");
+  for (const security of [false, true]) {
+    const notice = updateNotice("0.2.0-beta.3", { newest: "0.2.0-beta.4", security }, "npm");
+    assert.ok(notice.endsWith("npm install -g @mandusec/mandu@0.2.0-beta.4"), notice);
+    assert.ok(!notice.includes("curl"));
+    assert.equal(compactNotice(notice), notice);
+  }
 });
 
 test("the notice: one line, the install line of that release, SECURITY said plainly; the compact display keeps it as is", () => {
@@ -292,6 +309,16 @@ test("doctor: always asks afresh (a forged 'up to date' cache cannot hide a rele
   const o = await doctorUpdateFacts({ ...LAUNCH, env: { MANDU_UPDATE_CHECK: "0" } }, off.deps);
   assert.deepEqual(o, { version: "0.2.0-beta.3", state: "off", why: "turned off (MANDU_UPDATE_CHECK=0)" });
   assert.equal(off.urls.length, 0);
+});
+
+test("npm launch and doctor advice survives cached answers and an offline refresh", async () => {
+  const cache = entry({ checkedAt: 5_000_000_000, releasesAt: 5_000_000_000 });
+  const opts = { ...LAUNCH, channel: "npm" as const };
+  const m = memDeps([null], 5_000_000_000, cache);
+  assert.ok(launchUpdateCheck(opts, m.deps).notice?.endsWith("npm install -g @mandusec/mandu@0.2.0"));
+  const facts = await doctorUpdateFacts(opts, m.deps);
+  assert.ok(facts.state === "newer" && !facts.fresh);
+  assert.ok(updateRows(facts, { ok: "+", no: "!", dot: "." })[0]?.endsWith("npm install -g @mandusec/mandu@0.2.0"));
 });
 
 test("mkdir: the cache directory is made 0700 when the home has none", () => {

@@ -200,6 +200,10 @@ run env PATH="$(dirname "$NODE"):$PATH" "$NPM" install -g --prefix "$PREFIX/pkg"
 ENTRY="$PREFIX/pkg/lib/node_modules/@mandusec/mandu/bin/mandu.mjs"
 [ -f "$ENTRY" ] || [ "$DRY_RUN" = 1 ] || die "the package did not install $ENTRY"
 
+# Remember the release-installer channel for update notices. This marker is
+# local installation state, never part of the published npm tarball.
+run touch "$PREFIX/pkg/lib/node_modules/@mandusec/mandu/.mandu-installer"
+
 # ── 3. the command ───────────────────────────────────────────────────────────
 run mkdir -p "$BIN_DIR"
 if [ "$DRY_RUN" = 1 ]; then

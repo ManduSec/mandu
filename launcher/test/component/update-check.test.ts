@@ -259,7 +259,7 @@ test("mandu doctor asks afresh whatever the cache says and prints the row with t
   try {
     const work = mkdtempSync(join(dir, "doctor-"));
     const home = join(work, "mandu-home");
-    const env = { HOME: work, MANDU_HOME: home, XDG_RUNTIME_DIR: work, MANDU_UPDATE_CHECK: "1", MANDU_UPDATE_CHECK_URL: s.url, MANDU_MODE: "off" };
+    const env = { HOME: work, MANDU_HOME: home, XDG_RUNTIME_DIR: work, MANDU_UPDATE_CHECK: "1", MANDU_UPDATE_CHECK_URL: s.url, MANDU_MODE: "off", MANDU_LAYOUT: "installed" };
     // A forged "up to date, checked just now" entry.
     const cachePath = updateCachePath(env);
     mkdirSync(join(home, "cache"), { recursive: true, mode: 0o700 });
@@ -268,7 +268,7 @@ test("mandu doctor asks afresh whatever the cache says and prints the row with t
     assert.equal(r.code, 0, r.stderr);
     assert.equal(s.seen.length, 1, "doctor asked");
     assert.ok(r.stdout.includes(`  version ${CURRENT}\n`), r.stdout);
-    assert.ok(r.stdout.includes(`✗ Mandu ${NEWEST} is out with SECURITY fixes (you have ${CURRENT}); update now: ${installLine(NEWEST)}`), r.stdout);
+    assert.ok(r.stdout.includes(`✗ Mandu ${NEWEST} is out with SECURITY fixes (you have ${CURRENT}); update now: ${installLine(NEWEST, "npm")}`), r.stdout);
     assert.equal((JSON.parse(readFileSync(cachePath, "utf8")) as { releases: unknown[] }).releases.length, 3, "the forged entry is replaced");
     const off = await runCli(["doctor"], { ...env, MANDU_UPDATE_CHECK: "0" });
     assert.ok(off.stdout.includes("· newer release: turned off (MANDU_UPDATE_CHECK=0)"), off.stdout);
