@@ -1,0 +1,53 @@
+# Mandu: Mandu's own bubblewrap grant (docs/design/confidentiality/rootless-confinement-ubuntu-2404.md §12.3).
+# `mandu setup` copies the system bwrap to the root-owned /usr/lib/mandu/bin/bwrap
+# and loads this file. It names only Mandu profiles and attaches to that path
+# only, so it never collides with Ubuntu's own `bwrap` profile, and it changes
+# nothing for any other program on the host.
+#   mandu_bwrap  the copy: may create a user namespace and hold capabilities in it.
+#   mandu_child  everything the copy runs: no capabilities, no user namespace,
+#                except bubblewrap itself, which runs as mandu_bwrap again. So a
+#                sandbox can start inside Mandu's (Codex's, Mandu's command box),
+#                and running the copy by hand gives nobody a namespace with
+#                capabilities. bwrap sets no_new_privs, so every transition keeps
+#                mandu_bwrap in the label; a program with its own host profile
+#                keeps that profile, stacked.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile mandu_bwrap /usr/lib/mandu/bin/bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  allow /usr/lib/mandu/bin/bwrap ix,
+  allow /usr/bin/bwrap ix,
+  allow pix /** -> &mandu_bwrap//&mandu_child,
+
+  include if exists <local/mandu_bwrap>
+}
+
+profile mandu_child flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow dbus,
+  allow /usr/lib/mandu/bin/bwrap Px -> mandu_bwrap,
+  allow /usr/bin/bwrap Px -> mandu_bwrap,
+  allow pix /** -> &mandu_child,
+  deny capability,
+
+  include if exists <local/mandu_child>
+}

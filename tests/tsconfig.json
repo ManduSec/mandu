@@ -1,0 +1,16 @@
+{
+  "comment": "Mirrors arbiter/tsconfig.json (NodeNext + strict). The tests/ package imports the sibling packages' COMPILED .js specifiers (NodeNext ESM) at runtime via tsx; it owns no product sources, and typechecks every suite and the drill catalog under tests/ (test-reorganization.md §5.3). tests/conformance is a separate package with its own tsconfig.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "rootDir": "..",
+    "resolveJsonModule": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["**/node_modules", "conformance", "dist"]
+}

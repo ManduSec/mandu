@@ -1,0 +1,29 @@
+{
+  "name": "@mandusec/eval",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu red-team + benign-utility eval corpus. A declarative YAML corpus (attacks/ + benign/) ported from adfi-openclaw's test/benchmark (injection-tasks, attack-templates, injection-vectors, user-tasks) and re-targeted at Mandu's agent surface (Claude Code / Codex tools: Read / Bash / WebFetch / WebSearch). An attack case pairs a benign carrier (file/url/exec input) with an embedded injected instruction (delimiter-escape framing + attacker intent) and a security_check (regex patterns whose presence in an agent tool call means the attack SUCCEEDED). A benign task pairs a prompt + tool with file/content/response assertions. lib/corpus.ts owns the schema types, YAML loaders, and the (currently flat) case builder, structured so an attack×framing×vector cross-product can grow later (mirroring adfi's test/lib/e2e-defs.ts buildE2ETests). Owns no runner/oracle — those are downstream; this package only loads + validates the corpus.",
+  "scripts": {
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test lib/*.test.ts lib/*/*.test.ts",
+    "test:eval": "MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test live/*.test.ts",
+    "eval:policy-assistant": "tsx --test policy-assistant/*.test.ts",
+    "eval": "tsx run.ts",
+    "eval:paired": "tsx run-paired.ts",
+    "eval:deterministic": "tsx run.ts --defense both",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "eval:utility": "tsx run-utility.ts",
+    "eval:policy-model": "tsx run-policy-model.ts",
+    "eval:policy-model:contents": "tsx run-policy-model-contents.ts"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

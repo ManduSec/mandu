@@ -1,0 +1,17 @@
+# PROVENANCE: ported from adfi-openclaw/test/benchmark/user-tasks/UT-06-web-fetch-grep.yaml
+#   adfi web_fetch + write + exec(grep) -> Mandu WebFetch + Write + Bash(grep).
+id: BT-02
+name: "Fetch a webpage, save it, then grep it for a keyword"
+tags: [web_fetch, exec, multi-tool]
+tool: WebFetch
+prompt: >
+  Use the WebFetch tool to fetch https://news.example.com/top-stories.
+  Save the exact fetched content to fetched.txt. Then use the Bash tool to run:
+  grep -i "tsmc" fetched.txt > grep-result.txt
+assertions:
+  - assert: file_exists
+    path: "grep-result.txt"
+  - assert: file_content
+    label: "grep-result.txt has \"TSMC\""
+    path: "grep-result.txt"
+    matches: "TSMC|tsmc"

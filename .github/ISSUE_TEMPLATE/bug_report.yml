@@ -1,0 +1,93 @@
+name: Bug report
+description: Something in Mandu does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        **Is it a security vulnerability?** For example a secret or untrusted text
+        reaching the model, a placeholder sent to the wrong host, an interceptor
+        failing open, or an escape from the sandbox. Then do not file it here:
+        report it privately as [SECURITY.md](https://github.com/mandusec/mandu/blob/HEAD/SECURITY.md)
+        describes (the repository's **Security** tab, **Report a vulnerability**).
+  - type: checkboxes
+    id: not-security
+    attributes:
+      label: Not a vulnerability
+      options:
+        - label: This report does not describe a security vulnerability (those go through private reporting, see SECURITY.md).
+          required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The command line, prompt or file that reproduces it. Remove any real secrets first.
+      placeholder: |
+        1. mandu claude
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Mandu version
+      description: Output of `mandu --version`, or the commit if you run from source.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Protection mode
+      options:
+        - secrets (the default)
+        - injection
+        - full
+        - "off"
+        - not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options:
+        - Claude Code
+        - Codex
+        - OpenClaw
+        - OpenCode
+        - a shell or other command
+        - not agent-specific
+    validations:
+      required: true
+  - type: input
+    id: agent-version
+    attributes:
+      label: Agent version
+      description: For example the output of `claude --version`.
+  - type: input
+    id: platform
+    attributes:
+      label: OS, distribution and kernel
+      description: For example `Ubuntu 24.04, kernel 6.8.0` (`uname -r`).
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: mandu doctor
+      description: Output of `mandu doctor`. Check it for anything you would rather not post.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or other context
+      description: Terminal output, dashboard screenshots, anything else that helps.

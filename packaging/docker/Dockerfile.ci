@@ -1,0 +1,196 @@
+# packaging/docker/Dockerfile.ci — the ONE image every CI job (and every local repro) runs in.
+#
+# Design + rationale: docs/design/testing/docker-e2e.md §1. This image is the CI *environment*: the
+# toolchain, the two agent CLIs, and every package's node_modules baked in. Jobs
+# differ only by (a) the command they run and (b) the docker security flags their
+# tier needs — see scripts/ci/docker-run.sh, which is the only supported way to
+# start a container from this image.
+#
+# WHY BAKED, NOT BIND-MOUNTED. The repo source and all node_modules are COPYed in
+# at build time, so a job needs no `npm ci` at all. That is what retires the
+# shared-npm-cache corruption class (docs/design/testing/docker-e2e.md §1 "single-writer npm cache",
+# pipelines #6309/#6311/#6314): no job writes ~/.npm/_cacache, because no job
+# installs. Deps live in a manifests-only layer keyed on the lockfiles, so a
+# source-only change rebuilds just the final COPY (seconds), while a lockfile
+# change correctly busts the dep layer.
+#
+# WHY IT MUST RUN AS THE HOST UID. The live tier bind-mounts the host's real
+# ~/.claude so the container shares ONE credential store with the host (see
+# docker-run.sh --with-claude-auth). A mode-600 credential is only readable if the
+# container uid == the host uid, so the image bakes a matching `agent` user;
+# scripts/ci/build-image.sh passes --build-arg UID/GID from the caller.
+FROM node:22-bookworm-slim
+
+# Match the invoking user (CI runner = uid 1001 on the dev host). Overridden by
+# scripts/ci/build-image.sh with the caller's real uid/gid.
+ARG UID=1001
+ARG GID=1001
+
+# Pinned toolchain/CLIs. Rust: the workspace declares rust-version = "1.75";
+# Debian bookworm only ships 1.63, so rustup is REQUIRED (not a convenience).
+# 1.75.0 reproduces the toolchain the shell runner has been green on.
+ARG RUST_VERSION=1.75.0
+ARG CLAUDE_CODE_VERSION=2.1.295
+ARG CODEX_VERSION=0.162.0
+# OpenClaw/OpenCode pins mirror the maintainers' e2e rig image's, and those PINS ARE
+# LOAD-BEARING: opencode >1.18.x parses a v2 provider
+# config agent-provision.ts does not emit, and openclaw's baseUrl/headers path is
+# config-shaped, so a schema drift silently stops routing to the proxy. Bump both
+# files together and re-run the §2.4 provisioning probe.
+ARG OPENCODE_VERSION=1.18.13
+ARG OPENCLAW_VERSION=2026.7.1-2
+# Release-binary agents (scripts/ci/pins.env): the x86_64-gnu tarball, sha256-pinned.
+ARG GOOSE_VERSION=1.53.0
+ARG GOOSE_SHA256=2d010c66dfd4348bb437b3a94001882468a5db1aa556858920481522f57752d7
+
+# git/curl/openssl/procps/util-linux — as in the maintainers' e2e rig image.
+#   util-linux also supplies script(1), the interactive driver's PTY relay backend
+#   (the E22-E24 TUI scenarios skip on any other build of it).
+# make/g++/pkg-config       — cargo needs a C toolchain to LINK. (No node-gyp: the
+#                              tree has no native npm deps since the node:sqlite
+#                              migration retired better-sqlite3 — packaging.md §4.)
+# nftables/iproute2/iptables — net-supervisor's TPROXY chain, exercised inside an
+#                              unprivileged userns (offline-userns tier).
+# slirp4netns               — launcher --unshare-net host-loopback reachability.
+# qemu-system-x86/qemu-utils/genisoimage — the `vm` profile only (kernel-vm.sh:
+#                              boots Ubuntu 22.04 for the seccomp-ADDFD assertion
+#                              this 5.4 host kernel cannot make).
+#   python3 bubblewrap        E47 (exec-trust-derived-chain) runs `python3 -c …`
+#                              through the exec-box's bwrap clean box for real;
+#                              without them the command exited 126 in every
+#                              agent-live-full run since 2026-08-06 (found by
+#                              running the scenario in the container by hand,
+#                              2026-09-05). bwrap also lets the launcher's
+#                              exec-box / secret-twins rungs engage under the
+#                              `userns` profile instead of self-degrading.
+# gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user — the linux-arm64
+#                              bundle (packaging.md §11.3): release-pack cross-links
+#                              the native bins with the first, and starts each
+#                              under qemu-aarch64 against the second's
+#                              /usr/aarch64-linux-gnu; typecheck cargo-checks
+#                              the workspace for aarch64 on every push.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git curl bzip2 ca-certificates procps util-linux bsdutils \
+      make g++ pkg-config \
+      gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user \
+      nftables iproute2 iptables slirp4netns openssl jq \
+      qemu-system-x86 qemu-utils genisoimage \
+      python3 bubblewrap \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}" \
+         --target aarch64-unknown-linux-gnu --component clippy \
+    && rustc --version && cargo --version && cargo clippy --version
+
+# The npm agent CLIs, pinned. On the shell runner `codex` lived in ~/.local/bin,
+# outside the clean CI HOME's PATH, so its offline-live tests SELF-SKIPPED into a
+# false green (docs/design/testing/docker-e2e.md §1, "offline-live sub-tier"). Baking them here is
+# what lets live-offline become a BLOCKING gate instead of allow_failure.
+# openclaw/opencode serve agent-mock-openclaw-opencode (the OpenClaw and OpenCode
+# suites resolve both from PATH) — they were originally added only to the e2e rig image, which
+# left that job dying at `openclaw --version` (pipeline #6474).
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
+      "opencode-ai@${OPENCODE_VERSION}" "openclaw@${OPENCLAW_VERSION}"
+# Goose ships one binary per release, not an npm package (the guest's
+# install_release_bin does the same). The next release-binary agent copies this.
+RUN curl -fsSL --retry 5 -o /tmp/goose.tar.bz2 \
+      "https://github.com/aaif-goose/goose/releases/download/v${GOOSE_VERSION}/goose-x86_64-unknown-linux-gnu.tar.bz2" \
+    && echo "${GOOSE_SHA256}  /tmp/goose.tar.bz2" | sha256sum -c - \
+    && mkdir /tmp/goose && tar -xjf /tmp/goose.tar.bz2 -C /tmp/goose \
+    && install -m 0755 /tmp/goose/goose /usr/local/bin/goose \
+    && rm -rf /tmp/goose /tmp/goose.tar.bz2 && goose --version
+
+# Claude Code refuses --permission-mode bypassPermissions as root, and a
+# root-owned global install cannot self-update mid-run anyway.
+ENV DISABLE_AUTOUPDATER=1
+# Same posture for the other two agents (as in the e2e rig image): a self-update
+# mid-run would swap a pinned binary, and OpenCode must not fetch the models.dev
+# catalog over the network (agent-provision.ts sets this per-run too; belt and
+# braces for manual shells).
+ENV OPENCODE_DISABLE_AUTOUPDATE=1 \
+    OPENCODE_DISABLE_MODELS_FETCH=1
+
+# The uid-matched build user. node:22 already owns uid 1000 (`node`), so a
+# default UID=1001 does not collide; guard anyway so any uid/gid works.
+RUN if ! getent group "${GID}" >/dev/null; then groupadd -g "${GID}" agent; fi \
+    && if ! getent passwd "${UID}" >/dev/null; then \
+         useradd -u "${UID}" -g "${GID}" -m -d /home/agent -s /bin/bash agent; \
+       fi \
+    && install -d -o "${UID}" -g "${GID}" /home/agent /repo \
+    # cargo's registry + the workspace target dir are mounted as named volumes at
+    # run time (docker-run.sh). Docker seeds a fresh named volume from the image
+    # dir it covers — INCLUDING ownership — so these must exist and be agent-owned
+    # here, or the volume lands root-owned and the unprivileged build fails.
+    && install -d -o "${UID}" -g "${GID}" /usr/local/cargo/registry /repo/interceptors/target
+
+USER ${UID}:${GID}
+WORKDIR /repo
+
+# Onboarding/trust/bypass acceptances, identical to the e2e rig image's. Without
+# these the interactive TUI scenarios (E22-E24) stall at 0 turns on a dialog.
+# ~/.claude is a MOUNTPOINT: the live tier bind-mounts the host's real credential
+# store over it; offline tiers leave it empty and never touch a model.
+RUN printf '%s\n' '{"hasCompletedOnboarding": true, "bypassPermissionsModeAccepted": true, "projects": {"/tmp": {"hasTrustDialogAccepted": true}}}' > /home/agent/.claude.json \
+    && mkdir -p /home/agent/.claude
+
+# A git COMMITTER identity — load-bearing, not cosmetic. fs-sync's fs-view init
+# creates the symbolized AgentView worktree and COMMITS to it, and git refuses to
+# commit without one ("Author identity unknown"), which fs-sync then correctly
+# reports as a FAIL-CLOSED init failure. On the shell runner this came from the CI
+# home's symlinked ~/.gitconfig; the container has to supply its own or the
+# launcher golden-path + fs-preload-live suites fail (found 2026-07-12).
+RUN git config --global user.email "ci@mandu.invalid" \
+    && git config --global user.name "Mandu CI" \
+    && git config --global init.defaultBranch main
+
+# ── deps layer: manifests only, so a source edit does not bust `npm ci` ────────
+# The 14 packages scripts/test-all.sh drives. Keep this list in sync with it.
+COPY --chown=${UID}:${GID} arbiter/package.json arbiter/package-lock.json arbiter/
+COPY --chown=${UID}:${GID} tests/conformance/package.json tests/conformance/package-lock.json tests/conformance/
+COPY --chown=${UID}:${GID} dashboard/package.json dashboard/package-lock.json dashboard/
+COPY --chown=${UID}:${GID} eval/package.json eval/package-lock.json eval/
+COPY --chown=${UID}:${GID} fs-sync/package.json fs-sync/package-lock.json fs-sync/
+COPY --chown=${UID}:${GID} tests/package.json tests/package-lock.json tests/
+COPY --chown=${UID}:${GID} launcher/package.json launcher/package-lock.json launcher/
+COPY --chown=${UID}:${GID} interceptors/anthropic-proxy/package.json interceptors/anthropic-proxy/package-lock.json interceptors/anthropic-proxy/
+COPY --chown=${UID}:${GID} interceptors/exec-wrap/package.json interceptors/exec-wrap/package-lock.json interceptors/exec-wrap/
+COPY --chown=${UID}:${GID} interceptors/inspect-mcp/package.json interceptors/inspect-mcp/package-lock.json interceptors/inspect-mcp/
+COPY --chown=${UID}:${GID} interceptors/net-proxy/package.json interceptors/net-proxy/package-lock.json interceptors/net-proxy/
+COPY --chown=${UID}:${GID} interceptors/openai-proxy/package.json interceptors/openai-proxy/package-lock.json interceptors/openai-proxy/
+COPY --chown=${UID}:${GID} interceptors/openclaw-inspect-plugin/package.json interceptors/openclaw-inspect-plugin/package-lock.json interceptors/openclaw-inspect-plugin/
+COPY --chown=${UID}:${GID} interceptors/reply-filter/package.json interceptors/reply-filter/package-lock.json interceptors/reply-filter/
+
+RUN set -e; for p in arbiter tests/conformance dashboard eval fs-sync tests launcher \
+                     interceptors/anthropic-proxy interceptors/exec-wrap \
+                     interceptors/inspect-mcp interceptors/net-proxy \
+                     interceptors/openai-proxy interceptors/openclaw-inspect-plugin \
+                     interceptors/reply-filter; do \
+      echo "── npm ci: $p"; (cd "$p" && npm ci --no-audit --no-fund); \
+    done
+
+# ── source layer: the only layer a code-only change rebuilds ───────────────────
+COPY --chown=${UID}:${GID} . .
+
+# Fail the BUILD, not some later job, if any package's tree came out incomplete —
+# e.g. a new package added to test-all.sh but not to the COPY/npm-ci lists above.
+# The oracle is `.bin/tsx`: every package runs its tests through tsx, and "tree
+# installed but tsx missing" is precisely the shape the old shared-npm-cache
+# corruption took (MODULE_NOT_FOUND at preload, exit 0 from `npm ci` — see
+# docs/design/testing/docker-e2e.md §1 "single-writer npm cache").
+RUN set -e; for p in arbiter tests/conformance dashboard eval fs-sync tests launcher \
+                     interceptors/anthropic-proxy interceptors/exec-wrap \
+                     interceptors/inspect-mcp interceptors/net-proxy \
+                     interceptors/openai-proxy interceptors/openclaw-inspect-plugin \
+                     interceptors/reply-filter; do \
+      test -x "$p/node_modules/.bin/tsx" \
+        || { echo "FATAL: $p has no node_modules/.bin/tsx — dep layer is incomplete" >&2; exit 1; }; \
+    done; echo "deps verified: 14/14 packages have a runnable tsx"
+
+# No ENTRYPOINT: scripts/ci/docker-run.sh always supplies the command, and the
+# tiers run different ones. Default is a shell so `docker run -it mandu-ci` is
+# a usable repro environment.
+CMD ["bash"]

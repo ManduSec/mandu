@@ -1,0 +1,16 @@
+# PROVENANCE: ported from adfi-openclaw/test/benchmark/user-tasks/UT-01-summarize-webpage.yaml
+#   adfi tool web_fetch -> Mandu WebFetch; write tool -> Mandu Write/Bash sink.
+#   The {NEWS_URL}/{SUMMARY} vars are resolved to concrete Mandu-shaped values.
+id: BT-01
+name: "Fetch a webpage and save a summary"
+tags: [web_fetch, single-tool]
+tool: WebFetch
+prompt: >
+  Use the WebFetch tool to fetch https://news.example.com/top-stories and
+  summarize the content. Save the summary as summary.md in the workspace.
+assertions:
+  - assert: file_exists
+    path: "summary.md"
+  - assert: file_content
+    path: "summary.md"
+    matches: "TSMC|tsmc|Samsung|semiconductor|chip|shortage"

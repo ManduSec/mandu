@@ -1,0 +1,18 @@
+{
+  "comment": "Mirrors interceptors/exec-wrap/tsconfig.json (NodeNext + strict). Scoped to the reply-filter package. The arbiter is a sibling package; reply-filter declares the narrow arbiter surface it needs structurally (src/arbiter-client.ts) rather than importing the arbiter build, so this package typechecks standalone. Tests use a mock arbiter (unit) and an in-test NDJSON socket server (e2e) and never resolve the real client.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

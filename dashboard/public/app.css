@@ -1,0 +1,1309 @@
+/* The Mandu PRODUCT dashboard (dashboard.md §4.25). The visual system (one
+   accent, three semantic colors, one sans family over mono data, light
+   by default with dark following the system) is mandu.css, shared with the
+   /dev/ inspector; this file is the product page's own layout and parts. */
+
+code { font-family: var(--mono); font-size: 0.9em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+/* Code in the story and the asks: its own ink and a hairline edge. */
+#agent-story code, .ask code { color: var(--code-ink); box-shadow: inset 0 0 0 1px var(--line-2); overflow-wrap: anywhere; }
+/* The reply and the question keep their spaces (pre-wrap), where a space at
+   the end of a line hangs past it: a command's code ("! curl … -u ") drew
+   its box 6 px past the column at 320 px. Inside a code a space takes its
+   room, so the line breaks after it inside the column (§4.25u). */
+.reply-text code, .q-text code { white-space: break-spaces; }
+h2 { font-size: 18px; font-weight: 600; }
+/* A line of words does not end with one word alone (§4.25u, *No word alone
+   on a last line*): Approvals' "If you click Allow once or Always allow"
+   left "Allow" alone at 1280 px, and at 390 px ten notes and rows ended
+   on one word. A heading or a cell's label is balanced over its lines;
+   prose (a note, a card's cell, a list row, a glossary entry) moves a word
+   down where the browser judges its last line too short. Only the style:
+   where a line may break (white-space, nowrap, the name boxes above) is
+   unchanged. A browser without it wraps as before. */
+h1, h2, h3, .k, .proposal-k { text-wrap-style: balance; }
+p, li, dd, .v { text-wrap-style: pretty; }
+/* A moment never breaks between a number and its word (dashboard.md
+   §4.25u). A row's relative words stay on one line ("1 minute ago": History's
+   narrow column wrapped after the "1"), and so does each half of a moment
+   that says both (home.js sayWhen: "Oct 15, 15:31 ·" then "2 minutes ago");
+   a line may break between the halves. The longest part, "Sep 30, 2025,
+   14:12 ·", fits the narrowest column that holds one. */
+time.ago, .when-at, .when-ago { white-space: nowrap; }
+/* A row's moment keeps its verb: home.js whenLine puts "started" and "1
+   minute ago" in one .when-phrase, a box no wider than its line, so
+   History's 150 px column reads "running now," over "started 1 minute
+   ago". It wraps inside only when it alone is wider than the line
+   (§4.25u). */
+.when-phrase { display: inline-block; max-width: 100%; }
+/* Nor does a count: home.js countWords puts a number and the word after it
+   in the page's own words in one .count-word ("1 action", "2 requests"), so
+   a line never ends with "1" before "action blocked" (§4.25u). Its word is
+   at most 24 letters, so the pair fits the narrowest column. */
+.count-word { white-space: nowrap; }
+/* Nor does a command the page names: home.js ownCode marks a code of the
+   page's own words with a space in it, at most 24 characters, so "Start it
+   with mandu dashboard" never ends a line with "mandu" (§4.25u). 24
+   characters of code fit the narrowest column that holds one. */
+code.code-whole { white-space: nowrap; }
+/* In a column that can be narrower than 24 characters of code (a Rules row
+   under its name, 134 px at 320 px), a nowrap .code-whole would run past
+   it: home.js fitName puts such a name and the punctuation after it in a
+   .name-fit instead, a box no wider than its line, so the name moves whole
+   to the next line when it fits one and wraps inside only when it does not,
+   and a comma never starts a line (§4.25u). */
+.name-fit { display: inline-block; max-width: 100%; }
+.name-fit > code { overflow-wrap: anywhere; }
+/* A name longer than 24 characters with no space in it (a path, a host):
+   home.js longName cuts it after each slash (a host: each dot) into
+   .name-parts, boxes no wider than their line, so a line breaks between
+   them ("~/mandu-try/" over "deploy/staging.conf"), not at the hyphen
+   inside one ("~/mandu-" over "try/…"), and inside one only when it alone
+   is wider than the line (§4.25u, *A long name breaks at its slashes*). */
+.name-part { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+/* The bar's background spans the window; its contents sit in the same
+   column as #main (same max-width, same side padding), so the status on the
+   right lines up with the right edge of the cards below it. */
+#top {
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.top-inner {
+  height: 64px;
+  max-width: 1040px;
+  padding: 0 clamp(16px, 4vw, 48px);
+  display: flex;
+  align-items: center;
+  gap: clamp(16px, 3vw, 40px);
+}
+#nav { display: flex; gap: 6px; flex-grow: 1; }
+#nav a {
+  padding: 8px 14px;
+  border-radius: 8px;
+  color: var(--ink-2);
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#nav a:hover { text-decoration: none; background: var(--line-2); }
+#nav a[aria-current="page"] { background: var(--line); color: var(--ink); font-weight: 500; }
+/* The count's ink is the panel's, never a fixed white: white on the dark
+   theme's light amber read 2.23:1 (dashboard.md §4.25k *Text on a filled
+   color reads in both themes*). Light: #fff, as before. */
+.count {
+  background: var(--warn);
+  color: var(--panel);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 1px 7px;
+  line-height: 1.4;
+}
+.top-status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-3); white-space: nowrap; min-width: 0; }
+.top-status .dim { overflow: hidden; text-overflow: ellipsis; }
+/* While protection is not plainly on, the words link Settings › Protection
+   (dashboard.md §4.25 *The top bar says on or off*): the status's own ink,
+   size and gap, so the bar is no wider; underlined on hover and focus. */
+.top-status-link { display: flex; align-items: center; gap: 8px; min-width: 0; color: inherit; text-decoration: none; }
+.top-status-link:hover, .top-status-link:focus-visible { color: inherit; text-decoration: underline; }
+@media (max-width: 640px) {
+  .top-inner { height: auto; flex-wrap: wrap; row-gap: 4px; column-gap: 12px; padding-top: 10px; padding-bottom: 10px; }
+  #nav { order: 3; flex-basis: 100%; gap: 2px; overflow-x: auto; }
+  #nav a { padding: 6px 10px; }
+  /* The brand beside it links Home: on a phone the row holds the other
+     four, as five do not fit it (dashboard.md §4.25 *The page links fit a
+     small phone*). */
+  #nav a[data-page-link="home"] { display: none; }
+  .top-status { margin-left: auto; }
+}
+/* From 641 px the links share the bar with the brand and the status: five
+   at 14 px a side left "Protection on" 42 px of its 94 at 641 px. Until
+   768 px they sit closer, needing no more than the four did (dashboard.md
+   §4.25 *The page links fit a small phone*). */
+@media (min-width: 641px) and (max-width: 767px) {
+  #nav { gap: 2px; }
+  #nav a { padding: 8px 7px; }
+}
+/* Narrower than 375 px the links and a waiting count of up to 99 fit the
+   row only closer together: as above they needed 316 px with a count of 1
+   in the 288 px row at 320 px, which cut Settings. With History they need
+   283 px with two digits, at 5 px a side and the count's pill 6 px a side
+   (dashboard.md §4.25 *The page links fit a small phone*). Each link keeps
+   50 px (Rules' word is 38). The row still scrolls if it must. */
+@media (max-width: 374px) {
+  #nav { gap: 0; }
+  #nav a { padding: 6px 5px; min-width: 50px; justify-content: center; gap: 5px; }
+  .count { padding: 1px 6px; }
+}
+.dot { width: 8px; height: 8px; border-radius: 999px; background: var(--ink-4); flex-shrink: 0; }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+.dot.bad { background: var(--bad); }
+
+/* View as public (dashboard.md §4.25ac): a bar under the top bar, in the
+   same column as #main, while this browser hides the developer view's links. */
+.as-public { border-bottom: 1px solid var(--warn-line); background: var(--warn-bg); color: var(--ink-2); }
+.as-public-inner {
+  max-width: 1040px;
+  padding: 10px clamp(16px, 4vw, 48px);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 14px;
+}
+.as-public-inner > span { min-width: 0; }
+.view-public { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.view-public > .note { min-width: 0; }
+
+/* ── Page frame ──────────────────────────────────────────────────────────── */
+#main {
+  padding: 40px clamp(16px, 4vw, 48px) 64px;
+  max-width: 1040px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+#main > section[data-page] { display: flex; flex-direction: column; gap: 32px; }
+.page-head { display: flex; flex-direction: column; gap: 6px; }
+.page-head h1 { font-weight: 650; font-size: 30px; line-height: 1.15; letter-spacing: -0.02em; }
+.page-head p { margin: 0; color: var(--ink-3); }
+/* Section links (dashboard.md §4.25 "Section links"): under the title of
+   Rules and Settings, a link per card, "·" between them. One row that
+   wraps on a phone, in the page's flow: it never sticks over the page. A
+   link keeps its words together (a "Who may get your secrets" breaks only
+   between links), and the "·" ends a line rather than starting the next. */
+.section-links ul { display: flex; flex-wrap: wrap; gap: 4px 0; margin: 4px 0 0; padding: 0; list-style: none; font-size: 14px; }
+.section-links li { white-space: nowrap; }
+.section-links li:not(:last-child)::after { content: "·"; margin: 0 8px; color: var(--ink-3); }
+/* A page change gives the focus to the page's heading, or to the card or
+   step the page scrolls to (dashboard.md §4.25 *A page change moves the
+   focus*): not controls, so no ring; a marked card or step keeps its mark.
+   So does the model preview's headline, where the preview opens. */
+#main h1[tabindex="-1"]:focus, #main h2[tabindex="-1"]:focus, #suggest-model-head:focus,
+.ask.focus:focus, .row.answered.focus:focus, .focus-note:focus, .step.focus:focus, .turn.focus:focus { outline: none; }
+.block { display: flex; flex-direction: column; gap: 12px; }
+/* Cards and folds (dashboard.md §4.25 "Cards and folds"): on Rules and
+   Settings every section is its own panel, so where one ends is never in
+   doubt. A list inside a card keeps a lighter edge; a form inside one is not
+   boxed twice. A card says ONE line about itself; the rest folds under
+   "More" (.more, a <details>) or a "?" help. */
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; gap: 14px; }
+.card > h2, .card > .block-head h2 { font-size: 18px; }
+.card .table { border-color: var(--line-2); }
+.card .lock-form { border-color: var(--line-2); background: var(--panel-2); }
+.card > h3 { font-size: 15px; font-weight: 600; margin-top: 6px; }
+@media (max-width: 640px) { .card { padding: 18px 16px; border-radius: 12px; } }
+details.more { font-size: 14px; color: var(--ink-3); }
+details.more > summary { cursor: pointer; width: max-content; color: var(--accent); font-size: 13px; font-weight: 500; list-style: none; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::after { content: " ▾"; }
+details.more[open] > summary::after { content: " ▴"; }
+details.more > summary:hover { color: var(--accent-ink); }
+details.more > :not(summary) { margin-top: 8px; }
+.choice-line { display: flex; align-items: center; gap: 8px; }
+/* A choice inside a list row (a prompt filter's action, a label's level),
+   and Keys Mandu found's model menus. */
+:where(.card .row) select, :where(.suggest-model) select { height: 32px; padding: 0 28px 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font-size: 13px; }
+/* Rules, while protection is off: the rules are kept, not enforced. */
+.rules-off { margin: 0; padding: 12px 16px; border: 1px solid var(--warn-line); border-radius: 10px; background: var(--warn-bg); color: var(--ink-2); font-size: 14px; }
+.block-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.block-head a { font-size: 14px; }
+.muted { font-weight: 400; color: var(--ink-4); }
+.note { margin: 0; font-size: 14px; color: var(--ink-3); }
+/* Words the page marks secondary (a caption, a note, a status, an empty
+   list, where a label comes from) read in the note's ink wherever they are;
+   a row's own, `.row .dim`, stay fainter (dashboard.md §4.25k). */
+.dim { color: var(--ink-3); }
+.empty { padding: 20px 24px; border: 1px dashed var(--line); border-radius: 12px; color: var(--ink-3); font-size: 14px; }
+
+/* The first-run setup card (dashboard.md §4.25): shown until the first session. */
+.exposure { background: var(--panel); border: 1px solid var(--warn); border-left-width: 4px; border-radius: 12px; padding: 16px 24px; }
+.exposure h2 { margin: 0 0 6px; }
+.exposure p { margin: 0; max-width: 72ch; color: var(--ink-2); }
+.exposure-causes { margin: 8px 0; padding-left: 20px; font-size: 14px; }
+.exposure-causes li { overflow-wrap: anywhere; }
+.exposure-fix { font-weight: 600; }
+.first-run { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px 24px; }
+.first-run-protects { margin: 0; font-size: 15px; color: var(--ink-2); max-width: 72ch; }
+.first-run-steps { margin: 4px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 16px; }
+.first-run-step { display: flex; flex-direction: column; gap: 6px; }
+.first-run-step::marker { font-weight: 600; color: var(--ink-3); }
+.first-run-title { font-weight: 600; }
+.first-run-step .note { max-width: 72ch; }
+.first-run-commands { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.first-run-commands li { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.first-run-commands code { white-space: nowrap; }
+.first-run-commands .dim { color: var(--ink-3); }
+.first-run-step a { font-size: 14px; align-self: flex-start; }
+
+/* ── Hero ────────────────────────────────────────────────────────────────── */
+.hero { display: flex; gap: 24px; align-items: flex-start; }
+.hero-icon {
+  width: 56px; height: 56px; border-radius: 14px; flex-shrink: 0;
+  background: var(--line-2);
+  display: flex; align-items: center; justify-content: center;
+}
+.hero-icon svg { width: 28px; height: 28px; }
+.hero[data-verdict="protected"] .hero-icon,
+.hero[data-verdict="quiet"] .hero-icon,
+.hero[data-verdict="secrets-only"] .hero-icon { background: var(--ok-bg); color: var(--ok); }
+.hero[data-verdict="waiting"] .hero-icon,
+.hero[data-verdict="off"] .hero-icon { background: var(--warn-bg); color: var(--warn); }
+.hero[data-verdict="failed"] .hero-icon { background: var(--bad-bg); color: var(--bad); }
+.hero[data-verdict="unknown"] .hero-icon { color: var(--ink-4); }
+.hero-body { display: flex; flex-direction: column; gap: 10px; }
+.hero h1 { font-weight: 650; font-size: 34px; line-height: 1.1; letter-spacing: -0.02em; }
+.hero p { margin: 0; font-size: 17px; color: var(--ink-2); max-width: 720px; }
+/* On a phone the icon sits above the headline, smaller, and the words take
+   the column's whole width (dashboard.md §4.25, Home): beside them the 56 px
+   tile and its gap took 80 px of a 288 px column at 320 px, and the headline
+   wrapped in four lines. Its colours per verdict are the rules above. */
+@media (max-width: 640px) {
+  .hero { flex-direction: column; gap: 12px; }
+  .hero-icon { width: 40px; height: 40px; border-radius: 10px; }
+  .hero-icon svg { width: 22px; height: 22px; }
+  .hero h1 { font-size: 28px; }
+}
+.facts { display: flex; flex-wrap: wrap; gap: 6px 28px; margin-top: 6px; font-size: 14px; color: var(--ink-3); }
+.facts strong { color: var(--ink); font-weight: 600; }
+.facts strong.warn { color: var(--warn); }
+
+/* ── Cards (asks) ────────────────────────────────────────────────────────── */
+.cards { display: flex; flex-direction: column; gap: 12px; }
+.ask {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px 24px;
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.ask-icon {
+  width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0;
+  background: var(--warn-bg); color: var(--warn);
+  display: flex; align-items: center; justify-content: center;
+}
+.ask-icon svg { width: 20px; height: 20px; }
+/* A card's icon and words, side by side; above each other only where the
+   card is narrower than both (a phone). A browser sizes this row by its own
+   width first: icon, gap and the sentence's own width. A sentence shorter
+   than the words' 320 px basis made it narrower than 40 + 20 + 320 px, so it
+   wrapped: the icon over the words on Home, an empty band in Approvals'
+   cards (dashboard.md §4.25 *A short question keeps its icon beside its
+   words*). The min-width keeps it at least that wide, or the card's width. */
+.ask-top { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; min-width: min(100%, 380px); }
+.ask-body { flex: 1 1 320px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ask-sentence { font-size: 16px; font-weight: 500; }
+.ask-sub { font-size: 14px; color: var(--ink-3); }
+/* A card's answers. The row never shrinks (beside the words on a wide card,
+   the words give way), so it was as wide as all its buttons on one line and
+   its wrap never happened: a held message's four answers ran 365 px past the
+   card at 390 px and pushed the page sideways (dashboard.md §4.25 *A
+   question's buttons wrap inside its card*). Never wider than its row, so
+   on a phone the buttons wrap inside the card. */
+.ask-actions { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; max-width: 100%; }
+.ask.expanded { flex-direction: column; align-items: stretch; }
+.ask-detail {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--line-2);
+  border-bottom: 1px solid var(--line-2);
+}
+.ask-detail .k { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-4); }
+.ask-detail .v { font-size: 14px; color: var(--ink-2); }
+.ask-error { font-size: 13px; color: var(--bad); }
+/* A program's send of the files it holds (confidentiality plan 13 §5.4):
+   each file, where it may go, and its own Always. Wraps at phone width. */
+.ask-sources { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
+.ask-sources .k { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-4); }
+.ask-source-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.ask-source { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 14px; color: var(--ink-2); }
+.ask-source-what { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.ask-source-state { color: var(--warn); font-weight: 500; }
+.ask-source-why, .ask-sources-left { font-size: 13px; margin: 0; flex-basis: 100%; }
+.ask-source-always { white-space: normal; text-align: left; }
+/* The "?" help next to a "masked" mention (dashboard.md §4.25u): a real
+   button that opens a short note under it; never hover-only. The note
+   resets the label's caps so it reads as a sentence. */
+.help { position: relative; display: inline-block; vertical-align: middle; }
+.help-btn {
+  width: 18px; height: 18px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink-3);
+  font: 600 11px/16px var(--sans); letter-spacing: 0; text-transform: none; cursor: pointer;
+}
+.help-btn:hover, .help-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.help-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.help-pop {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 20;
+  display: block; width: max-content; max-width: min(320px, calc(100vw - 32px));
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--panel); color: var(--ink-2); box-shadow: 0 4px 16px color-mix(in srgb, var(--ink) 12%, transparent);
+  font: 400 13px/1.5 var(--sans); letter-spacing: 0; text-transform: none; white-space: normal;
+}
+.help-pop[hidden] { display: none; }
+/* Home card → the same question on Approvals (/approvals/<id>), marked there. */
+.ask-sub .ask-details { white-space: nowrap; }
+.ask.focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.row.answered.focus { box-shadow: inset 4px 0 0 var(--accent); background: var(--panel-2); }
+#approvals-focus-note { margin-bottom: 24px; }
+/* A rule-change request from the agent (policy-surface.md §8.6): the
+   facts first, the agent's own words last and muted. */
+.proposal-rows, .proposal-let { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 15px; }
+.proposal-let { color: var(--ink-2); font-size: 14px; }
+.proposal-k { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-4); }
+.agent-says { border-left: 3px solid var(--ink-4); padding: 4px 12px; color: var(--ink-3); font-size: 14px; }
+.agent-says .agent-says-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The ALLOW box of a wide change has the page's field look, as high as the
+   buttons beside it (§4.25r *Every field has the page's look*). */
+.proposal-confirm {
+  height: 40px; max-width: 220px; padding: 0 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
+}
+.proposal-confirm:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.proposal-notice { font-size: 14px; color: var(--ink-2); }
+.cards > .more { font-size: 14px; padding: 4px 0; }
+
+.btn {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+.btn:hover { border-color: var(--ink-4); }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.btn.primary:hover { opacity: 0.9; }
+.btn.small { height: 32px; padding: 0 12px; font-size: 13px; }
+.btn[disabled] { opacity: 0.5; cursor: default; }
+/* A text button: an action inside a sentence ("Browse all files to label
+   one"), which reads as the page's links do. Zero specificity, so one with a
+   class of its own (.rule-source-btn, .file-open, .crumb …) keeps that look. */
+:where(button.link-btn) { padding: 0; border: none; background: none; color: var(--accent); }
+:where(button.link-btn:hover) { color: var(--accent-ink); text-decoration: underline; }
+
+/* ── Tables (agents, rules, answered) ────────────────────────────────────── */
+.table { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+/* An empty state has one frame (dashboard.md §4.25 "Empty states"). A list
+   holding only its empty state draws no frame or fill of its own, so the
+   dashed box looks as it does in a card list; a note among a list's rows is
+   drawn as a row; a list with nothing in it draws nothing, not a stray line. */
+.table:has(> .empty:only-child) { background: none; border: none; border-radius: 0; }
+.table > .empty:not(:only-child) { padding: 14px 24px; border: none; border-bottom: 1px solid var(--line-2); border-radius: 0; }
+.table > .empty:not(:only-child):last-child { border-bottom: none; }
+.table:empty { display: none; }
+.row {
+  display: grid;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--line-2);
+  font-size: 14px;
+}
+.row:last-child { border-bottom: none; }
+.row.agent { grid-template-columns: 180px minmax(0, 1fr) 150px 90px; }
+/* A click anywhere on a session's row opens it (dashboard.md §4.25 *A click
+   on a session's row opens it*): the pointer and the page's row hover say
+   so. Under forced colors the background goes and the cursor stays. */
+.row.agent { cursor: pointer; }
+.row.agent:hover { background: var(--bg); }
+/* History's day headings (dashboard.md §4.25ae *Sessions sit under their
+   day*): an h2 for a screen reader, drawn as a slim line between the rows,
+   no card of its own; the page's other headings keep their size. */
+.history-day { margin: 0; padding: 8px 24px; font-size: 13px; font-weight: 600; color: var(--ink-3); background: var(--bg); border-bottom: 1px solid var(--line-2); }
+.history-day:last-child { border-bottom: none; }
+/* A Home row's prompt, with its counts on the line under it: the row's
+   widest column, so "1 secret masked, …, 1 send with a real value filled in"
+   reads as a line or two, not four lines in a narrow third column. The third
+   column says only when it started or ended (dashboard.md §4.25 Home). The
+   prompt keeps its one ellipsized line (min-width: 0 lets it); the counts
+   wrap, never cut, and without a lone last word where the browser can. */
+.agent-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.agent-counts { text-wrap: pretty; }
+/* An agent outside the tested versions / with tools Mandu does not know
+   (supported-agents.md §3): a warning mark by its name opens the sentence.
+   The table clips its corners, so it lets an open note overflow. */
+.notice-btn { display: inline-flex; align-items: center; justify-content: center; border: none; background: none; color: var(--warn); }
+.notice-btn:hover, .notice-btn[aria-expanded="true"] { color: var(--warn); background: var(--line-2); }
+.table:has(.help-pop:not([hidden])) { overflow: visible; }
+/* A preview agent (supported-agents.md §2.0): a "Preview" tag by its name
+   that opens what that means, the help button drawn as the page's tags. */
+.preview-btn { width: auto; padding: 0 7px; border-radius: 999px; background: var(--line-2); border-color: transparent; color: var(--ink-3); white-space: nowrap; }
+.preview-btn:hover, .preview-btn[aria-expanded="true"] { background: var(--line-2); }
+h1 .help { margin-left: 4px; vertical-align: 6px; }
+/* An Approvals row (Answered earlier, Rule changes): what was asked or
+   changed in its widest column, whole, with when under it as the waiting card
+   puts it; the answer; the button that reverses it. The words wrap and a long
+   path breaks inside its chip, never cut: until 2026-10-08 they kept one
+   ellipsized line beside a 110px time column, so a phone read "…your secret
+   GITHUB_…" above Block instead (dashboard.md §4.25, Approvals). */
+.row.answered { grid-template-columns: minmax(0, 1fr) 150px 110px; }
+.answered-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.answered-what code { overflow-wrap: anywhere; }
+.answered-when { font-size: 13px; }
+.row.answered > .ask-error { grid-column: 1 / -1; }
+.row.rule { grid-template-columns: 28px minmax(0, 1fr) 260px 32px; gap: 12px; padding: 8px 16px; }
+.row.rule.open { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+/* A rule's subject chip is as wide as its words, and a long host breaks
+   inside it. A flex column stretches its items, so until 2026-10-08 a host's
+   chip was a grey bar across the column, like an empty field (dashboard.md
+   §4.25c *The subject's chip fits it*). */
+.rule-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rule-text code { overflow-wrap: anywhere; align-self: flex-start; }
+.rule-text .dim { font-size: 13px; }
+/* Under an opened rule (its ⋯): when and where it was made, its lines, Remove. */
+.rule-detail { display: flex; flex-direction: column; gap: 8px; padding: 10px 16px 14px calc(16px + 28px + 12px); background: var(--panel-2); border-bottom: 1px solid var(--line-2); font-size: 13px; color: var(--ink-2); }
+.rule-detail:last-child { border-bottom: none; }
+.rule-detail .rule-remove { margin-left: auto; color: var(--bad); }
+.rules-folder {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 10px 24px 10px calc(24px + var(--depth, 0) * 24px);
+  font: inherit; font-size: 14px; text-align: left; color: var(--ink-2);
+  background: none; border: none; border-bottom: 1px solid var(--line-2); cursor: pointer;
+}
+.rules-folder:hover { background: var(--bg); }
+.rules-folder { flex-wrap: wrap; }
+.rules-folder code { font-weight: 600; color: var(--ink); white-space: nowrap; }
+.rules-folder-caret { display: flex; color: var(--ink-4); transition: transform 0.15s; }
+.rules-folder[aria-expanded="false"] .rules-folder-caret { transform: rotate(-90deg); }
+.rules-children[hidden] { display: none; }
+.rule-source-btn {
+  margin-top: 4px; padding: 0; border: none; background: none; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--accent);
+}
+.rule-source-btn:hover { color: var(--accent-ink); text-decoration: underline; }
+.rule-source-btn:disabled { color: var(--ink-4); cursor: default; }
+.rule-source-note { margin-top: 4px; font-size: 12px; }
+.rule-asked { margin-top: 4px; font-size: 12px; }
+.rule-asked .ask-link, .rule-origin .ask-link { font-size: 12px; }
+.rule-origin { margin-top: 4px; font-size: 12px; }
+.rule-source {
+  padding: 4px 24px 14px calc(24px + 28px + 16px + var(--depth, 0) * 24px);
+  border-bottom: 1px solid var(--line-2); font-size: 13px;
+}
+.rule-source p { margin: 0 0 6px; }
+.rule-source-head strong { font-weight: 600; }
+.rule-source-warn { color: var(--warn); }
+.rule-source-lines {
+  margin: 0; padding: 8px 0; background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.6;
+}
+.rule-source-lines .ln { display: flex; padding-right: 12px; }
+.rule-source-lines .ln.mark { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.rule-source-lines .ln-no { flex: none; width: 3.5em; padding-right: 12px; text-align: right; color: var(--ink-4); user-select: none; }
+.rule-source-lines .ln-text { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.rule-source-lines .ln.mark .ln-text { color: var(--ink); }
+.row-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+/* A group's heading over its list: its name, then what it decides. */
+.rules-group { margin-top: 6px; font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.rules-group .muted { font-size: 13px; margin-left: 4px; }
+/* Find a rule (§4.25f *Find a rule*): the box between Your rules' heading
+   and Add a rule, filling the room there; on a phone it goes under the
+   heading, a line of its own. A group it finds nothing in is not drawn. */
+#rules-block > .block-head { flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+#rules-block > .block-head h2 { margin-right: auto; }
+.rules-find {
+  flex: 0 1 260px; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
+}
+.rules-find:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 560px) { .rules-find { order: 3; flex: 1 1 100%; } }
+.rules-find-none p { margin: 0 0 6px; font-size: 14px; color: var(--ink-2); }
+.rules-find-none p.dim { color: var(--ink-3); }
+.rules-find-none[hidden], .rules-group[hidden], .files-heads[hidden], .files-tree[hidden] { display: none; }
+.rules-rest { display: flex; flex-direction: column; gap: 12px; }
+.rules-rest:empty { display: none; }
+.glossary { margin: 0 0 12px; font-size: 14px; color: var(--ink-2); }
+.glossary summary { cursor: pointer; color: var(--ink-3); }
+.glossary dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 10px 0 0; }
+.glossary dt { font-weight: 600; color: var(--ink); }
+.glossary dd { margin: 0; }
+@media (max-width: 760px) { .glossary dl { grid-template-columns: 1fr; gap: 2px; } .glossary dd { margin-bottom: 8px; } }
+.rules-notice { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; font-size: 14px; color: var(--ink-2); }
+.row.service { grid-template-columns: 180px minmax(0, 1fr) 120px; }
+.row.service .switch { justify-self: end; margin-top: 0; }
+/* Settings › Protection: one row, the on/off's sentence and under it the
+   service line (its state, Start or Restart; dashboard.md §4.25 *One
+   Protection row*). */
+.protect-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.service-line .service-state { color: var(--ink-2); font-weight: 500; }
+.service-line .service-btn { margin-left: 6px; vertical-align: middle; }
+.service-line .note { margin: 4px 0 0; }
+/* Settings › Protection service: Restart's inline question under the row. */
+.service-confirm { padding: 14px 24px; background: var(--warn-bg); border-bottom: 1px solid var(--line-2); font-size: 14px; }
+.service-confirm p { margin: 0 0 10px; color: var(--ink); }
+.service-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* "Where your data lives" on the Home page (on-disk-layout.md §9.2): closed by default, low on the page. */
+.data-where summary { cursor: pointer; font-size: 15px; font-weight: 600; color: var(--ink-2); }
+.data-where details[open] summary { margin-bottom: 12px; }
+.data-where .note { margin-bottom: 12px; max-width: 72ch; }
+.row.data-where-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 130px; padding: 8px 24px; font-size: 13px; }
+.row.data-where-row.missing { opacity: 0.6; }
+.row.data-where-group { display: block; padding: 8px 24px; font-size: 13px; font-weight: 600; color: var(--ink-3); background: var(--bg); }
+.tag.only-you { background: var(--ok-bg); color: var(--ok); }
+.tag.open-to-others { background: var(--bad-bg); color: var(--bad); }
+.tag.broken-link { background: var(--bad-bg); color: var(--bad); }
+.row .name { display: flex; align-items: center; gap: 10px; font-weight: 500; }
+.row .sub { color: var(--ink-3); }
+.row .dim { color: var(--ink-4); }
+.row .right { text-align: right; }
+/* A button in a row's right column keeps its own width: stretched across the
+   grid cell with its label pushed right, it read as a text field. */
+.row > .btn.right { justify-self: end; text-align: center; }
+.row .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.outcome { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+.outcome.ok { color: var(--ok); }
+.outcome.bad { color: var(--bad); }
+.outcome.dim { color: var(--ink-3); }
+.row-icon { color: var(--ink-3); display: flex; }
+.row-icon svg { width: 18px; height: 18px; }
+@media (max-width: 760px) {
+  .row.agent, .row.answered, .row.rule, .row.service, .row.data-where-row { grid-template-columns: 1fr; gap: 4px; }
+  .row.rule, .rules-folder { padding-left: calc(16px + var(--depth, 0) * 14px); }
+  .rule-source { padding-left: calc(16px + var(--depth, 0) * 14px); padding-right: 16px; }
+  .row .right { text-align: left; }
+  .row > .btn.right { justify-self: start; }
+  .service-confirm-actions { justify-content: flex-start; }
+  .row-actions { justify-content: flex-start; }
+  .ask-detail { grid-template-columns: 1fr; }
+}
+
+/* ── The on/off switch (Settings, Protection) ─────────────────────────────── */
+.switch {
+  width: 44px; height: 26px; border-radius: 999px; border: none;
+  background: var(--ink-4); position: relative; flex-shrink: 0; margin-top: 2px;
+  transition: background 120ms;
+}
+.switch[aria-checked="true"] { background: var(--ok); }
+.switch .knob {
+  position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 999px; background: #fff;
+  transition: left 120ms;
+}
+.switch[aria-checked="true"] .knob { left: 21px; }
+/* aria-disabled: the switch holds while its change is on its way, and keeps
+   the focus (home.js flipProtection). */
+.switch[disabled], .switch[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.plain-list { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; }
+@media (max-width: 760px) { .plain-list { grid-template-columns: 1fr; } }
+
+/* ── Agent page ──────────────────────────────────────────────────────────── */
+.back { font-size: 14px; }
+.agent-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.agent-head h1 { font-weight: 650; font-size: 30px; line-height: 1.15; letter-spacing: -0.02em; }
+.agent-head p { margin: 6px 0 0; color: var(--ink-3); }
+.link-btn { display: inline-flex; align-items: center; }
+/* The agent page's "Detailed trace" is a link drawn as a button: no link
+   underline. Anchors only, so text buttons keep their own hover. */
+a.link-btn:hover { text-decoration: none; color: var(--ink); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; }
+/* The tiles fill their rows evenly (dashboard.md §4.25, *The tiles fill
+   their rows evenly*). auto-fit puts as many 180px tiles in a row as fit,
+   so one could sit alone under the others: four as 3 + 1 where three fit
+   (a window 614-821px wide: #main's column, min(100%, 1040px) less
+   clamp(16px, 4vw, 48px) a side, is 564-755px), five as 4 + 1 and six as
+   4 + 2 where four fit (822px and wider), six as 5 + 1 where five fit
+   (1031-1150px). The rows stay as few, filled evenly: 2 + 2, 3 + 2, 3 + 3;
+   five keep their one row where five fit. Without :has() a browser drops
+   these and draws auto-fit. */
+/* On a phone the tiles sit two to a row too (§4.25, *On a phone*): a window
+   under 405px (#main's column under 373px) fits no two 180px tiles, so each
+   took a whole row, four as about 400px of a phone's first screen. There a
+   130px minimum fits two from a 304px window (138px each at 320px), never
+   three, and one tile still takes the row. */
+@media (max-width: 404px) {
+  .tiles { grid-template-columns: repeat(auto-fit, minmax(min(130px, 100%), 1fr)); }
+}
+@media (min-width: 614px) and (max-width: 821px) {
+  .tiles:has(> .tile:nth-child(4):last-child) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 822px) {
+  .tiles:has(> .tile:nth-child(5):last-child), .tiles:has(> .tile:nth-child(6):last-child) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 1031px) and (max-width: 1150px) {
+  .tiles:has(> .tile:nth-child(5):last-child) { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+.tile {background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; display: flex; flex-direction: column; gap: 2px; }
+.tile .big { font-size: 28px; font-weight: 600; line-height: 1.1; }
+.tile .lbl { font-size: 13px; color: var(--ink-3); }
+.tile.warn { border-color: var(--warn-line); }
+.tile.warn .big { color: var(--warn); }
+.tile.bad { border-color: var(--bad); }
+.tile.bad .big { color: var(--bad); }
+/* A tile with steps to go to is a button that looks like the others (§4.25,
+   *A tile takes you to what it counts*): "Show" in its corner and an
+   accent edge on hover and keyboard focus, a ring on keyboard focus. Its
+   "Showing 2 of 3" line takes no room before the first press. */
+button.tile { position: relative; color: inherit; text-align: left; cursor: pointer; }
+button.tile:hover, button.tile:focus-visible { border-color: var(--accent); }
+button.tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tile .go { position: absolute; top: 8px; right: 12px; font-size: 12px; font-weight: 600; color: var(--accent-ink); visibility: hidden; }
+button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
+.tile .at { font-size: 12px; color: var(--ink-3); }
+.tile .at:empty { display: none; }
+/* "What happened" (§4.25b): one card per turn; a step whose two views differ
+   splits into "what the AI saw" | "what really happened". */
+.story { display: flex; flex-direction: column; gap: 16px; }
+.turn { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.turn-head { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 12px; padding: 16px 24px; background: var(--panel-2); border-bottom: 1px solid var(--line-2); }
+.turn-head .time { color: var(--ink-4); font-family: var(--mono); font-size: 12px; padding-top: 3px; }
+.turn-q .note { color: var(--ink-3); font-size: 13px; }
+.turn-q .q-text { font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.turn-q .q-out { margin-top: 6px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--code-bg); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.linkish { border: none; background: none; padding: 0; font: inherit; font-size: 13px; color: var(--accent); cursor: pointer; }
+.linkish:hover { text-decoration: underline; }
+.turn-summary { padding: 10px 24px 10px 92px; font-size: 14px; font-weight: 500; color: var(--ok); background: var(--ok-bg); border-bottom: 1px solid var(--line-2); }
+.turn-summary.plain { color: var(--ink-3); background: var(--panel); font-weight: 400; }
+.turn-summary.waiting, .turn-summary.raw { color: var(--warn); background: var(--warn-bg); }
+.turn-summary.blocked, .turn-summary.unmasked { color: var(--bad); background: var(--bad-bg); }
+.cols-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border-bottom: 1px solid var(--line-2); font-size: 12px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-4); }
+.cols-head span { padding: 8px 24px; }
+.cols-head span + span { border-left: 1px solid var(--line-2); padding-left: 20px; }
+.step { border-bottom: 1px solid var(--line-2); font-size: 14px; }
+.step:last-child { border-bottom: none; }
+.step.wide, .half-body { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+.step.wide { padding: 12px 24px 12px 60px; }
+.step .ic { color: var(--ink-3); display: flex; padding-top: 1px; }
+.step .ic svg { width: 18px; height: 18px; }
+.step .what { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.step .note { color: var(--ink-3); font-size: 13px; }
+.step .note.why, .step .note.asked { color: var(--ink-2); }
+.why-label { font-weight: 600; }
+.step.said .what { color: var(--ink-3); }
+.step.blocked, .step.unmasked { background: color-mix(in srgb, var(--bad-bg) 45%, transparent); }
+.step.waiting { background: color-mix(in srgb, var(--warn-bg) 45%, transparent); }
+.step.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.half { padding: 12px 24px; min-width: 0; }
+.half.saw { padding-left: 60px; }
+.half.real { border-left: 1px solid var(--line-2); padding-left: 20px; background: var(--panel-2); display: flex; flex-direction: column; gap: 6px; }
+.half-label { display: none; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-4); margin-bottom: 6px; }
+.saw-line { color: var(--ink-3); font-size: 13px; margin-top: 2px; }
+.real-line { color: var(--ink-2); }
+.reply-text { white-space: pre-wrap; color: var(--ink); font-size: 15px; }
+/* A long reply folds to its first 10 lines, fading out, with one button
+   under it (home.js foldReply, dashboard.md §4.25b); a split folds both
+   halves to this height, its button under the row. */
+.reply-text.folded { max-height: 14em; max-height: 10lh; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 3em), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 3em), transparent); }
+.reply-fold-row { margin-top: 6px; }
+.step.split > .reply-fold-row { grid-column: 1 / -1; margin-top: 0; padding: 0 24px 12px 60px; }
+/* The agent's markdown (home.js markdownNode, §4.25b): bold, a list item
+   with its mark in a hanging indent, a heading line. */
+.md-li { display: flex; gap: 0.5em; }
+.md-li.md-d1 { margin-left: 1.25em; }
+.md-li.md-d2 { margin-left: 2.5em; }
+.md-li.md-d3 { margin-left: 3.75em; }
+.md-mark { flex: none; min-width: 0.75em; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.md-body { flex: 1; min-width: 0; }
+.md-h { display: block; font-weight: 600; }
+.reply-text strong, .q-text strong, .step.said strong { font-weight: 600; }
+.code-block { margin: 6px 0; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--code-bg); color: var(--ink-2); font-family: var(--mono); font-size: 12.5px; line-height: 1.55; white-space: pre; overflow-x: auto; }
+.code-block .mask-chip { vertical-align: 0; }
+.mask-chip { display: inline-block; padding: 0 8px; margin: 0 1px; border-radius: 999px; font-family: var(--sans); font-size: 12px; font-weight: 600; line-height: 18px; background: var(--ok-bg); color: var(--ok); box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 40%, transparent); vertical-align: 1px; cursor: help; }
+.mask-chip.secret { background: var(--warn-bg); color: var(--warn); }
+.hidden-box { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.hidden-caption { font-size: 12px; color: var(--ink-4); }
+.hidden-text { margin: 0; align-self: stretch; max-height: 320px; overflow: auto; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--code-bg); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hidden-note { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--ink-3); }
+.hidden-note svg { flex: none; }
+/* The secrets a reply held, under it (dashboard.md §4.25b). */
+.hidden-note.reply-kept { align-items: flex-start; margin-top: 6px; }
+.hidden-note.reply-kept svg { margin-top: 2px; }
+/* Signed out (dashboard.md §6): the page carries no real value. */
+.values-note { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 13px; color: var(--ink-2); }
+/* The note under your message (plan 15 §13.7; dashboard.md §4.25y). */
+.prompt-note { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding: 8px 12px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; background: var(--panel); font-size: 13px; color: var(--ink-2); }
+.prompt-note-line { display: flex; gap: 6px; align-items: flex-start; }
+.prompt-note-line svg { flex: none; margin-top: 2px; }
+.prompt-note-item { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.prompt-note-what { font-weight: 600; }
+.prompt-let-done, .prompt-let-once-only, .prompt-let-locked { color: var(--ink-3); }
+/* Settings › Prompt filters. */
+.prompt-meanings { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 12px 0 0; font-size: 13px; color: var(--ink-3); }
+.prompt-meanings dt { font-weight: 600; color: var(--ink-2); }
+.prompt-meanings dd { margin: 0; }
+@media (max-width: 560px) { .prompt-meanings { grid-template-columns: 1fr; } }
+.prompt-exception-form { margin-top: 12px; }
+.files summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.files ul { margin: 6px 0 0; padding-left: 18px; columns: 2; column-gap: 24px; font-size: 13px; }
+.toggle-row { padding: 8px 24px 8px 60px; }
+.routine { padding: 10px 24px 12px 60px; font-size: 13px; color: var(--ink-4); border-top: 1px solid var(--line-2); overflow-wrap: anywhere; }
+#agent-story .routine code { color: inherit; box-shadow: none; } /* a host in the muted background line stays muted */
+.tag { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; background: var(--line-2); color: var(--ink-3); }
+.tag.masked, .tag.secret, .tag.sandbox { background: var(--ok-bg); color: var(--ok); }
+.tag.blocked, .tag.unmasked { background: var(--bad-bg); color: var(--bad); }
+.tag.waiting, .tag.raw { background: var(--warn-bg); color: var(--warn); }
+/* A send that left this machine with a real value filled in (allowed). */
+.tag.sent { background: var(--panel-2); color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--line); }
+.story-more { padding: 12px 24px; color: var(--ink-4); font-size: 13px; }
+/* Only where Mandu stepped in (§4.25ae): the switch beside the heading,
+   which wraps under it on a narrow window, and the line a run of quiet
+   turns folds into. */
+.story-head { flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.story-only { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-2); }
+.story-only .switch { margin-top: 0; }
+.story-only label { cursor: pointer; }
+.story-quiet { border: 1px dashed var(--line); border-radius: 12px; }
+/* A session on more than one day (§4.25, the per-agent page): before the
+   first turn of each day, a line naming the day, in the note's ink and the
+   column heads' small capitals, a hairline after it. Not a heading. Its ink
+   and line are tokens, so the dark theme reads it too, and forced colors
+   draw both in the system's text color. */
+.story-day { display: flex; align-items: center; gap: 12px; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-3); }
+.story-day::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+/* §4.25ae: a turn's background steps on a press, the leak check's finding,
+   History's Show more. */
+.routine-more { float: right; padding: 7px 24px 0 8px; }
+.routine-list { list-style: none; margin: 0; padding: 0 24px 12px 60px; font-size: 13px; color: var(--ink-4); display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.routine-list li { display: flex; gap: 8px; align-items: baseline; }
+.routine-list time { flex: none; font-variant-numeric: tabular-nums; }
+#agent-story .routine-list code { color: inherit; box-shadow: none; }
+.finding-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--ink-2); }
+.finding-line { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: start; overflow-wrap: anywhere; }
+.finding-line svg { margin-top: 3px; color: var(--bad); }
+/* A list read a page at a time: its Show more after the words (§4.25ae;
+   §4.25 *Past the newest 20*). */
+.history-more .show-rest, .answered-more .show-rest, .changes-more .show-rest { margin-left: 6px; }
+/* History's search (§4.25ae *Finding a session*): the label, the box
+   filling the line, its switch (*Only the sessions where Mandu stepped
+   in*) and the count under it; one column on a phone. */
+.history-search { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -12px 0 -16px; }
+.history-search label { font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.history-search input[type="search"] {
+  flex: 1 1 220px; min-width: 0; height: 34px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
+}
+.history-search input[type="search"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.history-only { flex-basis: 100%; display: flex; align-items: center; gap: 8px; }
+.history-only .switch { margin-top: 0; flex: none; }
+.history-search .history-only label { font-weight: 400; cursor: pointer; }
+.history-count { flex-basis: 100%; margin: 0; font-size: 13px; color: var(--ink-3); }
+.history-count[hidden] { display: none; }
+.history-clear, .history-all { margin-left: 6px; }
+/* A list's "Show them" after the line that counts what it leaves out (§4.25ad). */
+.story-more .show-rest, .earlier-more .show-rest { margin-left: 6px; }
+/* Your secrets (§4.25b): one card per secret, a plain line per fact. */
+.block-note { margin: 0; color: var(--ink-3); font-size: 14px; }
+/* A column is never wider than its box (§4.25, *A grid column is never wider
+   than its box*): a bare 320px ran 16 px past a phone narrower than 352 px. */
+.secret-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 12px; }
+.secret-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 20px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.secret-head { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.secret-what { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.secret-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--ink-2); }
+.secret-line { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: start; overflow-wrap: anywhere; }
+.secret-line svg { margin-top: 3px; color: var(--ink-4); }
+.secret-line.good svg { color: var(--ok); }
+.secret-line.warn svg { color: var(--warn); }
+.secret-line.bad { color: var(--bad); }
+.secret-line.bad svg { color: var(--bad); }
+.step-link { font: inherit; padding: 0; border: none; background: none; color: var(--accent); cursor: pointer; }
+.step-link:hover { color: var(--accent-ink); text-decoration: underline; }
+.secret-limits { font-size: 13px; }
+/* Opened for an ask (dashboard.md §4.25h): the note, and the marked step. */
+.focus-note { padding: 12px 16px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; background: var(--panel); color: var(--ink-2); font-size: 14px; }
+.focus-note.missing { border-left-color: var(--ink-4); }
+.step.focus, .turn.focus { box-shadow: inset 4px 0 0 var(--accent); background: var(--panel-2); }
+/* A step opened from a time on a Your secrets card: the bar only, so a
+   blocked step keeps its colour (§4.25b, *A time opens its step*). */
+.step.shown { box-shadow: inset 4px 0 0 var(--accent); }
+.step.shown:focus { outline: none; }
+.focus-tag { margin-top: 4px; color: var(--accent-ink); font-size: 12px; font-weight: 600; }
+@media (max-width: 760px) {
+  .turn-head { grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 12px 16px; }
+  .turn-summary { padding: 10px 16px; }
+  .cols-head { display: none; }
+  .step.wide, .half-body { grid-template-columns: 24px minmax(0, 1fr); }
+  .step.wide .tag, .half-body .tag { grid-column: 2; justify-self: start; }
+  .step.wide, .toggle-row, .routine, .routine-more, .routine-list { padding-left: 16px; padding-right: 16px; }
+  .step.split { grid-template-columns: minmax(0, 1fr); }
+  .half, .half.saw { padding: 12px 16px; }
+  .half.real { border-left: none; border-top: 1px dashed var(--line); padding-left: 16px; }
+  .half-label { display: block; }
+  .step.split > .reply-fold-row { padding: 0 16px 12px; }
+  .files ul { columns: 1; }
+}
+
+/* ── Lock form ───────────────────────────────────────────────────────────── */
+.describe-form { display: flex; flex-direction: column; gap: 12px; }
+.describe-form textarea { font: inherit; font-size: 15px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: inherit; resize: vertical; min-height: 72px; width: 100%; box-sizing: border-box; }
+.describe-result { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
+.describe-result .suggestion { display: flex; flex-direction: column; gap: 12px; }
+.suggestion-rows li.loosens { font-weight: 500; }
+.tag-loosens { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-line); vertical-align: 1px; }
+.describe-problems { margin: 0; padding-left: 20px; font-size: 14px; color: var(--ink-2); }
+.describe-done { font-size: 15px; }
+.lock-form { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; border: none; margin: 0; padding: 0; min-width: 0; }
+.field > span, .field legend { font-weight: 600; font-size: 14px; padding: 0; margin-bottom: 6px; }
+.field input[type="text"] { height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-family: var(--mono); font-size: 14px; }
+.field input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.choice { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: var(--ink-2); padding: 6px 0; cursor: pointer; }
+.choice input { margin-top: 3px; accent-color: var(--ok); }
+.choice strong { color: var(--ink); font-weight: 600; margin-right: 6px; }
+.choice.inline { padding: 0; }
+.choice.disabled { cursor: not-allowed; opacity: 0.6; }
+.choice-hint { margin: -2px 0 6px 26px; font-size: 13px; color: var(--ink-3); }
+.choice-hint[hidden] { display: none; }
+.field select { height: 40px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px; }
+.field .field-hint { font-weight: 400; font-size: 13px; color: var(--ink-3); margin: 0; }
+.model-form { margin-bottom: 12px; }
+.row.service.model-row { grid-template-columns: 160px minmax(0, 1fr) minmax(120px, 220px) auto; }
+.model-row .model-plain-http { grid-column: 1 / -1; color: var(--warn); }
+.model-row .model-admin, .label-row > .model-admin { grid-column: 1 / -1; font-size: 13px; color: var(--ink-3); }
+#settings-models > .model-admin-lock, #settings-models > .model-admin-conflicts, #settings-models > .model-admin-refused, #settings-models > .model-perimeter { margin: 0; padding: 12px 24px 0; font-size: 14px; }
+#settings-models > .model-perimeter { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.model-perimeter { color: var(--ink-2); }
+.model-admin-conflicts, .model-admin-refused { color: var(--warn); }
+.model-admin-conflicts ul { margin: 4px 0 0; padding-left: 20px; font-size: 13px; overflow-wrap: anywhere; }
+/* Settings rows whose last cell is a choice and its buttons: a label's level
+   with Save and Remove, a prompt filter's action, the Appearance menu
+   (dashboard.md §4.25s *A row's controls fit it*). That cell takes the room its controls need, up to
+   half the row, and puts them on one line, wrapping only when the row is too
+   narrow. In the plain service row's 120px column the picker ran past the
+   row's border and Save and Remove stacked. The notes under a row span it. */
+.row.service.label-row, .row.service.prompt-kind, .row.service.appearance-row { grid-template-columns: 180px minmax(0, 1fr) fit-content(50%); }
+.row.service .model-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.row.service .model-actions input[type="text"] { height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; }
+.row.service > .ask-error, .label-row > .field-hint { grid-column: 1 / -1; }
+.label-row > .field-hint { margin: 0; font-size: 13px; color: var(--ink-3); }
+/* A prompt filter exception reads as one sentence ("An email address
+   matching *@example.com") in the row's widest column, who added it on the
+   line under it, Remove at the end. A name's chip breaks inside its column
+   (dashboard.md §4.25y *An exception reads as a sentence*). Until
+   2026-10-08 the sentence was a flex box in the 180px name column, three to
+   five lines tall, and a long pattern or kind ran over the words beside it. */
+.row.service.prompt-exception { grid-template-columns: minmax(0, 1fr) auto; }
+.prompt-exception-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.prompt-exception-what > .name { display: block; }
+.row.service .name code { overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .row.service.model-row, .row.service.label-row, .row.service.prompt-kind, .row.service.prompt-exception, .row.service.appearance-row { grid-template-columns: 1fr; }
+  .row.service .model-actions { justify-content: flex-start; }
+}
+.model-test { grid-column: 1 / -1; margin: 4px 0 0; padding: 0 0 0 20px; font-size: 14px; color: var(--ink-2); }
+.model-test li.bad { color: var(--bad); }
+.model-test li.ok { color: var(--ok); }
+.proposal-warn { font-size: 14px; color: var(--warn); }
+.rule-warn { font-size: 13px; color: var(--warn); margin-top: 2px; }
+.form-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.form-actions .ask-error { margin-right: auto; }
+
+/* ── Notifications offer ─────────────────────────────────────────────────── */
+.notify-offer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border: 1px dashed var(--line); border-radius: 10px; font-size: 14px; color: var(--ink-3); }
+
+/* "Try it" on a suggested rule (policy-surface.md §8.5.2) */
+.suggestion-rows .try-row { margin-left: 8px; }
+.suggestion-rows .try-result { margin: 6px 0 2px; padding: 6px 10px; border-left: 3px solid var(--line, #ccc); font-size: 14px; }
+
+/* ── Add a file or folder: the file browser (dashboard.md §4.25m) ────────── */
+.files-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.files-bar input[type="text"] {
+  flex: 1 1 280px; min-width: 0; height: 40px; padding: 0 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  font-family: var(--mono); font-size: 14px;
+}
+.files-bar input[type="text"]:focus, .files-tools input[type="search"]:focus, .files-suggest-bar input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.files-panel .field-hint { font-size: 13px; color: var(--ink-3); margin: -8px 0 0; }
+.files-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-family: var(--mono); font-size: 14px; }
+.files-crumbs .crumb { font: inherit; padding: 2px 4px; border: none; background: none; color: var(--accent); cursor: pointer; border-radius: 4px; }
+.files-crumbs .crumb:hover { background: var(--line-2); }
+.files-crumbs .crumb-here { padding: 2px 4px; font-weight: 600; color: var(--ink); }
+.files-starts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
+.files-starts[hidden] { display: none; }
+.files-tools { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.files-tools input[type="search"] {
+  flex: 1 1 200px; min-width: 0; height: 34px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
+}
+.files-note { margin: 0; padding: 8px 12px; border-left: 3px solid var(--warn-line); background: var(--warn-bg); color: var(--ink-2); font-size: 13px; border-radius: 4px; }
+.files-note[hidden], .files-self[hidden], .files-pending[hidden], .files-confirm[hidden] { display: none; }
+.files-self { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; }
+/* A folder's entries (Add a rule) and the scan's finds scroll in a box of
+   their own: a folder can hold thousands. Your rules (#files-tree) is no
+   such box: it is as long as the rules, as Sending data is (dashboard.md
+   §4.25f). */
+.files-list { max-height: min(60vh, 560px); overflow-y: auto; }
+.row.file { gap: 12px; padding: 4px 16px; }
+.row.file { cursor: pointer; }
+.row.file.selected { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.row.file input[type="checkbox"] { margin: 0; accent-color: var(--ok); }
+.row.file.up { grid-template-columns: 20px minmax(0, 1fr); padding: 8px 16px; width: 100%; font: inherit; font-size: 14px; text-align: left; background: none; border: none; border-bottom: 1px solid var(--line-2); cursor: pointer; color: var(--ink-2); }
+.row.file.up:hover { background: var(--bg); }
+.file-name { min-width: 0; overflow-wrap: anywhere; }
+.file-name code { background: none; padding: 0; }
+.file-open { font: inherit; font-family: var(--mono); font-size: 14px; padding: 0; border: none; background: none; color: var(--accent); cursor: pointer; text-align: left; }
+.file-open:hover { text-decoration: underline; }
+.file-from { margin-top: 2px; font-size: 12px; overflow-wrap: anywhere; }
+.file-pending { margin-top: 2px; font-size: 12px; color: var(--accent); font-weight: 500; }
+.label-chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid var(--line); color: var(--ink-2); }
+.label-chip.strict, .label-chip.local-only { background: var(--bad-bg); border-color: transparent; color: var(--bad); }
+.label-chip.model-ok { background: var(--warn-bg); border-color: transparent; color: var(--ink); }
+.label-chip.public { background: var(--ok-bg); border-color: transparent; color: var(--ok); }
+/* An ordinary file says so quietly, so the secrets stand out. */
+.label-chip.none { border-color: transparent; padding-left: 0; color: var(--ink-4); font-weight: 400; }
+.label-chip.unknown { border-style: dashed; color: var(--ink-3); }
+.empty-row { padding: 14px 16px; font-size: 14px; }
+.files-more { margin: 8px 16px; }
+/* Why a Show more read nothing, over the button that tries again. */
+.files-more-failed { margin: 8px 16px 0; font-size: 14px; color: var(--ink-2); overflow-wrap: anywhere; }
+/* Changes to save (dashboard.md §4.25n) never scrolls as one block: its
+   heading, the weaker-change question with its Why? field and the buttons
+   keep their size, and only the lists inside shrink and scroll in place, so
+   Discard and Save stay in view however many changes wait. It takes half
+   the window, at least 20rem where the window has room. Its own scroll is a
+   fallback for a window too short for even the parts that keep their size. */
+.files-pending {
+  display: flex; flex-direction: column; gap: 10px; padding: 16px 20px; border: 1px solid var(--accent); border-radius: 12px;
+  position: sticky; bottom: 12px; z-index: 5; overflow-y: auto;
+  max-height: max(50vh, min(100vh - 24px, 20rem)); max-height: max(50vh, min(100dvh - 24px, 20rem));
+  background: var(--panel); box-shadow: 0 8px 28px color-mix(in srgb, var(--ink) 16%, transparent);
+}
+/* It never hides the focus (§4.25n): the window keeps the bar's room
+   (home.js trackBarRoom) below what it scrolls into view, a Tab's control
+   or a row opened. Not for a control in the bar: the window would scroll
+   to the bar's own place in the page. */
+html:not(:has(#files-pending:focus-within)) { scroll-padding-bottom: var(--bar-room, 0px); }
+.files-pending > * { flex: none; }
+/* The list gives way last (it keeps two rows when it has them); the
+   impact note gives way first, down to its headline, its "Show the files"
+   and, open, the first file. */
+.files-pending > .files-pending-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.files-pending > .files-pending-list:has(> li:nth-child(2)) { min-height: calc(2lh + 8px); }
+.files-pending > .files-impact { flex: 0 100 auto; min-height: 1lh; overflow-y: auto; }
+.files-pending > .files-impact:has(> details) { min-height: calc(2lh + 4px); }
+.files-pending > .files-impact:has(> details[open]) { min-height: calc(3lh + 8px); }
+/* While Save asks about weaker changes, the box may take the window, and
+   the impact note gives way down to two lines (its headline and "Show the
+   files"): the question names the files. */
+.files-pending:has(> .files-confirm:not([hidden])) { max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); }
+.files-pending:has(> .files-confirm:not([hidden])) > .files-impact:has(> details) { min-height: calc(2lh + 4px); }
+.files-pending h3 { margin: 0; font-size: 15px; font-weight: 600; }
+/* The 2px above and below keep a focus ring in the list's view. */
+.files-pending-list { margin: 0; padding: 2px 0 2px 18px; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+/* A waiting change and Save's confirmation name each host and file as a
+   code (home.js levelNodes, fitName): a longer one than 24 characters wraps
+   anywhere rather than run past its column (§4.25u). */
+.files-pending-list code, .file-pending code, .impact-files code, .files-confirm code { overflow-wrap: anywhere; }
+.files-pending-list .link-btn { font: inherit; font-size: 13px; padding: 0; border: none; background: none; color: var(--accent); cursor: pointer; }
+.files-confirm { padding: 12px; border-left: 3px solid var(--bad); background: var(--bad-bg); border-radius: 4px; font-size: 14px; }
+.files-confirm p { margin: 0 0 6px; }
+.files-confirm ul { margin: 0 0 10px; padding-left: 18px; }
+/* The question's lists scroll in place, so its words and Why? stay put. */
+#files-confirm-list, .files-confirm-files ul { max-height: min(10em, 10vh); overflow-y: auto; }
+.files-confirm .field input[type="text"] { font-family: var(--sans); }
+@media (max-width: 640px) {
+  .lock-form { padding: 16px; }
+}
+.files-move { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--line-2); border-radius: 4px; font-size: 13px; }
+.files-move[hidden], .files-impact[hidden], .files-confirm-files[hidden] { display: none; }
+/* A refused move says why on its own line (home.js renderMoveNotice). */
+.files-move > .ask-error { flex-basis: 100%; }
+.file-link-note { margin-top: 4px; font-size: 12px; color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.file-why-btn { display: block; margin-top: 2px; padding: 0; border: none; background: none; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer; }
+.file-why-btn:hover { text-decoration: underline; }
+.file-why { grid-column: 3 / -1; font-size: 13px; padding: 8px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line-2); }
+.file-why dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; }
+.file-why dt { color: var(--ink-3); }
+.file-why dd { margin: 0; overflow-wrap: anywhere; }
+.files-impact { font-size: 13px; }
+.files-impact p { margin: 0 0 4px; }
+.impact-head.weaker { color: var(--bad); font-weight: 500; }
+.impact-files summary { cursor: pointer; color: var(--accent); }
+.impact-files ul, .files-confirm-files ul { margin: 4px 0 0; padding-left: 18px; }
+.impact-files li.weaker { color: var(--bad); }
+.files-confirm-files p { margin: 0 0 4px; }
+/* ── Files and folders: the explorer (dashboard.md §4.25n) ──────────────── */
+.files-body { display: flex; flex-direction: column; gap: 16px; }
+.files-main, .files-all-view { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.add-panel #rules-add-close { margin-left: auto; }
+.files-selected { margin: 0; font-size: 13px; color: var(--ink-4); }
+.files-tree-cap { padding: 12px 16px 6px; font-size: 13px; border-bottom: 1px solid var(--line-2); }
+.files-tree .rules-folder { padding-left: calc(16px + var(--depth, 0) * 24px); }
+/* A label chosen keeps its menu on screen (§4.25n): every choice draws the
+   tree again from nothing (home.js renderLabeled), so a scroll anchor
+   inside it is always a node about to go. Chrome kept one there on a phone
+   and moved the page up ~360px at each choice, the menu below the window. */
+.files-tree { overflow-anchor: none; }
+.file-inside { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; font-size: 12px; color: var(--ink-3); }
+.file-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+@media (max-width: 640px) {
+  .file-why { grid-column: 1 / -1; }
+  .file-why dl { grid-template-columns: 1fr; }
+}
+
+/* The opened row's parts, and the buttons of the ticked-items bar. */
+.detail-label { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.detail-cap { margin-bottom: 6px; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+.level-buttons { align-self: stretch; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.level-btn { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font: inherit; font-size: 13px; font-weight: 500; color: var(--ink); text-align: left; cursor: pointer; }
+.level-btn svg { flex: none; }
+.level-btn:hover:not(:disabled) { border-color: var(--ink-4); }
+.level-btn:disabled { color: var(--ink-4); background: var(--panel-2); cursor: not-allowed; }
+.detail-to-row { align-self: stretch; display: flex; gap: 8px; align-items: flex-end; }
+.detail-to { flex: 1; }
+.detail-to > span { font-size: 13px; margin-bottom: 0; }
+.detail-links { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center; }
+.files-tree .rules-folder code { white-space: normal; overflow-wrap: anywhere; }
+
+/* ── Your rules: ONE label menu per row (dashboard.md §4.25p) ──────────────── */
+/* Two questions per secret (dashboard.md §4.25p, 2026-10-11): one menu for
+   which AI may read it, one for where it may be sent; the heads name them.
+   The first menu's column fits its longest words, "Your own AI only (none
+   listed)" and "Any AI, when it asks (inherited)" (178px each, plus the
+   menu's 58px of dot and arrow); the second's fits its longest choice,
+   "Listed hosts without asking" (161px). The two shared 470px as 220 and
+   250 until 2026-10-17, which cut the first menu's words ("Your own AI
+   only (none li…"); the name keeps its width (§4.25p, *A menu says its
+   words whole*). */
+.row.file-rule { grid-template-columns: minmax(0, 1fr) 240px 230px 32px; }
+.row.file:not(.up) { grid-template-columns: 20px minmax(0, 1fr) 240px 230px 32px; }
+.files-heads { display: grid; grid-template-columns: minmax(0, 1fr) 240px 230px 32px; gap: 12px; padding: 0 16px; font-size: 12px; font-weight: 600; color: var(--ink-4); text-transform: uppercase; letter-spacing: .05em; }
+.files-heads::after { content: ""; }
+.file-opens { font-size: 13px; overflow-wrap: anywhere; }
+.q-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; align-items: flex-start; }
+.q-cap { display: none; font-size: 12px; font-weight: 600; color: var(--ink-4); }
+.file-opens-k { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-4); }
+.file-host-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
+.label-pick[data-send="ask"] .label-dot { background: var(--bad); border-color: var(--bad); }
+.label-pick[data-send="hosts"] .label-dot { background: var(--warn); border-color: var(--warn); }
+.label-pick[data-send="public"] .label-dot { background: var(--ok); border-color: var(--ok); }
+/* Plan 13 §5.2: a label whose values each have their own hosts (read only). */
+.label-pick[data-send="values"] .label-dot { background: var(--warn); border-color: var(--warn); }
+.label-pick.send-pick[data-from="values"] .label-dot { background: none; border: 2.5px solid var(--warn); }
+.file-values { margin: 2px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.label-pick.send-pick[data-from] select { color: var(--ink-3); font-weight: 400; }
+.label-pick.send-pick[data-from="ask"] .label-dot { background: none; border: 2.5px solid var(--bad); }
+.label-pick.send-pick[data-from="hosts"] .label-dot { background: none; border: 2.5px solid var(--warn); }
+.label-pick.send-pick[data-from="public"] .label-dot { background: none; border: 2.5px solid var(--ok); }
+.row.file-rule { gap: 12px; padding: 6px 16px; cursor: pointer; }
+.row.file-rule:hover, .row.file:not(.up):hover { background: var(--bg); }
+.row.file-rule.open, .row.file.open { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+.row.file.selected { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.row.file-rule .file-cell { padding-left: calc(var(--depth, 0) * 24px); }
+.file-cell { display: flex; gap: 10px; align-items: flex-start; min-width: 0; padding-block: 5px; }
+.file-cell .row-icon { padding-top: 1px; }
+.file-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.file-tag { padding: 0 6px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+.file-warn-mark { display: inline-flex; vertical-align: -2px; color: var(--warn); }
+
+/* The label menu: a colored dot (solid for a secret label, a ring for your
+   own model only, green for not secret or allowed, grey for no rule), then a
+   plain select. A choice waiting in Changes to save is dashed. */
+.label-pick { position: relative; display: inline-flex; align-items: center; justify-self: start; max-width: 100%; min-width: 0; }
+.label-pick select {
+  appearance: none; -webkit-appearance: none; max-width: 100%; height: 34px; padding: 0 30px 0 28px;
+  border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+  background: var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%238a8a92' stroke-width='1.5' fill='none'/%3E%3C/svg%3E") no-repeat right 10px center;
+  text-overflow: ellipsis;
+}
+.label-pick select:hover:not(:disabled) { border-color: var(--ink-4); }
+.label-pick select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.label-pick select:disabled { color: var(--ink-3); background-color: var(--panel-2); cursor: not-allowed; }
+.label-pick.waiting select { border-style: dashed; border-color: var(--accent); }
+.label-dot { position: absolute; left: 11px; box-sizing: border-box; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--ink-4); pointer-events: none; }
+.label-pick[data-level="no-model"] .label-dot, .label-pick[data-effect="block"] .label-dot { background: var(--bad); border-color: var(--bad); }
+.label-pick[data-level="local-model"] .label-dot { border: 3px solid var(--bad); }
+.label-pick[data-level="any-model"] .label-dot { background: var(--warn); border-color: var(--warn); }
+.label-pick[data-level="public"] .label-dot, .label-pick[data-effect="allow"] .label-dot { background: var(--ok); border-color: var(--ok); }
+.label-pick[data-from] select { color: var(--ink-3); font-weight: 400; }
+.label-pick[data-from="no-model"] .label-dot, .label-pick[data-from="local-model"] .label-dot { border: 2.5px solid var(--bad); }
+.label-pick[data-from="any-model"] .label-dot { border: 2.5px solid var(--warn); }
+.label-pick[data-from="public"] .label-dot { border: 2.5px solid var(--ok); }
+
+.file-hosts { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; min-width: 0; }
+.host-chip { padding: 0 6px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--code-bg); font-family: var(--mono); font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
+.host-chip.from { color: var(--ink-4); }
+.file-hosts-edit { padding: 0 4px; border: none; background: none; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer; }
+.file-hosts-edit:hover { text-decoration: underline; }
+.file-more { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: none; border-radius: 8px; background: none; color: var(--ink-4); font-size: 18px; line-height: 1; cursor: pointer; }
+.file-more:hover, .file-more[aria-expanded="true"] { background: var(--line-2); color: var(--ink); }
+
+/* The opened row: what the side panel held before §4.25p. */
+.file-detail {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 24px; align-items: start;
+  padding: 12px 16px 16px calc(16px + 28px + var(--depth, 0) * 24px);
+  background: var(--panel-2); border-bottom: 1px solid var(--line-2); font-size: 13px;
+}
+#files-list .file-detail { padding-left: calc(16px + 20px + 12px + 28px); }
+.file-detail-main { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; min-width: 0; }
+.file-detail p { margin: 0; }
+.file-detail .detail-path { font-family: var(--mono); font-size: 12px; color: var(--ink-3); overflow-wrap: anywhere; }
+.file-detail .detail-to-row { align-self: stretch; max-width: 520px; }
+.file-detail .field input[type="text"], .files-selected .field input[type="text"] { height: 34px; font-size: 13px; }
+.file-detail .detail-note { font-size: 12px; }
+.file-detail .detail-source { align-self: stretch; }
+.file-detail .rule-source { padding: 0; }
+.file-detail .file-why { grid-column: auto; font-size: 12px; }
+/* Wider than 1000 px the opened row is two columns (the 1000 px query below
+   makes it one), so What the rules say, or What the scan found, is a
+   column 300 to 410 px wide: a phone's width. Each term goes over what it
+   says, as on a phone. Side by side at 1280 px, the terms took 175 px and
+   the answers had 179 (§4.25p, *The rules' answers keep their width*). */
+@media (min-width: 1001px) {
+  .file-detail .file-why dl { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Ticked rows: one button per label labels them all. */
+.files-selected.ticked { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px; border: 1px solid var(--accent); border-radius: 10px; background: var(--panel-2); color: var(--ink-2); }
+.files-bulk-head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; font-size: 14px; }
+.files-bulk-head strong { color: var(--ink); }
+.files-bulk-head .link-btn { padding: 0; border: none; background: none; font: inherit; font-size: 13px; color: var(--accent); cursor: pointer; }
+.files-selected .level-buttons { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.files-selected[hidden] { display: none; }
+.files-selected .detail-to { max-width: 520px; }
+
+/* ── Suggested: keys Mandu's scan found (dashboard.md §4.25r) ──────────────── */
+.files-suggested-view { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.files-suggested-view[hidden] { display: none; }
+.files-suggest-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* The scan box and the model menus have the page's field look, as Add a
+   rule's filter box and Settings' menus (§4.25r *Every field has the page's
+   look*): until 2026-10-16 the browser drew them, square and grey. */
+.files-suggest-bar input[type="text"] {
+  flex: 1 1 220px; min-width: 0; height: 34px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 13px;
+}
+.files-suggest-bar #suggest-status { flex: 1 1 100%; font-size: 13px; }
+.files-suggest-bar .suggest-home { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+/* The model picker and its preview (dashboard.md §4.25t). */
+.suggest-model { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; font-size: 13px; }
+/* Narrower than its words and menu, the menu goes under "Ask a model too",
+   which stays on one line. */
+.suggest-model .suggest-model-pick { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: 100%; color: var(--ink-2); }
+.suggest-model .suggest-model-pick select { max-width: 100%; }
+.suggest-model #suggest-model-why { flex: 1 1 100%; }
+.suggest-model-preview { margin-top: 8px; padding: 12px 14px; border: 1px solid var(--line, #ddd); border-radius: 8px; background: var(--paper-2, transparent); font-size: 13px; }
+.suggest-model-preview .suggest-model-head { font-weight: 600; margin: 0 0 4px; }
+.suggest-model-list { max-height: 240px; overflow: auto; margin: 4px 0 8px; padding-left: 24px; font-family: var(--mono, monospace); font-size: 12px; overflow-wrap: anywhere; }
+.suggest-model-roots, .suggest-model-notes { margin: 4px 0; padding-left: 18px; }
+/* The view's gap spaces its lines: an empty status line takes no room. */
+.files-suggested-view .field-hint, .files-suggested-view .ask-error, .files-suggested-view #suggest-model-status { margin: 0; }
+.files-suggested-view .ask-error:empty { display: none; }
+/* A suggestion's label waits as if clicked: the dot is pressed and dashed. */
+.row.suggested .file-cell { padding-left: calc(var(--depth, 0) * 24px); }
+/* A path only git history holds is greyed and tagged. */
+.row.suggested.history-only .file-name code, .row.suggested.history-only .row-icon { color: var(--ink-3); }
+.row.suggested.history-only .row-icon { opacity: 0.6; }
+.file-tag.history { border-style: dashed; }
+.row.suggested-parent { cursor: default; }
+.row.suggested-parent .file-name code { color: var(--ink-2); }
+.files-suggested .file-detail { padding-left: calc(16px + 20px + 12px + 28px + var(--depth, 0) * 24px); }
+.suggestion-yaml { margin: 4px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--code-bg); font-size: 12px; overflow-x: auto; }
+.suggestion-card .ask-actions { margin-top: 12px; }
+.pending-suggestion .dim { font-size: 13px; }
+
+/* Narrow: the menu and the hosts go under the name. The file rows (Your
+   rules, Add a rule's browser, Keys Mandu found) do it up to 1000px: wider,
+   the name keeps at least 200px beside the two menus in every list, the
+   browser's in its padded panel the tightest (dashboard.md §4.25p, *The
+   name keeps its room*). At 721px it had 41px, the browser's none.
+   From 801 to 1000px the two menus sit side by side under the name, each
+   in half of the row, and each at least as wide as beside the name (250px
+   or more in every list, more than the 240 and 230 beside it; the
+   browser's has 257px at 801px). At 800px and
+   below each menu goes on its own line. The up row (`.row.file.up`) has
+   its own two columns. */
+@media (max-width: 1000px) {
+  .files-suggested .file-detail { padding-left: 16px; }
+  .files-heads { display: none; }
+  .q-cap { display: block; }
+  .row.file-rule { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px; padding-bottom: 10px; }
+  .row.file:not(.up) { grid-template-columns: 20px minmax(0, 1fr) minmax(0, 1fr) 32px; padding-bottom: 10px; }
+  .row.file-rule > .file-cell { grid-column: 1 / 3; }
+  .row.file:not(.up) > .file-cell { grid-column: 2 / 4; }
+  /* Each menu in its own column, under the name; the tops line up so the
+     two captions do. A found key's label and its (empty) hosts likewise. */
+  .row.file-rule > .q-cell { grid-column: 1; align-self: start; }
+  .row.file-rule > .q-cell + .q-cell { grid-column: 2; }
+  .row.file > .q-cell, .row.file > .label-chip { grid-column: 2; align-self: start; }
+  .row.file > .q-cell + .q-cell, .row.file > .file-hosts { grid-column: 3; }
+  .row.file-rule .file-more { grid-column: 3; grid-row: 1; }
+  .row.file .file-more { grid-column: 4; grid-row: 1; }
+  .row.file-rule .file-cell { padding-left: calc(var(--depth, 0) * 14px); }
+  .file-detail, #files-list .file-detail { grid-template-columns: minmax(0, 1fr); padding-left: 16px; }
+}
+@media (max-width: 800px) {
+  .row.file-rule { grid-template-columns: minmax(0, 1fr) 32px; }
+  .row.file:not(.up) { grid-template-columns: 20px minmax(0, 1fr) 32px; }
+  .row.file-rule > .file-cell { grid-column: 1; }
+  .row.file:not(.up) > .file-cell { grid-column: 2; }
+  .row.file-rule > .q-cell, .row.file-rule > .q-cell + .q-cell { grid-column: 1 / -1; }
+  .row.file > .q-cell, .row.file > .q-cell + .q-cell, .row.file > .label-chip, .row.file > .file-hosts { grid-column: 2 / -1; }
+  .row.file-rule .file-more { grid-column: 2; }
+  .row.file .file-more { grid-column: 3; }
+}
+/* The other rows of Rules (Sending data) and the ticked bar have room
+   down to 721px. */
+@media (max-width: 720px) {
+  .row.rule { grid-template-columns: 28px minmax(0, 1fr) 32px; }
+  .row.rule .file-more { grid-column: 3; grid-row: 1; }
+  .row.rule > .label-pick, .row.rule > .outcome, .row.rule > .sub { grid-column: 2 / -1; }
+  .rule-detail { padding-left: 16px; }
+  .files-selected .level-buttons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ── Who may get your secrets (dashboard.md §4.25aa) ─────────────────────────
+   The file rules read per program, host and AI: three tabs over one list. A
+   row is the name on the left and its lists of files on the right, each
+   under a coloured mark; on a phone the lists go under the name. */
+.by-who-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line-2); }
+.by-who-tabs [role="tab"] { padding: 8px 14px; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--ink-3); font-size: 14px; font-weight: 500; }
+.by-who-tabs [role="tab"]:hover { color: var(--ink); }
+.by-who-tabs [role="tab"][aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.row.by-who-row { grid-template-columns: 220px minmax(0, 1fr); align-items: start; padding: 12px 20px; }
+.row.by-who-row.any { background: var(--panel-2); }
+.by-who-name { min-width: 0; overflow-wrap: anywhere; }
+.by-who-subject { font-size: 13px; }
+.by-who-about { margin: 4px 0 0; font-size: 13px; color: var(--ink-3); }
+.by-who-groups { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.by-who-label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.by-who-items { margin: 4px 0 0; padding: 0 0 0 16px; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; }
+.by-who-items code { font-size: 13px; overflow-wrap: anywhere; }
+/* A file opens its rule under Your rules (§4.25aa): the same chip in the
+   link colour, inline so a long name still wraps as plain code does. */
+.by-who-items .by-who-link { display: inline; font: inherit; text-align: left; cursor: pointer; }
+.by-who-link code { color: var(--accent); }
+.by-who-link:hover code { color: var(--accent-ink); text-decoration: underline; }
+.by-who-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.by-who-more, .by-who-none { color: var(--ink-3); font-size: 13px; }
+@media (max-width: 640px) {
+  .row.by-who-row { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px 16px; }
+  .by-who-tabs [role="tab"] { padding: 8px 10px; }
+}
+
+/* ── Forced colors (dashboard.md §4.25k) ─────────────────────────────────────
+   Under a forced palette (Windows' contrast themes, a browser's own colors)
+   the browser draws every color this sheet sets in the person's palette and
+   every fill in the page's own color, so a state shown only by a fill or a
+   colored edge is gone: the Protection switch was not drawn at all, and the top bar's
+   current page and Who may get your secrets' picked tab looked like the
+   others. Here each draws in system colors, which the browser keeps: off is
+   an outline, a picked or "on" thing the palette's selection color, as the
+   system draws its own. System colors only: any other is replaced anyway.
+   Words are never set on a selection-color fill: the browser draws the
+   page's color behind every word, so such a word would be lost. */
+@media (forced-colors: active) {
+  #nav a[aria-current="page"] { text-decoration-line: underline; text-decoration-color: Highlight; text-decoration-thickness: 2px; text-underline-offset: 6px; }
+  /* The 1px edge narrows the box the knob is placed in: 1px less each way
+     keeps the knob on the pixels it has without forced colors. */
+  .switch { border: 1px solid ButtonText; background: ButtonFace; }
+  .switch .knob { top: 2px; left: 2px; background: ButtonText; }
+  .switch[aria-checked="true"] { border-color: Highlight; background: Highlight; }
+  .switch[aria-checked="true"] .knob { left: 20px; background: HighlightText; }
+  /* An unpicked tab draws no edge: its transparent one would be drawn, and
+     in the page's color it would cut the row's line. The 2px go to its
+     padding, so every tab keeps its height. */
+  .by-who-tabs [role="tab"] { border-bottom-style: none; padding-bottom: 10px; }
+  .by-who-tabs [role="tab"][aria-selected="true"] { border-bottom-style: solid; border-bottom-color: Highlight; padding-bottom: 8px; }
+  /* A count tile that goes to its steps: its edge in Highlight on hover and
+     keyboard focus, as the accent edge was. */
+  button.tile:hover, button.tile:focus-visible { border-color: Highlight; }
+}

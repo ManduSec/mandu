@@ -1,0 +1,29 @@
+id: CT-07
+name: "Exec classification: AgentShell by default, HumanShell only when it needs the real world"
+tags: [claude, exec, AgentShell, HumanShell, exec-classify]
+target: codex
+
+# Pure exec-policy scenario (no ingress). The arbiter's classifyExec selects the
+# shell VIEW a command runs in:
+#   - default → AgentShell (AgentView FS, network egress disabled — safe)
+#   - needsNetwork / needsOriginalFs → HumanShell (real network + HumanView FS)
+exec:
+  argv: ["wc", "-l", "data.md"]
+
+assertions:
+  # A plain command with no real-world needs runs in the sandboxed AgentShell.
+  - assert: exec_shell
+    argv: ["wc", "-l", "data.md"]
+    expect: AgentShell
+
+  # A command that needs real network is routed to HumanShell.
+  - assert: exec_shell
+    argv: ["curl", "https://api.example/data"]
+    needsNetwork: true
+    expect: HumanShell
+
+  # A command that needs the original (HumanView) filesystem → HumanShell.
+  - assert: exec_shell
+    argv: ["git", "push"]
+    needsOriginalFs: true
+    expect: HumanShell

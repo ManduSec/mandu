@@ -1,0 +1,371 @@
+# Public Linux CI: the unprivileged half of the GitLab pipeline, on GitHub-hosted
+# runners, so an outside contributor's pull request is tested without the
+# self-hosted runner. Design + the split with GitLab: docs/design/testing/continuous-integration.md §12.
+#
+# WHAT RUNS HERE (the manifest's unit, component and stack kinds, tests/suites.mjs,
+# less their `internet` entries; split into parallel jobs). Every such entry falls in
+# exactly one job (scripts/test/suites-manifest.test.mjs checks the split):
+#   packages      finds every TS package (a tracked package-lock.json outside
+#                 private/: the directories `node scripts/suites.mjs packages`
+#                 names, less private/)
+#   ts            one matrix cell per package: `npm ci` (every package, because
+#                 tests, tests/conformance and the launcher e2e import
+#                 or spawn their siblings from source), `npm run typecheck`,
+#                 `npm test`: the manifest's typecheck.* and package entries (a
+#                 sharded entry such as launcher runs whole) and eval.lib
+#   shell         lists its entries from the suite manifest
+#                 (tests/suites.mjs, docs/design/testing/test-organization.md §5):
+#                 `node scripts/suites.mjs list --kind unit,component,stack --platform linux
+#                 --json --public`, reduced to the entries whose command is
+#                 `bash` or `node` and that do not need cargo (no hand-kept
+#                 list), and runs them all in one job through
+#                 `node scripts/run-suites.mjs --only <ids>`: the launcher's
+#                 wrapper-layer live suites (real arbiter + real net-proxy / MITM
+#                 body gate / exec-wrap / reply-filter), the script contract
+#                 tests (scripts/test/*) and the matrix smoke suite
+#   rust          the same listing's entries that need cargo, run through
+#                 run-suites.mjs at the workspace's rust-version: `rust` (cargo
+#                 test at DEFAULT features: the privilege-free decision logic,
+#                 kernel attachment off), `rust.check-aarch64` (cargo check for
+#                 the arm64 release target, installed here so it does not
+#                 skip), `rust.clippy` (cargo clippy -D warnings at default
+#                 features and at `kernel`; the clippy component installed
+#                 here) and `fs-preload.redirect` (the LD_PRELOAD proof)
+#   audit         the dependency audit (continuous-integration.md §14.2): the
+#                 manifest entries deps.audit-npm and deps.audit-cargo (`npm
+#                 audit` over every lockfile, `cargo audit` over
+#                 interceptors/Cargo.lock, findings judged against
+#                 scripts/dep-audit-allow.json), with --strict-skips so an
+#                 unreachable advisory database is red, not a skip. Their kind
+#                 is `env` (they reach the internet), so no kind listing names
+#                 them; this job and GitLab's `audit` job run them by id
+#
+# Every package's `npm test` script and run-suites.mjs set the axes-strict flag
+# themselves, so this file sets no product environment variable.
+#
+# WHAT IS LEFT OUT, AND WHY (docs/design/testing/continuous-integration.md §12.2; by manifest kind, all
+# of it runs on the GitLab runner or by hand):
+#   - the `sandbox` kind and every entry that needs `kernel` (scripts/kernel-tests.sh,
+#     net-guard, exec-box, landlock-net, secret twins and readers, guard-death
+#     live; the `kernel` cargo feature), which a unit/component/stack listing never names: they need an
+#     unprivileged user namespace with a working uid map. GitHub's
+#     ubuntu-24.04 image sets kernel.apparmor_restrict_unprivileged_userns=1,
+#     so `unshare --user --map-root-user` fails there, and the suites would
+#     self-SKIP to a green that proved nothing. GitLab `test` job, every push.
+#   - the `replay-drill` kind: it drives the real claude / codex / openclaw /
+#     opencode CLIs (pinned in the GitLab guest image) against a fake model.
+#     Without those CLIs the suites self-SKIP; porting them needs the pinned
+#     installs and a flake record on these runners first. GitLab `test` job.
+#   - the `live-drill`, `env` and `eval` kinds: a local model, or a
+#     real model with a login and its quota. By hand.
+#   - the `install` kind (the VM matrix): needs /dev/kvm and a VM image cache.
+#     GitLab `install` job, v* tags.
+#   - release-pack, release-publish: releases are cut on the canonical remote.
+#   - the `internet: true` entries (wire-release-live, tls-compat): a kind
+#     listing leaves them out; they reach public hosts and run only by name.
+#   - the frozen integrity lane (`frozen: true`, among it eval.deterministic,
+#     the AgentDojo corpus): runs only when the integrity axis is revived
+#     (docs/design/architecture/protection-modes.md §10).
+#
+# No macOS job: a maintainer runs the manifest's darwin entries on a Mac by hand
+# (docs/development.md, "Developing and testing on macOS").
+
+name: CI
+
+# WHEN IT RUNS (continuous-integration.md §12, "When GitHub runs"): only where
+# GitHub is the only signal.
+#   - By hand (workflow_dispatch): the release check, once per snapshot that
+#     will be published, before it is published (the exported tree's own test).
+#   - A pull request (an outside contributor's), once the repository is
+#     public, unless it changes documentation only.
+#   - Never on a push to main or master: a snapshot push carries a commit the
+#     GitLab pipeline already ran a superset on. Never on a v* tag: GitHub makes
+#     the tag when the release is published, so a run there comes after the check.
+on:
+  pull_request:
+    # Documentation only runs nothing: the same cut as the GitLab docs lane
+    # (scripts/ci/lane.mjs, isDocsPath): docs/** and markdown anywhere, except
+    # launcher/README.md (it ships in the npm tarball) and anything under a
+    # fixtures/ directory (golden test data). GitHub selects a request when the
+    # last pattern that matches one of its paths is not a `!`, so a request that
+    # also touches code runs. scripts.suites-manifest checks this list against
+    # isDocsPath over every tracked file.
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!**/*.md"
+      - "launcher/README.md"
+      - "**/fixtures/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The engines floor (launcher/package.json ">=22.13.0", the first release with
+  # node:sqlite unflagged). Test at the floor so a newer-Node API cannot land.
+  NODE_VERSION: "22.13.0"
+
+# While the repository is private, Actions minutes come out of the free plan's
+# monthly quota, and the GitLab pipeline already runs all of this (a superset)
+# before a snapshot is exported. So on a private repository the root jobs run
+# only when started by hand (`gh workflow run`, as a release is checked before
+# it is published); the jobs that need them skip with them, and a skipped job
+# bills nothing. Once the repository is public (standard runners are free
+# there) pull requests run too. continuous-integration.md §12.
+jobs:
+  packages:
+    name: find TS packages
+    if: ${{ !github.event.repository.private || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      list: ${{ steps.find.outputs.list }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: find
+        name: List every tracked package-lock.json outside private/
+        # The set `node scripts/suites.mjs packages` names (less private/),
+        # found from the lockfiles so a new package cannot be missed. A test
+        # fixture's own package (tests/fixtures/*: the agent SDK host
+        # programs) is not a Mandu package; the replay-drill suite that uses
+        # it does not run here (above).
+        run: |
+          list="$(git ls-files ':(glob)**/package-lock.json' \
+            | grep -v '^private/' | grep -v '/node_modules/' | grep -v '^tests/fixtures/' \
+            | xargs -n1 dirname | sort | jq -R . | jq -sc .)"
+          echo "packages: $list"
+          test "$list" != "[]"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
+  ts:
+    name: ts (${{ matrix.package }})
+    needs: packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.packages.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
+
+      - name: Git identity
+        # fs-sync commits to its view repos, and git refuses to commit without
+        # an identity (the GitLab CI image sets one the same way).
+        run: |
+          git config --global user.name "Mandu CI"
+          git config --global user.email "ci@mandu.invalid"
+          git config --global init.defaultBranch main
+
+      - name: npm ci (every package)
+        # Lockfile-exact and without --prefer-offline, as test-all.sh installs.
+        run: |
+          set -euo pipefail
+          for lock in $(git ls-files ':(glob)**/package-lock.json' | grep -v '^private/'); do
+            dir="$(dirname "$lock")"
+            echo "::group::npm ci: $dir"
+            (cd "$dir" && npm ci --no-audit --no-fund)
+            echo "::endgroup::"
+          done
+
+      - name: typecheck
+        # `npm test` runs through tsx, which transpiles per file and masks type
+        # errors; tsc --noEmit is the gate.
+        working-directory: ${{ matrix.package }}
+        run: npm run typecheck
+
+      - name: test (unit + e2e)
+        working-directory: ${{ matrix.package }}
+        run: npm test
+
+  shell:
+    name: shell suites from the manifest
+    if: ${{ !github.event.repository.private || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
+
+      - name: Git identity
+        run: |
+          git config --global user.name "Mandu CI"
+          git config --global user.email "ci@mandu.invalid"
+          git config --global init.defaultBranch main
+
+      - name: npm ci (every package)
+        # The entries that need node may start their sibling packages from
+        # source (the wrapper-layer suites start a real arbiter and proxies).
+        run: |
+          set -euo pipefail
+          for lock in $(git ls-files ':(glob)**/package-lock.json' | grep -v '^private/'); do
+            dir="$(dirname "$lock")"
+            echo "::group::npm ci: $dir"
+            (cd "$dir" && npm ci --no-audit --no-fund)
+            echo "::endgroup::"
+          done
+
+      - id: list
+        name: List the offline shell and script entries of tests/suites.mjs
+        # The manifest (docs/design/testing/test-organization.md §5) is the only list:
+        # the offline, Linux, public entries (internet entries are already out
+        # of a kind listing) whose command is `bash` or `node`, except those that
+        # need cargo (the rust job's). The `ts` job runs the npm packages.
+        run: |
+          set -euo pipefail
+          ids="$(node scripts/suites.mjs list --kind unit,component,stack --platform linux --json --public | node -e '
+            const xs = JSON.parse(require("fs").readFileSync(0, "utf8"))
+              .filter((x) => ["bash", "node"].includes(x.cmd[0]) && !x.needs.includes("cargo"))
+              .map((x) => x.id);
+            if (!xs.length) throw new Error("no shell entries in the manifest");
+            process.stdout.write(xs.join(","));
+          ')"
+          echo "shell entries: $ids"
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+
+      - name: Run the shell entries
+        # The manifest runner, as test-all.sh and the GitLab pipeline run it:
+        # each entry's cwd, cmd, env and timeout, plus the fixed test env
+        # (axes-strict, no host policy); the parallel-safe ones two at a time.
+        # A failure does not stop the rest; the runner prints its log's tail.
+        # One job, not a matrix cell per entry: each cell billed a whole
+        # minute for about 30 s of setup and work (continuous-integration.md §12.1).
+        env:
+          IDS: ${{ steps.list.outputs.ids }}
+        run: node scripts/run-suites.mjs --only "$IDS" --jobs 2 --out "$RUNNER_TEMP/suites"
+
+  rust:
+    name: rust (the manifest's cargo entries, default features)
+    if: ${{ !github.event.repository.private || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # interceptors/Cargo.toml rust-version; the GitLab CI image pins the same.
+      RUSTUP_TOOLCHAIN: "1.75.0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Rust ${{ env.RUSTUP_TOOLCHAIN }}, the aarch64 target and clippy
+        # rust.check-aarch64 skips where the target is not installed, and
+        # rust.clippy where clippy is not; the GitLab guest installs both the
+        # same way. `cargo check` neither links nor compiles C for the target,
+        # so no cross gcc is needed.
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target aarch64-unknown-linux-gnu --component clippy
+          rustup target list --installed | grep -qx aarch64-unknown-linux-gnu
+          rustc --version
+          cargo --version
+          cargo clippy --version
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            interceptors/target
+          key: cargo-${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('interceptors/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-
+
+      - id: list
+        name: List the offline cargo entries of tests/suites.mjs
+        # The complement of the shell job's filter: the offline, Linux, public
+        # entries that need cargo. No hand-kept list.
+        run: |
+          set -euo pipefail
+          ids="$(node scripts/suites.mjs list --kind unit,component,stack --platform linux --json --public | node -e '
+            const xs = JSON.parse(require("fs").readFileSync(0, "utf8"))
+              .filter((x) => x.needs.includes("cargo"))
+              .map((x) => x.id);
+            if (!xs.length) throw new Error("no cargo entries in the manifest");
+            process.stdout.write(xs.join(","));
+          ')"
+          echo "cargo entries: $ids"
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+
+      - name: Run the cargo entries
+        # The manifest runner, one entry at a time (they share
+        # interceptors/target). On a failure it prints the log's tail.
+        env:
+          IDS: ${{ steps.list.outputs.ids }}
+        run: node scripts/run-suites.mjs --only "$IDS" --out "$RUNNER_TEMP/suites"
+
+      - name: No cargo entry skipped
+        # This job installs what every cargo entry needs (the aarch64 target,
+        # clippy, a C compiler), so a skip is a green that proved nothing.
+        run: |
+          node -e '
+            const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const skipped = s.entries.filter((x) => x.result !== "pass").map((x) => `${x.id} (${x.result})`);
+            if (skipped.length) { console.error(`not passed: ${skipped.join(", ")}`); process.exit(1); }
+          ' "$RUNNER_TEMP/suites/summary.json"
+
+  audit:
+    name: dependency audit (npm audit, cargo audit)
+    if: ${{ !github.event.repository.private || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install cargo-audit at its pin
+        # The RustSec release's static build, the file and the sha256 that
+        # scripts/ci/pins.env names (the GitLab CI image installs the same):
+        # no toolchain, nothing built. `npm audit` needs nothing installed
+        # (it reads each package-lock.json).
+        run: |
+          set -euo pipefail
+          v="$(sed -n 's/^CARGO_AUDIT_VERSION=//p' scripts/ci/pins.env)"
+          sha="$(sed -n 's/^CARGO_AUDIT_SHA256=//p' scripts/ci/pins.env)"
+          test -n "$v" && test -n "$sha"
+          f="cargo-audit-x86_64-unknown-linux-musl-v$v"
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/$f.tgz" \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv$v/$f.tgz"
+          echo "$sha  $RUNNER_TEMP/$f.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$f.tgz" -C "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 0755 "$RUNNER_TEMP/$f/cargo-audit" "$RUNNER_TEMP/bin/cargo-audit"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/cargo-audit" --version
+
+      - name: Run the audit entries
+        # The manifest runner, as the GitLab `audit` job runs them: by id, and
+        # --strict-skips holds each to ci.maxSkip 0 (an unreachable advisory
+        # database or a missing cargo-audit fails, never skips to green).
+        run: node scripts/run-suites.mjs --only deps.audit-npm,deps.audit-cargo --strict-skips --out "$RUNNER_TEMP/suites"

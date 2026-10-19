@@ -1,0 +1,14 @@
+[package]
+name = "mandu-paths"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Where Mandu keeps its files: the generated Rust copy of scripts/paths/mandu-paths.mjs (on-disk-layout.md §5). Pure resolvers, no dependencies."
+
+[lints]
+workspace = true
+
+[lib]
+name = "mandu_paths"
+path = "src/lib.rs"

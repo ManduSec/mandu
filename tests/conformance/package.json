@@ -1,0 +1,34 @@
+{
+  "name": "@mandusec/conformance",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu conformance test suite. A declarative, scenario-driven harness modeled on adfi-openclaw's tests/lib/assertions.ts DSL + test/e2e YAML scenario format. Boots the REAL arbiter (Unix-socket NDJSON daemon) and the REAL Track A ingress proxy (AnthropicProxy for Claude, OpenAiProxy for Codex) against a MOCK upstream — no API key, no network — and asserts the §9 symbolization invariant + the data-trust / data-usage / exec policies through the actual components. Imports the sibling packages directly; owns no sources beyond lib/ + scenarios/.",
+  "mandu": {
+    "siblings": [
+      "arbiter",
+      "dashboard",
+      "interceptors/anthropic-proxy",
+      "interceptors/inspect-mcp",
+      "interceptors/openai-proxy"
+    ]
+  },
+  "scripts": {
+    "pretest": "node ../../scripts/install-deps.mjs",
+    "test": "export MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml && tsx lib/unit_symbolization.ts",
+    "test:integrity": "export MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml && tsx run.ts && tsx lib/unit_egress_gate.ts",
+    "conformance": "tsx run.ts && tsx lib/unit_symbolization.ts && tsx lib/unit_egress_gate.ts",
+    "pretypecheck": "node ../../scripts/install-deps.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

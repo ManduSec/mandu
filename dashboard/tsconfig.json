@@ -1,0 +1,18 @@
+{
+  "comment": "Mirrors arbiter/tsconfig.json (NodeNext + strict). rootDir/include scoped to the dashboard package. The frontend in public/js/*.js is plain ES-module JS (no build step), so it is intentionally NOT in `include`; only the TS server, event model, sources, and tests are type-checked.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist", "public"]
+}

@@ -1,0 +1,18 @@
+{
+  "comment": "Mirrors interceptors/inspect-mcp/tsconfig.json (NodeNext + strict). Zero runtime deps; tests use a mock arbiter and never resolve the real arbiter package.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

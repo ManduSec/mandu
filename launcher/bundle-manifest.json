@@ -1,0 +1,41 @@
+{
+  "comment": "Single source of truth for the @mandusec/mandu bundle (packaging.md §5). `services` are the spawnable processes (the `ps` title minus the `mandu-` prefix, per runtime-instances.md §7); `modules` are bundled-but-imported (the arbiter IPC client the interceptors dynamic-import) or loaded beside a bundle (the arbiter's secret-discovery worker thread, which dist/arbiter.mjs starts from dist/secret-discovery-worker.mjs). build-bundle.mjs esbuilds every entry into dist/<name>.mjs; the launcher's layout resolver reads `services` to spawn `node dist/<name>.mjs` (installed) vs the from-source entry (dev), and points MANDU_ARBITER_CLIENT_MODULE at dist/arbiter-client.mjs. `assets` are static files copied VERBATIM to dist/<key> (the AppArmor userns grants `mandu setup` installs; rootless-confinement-ubuntu-2404.md §3.2; the SDK route preload a host program's Node loads and the permission-mode rule beside it that the preload requires, agent-sdks.md; the reference prompt classifier and its pack writer, which `mandu policy classifier-pack` runs, confidentiality-plan-15-prompt-filter.md §13.5) and resolved by Layout.asset(). `native` are the prebuilt Rust supervisor bins copied from $MANDU_NATIVE_BIN_DIR (default interceptors/target/release) to dist/native/<platform>-<arch>/<name> when they are built (services/native-bins.ts resolves them; the guard among them is what confines a no-userns host, plan 10 §11.7); a bin that is not built is skipped with a note, never an error. Entry paths are relative to the repo root. `optionalModules` and `optionalAssetDirs` are built and copied like `modules` and `assetDirs` when their source exists, and skipped with a note when it does not: the dashboard's developer view (dist/dashboard-dev.mjs, which dist/dashboard.mjs loads when it is there, and its pages under dist/dashboard/dev; dashboard.md §4.25ac). A build from the public tree has neither, so the package it makes serves the product page only.",
+  "services": {
+    "arbiter": "arbiter/ipc/server-main.ts",
+    "anthropic-proxy": "interceptors/anthropic-proxy/src/server-main.ts",
+    "openai-proxy": "interceptors/openai-proxy/src/server-main.ts",
+    "net-proxy": "interceptors/net-proxy/src/server-main.ts",
+    "cdp-relay": "interceptors/cdp-relay/src/server-main.ts",
+    "inspect-mcp": "interceptors/inspect-mcp/src/server-main.ts",
+    "policy-classifier": "interceptors/inspect-mcp/src/classify-main.ts",
+    "policy-mcp": "interceptors/policy-mcp/src/server-main.ts",
+    "dashboard": "dashboard/src/server-main.ts",
+    "reply-filter": "interceptors/reply-filter/src/run.ts",
+    "fs-sync-cli": "fs-sync/src/fs-sync-cli.ts",
+    "exec-shim": "interceptors/exec-wrap/src/wrap.ts",
+    "mandu": "launcher/src/run.ts"
+  },
+  "modules": {
+    "arbiter-client": "arbiter/ipc/client.ts",
+    "ullm-client": "interceptors/inspect-mcp/src/ullm-config.ts",
+    "secret-discovery-worker": "arbiter/policy/secret-discovery-worker.ts"
+  },
+  "assets": {
+    "apparmor/mandu-bwrap": "scripts/apparmor/mandu-bwrap",
+    "sdk-route-preload.cjs": "launcher/src/sdk-route-preload.cjs",
+    "claude-permission-rule.cjs": "launcher/src/claude-permission-rule.cjs",
+    "sdk-route-python/sitecustomize.py": "launcher/src/sdk-route-python/sitecustomize.py",
+    "prompt-filters/local-classifier.mjs": "arbiter/prompt-filter/plugins/local-classifier.mjs",
+    "prompt-filters/local-classifier-pack.mjs": "arbiter/prompt-filter/plugins/local-classifier-pack.mjs"
+  },
+  "native": [
+    "mandu-net-guard",
+    "mandu-exec-box",
+    "mandu-landlock-apply"
+  ],
+  "assetDirs": {
+    "dashboard/public": "dashboard/public"
+  },
+  "optionalModules": {},
+  "optionalAssetDirs": {}
+}

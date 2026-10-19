@@ -1,0 +1,15 @@
+{
+  "comment": "Mirrors interceptors/inspect-mcp/tsconfig.json (NodeNext + strict), scoped to the openclaw-inspect-plugin package. noEmit-only: the plugin ships as raw .ts (OpenClaw loads it through jiti), and its imports reach into the sibling ../inspect-mcp/src sources (the REUSED security core), which an emitting rootDir could not contain. Tests use the inspect-mcp mock arbiter + mock UllmClient and never resolve the real arbiter package or OpenClaw.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true
+  },
+  "include": ["index.ts", "src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules"]
+}

@@ -1,0 +1,77 @@
+[package]
+name = "exec-supervisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Mandu exec supervisor (M3): on execve, select AgentShell vs HumanShell and resolve argv only after the gated data-usage check."
+
+[dependencies]
+mandu-arbiter.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The clean box (exec-output-trust §4 rung 2) hashes captured stdout for the
+# clean-verdict report and re-verifies trusted-read grants by content hash.
+# Pure Rust, no privileges — lives in the default build (clean.rs is PURE).
+sha2.workspace = true
+
+[dev-dependencies]
+# Enable the arbiter's mock-socket harness for this crate's unit tests.
+mandu-arbiter = { path = "../mandu-arbiter", features = ["mock"] }
+# tests/exec_script_race.rs (default features) forks and execs to pin the
+# ETXTBSY fork race the integration tests' script writer closes.
+libc = "0.2"
+
+[features]
+default = []
+# The `kernel` feature enables the REAL per-exec sandbox supervisor: for each
+# intercepted exec it forks a child, applies the chosen shell's namespaces in the
+# child (AgentShell → unshare(CLONE_NEWNET) for egress-off + a private
+# CLONE_NEWNS bind-mount of the AgentView worktree over the workspace; HumanShell
+# → keep the inherited net + HumanView, block on approvals), then execvp's the
+# planned argv. It needs CAP_SYS_ADMIN (real root, or root-in-an-unprivileged
+# user namespace), so it is OFF by default — the view-selection + argv-resolution
+# orchestration (orchestrate.rs) is always compiled and unit-tested with no root.
+# Uses only `libc` (fork/waitpid/unshare/mount/chdir/execvp + SYS_execve(at) /
+# CLONE_* / MS_* / SIOCSIFFLAGS constants) plus fs-supervisor's Landlock module
+# (the LSM leg of the AgentShell overlay — plan + restrict_self_to_plan).
+kernel = ["dep:libc", "dep:fs-supervisor"]
+
+[dependencies.libc]
+version = "0.2"
+optional = true
+
+# The Landlock plan + enactment live in fs-supervisor (the FS chokepoint owns the
+# LSM backend); the exec sandbox only WIRES them (InProcess child pre-execve, and
+# the in-sandbox applier bin below). kernel feature only — the pure default build
+# must stay free of the enactment dependency.
+[dependencies.fs-supervisor]
+path = "../fs-supervisor"
+features = ["kernel"]
+optional = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "exec_supervisor"
+path = "src/lib.rs"
+
+# The in-sandbox Landlock applier: interposed by the Bubblewrap backend as
+# `bwrap … -- mandu-landlock-apply --rw <ws> … -- <argv>`. A separate binary
+# because a Landlock-restricted thread cannot mount(2) — the restriction must be
+# applied INSIDE the sandbox, after bwrap's mounts, just before the target exec.
+[[bin]]
+name = "mandu-landlock-apply"
+path = "src/bin/mandu-landlock-apply.rs"
+required-features = ["kernel"]
+
+# The "box one command" front-end: the production entry point into the fork model
+# (`supervise_exec`). A launcher shim execs `mandu-exec-box -- <argv>`; the bin
+# classifies via the arbiter and runs an AgentShell command inside the bwrap box
+# (net-off, RO-outside-AgentView, seccomp, Landlock) or passes a HumanShell one
+# through. This is what makes AgentShell routing LIVE (vs the #[ignore] tests).
+[[bin]]
+name = "mandu-exec-box"
+path = "src/bin/mandu-exec-box.rs"
+required-features = ["kernel"]

@@ -1,0 +1,45 @@
+{
+  "name": "@mandusec/tests",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu's cross-package test suites, one npm package for the whole tests/ tree (test-reorganization.md §5.3): the stack suites (several real Mandu packages wired as in production, a scripted model), the sandbox suites (the real sandbox, no agent), the drill runners and catalog, and the env suites. Imports the sibling packages directly; owns no product sources. tests/conformance is a separate package.",
+  "mandu": {
+    "siblings": [
+      "arbiter",
+      "dashboard",
+      "eval",
+      "fs-sync",
+      "interceptors/anthropic-proxy",
+      "interceptors/cdp-relay",
+      "interceptors/exec-wrap",
+      "interceptors/inspect-mcp",
+      "interceptors/net-proxy",
+      "interceptors/openai-proxy",
+      "interceptors/openclaw-inspect-plugin",
+      "interceptors/policy-mcp",
+      "interceptors/reply-filter",
+      "launcher"
+    ]
+  },
+  "scripts": {
+    "pretest": "node ../scripts/install-deps.mjs",
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test stack/*.test.ts",
+    "test:stack": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test stack/*.test.ts",
+    "test:sandbox": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test sandbox/*.test.ts",
+    "test:integrity": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test integrity/*.test.ts",
+    "test:env:local-model": "tsx --test env/local-model.test.ts",
+    "test:env:local-model-netns": "MANDU_LIVE_LOCAL_MODEL=1 MANDU_LIVE_LOCAL_MODEL_NETNS=1 tsx --test --test-name-pattern=local-model-netns env/local-model.test.ts",
+    "test:env:local-main-model": "tsx --test env/local-main-model.test.ts",
+    "test:env:network-model": "MANDU_AXES_STRICT=1 tsx --test env/network-model.test.ts",
+    "pretypecheck": "node ../scripts/install-deps.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@xterm/headless": "^6.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

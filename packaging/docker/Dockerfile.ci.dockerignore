@@ -1,0 +1,36 @@
+# Build-context filter for packaging/docker/Dockerfile.ci (BuildKit picks up
+# "<dockerfile>.dockerignore" in preference to the repo-root .dockerignore).
+#
+# It exists to make ONE deliberate exception to the root filter: the CI image
+# KEEPS .git.
+#
+# The root .dockerignore drops .git — right for the e2e rig, wrong here. Parts of
+# the stack read real git metadata, so without history they fail in ways that look
+# like product bugs (all three found 2026-07-12 by running test-all.sh in the
+# container while the host was green):
+#   - dashboard "stale code rev": src/git.ts shells out to `git rev-parse HEAD` on
+#     the repo root to decide whether a listening arbiter is running old code;
+#   - launcher golden-path + fs-preload-live: both seed a symbolized AgentView
+#     git worktree of the repo.
+# CI must reproduce the shell runner, which has a normal checkout — so: .git stays.
+# Cost is ~53 MB of build context, and it does not slow the cached path: the layer
+# it lands in (COPY . .) is invalidated by any source edit anyway.
+#
+# Everything else mirrors the root filter: deps are installed inside the image, and
+# nothing secret or host-generated may leak into a layer.
+**/node_modules
+interceptors/target
+eval/agentdojo/.venv
+
+# secrets / host-session artifacts (gitignored, but docker build reads the working
+# tree — exclude them explicitly)
+secrets.local.json
+secrets.json
+.env
+.mcp.json
+
+# The maintainers' private tree: nothing in the image's build or its test kinds
+# needs it, so the container tests what the public export holds, and no private
+# file (nor an unreadable tool output under it, which fails the whole context
+# load) reaches the build context.
+private/

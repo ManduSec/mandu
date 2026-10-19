@@ -1,0 +1,8 @@
+{"version": 2, "width": 80, "height": 24, "timestamp": 1790856005, "title": "fidelity-echo-short claude inline 80x24 (Mandu)"}
+[0.35, "o", "\u001b[?25l\u001b[2J\u001b[H> "]
+[1.2, "o", "DIFF_T1 read notes.md and echo its content back"]
+[1.25, "o", "\r\n"]
+[2.4, "o", "● Read(notes.md)\r\n  ⎿  Read 1 line\r\n"]
+[3.1, "o", "File content follows:\r\n"]
+[3.6, "o", "1 RC_PROBE_2026_5527\r\nDIFF_S1_DONE\r\n> "]
+[9.1, "o", "\u001b[?25h"]

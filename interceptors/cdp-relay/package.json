@@ -1,0 +1,21 @@
+{
+  "name": "@mandusec/cdp-relay",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu's browser chokepoint (wrapper layer): a relay on the DevTools (CDP) connection between a browser agent and Chrome. What Chrome sends the agent (DOM, accessibility tree, script results, network bodies) passes the arbiter's prompt filter as harness text, so a registered secret reaches the agent, and through it its model, only as its $MDU:* placeholder; a placeholder the agent types is put back only into a page whose origin the egress decision allows, checked and inserted in one turn of the page. Pixel commands are refused (text first). Fail-closed. All decisions go through the arbiter over IPC; this package never opens the symbol DB.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "serve": "tsx src/server-main.ts",
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts test/component/*.test.ts",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
+    "test:component": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/component/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

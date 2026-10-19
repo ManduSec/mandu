@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="mandu-app" content="home">
+<title>Mandu</title>
+<link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3l10 4v8c0 7-5 11-10 14C11 26 6 22 6 15V7z' fill='%231e7f4f'/%3E%3Cpath d='M11 16l3.5 3.5L21 13' stroke='%23fff' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<!-- The stored Appearance (Settings › Appearance) before the first paint: a
+     classic script, never a module, defer or async (theme-early.js). -->
+<script src="js/theme-early.js"></script>
+<link rel="stylesheet" href="mandu.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!--
+  The Mandu PRODUCT dashboard (dashboard.md §4.25): the end-user page served
+  at `/`. It answers two questions, "is this protecting me?" and "what needs my
+  OK?", from /api/home, and lets the person answer asks and change rules
+  through the same routes the developer inspector (served at /dev/) uses. The
+  page is a DOM shell; js/home.js fetches and renders. Every string that comes
+  from the server is inserted as TEXT, never as markup.
+-->
+<header id="top">
+  <div class="top-inner">
+    <a class="brand" href="./" data-page-link="home">Mandu</a>
+    <nav id="nav" aria-label="Pages">
+      <a href="./" data-page-link="home">Home</a>
+      <a href="approvals" data-page-link="approvals">Approvals <span id="nav-approvals-count" class="count" hidden>0</span></a>
+      <a href="rules" data-page-link="rules">Rules</a>
+      <a href="settings" data-page-link="settings">Settings</a>
+      <a href="history" data-page-link="history">History</a>
+    </nav>
+    <div id="top-status" class="top-status" aria-live="polite"></div>
+  </div>
+</header>
+<!-- View as public (dashboard.md §4.25ac): shown only while this browser
+     views a build with the developer view as the public version shows it. -->
+<div id="as-public" class="as-public" role="status" hidden>
+  <div class="as-public-inner">
+    <span>Viewing as public: the links to the developer view are hidden, as in the public version.</span>
+    <button type="button" class="btn small" id="as-public-off">Show them again</button>
+  </div>
+</div>
+
+<main id="main">
+  <section data-page="home" id="page-home">
+    <div id="hero" class="hero" data-verdict="unknown">
+      <div class="hero-icon" aria-hidden="true"></div>
+      <div class="hero-body">
+        <h1 id="hero-headline">Checking…</h1>
+        <p id="hero-sentence"></p>
+        <div id="hero-facts" class="facts"></div>
+      </div>
+    </div>
+
+    <!-- The first-run setup card (dashboard.md §4.25, "First-run card"):
+         /api/home carries `firstRun` only while no session exists yet. -->
+    <section class="block first-run" id="home-first-run" hidden aria-labelledby="first-run-headline">
+      <h2 id="first-run-headline"></h2>
+      <p id="first-run-protects" class="first-run-protects"></p>
+      <ol id="first-run-steps" class="first-run-steps"></ol>
+    </section>
+
+    <!-- Another agent can reach Mandu's own controls (dashboard.md §4.25x):
+         /api/home carries `exposure` only while that is so. -->
+    <section class="block exposure" id="home-exposure" hidden role="alert" aria-labelledby="exposure-headline">
+      <h2 id="exposure-headline"></h2>
+      <p id="exposure-sentence"></p>
+      <ul id="exposure-causes" class="exposure-causes"></ul>
+      <p id="exposure-fix" class="exposure-fix"></p>
+    </section>
+
+    <section class="block" id="home-waiting-block">
+      <div class="block-head">
+        <h2 id="home-waiting-title">Approvals waiting</h2>
+        <a href="approvals" data-page-link="approvals">Open Approvals →</a>
+      </div>
+      <div id="notify-offer" class="notify-offer" hidden>
+        <span>Get a notification on this computer when an agent needs your OK.</span>
+        <button type="button" class="btn small" id="notify-offer-btn">Turn on</button>
+      </div>
+      <div id="home-waiting" class="cards"></div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <h2>Running now</h2>
+        <a id="home-history" href="history" data-page-link="history"></a>
+      </div>
+      <div id="home-agents" class="table"></div>
+    </section>
+
+    <section class="block" id="home-earlier-block" hidden>
+      <h2 id="home-earlier-title">Earlier in the last 24 hours</h2>
+      <div id="home-earlier" class="table"></div>
+    </section>
+
+    <!-- "Where your data lives" (on-disk-layout.md §9 decision 2): every
+         location of the path table with what it holds and whether only you
+         can open it, from GET /api/data-locations (the `mandu paths` data),
+         without the developer-only places that are not there (§4.25q).
+         Closed by default; home.js loads it the first time it is opened. -->
+    <section class="block data-where" id="home-data-block">
+      <details id="home-data">
+        <summary>Where your data lives</summary>
+        <p class="note" id="home-data-about">Everything Mandu keeps for you is in one folder, <code id="home-data-folder">~/.mandu</code>. The AI cannot open it. To see every place, including the ones only Mandu's developers use, run <code class="code-whole">mandu paths</code>.</p>
+        <p class="note data-where-open" id="home-data-open" hidden></p>
+        <div id="home-data-list" class="table"></div>
+      </details>
+    </section>
+  </section>
+
+  <section data-page="agent" id="page-agent" hidden>
+    <div class="page-head">
+      <a href="./" id="agent-back" data-page-link="home" class="back">Back to home</a>
+      <div class="agent-head">
+        <div>
+          <h1 id="agent-name">Agent</h1>
+          <p id="agent-sub"></p>
+        </div>
+        <a id="agent-trace" data-dev-only class="btn link-btn" href="dev/" target="_blank" rel="noopener">Detailed trace</a>
+      </div>
+    </div>
+    <p id="agent-values-note" class="values-note" role="note" hidden></p>
+    <div id="agent-facts" class="tiles"></div>
+    <!-- What the leak check found (dashboard.md §4.25ae): each place, when,
+         the step it opens; never the text the check found. -->
+    <section class="block finding" id="agent-finding-block" hidden>
+      <h2 id="agent-finding-title">What the leak check found</h2>
+      <p class="block-note" id="agent-finding-intro"></p>
+      <ul id="agent-finding" class="finding-list"></ul>
+    </section>
+    <section class="block" id="agent-waiting-block" hidden>
+      <h2>Needs your OK</h2>
+      <div id="agent-waiting" class="cards"></div>
+    </section>
+    <section class="block" id="agent-secrets-block" hidden>
+      <h2>Your secrets</h2>
+      <p class="block-note" id="agent-secrets-intro"></p>
+      <div id="agent-secrets" class="secret-cards"></div>
+      <p class="block-note secret-limits" id="agent-secrets-limits"></p>
+    </section>
+    <section class="block" id="agent-browser-block" hidden>
+      <!-- A browser agent's run through Mandu's DevTools relay (§4.25af). -->
+      <h2>On web pages</h2>
+      <p class="block-note" id="agent-browser-intro"></p>
+      <ul id="agent-browser" class="secret-lines"></ul>
+    </section>
+    <section class="block" id="agent-story-block">
+      <!-- Only where Mandu stepped in (§4.25ae): the other turns fold into
+           one line a run; ?only=stepped-in in the address. -->
+      <div class="block-head story-head">
+        <h2>What happened</h2>
+        <div class="story-only" id="agent-only-row" hidden>
+          <button type="button" class="switch" id="agent-only" role="switch" aria-checked="false" aria-labelledby="agent-only-words"><span class="knob"></span></button>
+          <label for="agent-only" id="agent-only-words">Only where Mandu stepped in</label>
+        </div>
+      </div>
+      <div id="agent-story" class="story"></div>
+    </section>
+  </section>
+
+  <!-- History (dashboard.md §4.25ae): every session on record, newest
+       first, each opening its agent page; GET /api/home/history, a page at
+       a time. -->
+  <section data-page="history" id="page-history" hidden>
+    <div class="page-head">
+      <a href="./" data-page-link="home" class="back">Back to home</a>
+      <h1>History</h1>
+      <p id="history-intro">Every session Mandu recorded, newest first. Each one opens what the AI saw and what really happened.</p>
+    </div>
+    <!-- Finding a session (§4.25ae): the agent or the prompt, ?q= in the
+         address; GET /api/home/history?q=. Only the sessions where Mandu
+         stepped in: its switch, &only=stepped-in in both. -->
+    <form id="history-search" class="history-search" role="search">
+      <label for="history-q">Find a session</label>
+      <input type="search" id="history-q" maxlength="200" placeholder="What you asked, or the agent" autocomplete="off" spellcheck="false">
+      <div class="history-only">
+        <button type="button" class="switch" id="history-only" role="switch" aria-checked="false" aria-labelledby="history-only-words"><span class="knob"></span></button>
+        <label for="history-only" id="history-only-words">Only sessions where Mandu stepped in</label>
+      </div>
+      <p id="history-count" class="history-count" role="status" hidden></p>
+    </form>
+    <section class="block">
+      <div id="history-list" class="table"></div>
+    </section>
+  </section>
+
+  <section data-page="approvals" id="page-approvals" hidden>
+    <div class="page-head">
+      <h1>Approvals</h1>
+      <p>Always allow and Block are remembered under <a href="rules" data-page-link="rules">Rules</a>. Allow once lets just this one through.</p>
+    </div>
+    <!-- Opened for one question (?ask=, a Home card's Details link;
+         dashboard.md §4.25 "Details"): shown only when it is no longer
+         waiting. home.js markApprovalsAsk. -->
+    <div id="approvals-focus-note" class="focus-note missing" role="note" hidden></div>
+    <section class="block" id="approvals-suggestions-block" hidden>
+      <h2>Keys Mandu found</h2>
+      <div id="approvals-suggestions" class="cards"></div>
+    </section>
+    <section class="block" id="approvals-proposals-block" hidden>
+      <h2 id="approvals-proposals-head">Rule changes your agent asked for</h2>
+      <div id="approvals-proposals" class="cards"></div>
+    </section>
+    <section class="block">
+      <h2>Waiting for your answer</h2>
+      <div id="approvals-waiting" class="cards"></div>
+    </section>
+    <section class="block">
+      <h2>Answered earlier</h2>
+      <div id="approvals-answered" class="table"></div>
+    </section>
+    <section class="block" id="approvals-rule-history-block" hidden>
+      <h2>Rule changes</h2>
+      <div id="approvals-rule-history" class="table"></div>
+    </section>
+  </section>
+
+  <section data-page="rules" id="page-rules" hidden>
+    <div class="page-head">
+      <h1>Rules</h1>
+      <p>Which files are secret, and where your data may go.</p>
+      <!-- A link per card, each with its address (/rules#who; dashboard.md
+           §4.25 "Section links"): home.js drawSectionLinks from SECTIONS. -->
+      <nav class="section-links" data-sections="rules" aria-label="Sections of Rules"></nav>
+    </div>
+    <p id="rules-off" class="rules-off" role="status" hidden></p>
+    <p id="rules-pending" class="rules-off" role="status" hidden></p>
+    <section class="block card" id="describe-block">
+      <div class="block-head">
+        <h2>Describe what you want</h2>
+      </div>
+      <p class="note">Say it in your own words. A helper suggests rules, and nothing changes until you press Apply.</p>
+      <form id="describe-form" class="describe-form">
+        <textarea id="describe-text" rows="3" maxlength="2000" spellcheck="true" aria-label="Describe the rules you want" placeholder="This is my work repo. I use GitHub and PyPI. Keep .env and ~/.ssh secret. Never send anything to paste sites."></textarea>
+        <div class="form-actions">
+          <span id="describe-status" class="dim" role="status"></span>
+          <button type="button" class="btn" id="describe-cancel" hidden>Cancel</button>
+          <button type="submit" class="btn primary" id="describe-submit">Suggest rules</button>
+        </div>
+      </form>
+      <div id="describe-result" class="describe-result" hidden></div>
+    </section>
+    <section class="block card" id="rules-block" aria-labelledby="rules-title">
+      <!-- Your rules (dashboard.md §4.25f, §4.25n, §4.25p): ONE list, a row
+           per rule. A row says what it covers, then ONE label menu (or, for
+           a sending rule, its Always allowed / Always blocked menu), the
+           hosts it may still go to as chips, and a "⋯" that opens the rest
+           under it (where the rule comes from, its policy.yaml lines, what
+           the rules say, the hosts to edit, Remove). A file label chosen
+           here waits in Changes to save (the bar at the bottom) until Save;
+           a sending rule or an answer changes at once, with Undo. Browsing
+           files and typing a path or pattern sit behind "Add a rule". -->
+      <div class="block-head">
+        <h2 id="rules-title">Your rules <span id="rules-count" class="muted"></span></h2>
+        <!-- Find a rule (dashboard.md §4.25f *Find a rule*): narrows the rows
+             drawn below to those whose words hold the text; no read, never
+             in the address, cleared by a page change. -->
+        <input type="search" id="rules-find" class="rules-find" placeholder="Find a rule" aria-label="Find a rule" aria-describedby="rules-count" autocomplete="off" spellcheck="false" maxlength="200">
+        <button type="button" class="btn small primary" id="rules-add" aria-expanded="false" aria-controls="lock-form">Add a rule</button>
+      </div>
+      <p class="note">Your rules are checked first, then the built-in protections.</p>
+      <details class="more glossary" id="rules-glossary">
+        <summary>What the words mean</summary>
+        <dl>
+          <dt>Masked</dt><dd>Before the AI saw it, Mandu replaced the real text with a short code that stands for it. You still see the real text.</dd>
+          <dt>No AI</dt><dd>Every AI sees it masked, Mandu's helper included, and your OK does not change that. Only the programs allowed to open it get the real file: ssh, and programs you name, never a database shell. It is sent only where a rule or your OK allows.</dd>
+          <dt>Your own AI only</dt><dd>Only your own AI may read it, when it asks: one you or your organization run, on this computer or your organization's network, listed in Settings › Models. Any other AI sees it masked, and your OK does not change that. It is sent only where a rule or your OK allows.</dd>
+          <dt>Any AI, when it asks</dt><dd>The AI first sees it masked. When it needs the contents, Mandu's helper reads them for it, or the AI reads them itself. Each read is logged, and your AI provider gets what is read. It is sent only where a rule or your OK allows.</dd>
+          <dt>Not secret</dt><dd>Treated like any other file, even if it looks like a secret (a test .env, for example).</dd>
+          <dt>Trusted source</dt><dd>What comes from it reaches the AI unmasked.</dd>
+          <dt>Always allowed</dt><dd>Happens without asking you.</dd>
+          <dt>Always blocked</dt><dd>Stopped without asking you.</dd>
+          <dt>Needs your OK</dt><dd>The default: Mandu pauses and asks you first. One exception: a key whose shape names the company that issued it, such as a Stripe or GitHub key, goes to that company's own API without asking (issuer_bindings in policy.yaml turns this off).</dd>
+          <dt>Listed hosts without asking</dt><dd>For a secret: the hosts listed on its rule get the real value without asking you, over HTTPS too. Any other send still needs a rule or your OK. A program that read two secrets may send only where both may go.</dd>
+          <dt>Per value</dt><dd>Shown, greyed, in the second menu of a file that holds several secrets, such as a .env, when each value has its own listed hosts. Those are set in policy.yaml. A program that opened the whole file may send it only where every value may go.</dd>
+          <dt>Your answer</dt><dd>Your choice when Mandu asked and you picked always. For sending, it covers only the data you were asked about, going to that one place. Other data sent there still needs your OK.</dd>
+        </dl>
+      </details>
+      <div id="rules-notice" class="rules-notice" role="status" hidden></div>
+      <div id="files-move" class="files-move" role="note" hidden></div>
+      <!-- Add a rule (dashboard.md §4.25m): type a path or pattern, or browse
+           a folder; every entry has the same label menu as a rule, and ticked
+           entries are labeled together from the bar under the list. -->
+      <section id="lock-form" class="lock-form files-panel add-panel" aria-label="Add a rule" hidden>
+        <form id="files-go" class="files-bar" autocomplete="off">
+          <input type="text" id="lock-path" name="path" placeholder="~/project/.env or **/.env" spellcheck="false" aria-label="Folder, file or pattern" aria-describedby="files-path-hint" aria-autocomplete="both" list="files-suggest">
+          <datalist id="files-suggest"></datalist>
+          <button type="submit" class="btn small">Go</button>
+          <button type="button" class="btn small" id="files-home">Home folder</button>
+          <button type="button" class="btn small" id="rules-add-close">Close</button>
+        </form>
+        <p class="field-hint" id="files-path-hint">Type a path, or a pattern such as <code>**/.env</code> for every matching file. Tab finishes a name.</p>
+        <div id="files-all-view" class="files-all-view">
+          <nav id="files-crumbs" class="files-crumbs" aria-label="Folders"></nav>
+          <div id="files-starts" class="files-starts" hidden></div>
+          <div class="files-tools">
+            <input type="search" id="files-filter" placeholder="Filter this folder" aria-label="Filter this folder" autocomplete="off" spellcheck="false">
+            <label class="choice inline"><input type="checkbox" id="files-hidden" checked> <span>Show hidden files</span></label>
+            <label class="choice inline"><input type="checkbox" id="files-labeled"> <span>Hide ordinary files</span></label>
+          </div>
+          <p id="files-note" class="files-note" role="status" hidden></p>
+          <div id="files-self" class="files-self" hidden></div>
+          <div id="files-list" class="table files-list" role="list" aria-label="Files and folders"></div>
+          <div id="files-selected" class="files-selected" role="region" aria-label="The ticked items"></div>
+        </div>
+      </section>
+      <div id="rules-find-none" class="rules-find-none" role="status" hidden></div>
+      <div class="rules-group" id="files-group">Files and folders <span class="muted">which AI may read each one, and where it may be sent</span></div>
+      <div class="files-heads" id="files-heads" aria-hidden="true"><span>File or folder</span><span>Which AI may read it</span><span>Where it may be sent</span></div>
+      <div id="files-tree" class="table files-tree" role="list" aria-label="Your rules on files and folders"></div>
+      <div id="rules-list" class="rules-rest"></div>
+    </section>
+    <!-- Who may get your secrets (dashboard.md §4.25aa, plan 13 §5.3): the
+         same file rules read the other way round, per program, per host and
+         per AI, from /api/policy/by-who (home.js renderByWho). Read only:
+         a change is made in a file's menus under Your rules, and each file
+         here opens its rule's row there (openRuleRow). Hidden until
+         the rules are read. -->
+    <section class="block card" id="by-who-block" aria-labelledby="by-who-title" hidden>
+      <div class="block-head">
+        <h2 id="by-who-title">Who may get your secrets</h2>
+      </div>
+      <p class="note">Your file rules read the other way round: what each program, host and AI may get. To change one, press its file to open it under Your rules.</p>
+      <div class="by-who-tabs" role="tablist" aria-label="Read the rules by">
+        <button type="button" role="tab" id="by-who-tab-programs" data-by="programs" aria-controls="by-who-list" aria-selected="true">Programs</button>
+        <button type="button" role="tab" id="by-who-tab-hosts" data-by="hosts" aria-controls="by-who-list" aria-selected="false" tabindex="-1">Hosts</button>
+        <button type="button" role="tab" id="by-who-tab-models" data-by="models" aria-controls="by-who-list" aria-selected="false" tabindex="-1">AI</button>
+      </div>
+      <div id="by-who-list" class="by-who-list" role="tabpanel" aria-labelledby="by-who-tab-programs"></div>
+      <p id="by-who-note" class="note"></p>
+    </section>
+    <!-- Keys Mandu found (dashboard.md §4.25r, plan 14 §5.4, §13.6): its own
+         card, closed until opened (Review, or the Approvals card). Keys
+         Mandu's scans found, in git history or in the files as they are now,
+         that no rule covers yet. Once opened, each is a change waiting in
+         Changes to save, ticked; unticking skips it, and Save applies the
+         ticked ones. A row opens in place to what the scan found, and "Not a
+         secret". -->
+    <section class="block card" id="suggested-block" aria-labelledby="suggested-title">
+      <div class="block-head">
+        <h2 id="suggested-title">Keys Mandu found <span id="files-suggested-count" class="muted"></span></h2>
+        <button type="button" class="btn small" id="suggest-open" aria-expanded="false" aria-controls="files-suggested-view">Review</button>
+      </div>
+      <p class="note" id="suggested-line">Possible keys in your projects that no rule covers yet.</p>
+      <div id="files-suggested-view" class="files-suggested-view" hidden>
+        <form id="suggest-form" class="files-suggest-bar" autocomplete="off">
+          <button type="submit" class="btn small primary" id="suggest-scan" aria-describedby="suggest-error">Scan for keys</button>
+          <input type="text" id="suggest-root" placeholder="The projects your agents worked in" spellcheck="false" aria-label="Folder to scan (optional)">
+          <label class="suggest-home"><input type="checkbox" id="suggest-home"> Also look in your home folder</label>
+          <span id="suggest-status" class="dim" role="status"></span>
+        </form>
+        <details class="more">
+          <summary>More</summary>
+          <p class="note">Mandu reads the files and the git history of the projects your agents worked in, here on this computer. Type a folder to scan another project. In your home folder it reads only files named like settings or keys. Nothing changes until you press Save.</p>
+        </details>
+        <div id="suggest-model" class="suggest-model">
+          <label class="suggest-model-pick">Ask a model too
+            <select id="suggest-model-tier" aria-describedby="suggest-model-why">
+              <option value="off">Off</option>
+              <option value="names" disabled>Names only</option>
+              <option value="contents" disabled>Contents (your own model)</option>
+            </select>
+          </label>
+          <select id="suggest-model-own" aria-label="Which of your own models" hidden></select>
+          <button type="button" class="btn small" id="suggest-model-run" aria-describedby="suggest-error" disabled>See what it would send</button>
+          <span id="suggest-model-why" class="dim"></span>
+        </div>
+        <div id="suggest-model-preview" class="suggest-model-preview" role="dialog" aria-modal="false" aria-labelledby="suggest-model-head" hidden>
+          <p id="suggest-model-head" class="suggest-model-head"></p>
+          <p id="suggest-model-where" class="dim"></p>
+          <ul id="suggest-model-roots" class="dim suggest-model-roots"></ul>
+          <p id="suggest-model-caption" class="detail-cap"></p>
+          <ol id="suggest-model-list" class="suggest-model-list"></ol>
+          <ul id="suggest-model-notes" class="dim suggest-model-notes"></ul>
+          <div class="form-actions">
+            <button type="button" class="btn" id="suggest-model-cancel" aria-describedby="suggest-error">Cancel</button>
+            <button type="button" class="btn primary" id="suggest-model-send">Send</button>
+          </div>
+        </div>
+        <p id="suggest-model-status" class="dim" role="status"></p>
+        <p id="suggest-error" class="ask-error" role="alert"></p>
+        <div id="files-suggested-list" class="table files-list files-suggested" role="list" aria-label="Suggested rules"></div>
+      </div>
+    </section>
+    <!-- Changes to save: every file label chosen on this page and every
+         ticked suggestion, kept at the bottom of the window while there are
+         any, with what they change and Save (dashboard.md §4.25n). Only its
+         lists scroll (app.css): the heading, the question and the buttons
+         stay in view however many changes wait. A list with nothing to
+         focus in it is a Tab stop when it scrolls, so it is named
+         (dashboard.md §4.25 *A box that scrolls says what it holds*). -->
+    <div id="files-pending" class="files-pending" role="region" aria-label="Changes to save" hidden>
+      <h3>Changes to save <span id="files-pending-count" class="muted"></span></h3>
+      <ul id="files-pending-list" class="files-pending-list"></ul>
+      <div id="files-impact" class="files-impact" role="status" aria-label="What this changes" hidden></div>
+      <div id="files-confirm" class="files-confirm" role="alert" hidden>
+        <p><strong id="files-confirm-head">These changes make protection weaker.</strong> Check them before you save.</p>
+        <ul id="files-confirm-list" aria-labelledby="files-confirm-head"></ul>
+        <div id="files-confirm-files" class="files-confirm-files" hidden></div>
+        <label class="field">
+          <span>Why? <span class="muted">(optional, kept with the change under Rule changes in Approvals)</span></span>
+          <input type="text" id="files-reason" maxlength="200" autocomplete="off">
+        </label>
+      </div>
+      <div class="form-actions">
+        <span id="lock-error" class="ask-error" role="alert"></span>
+        <button type="button" class="btn" id="files-discard">Discard</button>
+        <button type="button" class="btn primary" id="files-save" aria-describedby="lock-error">Save changes</button>
+      </div>
+    </div>
+    <section class="block card" id="builtin-block">
+      <div class="block-head">
+        <h2>Built-in protections <span class="muted" id="builtin-note"></span></h2>
+      </div>
+      <!-- What the RUNNING mode does (dashboard.md §4.25z): home.js
+           renderBuiltIn paints /api/home's builtIn. Never a static list: in
+           the default Secrets mode untrusted content is not masked. -->
+      <ul class="plain-list" id="builtin-list"></ul>
+    </section>
+  </section>
+
+  <section data-page="settings" id="page-settings" hidden>
+    <div class="page-head">
+      <h1>Settings</h1>
+      <nav class="section-links" data-sections="settings" aria-label="Sections of Settings"></nav>
+    </div>
+    <!-- Every section is a card (dashboard.md §4.25 "Cards and folds"): its
+         title, ONE line that says what it is for, the controls, and the rest
+         of the explanation folded under "More" (a <details>) or a "?" help
+         (data-help, made a help button by home.js wireStaticHelp). -->
+    <section class="block card" id="settings-protection-block" aria-labelledby="settings-protection-title">
+      <h2 id="settings-protection-title">Protection</h2>
+      <!-- The one on/off (dashboard.md §4.25 Settings): the confidentiality
+           axis, POST {mode} to /api/config/axes; turning it off asks for a
+           typed OFF. The frozen integrity axis has no switch on this page.
+           The same row says whether the protection service runs, with Start
+           or Restart (#settings-services, home.js drawServices). -->
+      <div class="table">
+        <div class="row service setting" id="settings-protect-row">
+          <div class="name">Protection</div>
+          <div class="protect-body">
+            <div class="sub" id="settings-protect-text">Checking…</div>
+            <div class="sub service-line" id="settings-services"></div>
+          </div>
+          <button type="button" class="switch right" id="switch-protection" role="switch" aria-checked="false" aria-label="Protection" disabled><span class="knob"></span></button>
+        </div>
+      </div>
+      <p id="settings-protect-note" class="note"></p>
+    </section>
+    <section class="block card" id="settings-models-block" aria-labelledby="settings-models-title">
+      <div class="block-head">
+        <h2 id="settings-models-title">Models</h2>
+        <button type="button" class="btn small" id="model-open" aria-expanded="false" aria-controls="model-form">Add a model</button>
+      </div>
+      <p class="note">Which models may read files marked "Your own AI only".</p>
+      <details class="more">
+        <summary>More</summary>
+        <p class="note">A model you do not mark as your own is an outside model. Changes are saved to <code>models:</code> in policy.yaml.</p>
+      </details>
+      <!-- Settings › Models (dashboard.md §4.25l): one form for add and edit.
+           home.js wireModelForm sends it to POST /api/policy/models/change,
+           which plans the edit and asks before it applies. -->
+      <form id="model-form" class="lock-form model-form" hidden>
+        <input type="hidden" id="model-original" name="original" value="">
+        <label class="field">
+          <span>Name</span>
+          <input type="text" id="model-name" name="name" placeholder="ollama" autocomplete="off" spellcheck="false" required>
+        </label>
+        <label class="field">
+          <span>Address</span>
+          <input type="text" id="model-url" name="url" placeholder="http://127.0.0.1:11434" autocomplete="off" spellcheck="false" required>
+        </label>
+        <label class="field">
+          <span>API style</span>
+          <select id="model-wire" name="wire">
+            <option value="anthropic">Anthropic Messages</option>
+            <option value="openai-chat">OpenAI chat</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Model <span class="muted">(optional)</span></span>
+          <input type="text" id="model-model" name="model" placeholder="llama3.2" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="choice-line"><label class="choice inline"><input type="checkbox" id="model-local" name="local"> <span><strong>This is my own model</strong></span></label> <span data-help="About your own model">It runs on this computer, or on a server your organization controls. On another computer, it must use an https address.</span></div>
+        <div class="choice-line"><label class="choice inline"><input type="checkbox" id="model-plain-http" name="allowPlainHttp" disabled> <span><strong>Send without encryption</strong></span></label> <span data-help="About sending without encryption">Only for your own model at an http address on another computer, on a network you trust. Files marked "Your own AI only" then cross the network unencrypted. Prefer an https address.</span></div>
+        <div class="choice-line"><label class="choice inline"><input type="checkbox" id="model-helper" name="helper" disabled> <span><strong>Read my own-model files with this one</strong></span></label> <span data-help="About the model that reads your own-model files">When you list more than one model of your own, files marked "Your own AI only" are read by this one. Without a choice, the first model of your own in the list reads them.</span></div>
+        <label class="field">
+          <span id="model-token-env-label">Token variable name <span class="muted">(optional)</span></span>
+          <input type="text" id="model-token-env" name="tokenEnv" placeholder="OLLAMA_API_KEY" autocomplete="off" spellcheck="false" aria-labelledby="model-token-env-label" aria-describedby="model-token-env-hint">
+          <span class="field-hint" id="model-token-env-hint">An environment variable's name. The token itself never goes in policy.yaml.</span>
+        </label>
+        <div class="form-actions">
+          <span id="model-error" class="ask-error" role="alert"></span>
+          <button type="button" class="btn" id="model-cancel">Cancel</button>
+          <button type="submit" class="btn primary" id="model-save" aria-describedby="model-error">Save model</button>
+        </div>
+      </form>
+      <div id="models-notice" class="rules-notice" role="status" hidden></div>
+      <div id="settings-models" class="table"></div>
+    </section>
+    <section class="block card" id="settings-labels-block" aria-labelledby="settings-labels-title">
+      <h2 id="settings-labels-title">Sensitivity labels</h2>
+      <p class="note">Give your organization's document labels (like "Highly Confidential") a level.</p>
+      <details class="more">
+        <summary>More</summary>
+        <p class="note">Your organization's Office puts these labels on documents. Mandu's scan suggests a label's level for every document that carries it, and nothing is protected until you save a suggestion. Saved to <code>sensitivity_labels:</code> in policy.yaml.</p>
+      </details>
+      <!-- Settings › Sensitivity labels (dashboard.md §4.25s, plan 14 §14.1):
+           home.js loadLabels reads GET /api/policy/sensitivity-labels and
+           sends each Save to POST /api/policy/sensitivity-labels/change. -->
+      <div id="labels-notice" class="rules-notice" role="status" hidden></div>
+      <div id="settings-labels" class="table"></div>
+    </section>
+    <section class="block card" id="settings-prompt-block" aria-labelledby="settings-prompt-title">
+      <h2 id="settings-prompt-title">Prompt filters</h2>
+      <p class="note">What happens when a message you type holds a secret.</p>
+      <details class="more" id="settings-prompt-more">
+        <summary>More</summary>
+        <p class="note" id="settings-prompt-about">Mandu checks what you type before the AI reads it. Saved to <code>prompt_filters:</code> in policy.yaml; a change applies to your next message.<span data-dev-only> Which checks run, your own word lists and a place to try them are in the <a id="settings-prompt-dev" href="dev/rules" target="_blank" rel="noopener">developer view</a>.</span></p>
+      </details>
+      <!-- Settings › Prompt filters (dashboard.md §4.25y, plan 15 §13.7):
+           home.js loadPromptSettings reads GET /api/policy/prompt-filters
+           (the developer panel's projection in the product's words) and
+           sends each change, ONE typed PolicyEdit, to POST
+           /api/policy/prompt-filters/change, which asks before a change
+           that lets more through. Switches, packs, plugins and the test
+           bench stay in the developer view. -->
+      <div id="prompt-notice" class="rules-notice" role="status" hidden></div>
+      <div id="settings-prompt-kinds" class="table"></div>
+      <details class="more" id="settings-prompt-meanings-fold">
+        <summary>What the choices mean</summary>
+        <dl id="settings-prompt-meanings" class="prompt-meanings"></dl>
+      </details>
+      <!-- Hidden with the meanings while the filters cannot be read
+           (dashboard.md §4.25 "Empty states"). How to write an exception
+           shows with the form that takes one; without the form, the
+           server's words say why (§4.25y *An exception that cannot be
+           added says why*). -->
+      <h3 id="settings-prompt-exceptions-head">Exceptions</h3>
+      <p class="note" id="settings-prompt-exceptions-about">What matches an exception goes to the AI as you wrote it. <span id="settings-prompt-exceptions-how" hidden>Use a <code>*</code> for any text, as in <code>*@example.com</code>.</span><span id="settings-prompt-exceptions-why" hidden></span></p>
+      <div id="settings-prompt-exceptions" class="table"></div>
+      <form id="prompt-exception-form" class="lock-form prompt-exception-form" autocomplete="off" hidden>
+        <label class="field">
+          <span>Kind</span>
+          <select id="prompt-exception-kind"></select>
+        </label>
+        <label class="field">
+          <span id="prompt-exception-match-label">When it matches</span>
+          <input type="text" id="prompt-exception-match" maxlength="256" spellcheck="false" aria-labelledby="prompt-exception-match-label" aria-describedby="prompt-exception-hint">
+          <span class="field-hint" id="prompt-exception-hint">For example <code>*@example.com</code>. Adding one lets more reach the AI, so Mandu asks you first.</span>
+        </label>
+        <div class="form-actions">
+          <span id="prompt-exception-error" class="ask-error" role="alert"></span>
+          <button type="submit" class="btn primary" id="prompt-exception-add">Add exception</button>
+        </div>
+      </form>
+    </section>
+    <section class="block card" id="settings-notify-block" aria-labelledby="settings-notify-title">
+      <h2 id="settings-notify-title">Notifications</h2>
+      <div class="table"><div class="row service">
+        <div class="name">This browser</div>
+        <div class="sub" id="notify-state"></div>
+        <button type="button" class="btn small right" id="notify-enable" aria-describedby="notify-state" hidden>Turn on</button>
+      </div></div>
+    </section>
+    <!-- Settings › Appearance (dashboard.md §4.25 Settings): light, dark or
+         the system's, stored in this browser under the same key the
+         developer view's Appearance row uses, so both pages follow one
+         choice. home.js wireAppearance; js/theme-early.js applies it before
+         the first paint. -->
+    <section class="block card" id="settings-appearance-block" aria-labelledby="settings-appearance-title">
+      <h2 id="settings-appearance-title">Appearance</h2>
+      <div class="table"><div class="row service appearance-row">
+        <label class="name" id="settings-theme-label" for="settings-theme">Colours</label>
+        <div class="sub" id="settings-theme-note"></div>
+        <select id="settings-theme" aria-labelledby="settings-theme-label">
+          <option value="system">Same as this computer</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </div></div>
+    </section>
+    <section class="block card" aria-labelledby="settings-dev-title" data-dev-only>
+      <div class="block-head">
+        <h2 id="settings-dev-title">Developer view</h2>
+        <a id="settings-dev-link" href="dev/" target="_blank" rel="noopener">Open the developer view</a>
+      </div>
+      <p class="note">Every session's detailed trace, all your rules, and the test tools.</p>
+      <div class="view-public">
+        <button type="button" class="btn small" id="settings-view-public">View as public</button>
+        <span class="note">See these pages as the public version shows them, without the links here. A bar at the top turns it off.</span>
+      </div>
+    </section>
+  </section>
+</main>
+
+<script type="module" src="js/home.js"></script>
+</body>
+</html>

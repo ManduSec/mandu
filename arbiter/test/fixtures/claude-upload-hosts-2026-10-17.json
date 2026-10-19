@@ -1,0 +1,34 @@
+{
+  "captured": "2026-10-17",
+  "source": "Claude Code 2.1.302 (native build), strings of the binary; read statically, no model and no network",
+  "purpose": "The hosts Claude Code's upload tools send a local file's bytes to, observed instead of assumed (interceptors/anthropic-proxy/src/upload-gate.ts UPLOAD_HOSTS; docs/design/agents/supported-agents.md §2). A unit test pins every host listed here into UPLOAD_HOSTS.",
+  "origins": {
+    "CLAUDE_AI_ORIGIN": "https://claude.ai",
+    "first_party_api_origins": ["https://api.anthropic.com", "https://api-staging.anthropic.com"],
+    "note": "BASE_API_URL is the OAuth config's API host; with no custom OAuth URL a request origin is trusted when it equals BASE_API_URL's origin or is in the first-party set."
+  },
+  "tools": {
+    "DesignSync": {
+      "hosts": ["api.anthropic.com"],
+      "how": "every MCP call (write_files with localPath included) is a POST of /v1/design/mcp against BASE_API_URL; the tool refuses any other base URL",
+      "excerpts": [
+        "if(!_f(ln().BASE_API_URL))throw Error(\"Claude Design is only reachable from api.anthropic.com; the current OAuth base URL is not on the first-party allowlist.\");let y=await Gt.post(\"/v1/design/mcp\",e,{auth:\"none\",headers:{...Ae(t),Accept:\"application/json, text/event-stream\",\"X-Anthropic-Client\":\"claude-cli-design-tool\",",
+        "finalize_plan: directory the bundle was built into. write_files with localPath may only read files inside this directory. Defaults to the current working directory."
+      ]
+    },
+    "Artifact": {
+      "hosts": ["api.anthropic.com"],
+      "how": "the claude-artifacts MCP server (path /api/artifacts/mcp) hands back an upload URL per file; the client re-reads each file, checks its sha256 against the one it hashed, and PUTs the bytes to that URL, whose origin must be a trusted first-party API origin (sC/O$ below); api-staging.anthropic.com is accepted only when the service hands it out",
+      "excerpts": [
+        "QUt=\"/api/artifacts/mcp\"",
+        "var xqt=[{path:QUt,serverId:s3n,policy:\"allow_cobalt_plinth\",uploadPathPrefix:`${QUt}/upload/`,ccrEntryPath:N2s}];",
+        "async put(c,s){let e=[],_=0;for(let{path:r,sha256:n,url:g,headers:h}of c){if(s.aborted)return[...e,{path:r,code:\"canceled\"}];let l=await y(r,a,p);if(\"code\"in l)return[...e,l];if(_+=l.buf.length,_>m)return[...e,{path:r,code:\"too_large_total\"}];if(l.sha256!==n)return[...e,{path:r,code:\"changed\"}];",
+        "let n=await Gt.put(`/${e.pathname.slice(1)}`,p,{auth:\"none\",baseUrl:s,headers:_,maxRedirects:0,",
+        "function O$(e){let n;try{n=new URL(ln().BASE_API_URL).origin}catch{return!1}if(e.origin===n)return!0;if(a.CLAUDE_CODE_CUSTOM_OAUTH_URL)return!1;return R$.has(e.origin)}",
+        "R$=new Set([\"https://api.anthropic.com\",\"https://api-staging.anthropic.com\"]);"
+      ]
+    }
+  },
+  "not_carried_by_the_egress_proxy": "api.anthropic.com is a model API host: the egress proxy never touches it (interceptors/net-proxy/src/egress.ts MODEL_HOST_SUFFIXES) and the launch puts it in NO_PROXY (launcher/src/services/net-proxy.ts), so these uploads leave the agent's own process with no network layer seeing them; the model-wire gate is the only check.",
+  "also_seen_not_mapped": "2.1.302 also carries client-side file attachments for claude.ai connectors (the Chrome extension's file_upload{paths}, a managed agent's start_task files): MCP tools Mandu does not map, gated by the unmapped upload leg (interceptors/anthropic-proxy/src/unmapped-upload.ts)."
+}

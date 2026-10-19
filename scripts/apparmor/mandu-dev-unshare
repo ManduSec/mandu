@@ -1,0 +1,15 @@
+# Mandu-dev: a DEVELOPER-ONLY grant for scripts/kernel-tests.sh, which runs the
+# kernel tests under `unshare --user` (installed only by
+# `sudo scripts/apparmor/install.sh --dev-unshare`; never by `mandu setup`).
+# It lets every program run through /usr/bin/unshare create a user namespace
+# with capabilities, which is what Ubuntu's restriction exists to prevent, so
+# keep it off any machine that is not a development box. Mandu-named, so it
+# shares no profile name with anything Ubuntu ships.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile mandu_dev_unshare /usr/bin/unshare flags=(unconfined) {
+  userns,
+
+  include if exists <local/mandu_dev_unshare>
+}

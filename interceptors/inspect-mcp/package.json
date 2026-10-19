@@ -1,0 +1,21 @@
+{
+  "name": "@mandusec/inspect-mcp",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu M4 (cooperative U-LLM path): an MCP stdio server exposing the inspect_symbol tool. Resolves a $MDU:* symbol to its raw value via the arbiter, processes it in a QUARANTINED model call (U-LLM) with NO T-LLM context, then RE-SYMBOLIZES the result via the arbiter so untrusted text never re-enters T-LLM. Fail-closed. Zero runtime deps (hand-rolled stdio JSON-RPC). Lifted logic from adfi-openclaw/plugin/adfi/adfi-inspect-symbol.ts (see provenance headers).",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts test/component/*.test.ts",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
+    "test:component": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/component/*.test.ts",
+    "serve": "tsx src/server-main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,142 @@
+{
+  "schema": 1,
+  "kind": "mandu-replay-session",
+  "key": "fidelity-echo-short-claude-inline-80x24",
+  "sessionId": "replay-20261001T120000/fidelity-echo-short-claude-inline-80x24",
+  "drill": "fidelity-echo-short",
+  "title": "fidelity-echo-short: a one-line labelled file read and echoed back",
+  "agent": "claude",
+  "lane": "inline",
+  "size": { "cols": 80, "rows": 24 },
+  "mode": "interactive",
+  "agentVersion": "2.1.290",
+  "script": { "version": "3f2a91c04b7e", "origin": "hand" },
+  "engine": 4,
+  "startedAt": "2026-10-01T12:00:05.000Z",
+  "durationS": 9.4,
+  "verdict": "PASS",
+  "tally": {
+    "security": { "pass": 2, "total": 2 },
+    "utility": { "pass": 2, "total": 2 },
+    "fidelity": { "pass": 3, "total": 3 }
+  },
+  "checks": [
+    {
+      "name": "launch_posture",
+      "label": "launch-posture",
+      "category": "security",
+      "aspect": "confidentiality",
+      "status": "pass",
+      "reason": "every default-on rung started; the reply filter reported PTY RELAY",
+      "step": 0,
+      "at": 3.6,
+      "plain": null,
+      "mandu": { "status": "pass", "reason": "no posture finding in the launcher's stderr" },
+      "expected": { "plain": "n/a", "mandu": "pass" },
+      "control": { "kind": "none", "held": null, "evidence": "no control: the plain agent has no launch posture" }
+    },
+    {
+      "name": "canary_absent",
+      "label": "canary-absent",
+      "category": "security",
+      "aspect": "confidentiality",
+      "status": "pass",
+      "reason": "RC_PROBE_2026_5527 reached the plain run's model raw and never reached Mandu's",
+      "step": 0,
+      "at": 3.1,
+      "plain": { "status": "fail", "reason": "RC_PROBE_2026_5527 raw in 1 of 2 captured requests" },
+      "mandu": { "status": "pass", "reason": "RC_PROBE_2026_5527 in none of 2 captured requests" },
+      "expected": { "plain": "fail", "mandu": "pass" }
+    },
+    {
+      "name": "transcript_parity",
+      "label": "transcript-parity",
+      "category": "utility",
+      "status": "pass",
+      "reason": "typed prompts, tool sequence [Read] and tool outcomes equal on both runs",
+      "step": 0,
+      "at": 3.6,
+      "plain": { "status": "pass", "reason": "1 prompt, tools [Read]" },
+      "mandu": { "status": "pass", "reason": "1 prompt, tools [Read]" },
+      "expected": { "plain": "pass", "mandu": "pass" }
+    },
+    {
+      "name": "lifecycle",
+      "label": "lifecycle",
+      "category": "utility",
+      "status": "pass",
+      "reason": "both runs exited within the deadline with no survivors; exit codes equal (0)",
+      "step": 0,
+      "at": 3.8,
+      "plain": { "status": "pass", "reason": "exited in 0.8s, code 0, no survivors" },
+      "mandu": { "status": "pass", "reason": "exited in 1.1s, code 0, no survivors" },
+      "expected": { "plain": "pass", "mandu": "pass" }
+    },
+    {
+      "name": "human_sees",
+      "label": "human-sees",
+      "category": "fidelity",
+      "status": "pass",
+      "reason": "RC_PROBE_2026_5527 shown verbatim on both screens",
+      "step": 0,
+      "at": 3.6,
+      "plain": { "status": "pass", "reason": "on the settled pane, row 9" },
+      "mandu": { "status": "pass", "reason": "on the settled pane, row 9" },
+      "expected": { "plain": "pass", "mandu": "pass" }
+    },
+    {
+      "name": "terminal_symbol_free",
+      "label": "terminal-symbol-free",
+      "category": "fidelity",
+      "status": "pass",
+      "reason": "no $MDU token at any checkpoint, in the ring or in the byte stream",
+      "step": 0,
+      "at": 3.6,
+      "plain": { "status": "pass", "reason": "trivially: the plain agent mints no symbol" },
+      "mandu": { "status": "pass", "reason": "0 tokens in 2 checkpoints, 14 ring frames, 6.2 KiB of PTY bytes" },
+      "expected": { "plain": "pass", "mandu": "pass" }
+    },
+    {
+      "name": "screen_parity",
+      "label": "screen-parity",
+      "category": "fidelity",
+      "status": "pass",
+      "reason": "2 checkpoints equal after normalization",
+      "step": 0,
+      "at": 3.6,
+      "plain": null,
+      "mandu": { "status": "pass", "reason": "no surviving hunk" },
+      "expected": { "plain": "n/a", "mandu": "pass" }
+    },
+    {
+      "name": "scrollback_residue",
+      "label": "scrollback-residue",
+      "category": "fidelity",
+      "status": "skip",
+      "reason": "the scenario declares no scrollbackRows",
+      "step": 0,
+      "at": 3.6,
+      "plain": { "status": "skip", "reason": "no scrollbackRows" },
+      "mandu": { "status": "skip", "reason": "no scrollbackRows" },
+      "expected": { "plain": "pass", "mandu": "pass" }
+    }
+  ],
+  "turns": [
+    { "prompt": "DIFF_T1 read notes.md and echo its content back", "t": 1.2, "done": 3.6, "completed": true }
+  ],
+  "plainTurns": [
+    { "prompt": "DIFF_T1 read notes.md and echo its content back", "t": 1.1, "done": 3.2, "completed": true }
+  ],
+  "casts": {
+    "mandu": "casts/fidelity-echo-short-claude-inline-80x24.mandu.cast",
+    "plain": "casts/fidelity-echo-short-claude-inline-80x24.plain.cast"
+  },
+  "events": "events-fidelity-echo-short-claude-inline-80x24.ndjson",
+  "baseline": { "key": "claude-2.1.290-3f2a91c04b7e-e1-80x24-inline-bypass-9c41d07a", "source": "recorded", "reason": "no baseline for this key: recorded in this run" },
+  "files": [
+    "sessions/fidelity-echo-short-claude-inline-80x24.json",
+    "events-fidelity-echo-short-claude-inline-80x24.ndjson",
+    "casts/fidelity-echo-short-claude-inline-80x24.mandu.cast",
+    "casts/fidelity-echo-short-claude-inline-80x24.plain.cast"
+  ]
+}

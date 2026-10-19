@@ -1,0 +1,18 @@
+{
+  "comment": "Mirrors interceptors/anthropic-proxy/tsconfig.json (NodeNext + strict). Scoped to the net-proxy package. src/server-main.ts imports the real arbiter IPC client via a runtime-built specifier so TypeScript never statically resolves the sibling arbiter package into this package's program; tests use a mock and never resolve it.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

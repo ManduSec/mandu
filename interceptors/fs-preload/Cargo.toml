@@ -1,0 +1,25 @@
+[package]
+name = "fs-preload"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Mandu Tier-1(old-kernel)/Tier-2 unprivileged FS interposer: an LD_PRELOAD cdylib that redirects tracked-workspace file opens to the AgentView worktree, reusing fs-supervisor's decide_open. No root, no kernel feature, works on kernel 5.4 where seccomp-unotify openat REDIRECT (ADDFD, needs >=5.9) is unavailable."
+
+[lints]
+workspace = true
+
+[lib]
+name = "fs_preload"
+# cdylib is the LD_PRELOAD shared object. rlib lets the unit tests link the pure
+# config/decision module in-process (a cdylib alone is not unit-testable by cargo).
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# REUSE, DON'T REWRITE: the redirect decision (decide_open / TrackedRoots) and the
+# view path math (ViewLayout / rewrite_to_worktree) are lifted from
+# fs-supervisor — the proven, unit-tested pure core — NOT reimplemented here.
+fs-supervisor = { path = "../fs-supervisor" }
+# libc gives us dlsym(RTLD_NEXT, ...), the real open* signatures, and O_* flags.
+libc = "0.2"

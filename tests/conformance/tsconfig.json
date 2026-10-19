@@ -1,0 +1,16 @@
+{
+  "comment": "Mirrors tests/tsconfig.json (NodeNext + strict). rootDir is '..' so this package can import the sibling packages' compiled .js ESM specifiers (arbiter/, interceptors/*, dashboard/) at runtime via tsx — exactly as the tests/ package does. Owns no sources of its own beyond lib/ + run.ts + scenarios/.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "rootDir": "../..",
+    "resolveJsonModule": true
+  },
+  "include": ["lib/**/*.ts", "run.ts"],
+  "exclude": ["node_modules", "dist"]
+}

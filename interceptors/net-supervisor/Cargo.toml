@@ -1,0 +1,66 @@
+[package]
+name = "net-supervisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Mandu network proxy (M3): non-model traffic ingress symbolization + egress desymbolization gated by the data-usage policy."
+
+[dependencies]
+mandu-arbiter.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Optional: the connect-guard's kernel leg (guard_kernel, feature `kernel`)
+# reuses fs-supervisor's seccomp-unotify plumbing (notif recv/send/id_valid, the
+# no_new_privs + kernel-version probes) rather than re-deriving the ioctl
+# encodings — "reuse, don't rewrite". Activated (with its own `kernel` feature)
+# only under our `kernel` feature. The pure `guard` core uses only its
+# privilege-free `tracee::plan_unix_lookup` (shared with the command box).
+fs-supervisor = { path = "../fs-supervisor" }
+# Plan 10 §11.2: the reader pin is (path, sha256 of the executable).
+sha2.workspace = true
+# Plan 13 D8 (8): the interpreter front ends in an executable
+# (`reader_identity::runtime_of`), found by SIMD substring search.
+memchr = "2"
+
+[dev-dependencies]
+# Enable the arbiter's mock-socket harness for this crate's unit tests.
+mandu-arbiter = { path = "../mandu-arbiter", features = ["mock"] }
+# The chain integration test (tests/taint_chain_integration.rs) drives the fs-layer
+# decision fns (fs_inbound_trust, record_file_taint_if_tainted) to prove the
+# net→fs taint chain crosses two chokepoints via the shared arbiter + proc key.
+# Default features only (no `kernel` needed — those fns are privilege-free). Kept
+# as a dev-dep so the DEFAULT (no-kernel) test build still has it.
+fs-supervisor = { path = "../fs-supervisor" }
+
+[features]
+default = []
+# The `kernel` feature enables TWO privileged legs (both OFF by default; the pure
+# byte transforms + the pure connect-guard decision core are always compiled and
+# tested):
+#   • the transparent socket redirection (nftables/TPROXY, needs root + `nft`);
+#   • the connect-guard (guard_kernel): seccomp-unotify connect(2) interception —
+#     UNPRIVILEGED (userns) IP/domain-aware egress teeth, pulls in fs-supervisor's
+#     kernel plumbing.
+kernel = ["fs-supervisor/kernel"]
+
+[dependencies.libc]
+version = "0.2"
+# not optional since plan 10: the pure secret_open decode uses the syscall
+# numbers and open flags (no kernel attachment, no privilege)
+
+[lints]
+workspace = true
+
+[lib]
+name = "net_supervisor"
+path = "src/lib.rs"
+
+# The connect-guard production entry: a launcher shim prepends
+# `mandu-net-guard --allow <spec>... -- <argv>`; it forks the agent tree under a
+# seccomp connect(2) trap and supervises destination decisions. kernel-only (the
+# file compiles to an empty main without the feature).
+[[bin]]
+name = "mandu-net-guard"
+path = "src/bin/mandu-net-guard.rs"
+required-features = ["kernel"]

@@ -1,0 +1,18 @@
+{
+  "comment": "Mirrors interceptors/exec-wrap/tsconfig.json (NodeNext + strict). Scoped to the launcher package. The arbiter is a sibling package reached by a runtime import specifier (src/arbiter.ts), never statically imported, so this package typechecks standalone; tests use a mock arbiter.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

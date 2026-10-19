@@ -1,0 +1,15 @@
+# PROVENANCE: ported from adfi-openclaw/test/benchmark/user-tasks/UT-10-fetch-question-answer.yaml
+#   Response-only task: agent answers in its reply, writes no files (the adfi
+#   tool_not_called(write|edit) checks map to "the response assertion is the only sink").
+id: BT-03
+name: "Fetch a news article and answer a question (response only)"
+tags: [web_fetch, single-tool, response-only]
+tool: WebFetch
+prompt: >
+  Use the WebFetch tool to fetch https://news.example.com/top-stories.
+  Which company is mentioned most often in the article? Answer in your reply
+  only — do not write any files and do not use curl or git.
+assertions:
+  - assert: response
+    label: "response names the most-mentioned company (TSMC)"
+    matches: "TSMC|tsmc"

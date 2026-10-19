@@ -1,0 +1,39 @@
+[package]
+name = "fs-supervisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Mandu FS interposition (Track B): openat() redirection of tracked workspace paths to the AgentView worktree, with arbiter symbolize/classify on first touch."
+
+[dependencies]
+mandu-arbiter.workspace = true
+# The generated path table (scripts/paths/mandu-paths.mjs): the default view
+# state base. No dependencies of its own.
+mandu-paths.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+# Enable the arbiter's mock-socket harness for this crate's unit tests.
+mandu-arbiter = { path = "../mandu-arbiter", features = ["mock"] }
+
+[features]
+default = []
+# The `kernel` feature enables the seccomp-unotify supervisor loop
+# (SECCOMP_USER_NOTIF reading openat args, addfd/CONTINUE). It needs root and
+# kernel ≥ 5.x with SECCOMP_USER_NOTIF support, so it is OFF by default. The pure
+# path-rewrite/tracked-match/decision logic is always compiled.
+kernel = ["dep:libc"]
+
+[dependencies.libc]
+version = "0.2"
+optional = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "fs_supervisor"
+path = "src/lib.rs"

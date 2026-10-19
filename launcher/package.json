@@ -1,0 +1,61 @@
+{
+  "name": "@mandusec/mandu",
+  "version": "0.2.0-beta.7",
+  "type": "module",
+  "description": "Run Claude Code or Codex next to your real secrets: the AI sees placeholders, you see the real values.",
+  "license": "Apache-2.0",
+  "homepage": "https://mandusecurity.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManduSec/mandu.git",
+    "directory": "launcher"
+  },
+  "bugs": {
+    "email": "hello@mandusecurity.com"
+  },
+  "keywords": [
+    "mandu",
+    "claude-code",
+    "codex",
+    "ai-agent",
+    "prompt-injection",
+    "security",
+    "sandbox",
+    "cli"
+  ],
+  "bin": {
+    "mandu": "bin/mandu.mjs"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/",
+    "!dist/.bundle-stamp.json",
+    "!dist/.build.lock",
+    "bin/",
+    "README.md",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:bundle": "node scripts/build-bundle.mjs",
+    "prepack": "node scripts/build-bundle.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "tsx src/run.ts",
+    "test": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home tsx --test test/unit/*.test.ts test/component/*.test.ts",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home tsx --test test/unit/*.test.ts",
+    "test:component": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home tsx --test test/component/*.test.ts",
+    "test:kernel": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home tsx --test test/kernel/*.test.ts",
+    "test:integrity": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home tsx --test test/integrity/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

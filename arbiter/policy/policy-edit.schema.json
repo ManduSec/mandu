@@ -1,0 +1,424 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mandu.local/schema/policy-edit.json",
+  "title": "Mandu policy edits",
+  "description": "A list of typed edits to the Mandu policy. The whole list applies at once only when it tightens protection; if any edit loosens it, nothing applies and the list waits for the user's approval.",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "lock-path"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "absolute path, ~/path, or a gitignore-style pattern anchored at /, ~/ or **/"
+          },
+          "level": {
+            "enum": [
+              "public",
+              "any-model",
+              "local-model",
+              "no-model"
+            ],
+            "description": "no-model applies at once; any-model and public lower protection and wait for the user"
+          },
+          "bindings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "hosts this file may be sent to without an ask (loosens protection)"
+          },
+          "recursive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "op",
+          "path",
+          "level"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "unlock-path"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "op",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "lock-blob"
+          },
+          "blob": {
+            "type": "string",
+            "pattern": "^(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$",
+            "description": "a repository object's id: sha1:<40 hex> or sha256:<64 hex>, lowercase; that exact content is hidden from the agent in every repository"
+          },
+          "level": {
+            "enum": [
+              "public",
+              "any-model",
+              "local-model",
+              "no-model"
+            ],
+            "description": "any level but public hides the object and applies at once; public hides nothing and waits for the user"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "description": "one line saying where it was found (never the value)"
+          }
+        },
+        "required": [
+          "op",
+          "blob",
+          "level"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "unlock-blob"
+          },
+          "blob": {
+            "type": "string",
+            "pattern": "^(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$"
+          }
+        },
+        "required": [
+          "op",
+          "blob"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "trust-origin"
+          },
+          "kind": {
+            "enum": [
+              "url",
+              "dir",
+              "channel"
+            ]
+          },
+          "pattern": {
+            "type": "string",
+            "minLength": 1,
+            "description": "url: a hostname (pypi.org), a wildcard subdomain (*.python.org) or a hostname/path prefix (github.com/myorg), with no scheme; dir: an absolute or ~/ path; channel: a channel id"
+          }
+        },
+        "required": [
+          "op",
+          "kind",
+          "pattern"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "distrust-origin"
+          },
+          "kind": {
+            "enum": [
+              "url",
+              "dir",
+              "channel"
+            ]
+          },
+          "pattern": {
+            "type": "string",
+            "minLength": 1,
+            "description": "url: a hostname (pypi.org), a wildcard subdomain (*.python.org) or a hostname/path prefix (github.com/myorg), with no scheme; dir: an absolute or ~/ path; channel: a channel id"
+          }
+        },
+        "required": [
+          "op",
+          "kind",
+          "pattern"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "release"
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "from": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": false
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": false,
+            "description": "destination host, \"*\" for any, or @list"
+          },
+          "mode": {
+            "enum": [
+              "allow",
+              "block",
+              "audit"
+            ]
+          },
+          "expires": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "op",
+          "to",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "retire-rule"
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "op",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "set-disposition"
+          },
+          "rule": {
+            "enum": [
+              "egress:invalid-symbol",
+              "egress:obsolete-symbol",
+              "egress:siem-lockdown",
+              "egress:secret-unknown-destination",
+              "egress:secret-bound-approval",
+              "egress:secret-unbound",
+              "egress:symbol-as-command",
+              "egress:unknown-destination",
+              "egress:untrusted-destination",
+              "egress:shell-boundary",
+              "egress:unknown-boundary"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "ask",
+              "block"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "rule",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "allow-connect"
+          },
+          "host": {
+            "type": "string",
+            "minLength": 1
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              {
+                "const": "*"
+              }
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "host"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "remove-connect"
+          },
+          "host": {
+            "type": "string",
+            "minLength": 1
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              {
+                "const": "*"
+              }
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "host"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "trust-command"
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "trustHelp": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "op",
+          "id",
+          "trustHelp"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "tool-inbound"
+          },
+          "tool": {
+            "type": "string",
+            "minLength": 1
+          },
+          "trust": {
+            "enum": [
+              "TRUSTED",
+              "UNTRUSTED"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "tool",
+          "trust"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "const": "list"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+$"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "op",
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  }
+}

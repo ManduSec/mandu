@@ -1,0 +1,37 @@
+{
+  "name": "@mandusec/dashboard",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu observability dashboard: the privileged human view of a DualView session. Serves the canonical ManduEvent stream (file-backed now, arbiter-SSE later) and a vanilla-JS frontend with three DualView lanes, side-by-side symbolized/original call detail, T-LLM vs U-LLM, a symbol inspector, an invariant/oracle banner, and a read-only egress queue. Implements docs/design/ui/dashboard.md. Frontend render logic lifted/adapted from adfi-openclaw test/dashboard (see file PROVENANCE headers).",
+  "mandu": {
+    "siblings": [
+      "arbiter"
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "pretypecheck": "node ../scripts/install-deps.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "node ../scripts/install-deps.mjs",
+    "test": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home tsx --test test/unit/*.test.ts test/unit/*/*.test.ts test/component/*.test.ts && npm run --silent test:product-only",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home tsx --test test/unit/*.test.ts test/unit/*/*.test.ts && npm run --silent test:product-only",
+    "test:component": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home tsx --test test/component/*.test.ts",
+    "serve": "tsx src/server-main.ts",
+    "test:product-only": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home MANDU_TEST_NO_DEV_PAGES=1 tsx --test test/unit/ui/css-forced-colors.test.ts test/unit/ui/css-reduced-motion.test.ts test/unit/ui/css-grid-columns-fit.test.ts test/unit/ui/css-shared-system.test.ts test/unit/ui/dev-count-words.test.ts"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^22.10.0",
+    "asciinema-player": "^3.17.0",
+    "esbuild": "^0.28.1",
+    "jsdom": "^29.1.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

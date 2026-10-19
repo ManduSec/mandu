@@ -1,0 +1,5 @@
+# Mandu × AgentDojo eval — Python deps (installed into a local uv/pip venv by
+# run.sh). Pinned to the AgentDojo release the numbers in evaluation.md §2.7
+# were produced against.
+agentdojo==0.1.35
+anthropic>=0.40

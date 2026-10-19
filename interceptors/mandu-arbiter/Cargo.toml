@@ -1,0 +1,30 @@
+[package]
+name = "mandu-arbiter"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+rust-version.workspace = true
+description = "Mandu arbiter IPC client: NDJSON-over-Unix-socket client + typed request/response structs, shared by the OS interceptors."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# The bounded connect (client.rs `connect_before`): std's UnixStream has no
+# connect timeout, and a wedged arbiter's full listen queue holds a blocking
+# connect for good. Already in the lockfile (the interceptor crates use it).
+libc = "0.2"
+
+[features]
+default = []
+# Expose the in-process mock arbiter (a real UnixListener returning canned
+# responses) to downstream crates' tests. The interceptor crates turn this on as
+# a dev-dependency feature so their unit tests can drive the REAL ArbiterClient
+# wire path without a running arbiter daemon.
+mock = []
+
+[lints]
+workspace = true
+
+[lib]
+name = "mandu_arbiter"
+path = "src/lib.rs"

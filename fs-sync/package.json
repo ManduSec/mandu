@@ -1,0 +1,22 @@
+{
+  "name": "@mandusec/fs-sync",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu Track B (userspace half): git-worktree dual-view synchronization. Initializes the HumanView (real on-disk files) + AgentView (symbolized git worktree); symbolizes on agent read, captures agent writes, syncs AgentView->HumanView (desymbolize), re-symbolizes human-edited regions via git blame, and reverts. All symbol-table operations go through the arbiter over IPC; this package never opens the symbol DB. Lifted from adfi-openclaw (see per-file provenance headers). Fail-closed.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "view-state": "tsx src/fs-sync-cli.ts",
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts test/component/*.test.ts",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
+    "test:component": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/component/*.test.ts",
+    "test:integrity": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/integrity/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

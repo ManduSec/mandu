@@ -1,0 +1,18 @@
+{
+  "comment": "Mirrors adfi-openclaw/tsconfig.json (NodeNext + strict). rootDir/include scoped to the arbiter package.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "symbol-table/**/*.ts", "ipc/**/*.ts", "policy/**/*.ts", "events/**/*.ts", "provenance/**/*.ts", "db/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,18 @@
+{
+  "comment": "Mirrors interceptors/anthropic-proxy/tsconfig.json (NodeNext + strict). Scoped to the openai-proxy package. src/arbiter-client.ts declares the real arbiter IPC client structurally and src/server-main.ts imports it at runtime (built at runtime, never statically resolved) so this package typechecks standalone; tests use a mock and never resolve it.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

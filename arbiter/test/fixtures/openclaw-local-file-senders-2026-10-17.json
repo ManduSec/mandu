@@ -1,0 +1,46 @@
+{
+  "__doc__": "Where OpenClaw's tools read a LOCAL FILE they then send on, read statically (no run, no model) from the published packages: openclaw 2026.7.1 (dist/*.js, a local install) and openclaw 2026.9.9 (npm pack, dist/*.mjs), 2026-10-17. Pins the `upload` table of arbiter/policy/tool-gate-surface.ts (OPENCLAW_GATE_SURFACE) and the proxy's upload-gate.ts openclawUploadRefs. Excerpts are the source text, trimmed; both builds read the same keys.",
+  "message": {
+    "sendSchemaProps": ["message", "effectId", "effect", "media", "filename", "buffer", "contentType", "mimeType", "caption", "attachments"],
+    "attachmentItemProps": ["type", "media", "name", "mimeType"],
+    "BASE_ACTION_MEDIA_SOURCE_PARAM_KEYS": ["media", "path", "filePath", "mediaUrl", "fileUrl", "image"],
+    "STRUCTURED_ATTACHMENT_MEDIA_SOURCE_PARAM_KEYS": ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"],
+    "listParam": "mediaUrls",
+    "snakeCase": "resolveSnakeCaseParamKey(params, key): the key as written, else its snake_case spelling (file_path, media_url, file_url, media_urls)",
+    "pluginMediaSourceParams": {"matrix set-profile": ["avatarUrl", "avatarPath"]},
+    "excerpts": {
+      "schema": "media: Type.Optional(Type.String({ description: \"Media URL/path. data: use buffer.\" })), filename: Type.Optional(Type.String()), buffer: Type.Optional(Type.String({ description: \"Base64 attachment payload; data URL ok.\" })), … attachments: Type.Optional(Type.Array(Type.Object({ type: …, media: Type.Optional(Type.String()), name: …, mimeType: … }), { description: \"Structured attachments; each entry uses media.\" }))",
+      "collect": "function collectActionMediaSourceHints(args, extraParamKeys, options) { for (const key of buildActionMediaSourceParamKeys(extraParamKeys)) { … sources.push(entry.value) } for (const value of readStringArrayParam(args, \"mediaUrls\") ?? []) … if (options?.structuredAttachments === \"all\") sources.push(...collectStructuredAttachmentSources(args).map((source) => source.value)) …",
+      "loader": "loadWebMediaInternal(mediaUrl): stripLegacyMediaDirectivePrefix (MEDIA:), media:// → the inbound media store, file:// → safeFileURLToPath, http(s) → readRemoteMediaBuffer (fetched), ~ → resolveUserPath, relative → path.resolve(workspaceDir, mediaUrl), then readLocalFileSafely",
+      "dataUrl": "normalizeSandboxMediaParams: assertMediaNotDataUrl(entry.value) (a data: URL in a source param is refused; inline bytes go in `buffer`)",
+      "actions": "send, broadcast, sendAttachment, upload-file, setGroupIcon, emoji-upload, sticker-upload, set-profile, … all pass hydrateAttachmentParamsForAction over the same params"
+    },
+    "destination": "the channel: delivered from OpenClaw's process (executeSendAction) or through a gateway (runGatewayPluginMessageActionOrNull; `gatewayUrl` names any endpoint) to a channel API whose root is configurable (Telegram DEFAULT_TELEGRAM_API_ROOT \"https://api.telegram.org\", overridable) or a plugin's own transport. No host the proxy can vouch for."
+  },
+  "view_image": {
+    "build": "2026.9.9",
+    "params": ["prompt", "path", "paths", "model", "maxBytesMb", "maxImages"],
+    "excerpts": {
+      "refs": "const pathInputs = normalizeMediaReferenceList([...typeof record.path === \"string\" ? [record.path] : [], ...filterStringEntries(record.paths)]); … const imageRaw = trimmed.startsWith(\"@\") ? trimmed.slice(1).trim() : trimmed;",
+      "native": "if (modelHasVision) imageRoute = { kind: \"native\" } … if (imageRoute.kind === \"native\") { const result = await buildNativeImageToolResult(loadedImages, options?.config) … } (content blocks {type: \"image\", data: base64}: the tool_result carries the image to the session's own model)",
+      "fallback": "imageRoute = { kind: \"fallback\", imageModelConfig, … } … return buildTextToolResult(await runImagePrompt({ … imageModelConfig: imageRoute.imageModelConfig, prompt: promptRaw, images: loadedImages.map(…) })) (the bytes go to an image model resolved from agents.defaults.imageModel, the primary provider's vision model, or the auto media providers)"
+    },
+    "destination": "a model: the session's own (native route) or an image model OpenClaw picks (fallback route). The proxy cannot tell which route a call takes."
+  },
+  "image": {
+    "build": "2026.7.1",
+    "params": ["prompt", "image", "images", "model", "maxBytesMb", "maxImages"],
+    "excerpts": {
+      "route": "createImageTool: execute … return buildTextToolResult(await runImagePrompt({ … })) (always an image model call; no native route in 2026.7.1)"
+    },
+    "destination": "an image model OpenClaw picks"
+  },
+  "browser": {
+    "build": "2026.7.1",
+    "excerpts": {
+      "upload": "case \"upload\": { const paths = Array.isArray(params.paths) ? params.paths.map((p) => String(p)) : []; … const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths }); … browserArmFileChooser(baseUrl, { paths: normalizedPaths, … })",
+      "root": "resolveExistingUploadPaths: each path within DEFAULT_UPLOAD_DIR (<OpenClaw tmp dir>/uploads) or the inbound media dir; a relative one is read under that root"
+    },
+    "destination": "the page whose file chooser receives the files"
+  }
+}

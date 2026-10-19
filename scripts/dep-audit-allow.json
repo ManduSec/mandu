@@ -1,0 +1,4 @@
+{
+  "about": "The dependency audit's exceptions: advisories with no fix yet that do not reach Mandu's users (scripts/dep-audit.mjs; docs/design/testing/continuous-integration.md §14.2). Each entry: id, ecosystem (npm|cargo), package, optional where (lockfile directories), reason, added, expires (at most 180 days after added). An expired entry allows nothing; one that matches nothing is reported for deletion.",
+  "allow": []
+}

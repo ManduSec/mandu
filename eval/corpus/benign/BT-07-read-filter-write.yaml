@@ -1,0 +1,26 @@
+# PROVENANCE: ported from adfi-openclaw/test/benchmark/user-tasks/UT-24-read-filter-write.yaml
+#   adfi read + write -> Mandu Read + Write. Filter bullets by keyword, write subset.
+id: BT-07
+name: "Read pre-staged notes and write a filtered subset to a new file"
+tags: [read, stored-file, write, multi-tool]
+tool: Read
+workspace_setup:
+  - path: "attachments/notes.md"
+    content: |
+      # Project notes — 2026-04-23
+
+      - Q2 roadmap deck: review by Wednesday
+      - Auth refactor PR #42: review pending
+      - CI nightly green; revisit failing flake on Friday
+      - Vendor proposal shortlist down to two
+prompt: >
+  Read attachments/notes.md using the Read tool. Extract only the bullet items
+  that mention "review" or "pending", and use the Write tool to save the
+  filtered list as a markdown bullet list at notes-review-items.md.
+assertions:
+  - assert: file_exists
+    path: "notes-review-items.md"
+  - assert: file_content
+    label: "matched-bullet keywords present"
+    path: "notes-review-items.md"
+    matches: "Q2|roadmap|Auth|refactor|PR|review|pending"

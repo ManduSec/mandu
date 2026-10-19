@@ -1,0 +1,85 @@
+# Mandu OS-level interceptors — Rust Cargo workspace.
+#
+# This workspace holds the THREE OS-level interceptors (fs-supervisor, net-supervisor,
+# exec-supervisor) plus the shared arbiter client (mandu-arbiter) and the generated
+# path table (mandu-paths, from scripts/paths/mandu-paths.mjs). It deliberately
+# lists ONLY the Rust crate directories as members so the sibling Node packages in
+# this directory (anthropic-proxy/, inspect-mcp/) are excluded — they are TypeScript and
+# are not Cargo crates.
+#
+# HARD ENVIRONMENT CONSTRAINT: `cargo build` and `cargo test` with DEFAULT features
+# MUST succeed WITHOUT root / kernel features. All privileged syscall/kernel
+# attachment (seccomp-unotify, nftables/TPROXY, ptrace/seccomp execve) lives behind
+# the per-crate `kernel` cargo feature and/or `#[ignore]`d integration tests. The
+# pure decision logic is privilege-free and unit-tested by default.
+[workspace]
+resolver = "2"
+members = [
+    "mandu-arbiter",
+    "mandu-paths",
+    "fs-supervisor",
+    "fs-preload",
+    "net-supervisor",
+    "exec-supervisor",
+]
+
+[workspace.package]
+version = "0.2.0-beta.7"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.75"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# sha2 mirrors fs-sync's workspace-id derivation (<basename>-<sha256(path)[:12]>);
+# the Rust and TS sides MUST produce byte-identical state-dir names.
+sha2 = "0.10"
+# Shared arbiter client crate, depended on by all three interceptors.
+mandu-arbiter = { path = "mandu-arbiter" }
+# The generated path table (on-disk-layout.md §5); pure, no dependencies.
+mandu-paths = { path = "mandu-paths" }
+
+# The lint policy every crate inherits (`[lints] workspace = true`), checked by
+# `cargo clippy --workspace --all-targets -- -D warnings` at default features
+# and at `--features kernel` (the `rust.clippy` suite, continuous-integration.md
+# §14.1). Each relaxation names why it does not hide a defect.
+[workspace.lints.clippy]
+# The syscall numbers, ioctl requests and stat fields come from libc as
+# `c_long` / `dev_t` / `u64` and are cast to one fixed width (`as i64`, `as
+# u64`) so one source builds for x86_64 AND aarch64 (the release targets) and
+# compares against the seccomp data's own width. On the host target the cast
+# is often to the same type, which this lint flags (about 380 sites, all in
+# the seccomp and notification decoders); dropping the casts would make the
+# code compile per target by accident, not by design.
+unnecessary_cast = "allow"
+# Clippy 1.75's form of this lint asks to pass a struct's field by value where
+# the struct is used or dropped afterwards (`ArbiterClient::new(&arbiter.
+# socket_path)` in about 90 sites, nearly all tests: the "fix" moves the path out of a mock
+# arbiter that has a Drop, and does not compile; `cargo clippy --fix` rolls it
+# back). Later clippy narrowed it; a borrow passed to `AsRef<Path>` costs
+# nothing.
+needless_borrows_for_generic_args = "allow"
+# Hex encoding of a digest as `.map(|b| format!("{b:02x}")).collect()`: a
+# performance lint (one small allocation per byte of a ≤ 32-byte digest). The
+# strings are pinned byte for byte against the TS side (the state-dir names,
+# the derived index keys), so they stay in the one obvious form.
+format_collect = "allow"
+# A tuple type spelled once, at its one use (a test table, a spawn result),
+# reads better than a type alias declared away from it.
+type_complexity = "allow"
+
+# Keep release builds small/fast; debug is the default for tests.
+[profile.release]
+opt-level = 2
+
+# The guard reads an executable whole while it holds the open it decides
+# (its sha256, and the interpreter front ends `reader_identity::runtime_of`
+# looks for, plan 13 D8 (8)). Unoptimized, each pass costs a second or more
+# per 40 MB, so a test build's guard held a first open past its callers'
+# timeouts; these two crates do that work, optimized in every profile.
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.memchr]
+opt-level = 3

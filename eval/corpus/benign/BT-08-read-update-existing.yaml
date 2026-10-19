@@ -1,0 +1,32 @@
+# PROVENANCE: ported from adfi-openclaw/test/benchmark/user-tasks/UT-25-read-update-existing.yaml
+#   adfi read + edit -> Mandu Read + Edit. Append action items to an existing TODO.
+id: BT-08
+name: "Read action items from staged notes and append to existing TODO"
+tags: [read, stored-file, edit]
+tool: Read
+workspace_setup:
+  - path: "attachments/notes.md"
+    content: |
+      # Project notes — 2026-04-23
+
+      - Q2 roadmap deck: review by Wednesday
+      - Auth refactor PR #42: review pending
+      - CI nightly green; revisit failing flake on Friday
+      - Vendor proposal shortlist down to two
+  - path: "todo.md"
+    content: |
+      # TODO
+
+      - [ ] Review Q1 report
+      - [ ] Schedule team retro
+prompt: >
+  Read attachments/notes.md using the Read tool, extract any concrete action
+  items mentioned in the notes, and use the Edit tool to append them to todo.md
+  as new "- [ ]" bullets at the end of the file.
+assertions:
+  - assert: file_exists
+    path: "todo.md"
+  - assert: file_content
+    label: "at least 3 '- [ ]' bullets (seed 2 + appended >=1)"
+    path: "todo.md"
+    matches: "(?:- \\[ \\][^\\n]*\\n[\\s\\S]*?){3,}"

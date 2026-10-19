@@ -1,0 +1,18 @@
+{
+  "comment": "Mirrors interceptors/reply-filter/tsconfig.json (NodeNext + strict). The arbiter is a sibling package; the relay declares the narrow arbiter surface it needs structurally (src/arbiter-client.ts), so this package typechecks standalone. Tests use a mock arbiter and an in-test fake Chrome; the real client is wired only in src/server-main.ts and the stack parity test.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

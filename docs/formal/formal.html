@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Mandu component diagram with formal participants, state, policies, and data-flow notation.">
+  <title>Mandu · Formal component map</title>
+  <style>
+    :root {
+      --paper: #ededed;
+      --card: #fff;
+      --ink: #151515;
+      --muted: #575757;
+      --line: #b9b9b9;
+      --rule: #777;
+      --control: #1640a4;
+      --raw: #a52716;
+      --symbol: #006b50;
+      --sans: Arial, Helvetica, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html { color-scheme: light; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+    body { margin: 0; background: var(--paper); color: var(--ink); }
+    main { min-height: 100svh; display: grid; grid-template-rows: auto 1fr; justify-items: center; align-items: start; gap: 12px; padding: clamp(8px, 1.6vw, 28px); }
+    [hidden] { display: none !important; }
+    .view-switch { display: flex; margin: 0; padding: 0; border: 0; font: 14px var(--sans); }
+    .view-switch legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .view-option { position: relative; }
+    .view-option input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+    .view-option span { display: flex; align-items: center; justify-content: center; min-height: 44px; min-width: 126px; padding: 10px 18px; border: 1px solid #555; background: white; box-shadow: 2px 2px 0 #ccc; }
+    .view-option + .view-option span { border-left: 0; }
+    .view-option input:checked + span { background: #ffcf00; font-weight: 700; }
+    .view-option input:focus-visible + span { outline: 3px solid var(--control); outline-offset: 3px; position: relative; z-index: 1; }
+    .view-option:hover span { background: #f1f1f1; }
+    .canvas { width: 100%; max-width: 1640px; overflow-x: auto; border-radius: 0; }
+    .canvas:focus-visible { outline: 3px solid var(--control); outline-offset: 3px; }
+    ::selection { background: #ffcf00; color: var(--ink); }
+    svg { display: block; width: 100%; min-width: 1280px; height: auto; }
+    text { font-family: var(--sans); fill: var(--ink); }
+    .math { font-family: "Cambria Math", "STIX Two Math", "DejaVu Serif", Georgia, serif; }
+    .mono { font-family: var(--mono); }
+    .boundary { fill: var(--card); stroke: #999; stroke-width: 1; filter: url(#offset-shadow); }
+    .monitor { fill: #f1f1f1; stroke: #777; stroke-width: 1; }
+    .environment { fill: #fafafa; stroke: #777; stroke-width: 1; stroke-dasharray: 4 3; }
+    .card, .blue-card, .green-card, .red-card {
+      fill: var(--card);
+      stroke: #555;
+      stroke-width: 1;
+      filter: url(#offset-shadow);
+    }
+    .symbol { font-size: 33px; font-style: italic; }
+    .name { font-size: 23px; font-weight: 700; }
+    .body { font-size: 20px; }
+    .detail { font-size: 18px; fill: var(--muted); }
+    .small { font-size: 17px; fill: var(--muted); }
+    .blue { fill: var(--control); }
+    .green { fill: var(--symbol); }
+    .red { fill: var(--raw); }
+    .name.blue, .symbol.blue { fill: var(--ink); }
+    .rule { stroke: var(--line); stroke-width: 1; }
+    .flow { fill: none; stroke: #777; stroke-width: 1.5; stroke-linejoin: miter; marker-end: url(#arrow); }
+    .protected { stroke: var(--symbol); marker-end: url(#arrow-green); }
+    .raw { stroke: var(--raw); marker-end: url(#arrow-red); }
+    .policy { stroke: var(--control); stroke-dasharray: 4 3; marker-end: url(#arrow-blue); }
+    .label { font-size: 18px; paint-order: stroke; stroke: var(--card); stroke-width: 8px; stroke-linejoin: miter; }
+    .monitor-label { stroke: #f1f1f1; }
+    .simple-diagram { min-width: 900px; }
+    .simple-diagram .name { font-size: 31px; }
+    .simple-diagram .symbol { font-size: 39px; }
+    .simple-diagram .body { font-size: 27px; }
+    .simple-diagram .detail { font-size: 25px; }
+    .simple-diagram .label { font-size: 25px; }
+    .simple-diagram .card, .simple-diagram .boundary { filter: url(#simple-shadow); }
+    .simple-diagram .flow { stroke-width: 2; marker-end: url(#simple-arrow); }
+    .simple-diagram .protected { marker-end: url(#simple-arrow-green); }
+    .simple-diagram .raw { marker-end: url(#simple-arrow-red); }
+    @media print {
+      @page { size: landscape; margin: 8mm; }
+      body { background: white; }
+      main { padding: 0; min-height: 0; }
+      .view-switch { display: none; }
+      .canvas { overflow: visible; }
+      .canvas svg { min-width: 0; max-height: 185mm; }
+      .boundary, .card, .blue-card, .green-card, .red-card, .simple-diagram .card, .simple-diagram .boundary { filter: none; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <fieldset class="view-switch">
+    <legend>Diagram detail</legend>
+    <label class="view-option"><input type="radio" name="diagram-view" value="simple" aria-controls="simple-view" checked><span>Simple</span></label>
+    <label class="view-option"><input type="radio" name="diagram-view" value="full" aria-controls="full-view"><span>Full detail</span></label>
+  </fieldset>
+  <div id="simple-view" class="canvas" tabindex="0" role="region" aria-label="Simple presentation diagram; scroll horizontally on small screens">
+    <svg class="simple-diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="simple-title simple-description">
+      <title id="simple-title">Mandu: simple component and notation map</title>
+      <desc id="simple-description">Human H supplies task q. The agent consists of privileged model T, runtime R and tools X. Mandu monitor M symbolizes untrusted data d as Ref(sigma) before model admission, and checks data use. Sigma is the symbol store and P the policy. Quarantined model U processes permitted raw data; its answer returns to M and is symbolized. Environment E contains files and services, some controlled by adversary A. AgentView F_A holds symbols, while HumanView F_H holds readable values; synchronization is asynchronous. These arrows summarize the enabled mediated flows.</desc>
+      <defs>
+        <filter id="simple-shadow" x="-2%" y="-2%" width="105%" height="107%" color-interpolation-filters="sRGB"><feDropShadow dx="3" dy="3" stdDeviation="0" flood-color="#ccc" flood-opacity="1"/></filter>
+        <marker id="simple-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 9 5 L 1 9 Z" fill="#777"/></marker>
+        <marker id="simple-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 9 5 L 1 9 Z" fill="#006b50"/></marker>
+        <marker id="simple-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 9 5 L 1 9 Z" fill="#a52716"/></marker>
+      </defs>
+      <rect class="boundary" x="16" y="16" width="1568" height="868"/>
+
+      <!-- Only the conceptual routes appear in this presentation view. -->
+      <path class="flow" d="M 270 400 H 340"/>
+      <text x="304" y="385" text-anchor="middle" class="label math">q</text>
+      <path class="flow protected" d="M 805 305 H 675"/>
+      <text x="740" y="287" text-anchor="middle" class="label green math">Ref(σ)</text>
+      <path class="flow" d="M 675 465 H 805"/>
+      <text x="740" y="447" text-anchor="middle" class="label">actions</text>
+      <path class="flow raw" d="M 1300 305 H 1170"/>
+      <text x="1235" y="287" text-anchor="middle" class="label red math">d</text>
+      <path class="flow" d="M 1170 465 H 1300"/>
+      <text x="1235" y="418" text-anchor="middle" class="label">permitted</text>
+      <text x="1235" y="447" text-anchor="middle" class="label">use</text>
+      <path class="flow raw" d="M 910 235 V 155" marker-start="url(#simple-arrow-red)"/>
+      <text x="936" y="186" class="label red math">value(d)</text>
+      <text x="936" y="219" class="label red">raw data / answer</text>
+      <path class="flow raw" d="M 1425 675 V 535"/>
+      <text x="1443" y="593" class="label red">controls</text>
+      <text x="1443" y="624" class="label red">some data</text>
+      <path class="flow" d="M 508 535 V 680"/>
+      <text x="530" y="611" class="label">read / write</text>
+      <path class="flow protected" d="M 985 535 V 610 H 755 V 746 H 830"/>
+      <text x="994" y="592" class="label green">view sync</text>
+      <path class="flow protected" d="M 755 746 H 680"/>
+
+      <g data-component="simple-H">
+        <rect class="card" x="40" y="325" width="230" height="150"/>
+        <text x="62" y="372" class="math symbol">H</text>
+        <text x="110" y="367" class="name">Human</text>
+        <text x="62" y="417" class="body">Gives the task</text>
+        <text x="62" y="452" class="math detail">q · instruction</text>
+      </g>
+      <g data-component="simple-agent">
+        <rect class="card" x="340" y="235" width="335" height="300"/>
+        <text x="366" y="287" class="math symbol green">T</text>
+        <text x="414" y="281" class="name">Privileged model</text>
+        <text x="366" y="335" class="body">Chooses actions</text>
+        <text x="366" y="380" class="math body green">Ref(σ) + metadata L</text>
+        <line class="rule" x1="366" y1="408" x2="649" y2="408"/>
+        <text x="366" y="449" class="body"><tspan class="math">R</tspan>  runtime</text>
+        <text x="366" y="494" class="body"><tspan class="math">X</tspan>  tools</text>
+      </g>
+      <g data-component="simple-M">
+        <rect class="card" x="805" y="235" width="365" height="300"/>
+        <text x="831" y="287" class="math symbol">M</text>
+        <text x="886" y="281" class="name">Mandu</text>
+        <text x="831" y="337" class="body">Protect model input</text>
+        <text x="831" y="380" class="body">Check data use</text>
+        <line class="rule" x1="831" y1="408" x2="1144" y2="408"/>
+        <text x="831" y="449" class="body"><tspan class="math">Σ</tspan>  symbol store</text>
+        <text x="831" y="494" class="body"><tspan class="math">P</tspan>  policies</text>
+      </g>
+      <g data-component="simple-U">
+        <rect class="card" x="805" y="35" width="365" height="120"/>
+        <text x="831" y="80" class="math symbol red">U</text>
+        <text x="876" y="75" class="name">Quarantined model</text>
+        <text x="831" y="124" class="detail">Processes raw data</text>
+      </g>
+      <g data-component="simple-E">
+        <rect class="card" x="1300" y="235" width="250" height="300"/>
+        <text x="1323" y="287" class="math symbol">E</text>
+        <text x="1323" y="335" class="name">Environment</text>
+        <text x="1323" y="390" class="body">Files &amp; services</text>
+        <text x="1323" y="443" class="math body red">d · raw data</text>
+      </g>
+      <g data-component="simple-A">
+        <rect class="card" x="1300" y="675" width="250" height="110"/>
+        <text x="1323" y="723" class="math symbol red">A</text>
+        <text x="1372" y="718" class="name">Adversary</text>
+        <text x="1323" y="760" class="detail">Controls content</text>
+      </g>
+      <g data-component="simple-F_A">
+        <rect class="card" x="340" y="680" width="340" height="145"/>
+        <text x="366" y="729" class="math symbol green">F<tspan baseline-shift="sub" font-size="24">A</tspan></text>
+        <text x="429" y="723" class="name">AgentView</text>
+        <text x="366" y="777" class="math body green">σ · symbolic file</text>
+        <text x="366" y="808" class="detail">Agent File System</text>
+      </g>
+      <g data-component="simple-F_H">
+        <rect class="card" x="830" y="680" width="340" height="145"/>
+        <text x="856" y="729" class="math symbol">F<tspan baseline-shift="sub" font-size="24">H</tspan></text>
+        <text x="919" y="723" class="name">HumanView</text>
+        <text x="856" y="777" class="math body">value(d) · raw file</text>
+        <text x="856" y="808" class="detail">Human File System</text>
+      </g>
+      <text x="755" y="860" text-anchor="middle" class="detail">Two views of the same data · asynchronous synchronization</text>
+    </svg>
+  </div>
+  <div id="full-view" class="canvas" tabindex="0" role="region" aria-label="Full-detail formal component diagram; scroll horizontally on small screens" hidden>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 1300" role="img" aria-labelledby="diagram-title diagram-description">
+      <title id="diagram-title">Mandu components and formal notation</title>
+      <desc id="diagram-description">The user H gives task tau to agent runtime R. R and its tools X interact with a Mandu monitor M: a model proxy applies inbound policy P_in, an inspect interface isolates processing in quarantined model U, and usage gates apply P_use. Privileged model T receives protected observations. The arbiter stores symbols Sigma, provenance Pi, policies P, approvals G, and session labels W. AgentView F_A and HumanView F_H are synchronized asynchronously. Adversary A controls some data d in environment E. The enclosing system S_kappa has deployment configuration kappa and state s_t. Solid arrows show the labeled data or action route; dashed arrows show policy and symbol lookups. Connections describe the modeled, enabled routes, not universal mediation.</desc>
+      <defs>
+        <filter id="offset-shadow" x="-2%" y="-2%" width="105%" height="107%" color-interpolation-filters="sRGB">
+          <feDropShadow dx="3" dy="3" stdDeviation="0" flood-color="#ccc" flood-opacity="1"/>
+        </filter>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 9 5 L 1 9 Z" fill="#777"/></marker>
+        <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 9 5 L 1 9 Z" fill="#006b50"/></marker>
+        <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 9 5 L 1 9 Z" fill="#a52716"/></marker>
+        <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 9 5 L 1 9 Z" fill="#1640a4"/></marker>
+      </defs>
+
+      <!-- This enclosing frame is the formal system, not another service. -->
+      <rect class="boundary" x="18" y="18" width="1524" height="1264" rx="0"/>
+      <text x="48" y="56" class="math" font-size="25">𝒮<tspan baseline-shift="sub" font-size="17">κ</tspan></text>
+      <text x="107" y="55" class="detail">System model</text>
+      <text x="1498" y="55" text-anchor="end" class="detail"><tspan class="math blue" font-size="23">κ</tspan><tspan>  deployment · adapter · active controls</tspan></text>
+
+      <!-- Component grouping. -->
+      <rect class="monitor" x="430" y="310" width="650" height="730" rx="0"/>
+      <text x="454" y="346" class="math symbol blue">M</text>
+      <text x="496" y="343" class="name blue">Mandu monitor</text>
+      <text x="1053" y="343" text-anchor="end" class="small"><tspan class="math" font-size="22">K</tspan>  component health</text>
+      <rect class="environment" x="1130" y="705" width="365" height="461" rx="0"/>
+      <text x="1154" y="745" class="math symbol">E</text>
+      <text x="1194" y="741" class="name">Environment</text>
+      <text x="1154" y="772" class="small">Files, services, persistent data</text>
+
+      <!-- Routes are behind the cards; labels occupy dedicated routing space. -->
+      <path class="flow" d="M 225 240 V 365"/>
+      <text x="240" y="278" class="label">q · instruction</text>
+      <path class="flow" d="M 380 417 H 460"/>
+      <path class="flow protected" d="M 578 380 V 240"/>
+      <text x="595" y="280" class="label green math">Obs<tspan baseline-shift="sub" font-size="13">T</tspan>(trace)</text>
+      <text x="595" y="306" class="label green">protected request</text>
+      <path class="flow" d="M 480 160 H 413 V 330 H 355 V 365"/>
+      <text x="429" y="271" class="label" transform="rotate(-90 429 271)">tool decisions</text>
+      <path class="flow raw" d="M 910 380 V 277 H 1310 V 240" marker-start="url(#arrow-red)"/>
+      <text x="1070" y="265" text-anchor="middle" class="label red">isolated request / answer</text>
+      <path class="flow protected" d="M 770 472 H 730"/>
+      <path class="flow policy" d="M 590 550 V 605"/>
+      <path class="flow policy" d="M 910 550 V 605"/>
+      <text x="750" y="588" text-anchor="middle" class="label monitor-label blue">policy &amp; symbol lookups</text>
+      <path class="flow policy" d="M 598 878 V 810"/>
+      <path class="flow policy" d="M 915 878 V 810"/>
+      <path class="flow" d="M 218 605 V 740"/>
+      <text x="235" y="649" class="label">dispatch</text>
+      <path class="flow" d="M 90 740 V 605"/>
+      <text x="76" y="679" text-anchor="middle" class="label" transform="rotate(-90 76 679)">results</text>
+      <path class="flow" d="M 380 820 H 406 V 930 H 460"/>
+      <path class="flow" d="M 740 970 H 755 V 1070 H 1090 V 990 H 1154"/>
+      <text x="927" y="1059" text-anchor="middle" class="label">permitted execution / network release</text>
+      <path class="flow" d="M 219 930 V 1025"/>
+      <text x="236" y="973" class="label">read / write</text>
+      <path class="flow protected" d="M 380 1105 H 913 V 998" marker-start="url(#arrow-green)"/>
+      <text x="634" y="1132" text-anchor="middle" class="label green">AgentView (Agent File System)</text>
+      <path class="flow protected" d="M 1050 955 H 1100 V 817 H 1154" marker-start="url(#arrow-green)"/>
+      <text x="1117" y="961" class="label green" transform="rotate(-90 1117 961)">view sync</text>
+      <path class="flow raw" d="M 1312 617 V 705"/>
+      <text x="1327" y="654" class="label red">controls some d</text>
+
+      <!-- Human and model principals. -->
+      <g data-component="H">
+        <rect class="card" x="60" y="90" width="320" height="150" rx="0"/>
+        <text x="82" y="130" class="math symbol">H</text>
+        <text x="123" y="126" class="name">Human / user</text>
+        <text x="82" y="166" class="math body">τ = (q, Auth, Goal)</text>
+        <text x="82" y="197" class="detail">Task · authority · success</text>
+        <text x="82" y="222" class="small">Grants scoped approvals G</text>
+      </g>
+      <g data-component="T">
+        <rect class="green-card" x="480" y="90" width="310" height="150" rx="0"/>
+        <text x="503" y="130" class="math symbol green">T</text>
+        <text x="544" y="126" class="name">Privileged model</text>
+        <text x="503" y="166" class="detail">T-LLM · selects actions</text>
+        <text x="503" y="199" class="math body green">C<tspan baseline-shift="sub" font-size="14">T</tspan>  trusted text + Ref(σ)</text>
+        <text x="503" y="224" class="small">+ permitted observations L</text>
+      </g>
+      <g data-component="U">
+        <rect class="red-card" x="1130" y="90" width="365" height="150" rx="0"/>
+        <text x="1154" y="130" class="math symbol red">U</text>
+        <text x="1195" y="126" class="name">Quarantined model</text>
+        <text x="1154" y="166" class="detail">U-LLM · processes raw content</text>
+        <text x="1154" y="199" class="math body red">C<tspan baseline-shift="sub" font-size="14">U</tspan>  instruction + value(d)</text>
+        <text x="1154" y="224" class="small">No agent tools · answer stays untrusted</text>
+      </g>
+
+      <g data-component="R">
+        <rect class="card" x="60" y="365" width="320" height="240" rx="0"/>
+        <text x="82" y="408" class="math symbol">R</text>
+        <text x="123" y="404" class="name">Agent runtime</text>
+        <text x="82" y="442" class="detail">Claude Code / another adapter</text>
+        <line x1="82" y1="462" x2="358" y2="462" class="rule"/>
+        <text x="82" y="499" class="math" font-size="25">r<tspan class="detail" font-style="normal">  runtime / process state</tspan></text>
+        <text x="82" y="537" class="math" font-size="25">Q<tspan class="detail" font-style="normal">  pending operations*</tspan></text>
+        <text x="82" y="576" class="small">*Also includes IPC and sync work</text>
+      </g>
+
+      <!-- All of these boxes are enforcement components inside M. -->
+      <g data-component="model-proxy">
+        <rect class="blue-card" x="460" y="380" width="270" height="170" rx="0"/>
+        <text x="480" y="415" class="name">Model proxy</text>
+        <text x="480" y="448" class="math body blue">P<tspan baseline-shift="sub" font-size="14">in</tspan>  trust policy</text>
+        <text x="480" y="485" class="math body green">d → Ref(σ)</text>
+        <text x="480" y="515" class="detail">Symbolize untrusted spans</text>
+        <text x="480" y="539" class="small">Check admitted metadata L</text>
+      </g>
+      <g data-component="inspect">
+        <rect class="blue-card" x="770" y="380" width="280" height="170" rx="0"/>
+        <text x="790" y="415" class="name">Inspect interface</text>
+        <text x="790" y="447" class="mono small">inspect_symbol</text>
+        <text x="790" y="481" class="math body red">Σ(σ) = d → value(d)</text>
+        <text x="790" y="512" class="math body green">answer d′ → Ref(σ′)</text>
+        <text x="790" y="539" class="small">L includes content_kind feedback</text>
+      </g>
+      <g data-component="arbiter">
+        <rect class="blue-card" x="460" y="605" width="590" height="205" rx="0"/>
+        <text x="482" y="642" class="name">Arbiter</text>
+        <text x="1028" y="641" text-anchor="end" class="small">Policy &amp; persistent symbol state</text>
+        <line x1="482" y1="661" x2="1028" y2="661" class="rule"/>
+        <text x="482" y="699" class="math" font-size="27">Σ<tspan class="body" font-style="normal">  symbol store</tspan></text>
+        <text x="774" y="699" class="math" font-size="27">P<tspan class="body" font-style="normal">  active policies</tspan></text>
+        <text x="482" y="739" class="math" font-size="27">Π<tspan class="body" font-style="normal">  provenance</tspan></text>
+        <text x="774" y="739" class="math" font-size="27">G<tspan class="body" font-style="normal">  approvals</tspan></text>
+        <text x="482" y="783" class="math" font-size="27">W<tspan class="body" font-style="normal">  session labels / confidentiality watermark</tspan></text>
+      </g>
+      <g data-component="usage-gates">
+        <rect class="blue-card" x="460" y="878" width="280" height="120" rx="0"/>
+        <text x="480" y="913" class="name">Exec &amp; network gates</text>
+        <text x="480" y="948" class="math body blue">P<tspan baseline-shift="sub" font-size="14">use</tspan>  usage policy</text>
+        <text x="480" y="978" class="small">Allow · deny · require approval</text>
+      </g>
+      <g data-component="fs-sync">
+        <rect class="blue-card" x="770" y="878" width="280" height="120" rx="0"/>
+        <text x="790" y="913" class="name">Filesystem sync</text>
+        <text x="790" y="948" class="math body green">F<tspan baseline-shift="sub" font-size="14">A</tspan> ↔ F<tspan baseline-shift="sub" font-size="14">H</tspan></text>
+        <text x="790" y="978" class="small">Asynchronous · two views</text>
+      </g>
+      <text x="752" y="1025" text-anchor="middle" class="small blue">Connections show enabled routes in deployment κ</text>
+
+      <g data-component="X">
+        <rect class="card" x="60" y="740" width="320" height="190" rx="0"/>
+        <text x="82" y="781" class="math symbol">X</text>
+        <text x="124" y="777" class="name">Tools &amp; processes</text>
+        <text x="82" y="815" class="detail">Read files · run code · call services</text>
+        <line x1="82" y1="835" x2="358" y2="835" class="rule"/>
+        <text x="82" y="870" class="math body">Eff(trace)</text>
+        <text x="82" y="900" class="detail">Writes, executions, releases</text>
+      </g>
+      <g data-component="F_A">
+        <rect class="green-card" x="60" y="1025" width="320" height="141" rx="0"/>
+        <text x="82" y="1066" class="math symbol green">F<tspan baseline-shift="sub" font-size="21">A</tspan></text>
+        <text x="135" y="1062" class="name">AgentView</text>
+        <text x="82" y="1101" class="math body green">Ref(σ) · symbolic content</text>
+        <text x="82" y="1131" class="small">Raw tool results still pass through</text>
+        <text x="82" y="1154" class="small">model admission checks</text>
+      </g>
+
+      <g data-component="A">
+        <rect class="red-card" x="1130" y="487" width="365" height="130" rx="0"/>
+        <text x="1154" y="529" class="math symbol red">A</text>
+        <text x="1196" y="525" class="name">Adversary</text>
+        <text x="1154" y="564" class="detail">Chooses attacker-owned content</text>
+        <text x="1154" y="593" class="small">No direct control over M or user authority</text>
+      </g>
+      <g data-component="F_H">
+        <rect class="card" x="1154" y="795" width="317" height="133" rx="0"/>
+        <text x="1174" y="836" class="math symbol">F<tspan baseline-shift="sub" font-size="21">H</tspan></text>
+        <text x="1227" y="832" class="name">HumanView</text>
+        <text x="1174" y="870" class="math body">value(d) · readable files</text>
+        <text x="1174" y="901" class="small">Human File System / human-view</text>
+      </g>
+      <g data-component="external-data">
+        <rect class="card" x="1154" y="951" width="317" height="190" rx="0"/>
+        <text x="1174" y="986" class="name">Services &amp; data</text>
+        <text x="1174" y="1021" class="math body">d = (id, value, origin,</text>
+        <text x="1174" y="1050" class="math body">parents, integrity,</text>
+        <text x="1174" y="1079" class="math body">confidentiality, bindings)</text>
+        <text x="1174" y="1118" class="small">d′ denotes a derived or new datum</text>
+      </g>
+
+      <!-- State/transition notation labels the enclosing system itself. -->
+      <line x1="48" y1="1195" x2="1512" y2="1195" class="rule"/>
+      <text x="48" y="1226" class="math" font-size="22">s<tspan baseline-shift="sub" font-size="15">t</tspan> = (C, r, F<tspan baseline-shift="sub" font-size="15">A</tspan>, F<tspan baseline-shift="sub" font-size="15">H</tspan>, E, Σ, Π, P, G, W, Q, K)<tspan class="small" font-style="normal">  · snapshot at step t</tspan></text>
+      <text x="48" y="1256" class="small"><tspan class="math" font-size="21">Init<tspan baseline-shift="sub" font-size="14">κ</tspan>(s₀)</tspan>  allowed start</text>
+      <text x="500" y="1256" class="small"><tspan class="math" font-size="21">Next<tspan baseline-shift="sub" font-size="14">κ</tspan>(s, e, s′)</tspan>  allowed transition</text>
+      <text x="1512" y="1256" text-anchor="end" class="small"><tspan class="math" font-size="21">trace: s₀ → s₁ → s₂ → …</tspan>  events change state</text>
+    </svg>
+  </div>
+</main>
+<script>
+  const views = {
+    simple: document.getElementById('simple-view'),
+    full: document.getElementById('full-view'),
+  };
+  const options = document.querySelectorAll('input[name="diagram-view"]');
+  function syncView() {
+    const selected = Array.from(options).find(input => input.checked);
+    for (const [name, panel] of Object.entries(views)) {
+      panel.hidden = name !== selected.value;
+    }
+  }
+  for (const input of options) input.addEventListener('change', syncView);
+  window.addEventListener('pageshow', syncView);
+  syncView();
+</script>
+</body>
+</html>

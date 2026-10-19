@@ -1,0 +1,49 @@
+{
+  "id": "mandu-inspect",
+  "name": "Mandu inspect_symbol (U-LLM quarantine channel)",
+  "description": "Registers the Mandu inspect_symbol tool: process the untrusted data behind an opaque $MDU:* symbol in a quarantined model call (U-LLM) and return the result RE-SYMBOLIZED — raw untrusted text never enters the privileged model's context. Also registers declassify_symbol (rung 3, the in-context read): the arbiter decides every release, asks the human when the session has ingested untrusted data, and raises the session watermark before the value is returned. OpenClaw port of interceptors/inspect-mcp (OpenClaw has no MCP client).",
+  "version": "0.0.0-m4",
+  "contracts": {
+    "tools": ["inspect_symbol", "declassify_symbol"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "arbiterSock": {
+        "type": "string",
+        "description": "Path to the Mandu arbiter Unix socket (falls back to env MANDU_ARBITER_SOCK). REQUIRED one way or the other: without an arbiter there is no symbol table, and the plugin refuses to register (fail closed)."
+      },
+      "scopeId": {
+        "type": "string",
+        "description": "Mandu session/scope key threaded into symbolize + emitted events (falls back to env MANDU_SCOPE_ID, then the OpenClaw session key). Must match the scope the anthropic-proxy uses for this run so re-symbolized results land in the same scope. declassify_symbol REQUIRES it (config or env) and refuses without it: the release watermarks this session."
+      },
+      "ullmMode": {
+        "type": "string",
+        "enum": ["auto", "api", "cli"],
+        "description": "Quarantined U-LLM transport: 'api' = direct Anthropic Messages call (needs ullmApiKey), 'cli' = fresh `claude -p`/`codex exec` subprocess reusing the logged-in auth, 'auto' (default) = key present ? api : cli. Falls back to env MANDU_ULLM_MODE."
+      },
+      "ullmBinary": {
+        "type": "string",
+        "enum": ["claude", "codex", "auto"],
+        "description": "cli-mode binary hint (falls back to env MANDU_ULLM_BINARY)."
+      },
+      "ullmModel": {
+        "type": "string",
+        "description": "Quarantined model id (falls back to env MANDU_ULLM_MODEL)."
+      },
+      "ullmBaseUrl": {
+        "type": "string",
+        "description": "U-LLM endpoint (falls back to env MANDU_ULLM_BASE_URL — deliberately NOT the host process's ANTHROPIC_BASE_URL, which in a Mandu-wrapped run is the instrumented proxy). MUST be the REAL Anthropic endpoint; any loopback except the pinned forwarder is refused fail-closed."
+      },
+      "ullmForwarder": {
+        "type": "string",
+        "description": "The launcher's loopback->api.anthropic.com verbatim relay URL — the ONE loopback base URL the guard accepts (falls back to env MANDU_ULLM_FORWARDER)."
+      },
+      "ullmApiKey": {
+        "type": "string",
+        "description": "API key for api-mode U-LLM calls (falls back to env MANDU_ULLM_API_KEY — deliberately NOT the host process's ANTHROPIC_API_KEY, which in a Mandu-wrapped run authenticates the instrumented T-LLM path, not the quarantine)."
+      }
+    }
+  }
+}

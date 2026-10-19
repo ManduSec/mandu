@@ -1,0 +1,21 @@
+{
+  "name": "@mandusec/openai-proxy",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu Track A: OpenAI Responses-API MITM reverse proxy for the Codex CLI. Enforces the AgentView context boundary — symbolizes untrusted function_call_output spans before they reach T-LLM, injects the handling system prompt. Pure userspace TypeScript; reuses the arbiter over IPC. Request-side only (the response stream is forwarded verbatim). Fail-closed.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts test/component/*.test.ts",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
+    "test:component": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/component/*.test.ts",
+    "serve": "tsx src/server-main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "@mandusec/openclaw-inspect-plugin",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu U-LLM channel for OpenClaw: an OpenClaw PLUGIN TOOL exposing inspect_symbol (OpenClaw has no MCP client, so the inspect-mcp stdio server cannot mount — docs/design/testing/agent-e2e-harness.md §8). The security core is REUSED, not reimplemented: the tool calls interceptors/inspect-mcp/src/inspect-symbol.ts (resolve via arbiter → quarantined U-LLM → RE-SYMBOLIZE → emit) with the same ArbiterClientAdapter + ullm-client deps; only the mount layer (api.registerTool vs MCP JSON-RPC) is new. Fail-closed; success results are pure-symbolic. Zero runtime deps (loaded by OpenClaw via jiti as raw .ts).",
+  "main": "index.ts",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "mandu": {
+    "siblings": [
+      "interceptors/inspect-mcp"
+    ]
+  },
+  "scripts": {
+    "pretypecheck": "node ../../scripts/install-deps.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "node ../../scripts/install-deps.mjs",
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

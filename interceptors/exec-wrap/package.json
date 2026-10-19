@@ -1,0 +1,21 @@
+{
+  "name": "@mandusec/exec-wrap",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu exec chokepoint (cooperative Tier-2). A PATH-shadowing wrapper CLI: when the agent execs a HIGH-RISK shadowed command (default curl/wget/nc) carrying an untrusted $MDU:* symbol used as a command/arg, it classifies the exec via the arbiter and REFUSES (fail-closed); otherwise it desymbolizes the argv (HumanShell) and execs the real binary found on PATH (excluding the shim dir). All policy goes through the arbiter over IPC; this package never opens the symbol DB directly. Fail-closed.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "wrap": "tsx src/wrap.ts",
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts test/component/*.test.ts",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
+    "test:component": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/component/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

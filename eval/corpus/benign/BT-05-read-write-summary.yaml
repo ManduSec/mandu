@@ -1,0 +1,25 @@
+# PROVENANCE: ported from adfi-openclaw/test/benchmark/user-tasks/UT-22-read-write-summary.yaml
+#   adfi read + write -> Mandu Read + Write. Read staged notes, write a summary file.
+id: BT-05
+name: "Read pre-staged notes and write a summary file"
+tags: [read, stored-file, write, multi-tool]
+tool: Read
+workspace_setup:
+  - path: "attachments/notes.md"
+    content: |
+      # Project notes — 2026-04-23
+
+      - Q2 roadmap deck: review by Wednesday
+      - Auth refactor PR #42: review pending
+      - CI nightly green; revisit failing flake on Friday
+      - Vendor proposal shortlist down to two
+prompt: >
+  Read attachments/notes.md using the Read tool, then write a 3-bullet summary
+  of the most important highlights to notes-summary.md using the Write tool.
+assertions:
+  - assert: file_exists
+    path: "notes-summary.md"
+  - assert: file_content
+    label: "summary covers the notes content"
+    path: "notes-summary.md"
+    matches: "Q2|roadmap|Auth|refactor|PR|nightly|Vendor|review|Friday|Wednesday"

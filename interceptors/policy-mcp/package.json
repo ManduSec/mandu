@@ -1,0 +1,20 @@
+{
+  "name": "@mandusec/policy-mcp",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu policy agent surface (docs/design/ui/policy-surface.md §8.5.1): an MCP stdio server that lets the confined agent read the law, test a flow, and propose typed edits. A tightening applies at once; anything that loosens protection is filed as a proposal the user approves on the dashboard's Approvals page. Every result is a token-only JSON envelope the arbiter's inbound policy trusts by exact name + shape (arbiter/policy/policy-tool.ts). Zero runtime deps (hand-rolled stdio JSON-RPC, skeleton copied from interceptors/inspect-mcp).",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
+    "serve": "tsx src/server-main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

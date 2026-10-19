@@ -1,0 +1,151 @@
+/* mandu.css — the ONE visual system of both dashboard front-ends
+   (dashboard.md §4.25k). The product page (`/`, app.css) and the developer
+   inspector (`/dev/`, dev/dashboard.css) both load this file first and build
+   on its tokens, so the two pages read as one product: one accent, three
+   semantic colors (fine / needs you / failed), one sans family for every
+   word (headlines, wordmark, body; no serif, no italics) and a mono for data,
+   generous space, no icon font. Only tokens and bare elements live
+   here; each page keeps its own components.
+
+   Theme: light by default, dark follows the system. A page may pin one with
+   `data-theme="light" | "dark"` on <html>: both pages set it from one stored
+   choice (`mandu.theme` in the browser), the product's Settings › Appearance
+   and the inspector's Appearance row.
+
+   Fonts are self-hosted from fonts/ (latin subset, woff2, SIL OFL 1.1; the
+   licenses sit beside the files): the dashboard runs on loopback, offline,
+   with no CDN. A glyph outside the latin range falls through to the system
+   face named after it in the stack. */
+
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/ibm-plex-sans-latin-400-normal.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 500; font-display: swap; src: url(fonts/ibm-plex-sans-latin-500-normal.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 600; font-display: swap; src: url(fonts/ibm-plex-sans-latin-600-normal.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 700 800; font-display: swap; src: url(fonts/ibm-plex-sans-latin-700-normal.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/ibm-plex-mono-latin-400-normal.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500 800; font-display: swap; src: url(fonts/ibm-plex-mono-latin-600-normal.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+
+:root {
+  color-scheme: light;
+  --bg: #f4f3ee;
+  --panel: #ffffff;
+  --panel-2: #fbfaf6;
+  --line: #dedcd3;
+  --line-2: #ecebe4;
+  --ink: #1c1c20;
+  --ink-2: #3d3d44;
+  --ink-3: #5a5a62;
+  --ink-4: #6c6c74;
+  --accent: #1f5f8b;
+  --accent-ink: #164767;
+  --ok: #1b7448;
+  --ok-bg: #dcefe3;
+  --warn: #a35d00;
+  --warn-bg: #fbeedb;
+  --warn-line: #e8c48f;
+  --bad: #b4342a;
+  --bad-bg: #f6dcd9;
+  --code-bg: #f0efe8;
+  /* Inline code on the product page: its own ink, apart from the accent
+     (links) and the three semantic colors (the masked / secret chips). */
+  --code-ink: #6b3fa0;
+  /* The inspector's extra hues (dev/dashboard.css): symbols, the quarantined
+     U-LLM lane, and a few categorical chips. Muted to sit beside the three
+     semantic colors; the product page does not use them. */
+  --sym: #7a6400;
+  --pink: #a23a72;
+  --purple: #6a4ea8;
+  --cyan: #16708a;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius: 12px;
+  --radius-sm: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #17181c;
+    --panel: #1f2126;
+    --panel-2: #1b1d21;
+    --line: #34363d;
+    --line-2: #2a2c32;
+    --ink: #ecebe6;
+    --ink-2: #cfcec8;
+    --ink-3: #a3a29c;
+    --ink-4: #989791;
+    --accent: #7db4dc;
+    --accent-ink: #a8cde8;
+    --ok: #5fc48f;
+    --ok-bg: #1d3a2b;
+    --warn: #e0a24a;
+    --warn-bg: #3b2d17;
+    --warn-line: #6a4d1c;
+    --bad: #e8756b;
+    --bad-bg: #44231f;
+    --code-bg: #2a2c32;
+    --code-ink: #c9b3f5;
+    --sym: #d9bd5c;
+    --pink: #e38ab6;
+    --purple: #b39cef;
+    --cyan: #6fc3d9;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #17181c;
+  --panel: #1f2126;
+  --panel-2: #1b1d21;
+  --line: #34363d;
+  --line-2: #2a2c32;
+  --ink: #ecebe6;
+  --ink-2: #cfcec8;
+  --ink-3: #a3a29c;
+  --ink-4: #989791;
+  --accent: #7db4dc;
+  --accent-ink: #a8cde8;
+  --ok: #5fc48f;
+  --ok-bg: #1d3a2b;
+  --warn: #e0a24a;
+  --warn-bg: #3b2d17;
+  --warn-line: #6a4d1c;
+  --bad: #e8756b;
+  --bad-bg: #44231f;
+  --code-bg: #2a2c32;
+  --code-ink: #c9b3f5;
+  --sym: #d9bd5c;
+  --pink: #e38ab6;
+  --purple: #b39cef;
+  --cyan: #6fc3d9;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-ink); text-decoration: underline; }
+code, pre, kbd, samp { font-family: var(--mono); }
+code { font-size: 0.9em; }
+h1, h2, h3 { margin: 0; }
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+[hidden] { display: none !important; }
+/* Motion follows the system's setting (dashboard.md §4.25k): under "reduce
+   motion" a change of state on either page happens at once. Every
+   transition ends at once (!important: a page's own later rule cannot bring
+   one back); dashboard.css stops the inspector's animations and
+   render-helpers.js scrollMotion its scripted jumps. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; }
+}
+
+/* The brand word: the sans wordmark both top bars open with. */
+.brand { font-family: var(--sans); font-size: 21px; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); }
+/* Emphasis is weight, never a slanted face: there is no italic font. */
+em, i, cite, dfn, var, address { font-style: normal; }
+.brand:hover { text-decoration: none; color: var(--ink); }

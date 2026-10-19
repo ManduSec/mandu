@@ -1,0 +1,27 @@
+{
+  "comment": "Mirrors tests/conformance/tsconfig.json (NodeNext + strict). rootDir is '.' and stays '.': the eval package owns its corpus + lib + run.ts and imports no sibling Mandu package STATICALLY. The deterministic backend reaches tests/conformance/lib/harness.js's buildStack via a RUNTIME import() of an absolute file: specifier (the anthropic-proxy/src/server-main.ts cross-package pattern), so tsc never resolves the sibling sources under this rootDir \u2014 no '..' rootDir needed. run.ts is the CLI entry.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "rootDir": ".",
+    "resolveJsonModule": true
+  },
+  "include": [
+    "lib/**/*.ts",
+    "live/**/*.ts",
+    "policy-assistant/**/*.ts",
+    "run.ts",
+    "run-paired.ts",
+    "run-utility.ts",
+    "run-policy-model.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

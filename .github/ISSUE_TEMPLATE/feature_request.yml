@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest a new capability or a change to how Mandu behaves.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. A change that touches what Mandu protects
+        (secrets, untrusted text, the sandbox) is discussed against the design
+        docs under `docs/design/` before it is built, so say which part of the
+        protection it affects if you know.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: The behavior you have in mind. Commands, config or UI sketches are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Workarounds you use now, or other ways to solve it.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - secrets protection
+        - prompt-injection protection
+        - sandbox (files, network, commands)
+        - dashboard and approvals
+        - launcher and install
+        - support for another agent
+        - docs
+        - other
+  - type: textarea
+    id: context
+    attributes:
+      label: Other context

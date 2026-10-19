@@ -1,0 +1,24 @@
+{
+  "name": "@mandusec/reply-filter",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu user-reply egress chokepoint (cooperative wrapper layer; paper: resolve symbols in user-facing replies, OpenClaw hook message_sending). A wrapper CLI that routes the agent's output through a desymbolizing stream filter: $MDU:* tokens in the agent's user-facing output are resolved to their ORIGINAL values via the arbiter's deep desymbolize (HumanView fidelity — the human always sees real data), while the agent's own context keeps the symbols. Piped/print runs filter through a plain pipe; interactive TUIs on a TTY are relayed through a PTY (util-linux script on Linux; BSD script on macOS, with a companion that relays resizes and signals BSD script does not) so the TUI keeps a real terminal while replies resolve. UTILITY-ONLY surface: on any arbiter failure the filter passes text through UNCHANGED (symbols stay opaque — fail-closed toward symbolic, nothing can leak). All resolution goes through the arbiter over IPC; this package never opens the symbol DB directly.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "filter": "tsx src/run.ts",
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts test/component/*.test.ts",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
+    "test:component": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/component/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@xterm/headless": "^6.0.0"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "kind": "mandu-replay-run",
+  "runId": "replay-20261001T120000",
+  "commit": "5a557bfa0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f",
+  "ref": "master",
+  "source": "local",
+  "startedAt": "2026-10-01T12:00:00.000Z",
+  "engine": 4
+}

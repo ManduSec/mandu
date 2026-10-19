@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mandu-arbiter"
+version = "0.1.0"
+description = "Python client for the Mandu arbiter (NDJSON over a Unix socket)"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+dependencies = []
+
+[tool.setuptools]
+packages = ["mandu_arbiter"]

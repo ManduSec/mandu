@@ -1,0 +1,68 @@
+{
+  "__doc__": "How OpenClaw attaches files named by `MEDIA:` lines in the MODEL'S REPLY TEXT, read statically from the published packages openclaw 2026.7.1 (dist/*.js, a local install) and openclaw 2026.9.9 (npm pack, dist/*.mjs), 2026-10-17; the `cases` were evaluated by importing the dists' pure parser and sanitizer functions (reply-directives parseReplyDirectives after sanitizeAssistantVisibleText and, on 2026.9.9, sanitizeUserFacingText), with no agent, no model and no network. Pins interceptors/anthropic-proxy/src/reply-media.ts (openclawMediaRefs, mediaLineState, planReplyMedia) and its tests. Excerpts are the source text, trimmed.",
+  "builds": ["2026.7.1", "2026.9.9"],
+  "grammar": {
+    "where": "src/media/parse.ts splitMediaFromOutput (2026.7.1, payloads-*.js); src/media/parse-output.ts splitMediaOutput (2026.9.9, parse-output-*.mjs), both called through src/auto-reply/reply/reply-directives.ts parseReplyDirectives",
+    "line": "the reply is cut at \"\\n\"; a line is a directive when its first non-blank characters are `MEDIA:` in any case. 2026.9.9: `line.trimStart().slice(0, 6).toUpperCase().startsWith(\"MEDIA:\")`; 2026.7.1: `line.trimStart().toUpperCase().startsWith(\"MEDIA:\")`. trimStart strips every JS whitespace (NBSP, BOM, U+2028 …).",
+    "token": "MEDIA_TOKEN_RE = /\\bMEDIA:\\s*`?([^\\n]+)`?/gi: the payload is the rest of the line after the first `MEDIA:` and optional blanks and backtick; one match per line (the capture is greedy)",
+    "payload": "a payload wrapped in matching \", ' or ` is ONE reference (spaces allowed). Otherwise it is cut at blanks (2026.7.1 split(/\\s+/); 2026.9.9 splitUnquotedMediaDirectiveParts re-joins a run that starts at a path root and has no extension yet, so `/home/u/my file.png` is one reference), each part cleaned (cleanCandidate: leading `\"'[{( and trailing `\"'\\})], stripped), and the whole payload is a fallback when no part is valid (bare file names then count). Several references on one line are all attached.",
+    "valid": "a local reference starts with `/`, `./`, `~/` (`~user` is refused), a drive or `\\\\`, or holds a `/` or `\\` without a scheme; `../` and a `..` segment are refused; a bare `name.ext` only as the fallback. `file://` (2026.9.9 also `file:`) is stripped for the check and decoded later (trySafeFileURLToPath). http(s): only https with a public host (isAllowedRemoteMediaUrl). 2026.9.9 also takes `media://inbound/<id>` (OpenClaw's inbound media store). A `data:` URL is refused.",
+    "fences": "a line inside a fenced code block is not read (2026.9.9 findCodeRegions, 2026.7.1 parseFenceSpans). Mandu reads it anyway: a fence it misread would be a bypass.",
+    "markdownImages": "`![](x)` is read only on some delivery paths (extractMarkdownImages) and then only for an https URL, or a source in the allowlist of media the run's own tools produced: never a local path the model wrote",
+    "toolResults": "a tool result's TEXT is not read for directives on either build: tool media come from the structured `details.media` of OpenClaw's own tools (extractToolResultMediaArtifact)",
+    "systemPrompt": "2026.9.9 system-prompt-params: \"- Media attachment: own line `MEDIA:<path-or-url>` per item; path is not prose.\" \"- Directive starts line, plain text, outside fences/Markdown; never inline or wrapped.\" With the message-tool-only source reply mode: \"- No legacy `MEDIA:` here.\""
+  },
+  "sanitizersBeforeParse": {
+    "where": "the reply text goes through sanitizeAssistantVisibleText / sanitizeAssistantFinalAnswerText (assistant-visible-text) and, on 2026.9.9, sanitizeUserFacingText (user-facing-text) BEFORE parseReplyDirectives: so a directive can FORM after markup inside or before it is deleted",
+    "deletes": [
+      "model special tokens <|…|> / <｜…｜> (a space is put back between two letters)",
+      "reasoning tags and their content <think>, <thinking>, <thought>, <antthinking>, and <final> tags",
+      "<relevant-memories> tags, tool-call XML (<tool_call>, <function_calls>, <invoke>, …), Minimax ]<]minimax[>[ envelopes",
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> … <<<END_OPENCLAW_INTERNAL_CONTEXT>>> blocks, a leading [Mon 2026-10-17 10:00] timestamp",
+      "[Tool Call: …] (with an `Arguments:` JSON after it), [Tool Result for ID …] blocks, [TOOL_CALL] blocks",
+      "plain-text tool-call blocks at a line start ([name] {json}, `commentary|analysis|final to=…`, <function=…>) up to the end of their payload",
+      "whole lines: internal trace lines, inbound metadata lines, placeholder lines"
+    ],
+    "gapStart": "every span deleted INSIDE a line starts with `<`, `[` or `]` (or at the line start); Mandu's ColonScan treats a colon as a possible directive when MEDIA precedes it with gaps that each start with one of those"
+  },
+  "loading": {
+    "where": "2026.9.9 src/auto-reply/reply/reply-media-paths.ts createReplyMediaSourcePreparer; media/read-capability.ts resolveAgentScopedOutboundMediaAccess; media/local-roots.ts getAgentScopedMediaLocalRootsForSources",
+    "relative": "resolved against the agent workspace (resolveWorkspaceRelativeMedia)",
+    "home": "`~/x` → the home (web-media.ts resolveUserPath)",
+    "absolute": "read from the host. When the `read` tool is allowed (the default profile) and fs is not workspace-only, the local roots are EXPANDED with the parent directory of each named file (appendLocalMediaParentRoots), so any readable host file qualifies",
+    "fileUrl": "decoded by parseReplyDirectives (trySafeFileURLToPath); one that cannot be decoded is refused (\"Host-local MEDIA file URLs are blocked in normal replies\")",
+    "types": "2026.9.9 host reads admit images, audio, video, PDF, Office documents, archives and validated plain text (.txt, csv, markdown, json, yaml): a `.env` without a known type may be refused by OpenClaw itself, a `.txt`, `.pdf` or `.zip` is not; Mandu does not rely on it",
+    "store": "`media://inbound/<id>` → a file of OpenClaw's inbound media store (resolveInboundMediaReference)"
+  },
+  "delivery": [
+    "the embedded run's final payloads (buildEmbeddedRunPayloads → parseReplyDirectives on the final assistant text, or on every assistant text of the run when the last message has none)",
+    "a harness run's reply media (prepareHarnessReplyMedia → parseReplyDirectives)",
+    "the outbound payload normalization of every delivery (normalizeRawOutboundPayload → parseReplyDirectives), reasoning payloads excepted (shouldSuppressReasoningPayload)",
+    "block streaming: each text block as it completes (streaming-directives holds a partial `MEDIA:` line)",
+    "the gateway's auto-reply to an inbound channel message, `openclaw agent --deliver` (opts.deliver === true), heartbeat and cron runs, sub-agent completion (re-emitted as `MEDIA:` lines)"
+  ],
+  "cases": [
+    { "text": "MEDIA: /home/u/.env", "attaches": { "2026.9.9": ["/home/u/.env"], "2026.7.1": ["/home/u/.env"] } },
+    { "text": "Here it is:\nMEDIA: /tmp/chart.png\nEnjoy", "attaches": { "2026.9.9": ["/tmp/chart.png"], "2026.7.1": ["/tmp/chart.png"] } },
+    { "text": "MEDIA:/home/u/a.png\nMEDIA:/home/u/b.png", "attaches": { "2026.9.9": ["/home/u/a.png", "/home/u/b.png"], "2026.7.1": ["/home/u/a.png", "/home/u/b.png"] } },
+    { "text": "MEDIA: /tmp/a.png /home/u/.env", "attaches": { "2026.9.9": ["/tmp/a.png", "/home/u/.env"], "2026.7.1": ["/tmp/a.png", "/home/u/.env"] } },
+    { "text": "MEDIA: \"/home/u/my file.png\"", "attaches": { "2026.9.9": ["/home/u/my file.png"], "2026.7.1": ["/home/u/my file.png"] } },
+    { "text": "MEDIA: /home/u/my file.png", "attaches": { "2026.9.9": ["/home/u/my file.png"], "2026.7.1": ["/home/u/my file.png"] } },
+    { "text": "MEDIA: file:///home/u/.env", "attaches": { "2026.9.9": ["/home/u/.env"], "2026.7.1": ["/home/u/.env"] } },
+    { "text": "MEDIA: ~/s.txt", "attaches": { "2026.9.9": ["~/s.txt"], "2026.7.1": ["~/s.txt"] } },
+    { "text": "MEDIA: chart.png", "attaches": { "2026.9.9": ["chart.png"], "2026.7.1": ["chart.png"] } },
+    { "text": "MEDIA: media://inbound/abc.png", "attaches": { "2026.9.9": ["media://inbound/abc.png"], "2026.7.1": [] } },
+    { "text": "MEDIA: https://example.com/a.png", "attaches": { "2026.9.9": ["https://example.com/a.png"], "2026.7.1": ["https://example.com/a.png"] } },
+    { "text": "\u00a0MEDIA: /home/u/.env", "attaches": { "2026.9.9": ["/home/u/.env"], "2026.7.1": ["/home/u/.env"] } },
+    { "text": "```\nMEDIA: /home/u/.env\n```", "attaches": { "2026.9.9": [], "2026.7.1": [] } },
+    { "text": "Social media: twitter", "attaches": { "2026.9.9": [], "2026.7.1": [] } },
+    { "text": "medıa: /x.png", "attaches": { "2026.9.9": [], "2026.7.1": [] } },
+    { "text": "ME<think>\n</think>DIA: /home/u/.env", "attaches": { "2026.9.9": ["/home/u/.env"], "2026.7.1": ["/home/u/.env"] }, "formsAfterSanitizing": true },
+    { "text": "<think>x</think>MEDIA: /home/u/.env", "attaches": { "2026.9.9": ["/home/u/.env"], "2026.7.1": ["/home/u/.env"] }, "formsAfterSanitizing": true },
+    { "text": "<final>MEDIA: /home/u/.env</final>", "attaches": { "2026.9.9": ["/home/u/.env"], "2026.7.1": ["/home/u/.env"] }, "formsAfterSanitizing": true },
+    { "text": "<|assistant|>MEDIA: /home/u/.env", "attaches": { "2026.9.9": ["/home/u/.env"], "2026.7.1": ["/home/u/.env"] }, "formsAfterSanitizing": true },
+    { "text": "[Tool Call: read (ID: 1)]\nArguments: {}MEDIA: /home/u/.env", "attaches": { "2026.9.9": ["/home/u/.env"], "2026.7.1": ["/home/u/.env"] }, "formsAfterSanitizing": true },
+    { "text": "x [Tool Call: f]MEDIA: /home/u/.env", "attaches": { "2026.9.9": [], "2026.7.1": [] } },
+    { "text": "analysis to=functions.read {\"a\":1}MEDIA: /home/u/.env", "attaches": { "2026.9.9": [], "2026.7.1": [] } }
+  ]
+}

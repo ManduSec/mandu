@@ -1,0 +1,317 @@
+{
+  "__doc__": "tools[] captured 2026-10-05 from real goose 1.53.0 requests (the x86_64-unknown-linux-gnu release binary, the CI guest's pin) against a local scripted /v1/messages stand-in, no Mandu in the path, with a throwaway GOOSE_PATH_ROOT, GOOSE_PROVIDER=anthropic and ANTHROPIC_HOST at the stand-in, in a network namespace with only loopback. name -> input_schema property names. \"1.53.0\" is the default surface of `goose run` and `goose session` (the developer, analyze, summon, skills, apps and extensionmanager platform extensions; scheduler and tom advertise no tool there). \"1.53.0 subagent\" is what a `delegate` subagent advertises (same provider, its own agent-session-id). \"1.53.0 --with-builtin <each>\" lists the tools each opt-in builtin or platform extension adds (code_execution, computercontroller, memory, chatrecall, todo, summarize, orchestrator, tutorial, autovisualiser; computercontroller's computer_control is macOS-only and absent here). \"1.53.0 +code_execution\" is the whole surface with code mode on: the non-developer tools move inside execute_typescript. \"1.53.0 --with-extension mandu-inspect:<cmd>\" is the U-LLM mount's spelling (`<name>__<tool>`, the name kept as given, hyphen included). Wire facts read in the same captures: POST /v1/messages only (no GET /v1/models at start for run or session), stream true, header agent-session-id (yyyymmdd_N), x-api-key; a tool_result's content is a plain string (shell: stderr then stdout, then \"Command exited with code N\" when non-zero). Pins arbiter/policy/goose-inbound.ts and tool-gate-surface.ts.",
+  "1.53.0": {
+    "analyze": [
+      "path",
+      "focus",
+      "max_depth",
+      "follow_depth",
+      "force"
+    ],
+    "apps__create_app": [
+      "prd"
+    ],
+    "apps__delete_app": [
+      "name"
+    ],
+    "apps__iterate_app": [
+      "name",
+      "feedback"
+    ],
+    "apps__list_apps": [],
+    "delegate": [
+      "instructions",
+      "source",
+      "parameters",
+      "extensions",
+      "provider",
+      "model",
+      "temperature",
+      "max_turns",
+      "context",
+      "working_dir",
+      "async"
+    ],
+    "edit": [
+      "path",
+      "before",
+      "after"
+    ],
+    "extensionmanager__list_resources": [
+      "extension_name"
+    ],
+    "extensionmanager__manage_extensions": [
+      "action",
+      "extension_name"
+    ],
+    "extensionmanager__read_resource": [
+      "uri",
+      "extension_name"
+    ],
+    "extensionmanager__search_available_extensions": [],
+    "load": [
+      "source",
+      "cancel",
+      "peek"
+    ],
+    "load_skill": [
+      "name",
+      "args"
+    ],
+    "read_image": [
+      "source",
+      "crop"
+    ],
+    "shell": [
+      "command",
+      "timeout_secs"
+    ],
+    "tree": [
+      "path",
+      "depth"
+    ],
+    "write": [
+      "path",
+      "content"
+    ]
+  },
+  "1.53.0 subagent": {
+    "analyze": [
+      "path",
+      "focus",
+      "max_depth",
+      "follow_depth",
+      "force"
+    ],
+    "apps__create_app": [
+      "prd"
+    ],
+    "apps__delete_app": [
+      "name"
+    ],
+    "apps__iterate_app": [
+      "name",
+      "feedback"
+    ],
+    "apps__list_apps": [],
+    "edit": [
+      "path",
+      "before",
+      "after"
+    ],
+    "extensionmanager__list_resources": [
+      "extension_name"
+    ],
+    "extensionmanager__read_resource": [
+      "uri",
+      "extension_name"
+    ],
+    "extensionmanager__search_available_extensions": [],
+    "load": [
+      "source",
+      "cancel",
+      "peek"
+    ],
+    "load_skill": [
+      "name",
+      "args"
+    ],
+    "read_image": [
+      "source",
+      "crop"
+    ],
+    "shell": [
+      "command",
+      "timeout_secs"
+    ],
+    "tree": [
+      "path",
+      "depth"
+    ],
+    "write": [
+      "path",
+      "content"
+    ]
+  },
+  "1.53.0 --with-builtin <each>": {
+    "autovisualiser__render_chord": [
+      "data"
+    ],
+    "autovisualiser__render_donut": [
+      "data"
+    ],
+    "autovisualiser__render_map": [
+      "data"
+    ],
+    "autovisualiser__render_mermaid": [
+      "mermaid_code"
+    ],
+    "autovisualiser__render_radar": [
+      "data"
+    ],
+    "autovisualiser__render_sankey": [
+      "data"
+    ],
+    "autovisualiser__render_treemap": [
+      "data"
+    ],
+    "autovisualiser__show_chart": [
+      "data"
+    ],
+    "chatrecall__chatrecall": [
+      "query",
+      "session_id",
+      "limit",
+      "after_date",
+      "before_date"
+    ],
+    "computercontroller__docx_tool": [
+      "path",
+      "operation",
+      "content",
+      "params"
+    ],
+    "computercontroller__pdf_tool": [
+      "path",
+      "operation"
+    ],
+    "computercontroller__xlsx_tool": [
+      "path",
+      "operation",
+      "worksheet",
+      "range",
+      "search_text",
+      "case_sensitive",
+      "row",
+      "col",
+      "value"
+    ],
+    "execute_typescript": [
+      "code",
+      "tool_graph"
+    ],
+    "get_function_details": [
+      "functions"
+    ],
+    "list_functions": [],
+    "memory__remember_memory": [
+      "category",
+      "data",
+      "tags",
+      "is_global"
+    ],
+    "memory__remove_memory_category": [
+      "category",
+      "is_global"
+    ],
+    "memory__remove_specific_memory": [
+      "category",
+      "memory_content",
+      "is_global"
+    ],
+    "memory__retrieve_memories": [
+      "category",
+      "is_global"
+    ],
+    "orchestrator__interrupt_agent": [
+      "session_id"
+    ],
+    "orchestrator__list_sessions": [
+      "session_type",
+      "last_n"
+    ],
+    "orchestrator__send_message": [
+      "session_id",
+      "message"
+    ],
+    "orchestrator__start_agent": [
+      "working_dir",
+      "name"
+    ],
+    "orchestrator__view_session": [
+      "session_id",
+      "mode"
+    ],
+    "summarize__summarize": [
+      "paths",
+      "question",
+      "extensions"
+    ],
+    "todo__todo_write": [
+      "content"
+    ],
+    "tutorial__load_tutorial": [
+      "name"
+    ]
+  },
+  "1.53.0 +code_execution": {
+    "analyze": [
+      "path",
+      "focus",
+      "max_depth",
+      "follow_depth",
+      "force"
+    ],
+    "delegate": [
+      "instructions",
+      "source",
+      "parameters",
+      "extensions",
+      "provider",
+      "model",
+      "temperature",
+      "max_turns",
+      "context",
+      "working_dir",
+      "async"
+    ],
+    "edit": [
+      "path",
+      "before",
+      "after"
+    ],
+    "execute_typescript": [
+      "code",
+      "tool_graph"
+    ],
+    "get_function_details": [
+      "functions"
+    ],
+    "list_functions": [],
+    "load": [
+      "source",
+      "cancel",
+      "peek"
+    ],
+    "load_skill": [
+      "name",
+      "args"
+    ],
+    "read_image": [
+      "source",
+      "crop"
+    ],
+    "shell": [
+      "command",
+      "timeout_secs"
+    ],
+    "tree": [
+      "path",
+      "depth"
+    ],
+    "write": [
+      "path",
+      "content"
+    ]
+  },
+  "1.53.0 --with-extension mandu-inspect:<cmd>": {
+    "mandu-inspect__declassify_symbol": [
+      "symbol",
+      "reason"
+    ],
+    "mandu-inspect__inspect_symbol": [
+      "symbol",
+      "question"
+    ]
+  }
+}

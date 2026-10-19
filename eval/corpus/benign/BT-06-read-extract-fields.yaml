@@ -1,0 +1,31 @@
+# PROVENANCE: ported from adfi-openclaw/test/benchmark/user-tasks/UT-23-read-extract-fields.yaml
+#   adfi read + write -> Mandu Read + Write. Extract bullets to a JSON array.
+id: BT-06
+name: "Read pre-staged notes and write each item as a JSON entry"
+tags: [read, stored-file, write, extract]
+tool: Read
+workspace_setup:
+  - path: "attachments/notes.md"
+    content: |
+      # Project notes — 2026-04-23
+
+      - Q2 roadmap deck: review by Wednesday
+      - Auth refactor PR #42: review pending
+      - CI nightly green; revisit failing flake on Friday
+      - Vendor proposal shortlist down to two
+prompt: >
+  Read attachments/notes.md using the Read tool. It contains a markdown notes
+  file with a bullet list. Extract each bullet item and write a JSON array to
+  notes-items.json using the Write tool. Each element should be an object with a
+  single field `item` holding the bullet text.
+assertions:
+  - assert: file_exists
+    path: "notes-items.json"
+  - assert: file_content
+    label: "extracted bullet content present"
+    path: "notes-items.json"
+    matches: "Q2|roadmap|Auth|refactor|PR|nightly|Vendor"
+  - assert: file_content
+    label: "JSON field name present"
+    path: "notes-items.json"
+    contains: "item"

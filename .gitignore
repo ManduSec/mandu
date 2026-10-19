@@ -1,0 +1,39 @@
+node_modules/
+*.log
+.env
+tmp/
+__pycache__/
+.pytest_cache/
+
+# Python venvs (e.g. eval/agentdojo/.venv — provisioned by run.sh)
+.venv/
+
+# TS build output
+dist/
+
+# Rust build output (interceptors Cargo workspace)
+target/
+
+# Local SQLite symbol-table artifacts (WAL/SHM)
+*.db-wal
+*.db-shm
+
+# Per-session MCP config emitted by launcher/mandu-run.sh (may contain a key)
+.mcp.json
+
+# Central API-key file (see docs/design/testing/continuous-integration.md §13) — NEVER commit. Only the
+# secrets.example.json template is tracked.
+secrets.local.json
+secrets.json
+
+# Personal editor settings (checklist b11)
+.vscode/
+
+# Claude Code: per-session worktrees (`claude -w`) and personal settings; the
+# shared .claude/settings.json, hooks/ and skills/ are tracked
+.claude/worktrees/
+.claude/settings.local.json
+
+# The promoted replay baselines a per-push CI guest is given (scripts/ci/vm-run.sh,
+# test-reorganization.md §6.9): data in the guest's tree, never tracked
+.mandu-ci/

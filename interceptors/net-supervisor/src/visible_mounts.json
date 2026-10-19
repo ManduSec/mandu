@@ -1,0 +1,33 @@
+{
+  "comment": "Which mountinfo rows count as a mount that sees a holder's lookups (net-supervisor visible_mounts.rs, launcher remote-mounts.ts). Both test suites read this file, so the two classifications cannot drift. Each case: one /proc/<pid>/mountinfo line and whether it counts.",
+  "cases": [
+    { "line": "98 22 0:51 / /mnt/nas rw,relatime shared:40 - nfs4 nas.lan:/export/home rw,vers=4.2", "counts": true, "dest": "mount:nfs4:nas.lan:/export/home" },
+    { "line": "99 22 0:52 / /home rw,relatime - nfs nas:/home rw,vers=3", "counts": true, "dest": "mount:nfs:nas:/home" },
+    { "line": "120 22 0:60 / /home/u/remote\\040dir rw,nosuid - fuse.sshfs u@host:/srv rw,user_id=1000", "counts": true, "dest": "mount:fuse.sshfs:u@host:/srv" },
+    { "line": "121 22 0:61 / /run/user/1000/gvfs rw,nosuid - fuse.gvfsd-fuse gvfsd-fuse rw,user_id=1000", "counts": true, "dest": "mount:fuse.gvfsd-fuse:gvfsd-fuse" },
+    { "line": "122 22 0:62 / /run/user/1000/doc rw,nosuid - fuse.portal portal rw,user_id=1000", "counts": true, "dest": "mount:fuse.portal:portal" },
+    { "line": "123 22 0:63 / /mnt/w rw - fuseblk /dev/sdb1 rw,user_id=0", "counts": true, "dest": "mount:fuseblk:/dev/sdb1" },
+    { "line": "124 22 0:64 / /mnt/smb rw - cifs //srv/share rw,vers=3.1.1", "counts": true, "dest": "mount:cifs://srv/share" },
+    { "line": "125 22 0:65 / /mnt/ceph rw - ceph 10.0.0.1:/ rw", "counts": true, "dest": "mount:ceph:10.0.0.1:/" },
+    { "line": "126 22 0:66 / /mnt/p9 rw - 9p 10.0.0.2 rw,trans=tcp,port=564", "counts": true, "dest": "mount:9p:10.0.0.2" },
+    { "line": "127 22 0:67 / /mnt/p9u rw - 9p /run/srv.sock rw,trans=unix", "counts": true, "dest": "mount:9p:/run/srv.sock" },
+    { "line": "128 22 0:68 / /mnt/p9n rw - 9p share rw", "counts": true, "dest": "mount:9p:share" },
+    { "line": "129 22 0:69 / /net rw - autofs /etc/auto.net rw,fd=7,pgrp=1,timeout=300,minproto=5,maxproto=5,indirect", "counts": true, "dest": "mount:autofs:/etc/auto.net" },
+    { "line": "130 22 0:70 / /mnt/data rw - autofs systemd-1 rw,fd=40,pgrp=1,timeout=0,minproto=5,maxproto=5,direct", "counts": true, "dest": "mount:autofs:systemd-1" },
+    { "line": "131 22 0:71 / /mnt/vb rw - vboxsf share rw", "counts": true, "dest": "mount:vboxsf:share" },
+    { "line": "40 22 0:38 / /proc/sys/fs/binfmt_misc rw,relatime - autofs systemd-1 rw,fd=32,pgrp=1,timeout=0,minproto=5,maxproto=5,direct", "counts": false },
+    { "line": "41 22 0:39 / /boot/efi rw,relatime - autofs systemd-1 rw,fd=33,pgrp=1,timeout=120,direct", "counts": false },
+    { "line": "42 22 0:40 / /efi rw,relatime - autofs systemd-1 rw,fd=34,pgrp=1,timeout=120,direct", "counts": false },
+    { "line": "43 22 0:41 / /boot rw,relatime - autofs systemd-1 rw,fd=35,pgrp=1,timeout=120,direct", "counts": false },
+    { "line": "60 22 0:80 / /mnt/c rw,noatime - 9p C:\\134 rw,aname=drvfs;path=C:\\;uid=1000;symlinkroot=/mnt/,trans=fd,rfdno=5,wfdno=5", "counts": false },
+    { "line": "61 22 0:81 / /usr/lib/wsl/drivers ro - 9p drivers ro,dirsync,aname=drivers,mmap,access=client,msize=65536,trans=fd,rfd=7,wfd=7", "counts": false },
+    { "line": "62 22 0:82 / /work rw - 9p work rw,trans=virtio,version=9p2000.L", "counts": false },
+    { "line": "63 22 0:83 / /share rw - virtiofs myfs rw", "counts": false },
+    { "line": "64 22 0:84 / /mnt/x rw - drvfs X: rw", "counts": false },
+    { "line": "22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw", "counts": false },
+    { "line": "23 22 0:26 / /dev/shm rw,nosuid,nodev - tmpfs tmpfs rw", "counts": false },
+    { "line": "24 22 0:27 / /sys/fs/fuse/connections rw - fusectl fusectl rw", "counts": false },
+    { "line": "25 22 0:90 / /merged rw - overlay overlay rw,lowerdir=/lo,upperdir=/up,workdir=/wk", "counts": false },
+    { "line": "26 22 0:91 / /var/lib/x rw - btrfs /dev/sda2 rw", "counts": false }
+  ]
+}

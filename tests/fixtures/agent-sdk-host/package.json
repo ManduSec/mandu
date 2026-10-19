@@ -1,0 +1,12 @@
+{
+  "name": "@mandusec/agent-sdk-host-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Two small host programs built on the agent SDKs (the Claude Agent SDK and the Codex SDK), pinned, that agent-sdk.test.ts runs under the real launcher (docs/design/agents/agent-sdks.md). .npmrc omits the optional per-platform CLI binaries, so the hosts run the claude and codex on PATH unless the bundled ones are installed (npm ci --include=optional).",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.289",
+    "@openai/codex-sdk": "0.160.0"
+  }
+}

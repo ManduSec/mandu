@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/mandusec/mandu/security/advisories/new
+    about: Do not open a public issue for a vulnerability. Report it privately through GitHub's private vulnerability reporting, as SECURITY.md describes.
+  - name: Security policy (what counts, what to include)
+    url: https://github.com/mandusec/mandu/blob/HEAD/SECURITY.md
+    about: The scope of a security report and the details that help us reproduce it.

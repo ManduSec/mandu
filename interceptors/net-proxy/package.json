@@ -1,0 +1,25 @@
+{
+  "name": "@mandusec/net-proxy",
+  "version": "0.2.0-beta.7",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Mandu egress data-usage gate: a COOPERATIVE forward HTTP(S) proxy (HTTP_PROXY/HTTPS_PROXY). The network exfiltration kill-switch — a request carrying an untrusted $MDU:* symbol is gated by the arbiter's data-usage policy (sending a symbol to an untrusted destination, or using a symbol AS the destination, requires approval → fail-closed block). Symbol-free requests pass through unchanged; model-API hosts are excluded (owned by anthropic-proxy). Pure userspace TypeScript; reuses the arbiter over IPC. Fail-closed.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts test/component/*.test.ts",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
+    "test:component": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/component/*.test.ts",
+    "serve": "tsx src/server-main.ts"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

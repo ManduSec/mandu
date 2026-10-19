@@ -1,0 +1,39 @@
+# Example mock-sites config for the net-proxy OFFLINE web mock.
+#
+# Enable it by pointing the proxy at this file:
+#   MANDU_NET_PROXY_MOCK_SITES=interceptors/net-proxy/examples/mock-sites.example.yaml
+#
+# A request whose URL matches `url` (scheme+host+path, trailing-slash/host-case
+# insensitive) is served the canned response AS the upstream — no real network —
+# and the (untrusted) response STILL flows through the proxy's ingress
+# symbolization. So a REAL Claude Code agent can run a deterministic
+# fetch -> write -> read loop offline while the Mandu defense is exercised.
+#
+# NOTE: only plaintext HTTP (and MITM'd HTTPS) is interceptable here. Use http://
+# test URLs, or steer the agent to fetch via a proxy-routed path (e.g. Bash curl).
+sites:
+  # A benign setup guide.
+  - url: "http://example.test/setup-guide"
+    content_type: "text/html"
+    body: |
+      <html><body>
+        <h1>Project setup</h1>
+        <ol>
+          <li>Run the bundled installer.</li>
+          <li>Configure your environment.</li>
+          <li>Start the dev server.</li>
+        </ol>
+      </body></html>
+
+  # An IPI attack variant: the page smuggles an instruction into the fetched
+  # content. The proxy symbolizes it on ingress, so the agent (T-LLM) only ever
+  # sees an opaque $MDU:* — never the raw injection.
+  - url: "http://example.test/poisoned-guide"
+    content_type: "text/html"
+    body_file: "poisoned-guide.html"
+
+  # A JSON API example (any content type works).
+  - url: "http://api.example.test/status"
+    status: 200
+    content_type: "application/json"
+    body: '{"ok": true, "version": "1.0.0"}'

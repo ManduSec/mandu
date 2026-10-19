@@ -1,0 +1,1415 @@
+{
+  "__doc__": "tools[] captured 2026-09-27 from a real `openclaw agent --local` request (tools.profile coding) against a local /v1/messages stand-in (scripts/matrix/suites/fresh-agents/fake-model.mjs), no Mandu in the path. name -> input_schema property names. 2026.9.6 under its default config hides most tools behind the Tool Search dispatcher (tool_search / tool_describe / tool_call); `tools.toolSearch: false` shows them directly; `tools.toolSearch: {mode: \"code\"}` replaces the dispatcher with tool_search_code (JavaScript). 2026.3.12 rejects the `tools.toolSearch` key (\"Unrecognized key\"). Pins arbiter/policy/openclaw-inbound.ts and tool-gate-surface.ts. The \"2026.9.6 full profile (package schemas)\" entry is NOT a wire capture: it lists, for the tools outside the coding profile that Mandu gates or refuses, the input property names read from the TypeBox schemas in the published openclaw@2026.9.6 package (dist/*.mjs; the browser from its plugin schema, xAI tools from their plugin), 2026-09-28. Only the fields the gate tables and the refusal read are listed for tools with very wide schemas (message, browser, computer). Added 2026-10-09 the same way (openclaw 2026.9.9 on Node 24.21, a routing override of the anthropic provider like the launcher's): `2026.9.9` (default config; `tools.toolSearch: {mode: \"tools\"}` sends the same tools), `+toolSearch=false`, `+toolSearch=directory` (`{mode: \"directory\"}`, 2026.9.9's other mode; `{mode: \"code\"}` is retired and rejected), and `+codeMode=true` (`tools.codeMode: true`) for 2026.7.1, 2026.9.6 and 2026.9.9: Code Mode replaces the tools with `exec{code}` (JavaScript that calls tools inside OpenClaw) and `wait{runId}`. 2026.9.x's absent `tools.codeMode` means \"auto\", which engages Code Mode for models the provider catalog flags preferred; under the routing override claude-opus-5 and claude-sonnet-5-5 still got the normal tools.",
+  "2026.7.1": {
+    "apply_patch": [
+      "input"
+    ],
+    "create_goal": [
+      "objective",
+      "token_budget"
+    ],
+    "cron": [
+      "action",
+      "gatewayUrl",
+      "gatewayToken",
+      "timeoutMs",
+      "includeDisabled",
+      "job",
+      "jobId",
+      "id",
+      "patch",
+      "text",
+      "mode",
+      "runMode",
+      "contextMessages",
+      "agentId",
+      "sessionKey"
+    ],
+    "edit": [
+      "path",
+      "edits"
+    ],
+    "exec": [
+      "command",
+      "workdir",
+      "env",
+      "yieldMs",
+      "background",
+      "timeout",
+      "pty",
+      "elevated",
+      "host",
+      "security",
+      "ask",
+      "node"
+    ],
+    "get_goal": [],
+    "image": [
+      "prompt",
+      "image",
+      "images",
+      "model",
+      "maxBytesMb",
+      "maxImages"
+    ],
+    "memory_get": [
+      "path",
+      "from",
+      "lines",
+      "corpus"
+    ],
+    "memory_search": [
+      "query",
+      "maxResults",
+      "minScore",
+      "corpus"
+    ],
+    "process": [
+      "action",
+      "sessionId",
+      "data",
+      "keys",
+      "hex",
+      "literal",
+      "text",
+      "bracketed",
+      "eof",
+      "offset",
+      "limit",
+      "timeout"
+    ],
+    "read": [
+      "path",
+      "offset",
+      "limit"
+    ],
+    "session_status": [
+      "sessionKey",
+      "model"
+    ],
+    "sessions_history": [
+      "sessionKey",
+      "limit",
+      "offset",
+      "includeTools"
+    ],
+    "sessions_list": [
+      "kinds",
+      "limit",
+      "activeMinutes",
+      "messageLimit",
+      "label",
+      "agentId",
+      "search",
+      "archived",
+      "includeDerivedTitles",
+      "includeLastMessage"
+    ],
+    "sessions_send": [
+      "sessionKey",
+      "label",
+      "agentId",
+      "message",
+      "timeoutSeconds"
+    ],
+    "sessions_spawn": [
+      "task",
+      "taskName",
+      "label",
+      "runtime",
+      "agentId",
+      "model",
+      "thinking",
+      "cwd",
+      "mode",
+      "cleanup",
+      "sandbox",
+      "context",
+      "lightContext",
+      "attachments",
+      "attachAs"
+    ],
+    "sessions_yield": [
+      "message"
+    ],
+    "skill_workshop": [
+      "action",
+      "proposal_id",
+      "name",
+      "query",
+      "status",
+      "limit",
+      "description",
+      "skill_name",
+      "proposal_content",
+      "support_files",
+      "goal",
+      "evidence",
+      "reason"
+    ],
+    "subagents": [
+      "action",
+      "recentMinutes"
+    ],
+    "update_goal": [
+      "status",
+      "note"
+    ],
+    "update_plan": [
+      "explanation",
+      "plan"
+    ],
+    "web_fetch": [
+      "url",
+      "extractMode",
+      "maxChars"
+    ],
+    "web_search": [
+      "query",
+      "count",
+      "country",
+      "language",
+      "freshness",
+      "date_after",
+      "date_before",
+      "search_lang",
+      "ui_lang",
+      "domain_filter",
+      "max_tokens",
+      "max_tokens_per_page"
+    ],
+    "write": [
+      "path",
+      "content"
+    ]
+  },
+  "2026.7.1+codeMode=true": {
+    "exec": [
+      "code",
+      "command",
+      "language"
+    ],
+    "wait": [
+      "runId"
+    ]
+  },
+  "2026.9.6": {
+    "apply_patch": [
+      "input"
+    ],
+    "edit": [
+      "path",
+      "edits"
+    ],
+    "exec": [
+      "title",
+      "command",
+      "workdir",
+      "env",
+      "yieldMs",
+      "background",
+      "timeoutSeconds",
+      "pty",
+      "elevated",
+      "host",
+      "ask",
+      "node"
+    ],
+    "ls": [
+      "path",
+      "limit",
+      "after"
+    ],
+    "process": [
+      "action",
+      "sessionId",
+      "data",
+      "keys",
+      "hex",
+      "literal",
+      "text",
+      "bracketed",
+      "eof",
+      "offset",
+      "limit",
+      "timeout"
+    ],
+    "read": [
+      "path",
+      "offset",
+      "limit",
+      "cursor",
+      "optional"
+    ],
+    "sessions_yield": [
+      "waitFor",
+      "message",
+      "acknowledgment"
+    ],
+    "tool_call": [
+      "id",
+      "args"
+    ],
+    "tool_describe": [
+      "id"
+    ],
+    "tool_search": [
+      "query",
+      "limit",
+      "queries"
+    ],
+    "view_image": [
+      "prompt",
+      "path",
+      "paths",
+      "maxBytesMb",
+      "maxImages"
+    ],
+    "write": [
+      "path",
+      "content"
+    ]
+  },
+  "2026.9.6+toolSearch=false": {
+    "agents_wait": [
+      "ids",
+      "timeoutSeconds"
+    ],
+    "apply_patch": [
+      "input"
+    ],
+    "ask_user": [
+      "questions",
+      "timeoutSeconds"
+    ],
+    "automations": [
+      "action",
+      "gatewayUrl",
+      "gatewayToken",
+      "timeoutMs",
+      "includeDisabled",
+      "limit",
+      "offset",
+      "job",
+      "jobId",
+      "id",
+      "in",
+      "text",
+      "mode",
+      "runMode",
+      "contextMessages",
+      "agentId",
+      "sessionKey"
+    ],
+    "conversations_list": [
+      "channel",
+      "query",
+      "limit"
+    ],
+    "conversations_send": [
+      "conversationRef",
+      "message"
+    ],
+    "conversations_turn": [
+      "conversationRef",
+      "message",
+      "timeoutSeconds"
+    ],
+    "create_goal": [
+      "objective",
+      "token_budget"
+    ],
+    "dashboard": [
+      "action",
+      "tabId",
+      "title",
+      "presentation",
+      "position",
+      "tabIds",
+      "name",
+      "after",
+      "sizeW",
+      "sizeH",
+      "size",
+      "pluginKind",
+      "props"
+    ],
+    "edit": [
+      "path",
+      "edits"
+    ],
+    "exec": [
+      "title",
+      "command",
+      "workdir",
+      "env",
+      "yieldMs",
+      "background",
+      "timeoutSeconds",
+      "pty",
+      "elevated",
+      "host",
+      "ask",
+      "node"
+    ],
+    "gateway": [
+      "action",
+      "note"
+    ],
+    "get_goal": [],
+    "intent": [
+      "action",
+      "id",
+      "description",
+      "triggerKeywords",
+      "scope",
+      "senderScope",
+      "expiresAt",
+      "maxFires",
+      "cooldownSeconds",
+      "status"
+    ],
+    "ls": [
+      "path",
+      "limit",
+      "after"
+    ],
+    "memory_get": [
+      "path",
+      "from",
+      "lines",
+      "corpus"
+    ],
+    "memory_search": [
+      "query",
+      "maxResults",
+      "minScore",
+      "corpus"
+    ],
+    "plugins": [
+      "action",
+      "pluginId",
+      "query",
+      "source",
+      "packageName",
+      "version",
+      "reviewToken",
+      "acknowledgeInstallPolicyWarning"
+    ],
+    "portal": [
+      "action",
+      "port",
+      "title",
+      "description",
+      "path",
+      "id",
+      "environmentId"
+    ],
+    "process": [
+      "action",
+      "sessionId",
+      "data",
+      "keys",
+      "hex",
+      "literal",
+      "text",
+      "bracketed",
+      "eof",
+      "offset",
+      "limit",
+      "timeout"
+    ],
+    "progress_card": [
+      "markdown",
+      "plan"
+    ],
+    "read": [
+      "path",
+      "offset",
+      "limit",
+      "cursor",
+      "optional"
+    ],
+    "secrets": [
+      "action",
+      "name",
+      "kind",
+      "allowedHosts",
+      "reason",
+      "timeoutSeconds"
+    ],
+    "session_status": [
+      "sessionKey",
+      "model",
+      "changesSince"
+    ],
+    "sessions": [
+      "action",
+      "profileId",
+      "offset",
+      "sessionKey",
+      "targets",
+      "expectedSessionId",
+      "deleteTranscript",
+      "label",
+      "icon",
+      "color",
+      "group",
+      "statusNote",
+      "attention",
+      "ttlMinutes",
+      "pinned",
+      "archived",
+      "model",
+      "thinkingLevel",
+      "ownerType",
+      "ownerId",
+      "names",
+      "name",
+      "to"
+    ],
+    "sessions_history": [
+      "sessionKey",
+      "limit",
+      "offset",
+      "pendingBefore",
+      "messageId",
+      "sessionId",
+      "includeTools"
+    ],
+    "sessions_list": [
+      "kinds",
+      "limit",
+      "offset",
+      "activeMinutes",
+      "activeOnly",
+      "excludeSubagents",
+      "relationship",
+      "ownerId",
+      "creatorId",
+      "projectId",
+      "workspaceDir",
+      "group",
+      "pinned",
+      "messageLimit",
+      "label",
+      "agentId",
+      "search",
+      "archived",
+      "includeDerivedTitles",
+      "includeLastMessage"
+    ],
+    "sessions_search": [
+      "query",
+      "sessionKey",
+      "limit"
+    ],
+    "sessions_send": [
+      "sessionKey",
+      "label",
+      "agentId",
+      "message",
+      "timeoutSeconds",
+      "watch",
+      "mode"
+    ],
+    "sessions_spawn": [
+      "task",
+      "taskName",
+      "label",
+      "runtime",
+      "agentId",
+      "model",
+      "runTimeoutSeconds",
+      "thinking",
+      "cwd",
+      "mode",
+      "cleanup",
+      "expectsCompletionMessage",
+      "completionTarget",
+      "sandbox",
+      "context",
+      "lightContext",
+      "fastMode",
+      "placement",
+      "visible",
+      "group",
+      "projectId",
+      "projectGitUrl",
+      "worktree",
+      "worktreeName",
+      "worktreeBaseRef",
+      "attachments",
+      "attachAs",
+      "collect",
+      "outputSchema",
+      "groupId"
+    ],
+    "sessions_yield": [
+      "waitFor",
+      "message",
+      "acknowledgment"
+    ],
+    "skill_workshop": [
+      "action",
+      "proposal_id",
+      "artifact_path",
+      "name",
+      "query",
+      "status",
+      "limit",
+      "description",
+      "skill_name",
+      "old_string",
+      "new_string",
+      "proposal_content",
+      "support_files",
+      "goal",
+      "evidence",
+      "reason",
+      "expected_revision_hash",
+      "correlation_id"
+    ],
+    "subagents": [
+      "action",
+      "recentMinutes",
+      "taskId",
+      "taskIds",
+      "timeoutSeconds"
+    ],
+    "terminal": [
+      "action",
+      "sessionId",
+      "data",
+      "cols",
+      "rows"
+    ],
+    "theme": [
+      "action",
+      "id",
+      "mode",
+      "definition",
+      "apply"
+    ],
+    "update_goal": [
+      "status",
+      "note"
+    ],
+    "view_image": [
+      "prompt",
+      "path",
+      "paths",
+      "maxBytesMb",
+      "maxImages"
+    ],
+    "web_fetch": [
+      "url",
+      "extractMode",
+      "maxChars"
+    ],
+    "web_search": [
+      "query",
+      "count",
+      "country",
+      "language",
+      "freshness",
+      "date_after",
+      "date_before",
+      "search_lang",
+      "ui_lang",
+      "domain_filter",
+      "max_tokens",
+      "max_tokens_per_page"
+    ],
+    "write": [
+      "path",
+      "content"
+    ]
+  },
+  "2026.9.6+toolSearch=code": {
+    "apply_patch": [
+      "input"
+    ],
+    "edit": [
+      "path",
+      "edits"
+    ],
+    "exec": [
+      "title",
+      "command",
+      "workdir",
+      "env",
+      "yieldMs",
+      "background",
+      "timeoutSeconds",
+      "pty",
+      "elevated",
+      "host",
+      "ask",
+      "node"
+    ],
+    "ls": [
+      "path",
+      "limit",
+      "after"
+    ],
+    "process": [
+      "action",
+      "sessionId",
+      "data",
+      "keys",
+      "hex",
+      "literal",
+      "text",
+      "bracketed",
+      "eof",
+      "offset",
+      "limit",
+      "timeout"
+    ],
+    "read": [
+      "path",
+      "offset",
+      "limit",
+      "cursor",
+      "optional"
+    ],
+    "sessions_yield": [
+      "waitFor",
+      "message",
+      "acknowledgment"
+    ],
+    "tool_search_code": [
+      "code"
+    ],
+    "view_image": [
+      "prompt",
+      "path",
+      "paths",
+      "maxBytesMb",
+      "maxImages"
+    ],
+    "write": [
+      "path",
+      "content"
+    ]
+  },
+  "2026.9.6+codeMode=true": {
+    "exec": [
+      "title",
+      "code",
+      "restartSafe"
+    ],
+    "sessions_yield": [
+      "waitFor",
+      "message",
+      "acknowledgment"
+    ],
+    "view_image": [
+      "prompt",
+      "path",
+      "paths",
+      "maxBytesMb",
+      "maxImages"
+    ],
+    "wait": [
+      "runId"
+    ]
+  },
+  "2026.9.9": {
+    "apply_patch": [
+      "input"
+    ],
+    "edit": [
+      "path",
+      "edits"
+    ],
+    "exec": [
+      "title",
+      "command",
+      "workdir",
+      "env",
+      "yieldMs",
+      "background",
+      "timeoutSeconds",
+      "pty",
+      "elevated",
+      "host",
+      "ask",
+      "node"
+    ],
+    "ls": [
+      "path",
+      "limit",
+      "after"
+    ],
+    "process": [
+      "action",
+      "sessionId",
+      "data",
+      "keys",
+      "hex",
+      "literal",
+      "text",
+      "bracketed",
+      "eof",
+      "offset",
+      "limit",
+      "timeout"
+    ],
+    "read": [
+      "path",
+      "offset",
+      "limit",
+      "cursor",
+      "optional"
+    ],
+    "sessions_yield": [
+      "waitFor",
+      "message",
+      "acknowledgment"
+    ],
+    "tool_call": [
+      "id",
+      "args"
+    ],
+    "tool_describe": [
+      "id"
+    ],
+    "tool_search": [
+      "query",
+      "limit",
+      "queries"
+    ],
+    "view_image": [
+      "prompt",
+      "path",
+      "paths",
+      "maxBytesMb",
+      "maxImages"
+    ],
+    "write": [
+      "path",
+      "content"
+    ]
+  },
+  "2026.9.9+toolSearch=false": {
+    "agents_wait": [
+      "ids",
+      "timeoutSeconds"
+    ],
+    "apply_patch": [
+      "input"
+    ],
+    "ask_user": [
+      "questions",
+      "timeoutSeconds"
+    ],
+    "automations": [
+      "action",
+      "gatewayUrl",
+      "gatewayToken",
+      "timeoutMs",
+      "includeDisabled",
+      "limit",
+      "offset",
+      "job",
+      "jobId",
+      "id",
+      "in",
+      "text",
+      "mode",
+      "runMode",
+      "contextMessages",
+      "agentId",
+      "sessionKey"
+    ],
+    "conversations_list": [
+      "channel",
+      "query",
+      "limit"
+    ],
+    "conversations_send": [
+      "conversationRef",
+      "message"
+    ],
+    "conversations_turn": [
+      "conversationRef",
+      "message",
+      "timeoutSeconds"
+    ],
+    "create_goal": [
+      "objective",
+      "token_budget"
+    ],
+    "dashboard": [
+      "action",
+      "tabId",
+      "title",
+      "presentation",
+      "position",
+      "tabIds",
+      "name",
+      "after",
+      "sizeW",
+      "sizeH",
+      "size",
+      "pluginKind",
+      "props"
+    ],
+    "edit": [
+      "path",
+      "edits"
+    ],
+    "exec": [
+      "title",
+      "command",
+      "workdir",
+      "env",
+      "yieldMs",
+      "background",
+      "timeoutSeconds",
+      "pty",
+      "elevated",
+      "host",
+      "ask",
+      "node"
+    ],
+    "gateway": [
+      "action",
+      "note"
+    ],
+    "get_goal": [],
+    "intent": [
+      "action",
+      "id",
+      "description",
+      "triggerKeywords",
+      "scope",
+      "senderScope",
+      "expiresAt",
+      "maxFires",
+      "cooldownSeconds",
+      "status"
+    ],
+    "ls": [
+      "path",
+      "limit",
+      "after"
+    ],
+    "memory_get": [
+      "path",
+      "from",
+      "lines",
+      "corpus"
+    ],
+    "memory_search": [
+      "query",
+      "maxResults",
+      "minScore",
+      "corpus"
+    ],
+    "plugins": [
+      "action",
+      "pluginId",
+      "query",
+      "source",
+      "packageName",
+      "version",
+      "reviewToken",
+      "acknowledgeInstallPolicyWarning"
+    ],
+    "portal": [
+      "action",
+      "port",
+      "title",
+      "description",
+      "path",
+      "id",
+      "environmentId"
+    ],
+    "presence": [
+      "action",
+      "person",
+      "deviceId",
+      "include",
+      "limit"
+    ],
+    "process": [
+      "action",
+      "sessionId",
+      "data",
+      "keys",
+      "hex",
+      "literal",
+      "text",
+      "bracketed",
+      "eof",
+      "offset",
+      "limit",
+      "timeout"
+    ],
+    "progress_card": [
+      "markdown",
+      "plan"
+    ],
+    "read": [
+      "path",
+      "offset",
+      "limit",
+      "cursor",
+      "optional"
+    ],
+    "secrets": [
+      "action",
+      "name",
+      "kind",
+      "allowedHosts",
+      "reason",
+      "timeoutSeconds"
+    ],
+    "session_status": [
+      "sessionKey",
+      "model",
+      "changesSince"
+    ],
+    "sessions": [
+      "action",
+      "profileId",
+      "offset",
+      "sessionKey",
+      "targets",
+      "expectedSessionId",
+      "runId",
+      "clearQueued",
+      "deleteTranscript",
+      "label",
+      "icon",
+      "color",
+      "group",
+      "statusNote",
+      "attention",
+      "ttlMinutes",
+      "pinned",
+      "archived",
+      "model",
+      "thinkingLevel",
+      "ownerType",
+      "ownerId",
+      "names",
+      "name",
+      "to"
+    ],
+    "sessions_history": [
+      "sessionKey",
+      "limit",
+      "offset",
+      "pendingBefore",
+      "messageId",
+      "sessionId",
+      "includeTools"
+    ],
+    "sessions_list": [
+      "kinds",
+      "limit",
+      "offset",
+      "activeMinutes",
+      "activeOnly",
+      "excludeSubagents",
+      "relationship",
+      "ownerId",
+      "creatorId",
+      "projectId",
+      "workspaceDir",
+      "group",
+      "pinned",
+      "messageLimit",
+      "label",
+      "agentId",
+      "search",
+      "archived",
+      "includeDerivedTitles",
+      "includeLastMessage"
+    ],
+    "sessions_search": [
+      "query",
+      "sessionKey",
+      "limit"
+    ],
+    "sessions_send": [
+      "sessionKey",
+      "label",
+      "agentId",
+      "message",
+      "timeoutSeconds",
+      "watch",
+      "mode"
+    ],
+    "sessions_spawn": [
+      "task",
+      "taskName",
+      "label",
+      "runtime",
+      "agentId",
+      "model",
+      "runTimeoutSeconds",
+      "thinking",
+      "cwd",
+      "mode",
+      "cleanup",
+      "expectsCompletionMessage",
+      "completionTarget",
+      "sandbox",
+      "context",
+      "lightContext",
+      "fastMode",
+      "placement",
+      "visible",
+      "group",
+      "projectId",
+      "projectGitUrl",
+      "worktree",
+      "worktreeName",
+      "worktreeBaseRef",
+      "attachments",
+      "attachAs",
+      "collect",
+      "outputSchema",
+      "groupId"
+    ],
+    "sessions_yield": [
+      "waitFor",
+      "message",
+      "acknowledgment"
+    ],
+    "skill_workshop": [
+      "action",
+      "proposal_id",
+      "artifact_path",
+      "name",
+      "query",
+      "status",
+      "limit",
+      "description",
+      "skill_name",
+      "old_string",
+      "new_string",
+      "proposal_content",
+      "support_files",
+      "goal",
+      "evidence",
+      "reason",
+      "expected_revision_hash",
+      "correlation_id"
+    ],
+    "subagents": [
+      "action",
+      "recentMinutes",
+      "runId",
+      "runIds",
+      "timeoutSeconds"
+    ],
+    "terminal": [
+      "action",
+      "sessionId",
+      "data",
+      "cols",
+      "rows"
+    ],
+    "theme": [
+      "action",
+      "user",
+      "id",
+      "mode",
+      "definition",
+      "apply"
+    ],
+    "update_goal": [
+      "status",
+      "note"
+    ],
+    "view_image": [
+      "prompt",
+      "path",
+      "paths",
+      "maxBytesMb",
+      "maxImages"
+    ],
+    "web_fetch": [
+      "url",
+      "extractMode",
+      "maxChars"
+    ],
+    "web_search": [
+      "query",
+      "count",
+      "country",
+      "language",
+      "freshness",
+      "date_after",
+      "date_before",
+      "search_lang",
+      "ui_lang",
+      "domain_filter",
+      "max_tokens",
+      "max_tokens_per_page"
+    ],
+    "write": [
+      "path",
+      "content"
+    ]
+  },
+  "2026.9.9+toolSearch=directory": {
+    "apply_patch": [
+      "input"
+    ],
+    "edit": [
+      "path",
+      "edits"
+    ],
+    "exec": [
+      "title",
+      "command",
+      "workdir",
+      "env",
+      "yieldMs",
+      "background",
+      "timeoutSeconds",
+      "pty",
+      "elevated",
+      "host",
+      "ask",
+      "node"
+    ],
+    "ls": [
+      "path",
+      "limit",
+      "after"
+    ],
+    "process": [
+      "action",
+      "sessionId",
+      "data",
+      "keys",
+      "hex",
+      "literal",
+      "text",
+      "bracketed",
+      "eof",
+      "offset",
+      "limit",
+      "timeout"
+    ],
+    "read": [
+      "path",
+      "offset",
+      "limit",
+      "cursor",
+      "optional"
+    ],
+    "sessions_yield": [
+      "waitFor",
+      "message",
+      "acknowledgment"
+    ],
+    "tool_call": [
+      "id",
+      "args"
+    ],
+    "tool_describe": [
+      "id"
+    ],
+    "tool_search": [
+      "query",
+      "limit",
+      "queries"
+    ],
+    "view_image": [
+      "prompt",
+      "path",
+      "paths",
+      "maxBytesMb",
+      "maxImages"
+    ],
+    "write": [
+      "path",
+      "content"
+    ]
+  },
+  "2026.9.9+codeMode=true": {
+    "exec": [
+      "title",
+      "code",
+      "restartSafe"
+    ],
+    "sessions_yield": [
+      "waitFor",
+      "message",
+      "acknowledgment"
+    ],
+    "view_image": [
+      "prompt",
+      "path",
+      "paths",
+      "maxBytesMb",
+      "maxImages"
+    ],
+    "wait": [
+      "runId"
+    ]
+  },
+  "2026.9.6 full profile (package schemas)": {
+    "message": [
+      "action",
+      "message",
+      "media",
+      "filename",
+      "buffer",
+      "caption",
+      "attachments"
+    ],
+    "show_widget": [
+      "title",
+      "widget_code",
+      "kind",
+      "name",
+      "pin",
+      "tab",
+      "size",
+      "presentation"
+    ],
+    "x_search": [
+      "query",
+      "allowed_x_handles",
+      "excluded_x_handles",
+      "from_date",
+      "to_date",
+      "enable_image_understanding",
+      "enable_video_understanding"
+    ],
+    "code_execution": [
+      "task"
+    ],
+    "image_generate": [
+      "action",
+      "prompt",
+      "image",
+      "images",
+      "model",
+      "filename",
+      "size",
+      "aspectRatio",
+      "resolution",
+      "quality",
+      "outputFormat",
+      "background",
+      "openai",
+      "fal",
+      "count",
+      "timeoutMs"
+    ],
+    "music_generate": [
+      "action",
+      "prompt",
+      "lyrics",
+      "instrumental",
+      "image",
+      "images",
+      "model",
+      "durationSeconds",
+      "format",
+      "filename"
+    ],
+    "video_generate": [
+      "action",
+      "prompt",
+      "image",
+      "images",
+      "imageRoles",
+      "video",
+      "videos",
+      "videoRoles",
+      "audioRef",
+      "audioRefs",
+      "audioRoles",
+      "model",
+      "filename",
+      "size",
+      "aspectRatio",
+      "resolution",
+      "durationSeconds",
+      "audio",
+      "watermark",
+      "providerOptions",
+      "timeoutMs"
+    ],
+    "tts": [
+      "text",
+      "channel",
+      "timeoutMs"
+    ],
+    "pdf": [
+      "prompt",
+      "pdf",
+      "pdfs",
+      "pages",
+      "password",
+      "model",
+      "maxBytesMb"
+    ],
+    "browser": [
+      "action",
+      "target",
+      "node",
+      "profile",
+      "browser",
+      "systemProfile",
+      "targetUrl",
+      "path",
+      "paths",
+      "url",
+      "text",
+      "fn",
+      "request",
+      "kind"
+    ],
+    "computer": [
+      "action",
+      "gatewayUrl",
+      "gatewayToken",
+      "timeoutMs",
+      "target",
+      "node",
+      "environmentId"
+    ],
+    "mobile_ui": [
+      "action",
+      "gatewayUrl",
+      "gatewayToken",
+      "timeoutMs",
+      "node",
+      "snapshotId",
+      "mobileAction",
+      "confirmed"
+    ],
+    "canvas": [
+      "action",
+      "gatewayUrl",
+      "gatewayToken",
+      "timeoutMs",
+      "node"
+    ],
+    "openclaw": [
+      "message",
+      "sessionId"
+    ],
+    "github_publish": [
+      "title",
+      "body"
+    ],
+    "nodes": [
+      "action",
+      "node"
+    ]
+  }
+}

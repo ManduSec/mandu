@@ -1,0 +1,18 @@
+{
+  "comment": "Mirrors arbiter/tsconfig.json and interceptors/anthropic-proxy/tsconfig.json (NodeNext + strict). Scoped to the fs-sync package. The arbiter is a sibling package owned by another sub-agent; fs-sync declares the narrow arbiter surface it needs structurally (src/arbiter-client.ts) rather than importing the arbiter build, so this package typechecks standalone. Tests use a mock arbiter and never resolve the real client.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

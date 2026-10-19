@@ -1,0 +1,21 @@
+# Build-context filter for an image built from the repo root (the maintainers'
+# e2e rig; packaging/docker/Dockerfile.ci has its own, Dockerfile.ci.dockerignore,
+# which BuildKit prefers). Keep the context to source + lockfiles: deps are
+# installed inside the image, and nothing secret or host-generated may leak into
+# layers.
+**/node_modules
+.git
+interceptors/target
+eval/agentdojo/.venv
+
+# secrets / host-session artifacts (gitignored, but docker build reads the
+# working tree — exclude them explicitly)
+secrets.local.json
+secrets.json
+.env
+.mcp.json
+
+# A Wazuh rig's certificate output: its cert tool writes a root-owned, mode-500
+# dir the docker context sender cannot even open — the whole context load fails
+# on it.
+**/wazuh_indexer_ssl_certs

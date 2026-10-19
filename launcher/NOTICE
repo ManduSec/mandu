@@ -1,0 +1,111 @@
+Mandu
+Copyright (c) 2026 Byoungyoung Lee, Taehyun Kang, Woohyuk Choi, Juhee Kim,
+Youngmin Kim (the DualView authors).
+
+Licensed under the Apache License, Version 2.0 (see LICENSE), except the
+enterprise components listed in section 2. See
+docs/design/distribution/licensing.md.
+
+------------------------------------------------------------------------------
+1. Code derived from DualView (adfi-openclaw)
+------------------------------------------------------------------------------
+
+Mandu is the OS-level generalization of DualView (https://github.com/compsec-snu/dualview,
+the "adfi-openclaw" OpenClaw plugin), by Juhee Kim, Woohyuk Choi, Taehyun Kang,
+Youngmin Kim and Byoungyoung Lee. The DualView authors have agreed (2026-10-09)
+that the DualView code carried into Mandu is licensed here under the same
+Apache-2.0 terms as the rest of this repository. Each file below keeps a
+provenance header naming its DualView origin (the reuse convention in CONTRIBUTING.md).
+
+Files derived from or adapted from DualView:
+
+  arbiter/policy/claude-code-inbound.ts
+  arbiter/policy/exec-argv-mode.ts
+  arbiter/policy/exec-identifier.ts
+  arbiter/policy/exec-inbound.ts
+  arbiter/policy/exec-outbound.ts
+  arbiter/policy/load-policy.ts
+  arbiter/policy/policy-engine.ts
+  arbiter/policy/policy-interface.ts
+  arbiter/policy/resolve-schema.ts
+  arbiter/policy/schema-types.ts
+  arbiter/policy/script-file-command-expansion.ts
+  arbiter/policy/shell-symbol-resolution.ts
+  arbiter/policy/tool-inbound.ts
+  arbiter/policy/tool-outbound.ts
+  arbiter/policy/tool-overrides.ts
+  arbiter/policy/trust-category.ts
+  arbiter/policy/untrusted-command-execution.ts
+  arbiter/symbol-table/handling-prompt.ts
+  arbiter/symbol-table/index.ts
+  arbiter/symbol-table/symbol-formats.ts
+  arbiter/symbol-table/symbol-format.ts
+  arbiter/symbol-table/symbol-table.ts
+  arbiter/test/integrity/policy.test.ts
+  tests/conformance/lib/assertions.ts
+  tests/conformance/lib/harness.ts
+  tests/conformance/lib/unit_egress_gate.ts
+  tests/conformance/lib/unit_symbolization.ts
+  tests/conformance/run.ts
+  dashboard/src/event-model.ts
+  dashboard/src/server.ts
+  dashboard/src/view-model/assertions.ts
+  eval/agentdojo/attacks_mandu.py
+  eval/lib/corpus.test.ts
+  eval/lib/corpus.ts
+  eval/lib/metrics.ts
+  eval/lib/oracle.ts
+  eval/lib/run-deterministic.ts
+  eval/lib/transcript.ts
+  eval/lib/utility.ts
+  fs-sync/src/view-sync.ts
+  fs-sync/src/git.ts
+  fs-sync/src/human-edit.ts
+  fs-sync/src/index.ts
+  fs-sync/src/layout.ts
+  fs-sync/src/revert.ts
+  fs-sync/src/symbolize.ts
+  tests/lib/assertions.ts
+  interceptors/inspect-mcp/src/inspect-symbol.ts
+  interceptors/inspect-mcp/src/ullm-client.ts
+  interceptors/net-proxy/src/mock-sites.ts
+  interceptors/openclaw-inspect-plugin/index.ts
+  interceptors/openclaw-inspect-plugin/src/inspect-tool.ts
+  interceptors/openclaw-inspect-plugin/src/openclaw-api.ts
+  interceptors/openclaw-inspect-plugin/src/register.ts
+  interceptors/reply-filter/src/filter.ts
+
+Files that name DualView in a comment but carry no DualView code (listed so the
+provenance audit in launcher/test/unit/license-manifest.test.ts stays complete):
+
+  arbiter/test/unit/ipc.test.ts
+  fs-sync/src/arbiter-client.ts
+  tests/lib/claude-history.ts
+  tests/lib/claude-transcript.ts
+  launcher/src/services/fs-view.ts
+  launcher/test/unit/license-manifest.test.ts
+
+------------------------------------------------------------------------------
+2. Enterprise components (not open source)
+------------------------------------------------------------------------------
+
+The SIEM integration (a Wazuh rig and a redacting event exporter) is on the
+enterprise side of the open-core line. It is not part of the open-source
+release, is not covered by the root LICENSE, and carries its own LICENSE
+(docs/design/distribution/licensing.md §6).
+
+------------------------------------------------------------------------------
+3. Third-party material
+------------------------------------------------------------------------------
+
+OpenClaw (https://github.com/openclaw/openclaw), MIT License,
+Copyright (c) 2025 Peter Steinberger. No OpenClaw source is shipped;
+interceptors/openclaw-inspect-plugin/src/openclaw-api.ts declares structural
+TypeScript types against OpenClaw's plugin API surface.
+
+IBM Plex Sans and IBM Plex Mono (Copyright IBM Corp.), SIL Open Font License 1.1:
+latin-subset woff2 files from Fontsource 5.3.0, vendored at
+dashboard/public/fonts/ with each family's license beside them.
+
+npm and crates.io dependencies are fetched at install time under their own
+permissive licenses (MIT / Apache-2.0 / BSD / ISC) and are not vendored here.

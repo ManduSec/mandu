@@ -1,0 +1,15 @@
+{
+  "__doc__": "OpenCode 1.x's `websearch` tool, read STATICALLY (no run, no model) from the compiled opencode-ai 1.18.13 linux-x64 binary (a local install; `strings` over the Bun bundle), 2026-10-17. The 1.18.32 wire capture (agent-tool-schemas-2026-09-27.json) does not advertise it: the registry adds it only for the `opencode` provider or with OPENCODE_ENABLE_EXA / OPENCODE_ENABLE_PARALLEL (or OPENCODE_EXPERIMENTAL) set. Pins OPENCODE_GATE_SURFACE.net.websearch in arbiter/policy/tool-gate-surface.ts. OpenCode 2.0.23 advertises it by default (opencode2-tool-surface-2026-10-05.json).",
+  "build": "opencode-ai 1.18.13 (linux-x64)",
+  "tool": "websearch",
+  "params": ["query", "numResults", "livecrawl", "type", "contextMaxCharacters"],
+  "required": ["query"],
+  "destinations": ["mcp.exa.ai", "search.parallel.ai"],
+  "excerpts": {
+    "schema": "query:Z.String.annotate({description:\"Websearch query\"}),numResults:Z.optional(…),livecrawl:Z.optional(Z.Literals([\"fallback\",\"preferred\"])),type:Z.optional(Z.Literals([\"auto\",\"fast\",\"deep\"])),contextMaxCharacters:Z.optional(…)",
+    "registry": "ToolRegistry.tools … filter((Q)=>{if(Q.id===oe.id)return St(W.providerID,{exa:i.enableExa,parallel:i.enableParallel}); …",
+    "flags": "enableExa:$_(\"OPENCODE_EXPERIMENTAL\")||$_(\"OPENCODE_ENABLE_EXA\")||$_(\"OPENCODE_EXPERIMENTAL_EXA\"),enableParallel:$_(\"OPENCODE_ENABLE_PARALLEL\")||$_(\"OPENCODE_EXPERIMENTAL_PARALLEL\")",
+    "send": "if(n===\"parallel\")return a(r,S,\"web_search\",h,{objective:e.query,search_queries:[e.query],session_id:o.sessionID,…});return a(r,g,\"web_search_exa\",y,{query:e.query,type:e.type||\"auto\",numResults:e.numResults||8,livecrawl:e.livecrawl||\"fallback\",contextMaxCharacters:e.contextMaxCharacters},…)",
+    "hosts": "r0=\"https://mcp.exa.ai/mcp\",O2=\"https://search.parallel.ai/mcp\"; the provider is OPENCODE_WEBSEARCH_PROVIDER, else the enabled one, else picked by a hash of the session id"
+  }
+}
