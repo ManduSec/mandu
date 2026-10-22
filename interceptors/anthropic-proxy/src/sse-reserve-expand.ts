@@ -94,12 +94,14 @@ export interface ReserveExpandOptions {
    *  null. */
   lines: (token: string) => Promise<number | null>;
   /** v2: the relay's terminal columns when it paints v2 heads, else null,
-   *  and the TUI's wrap rule (§17; absent: `ink`).
+   *  the TUI's wrap rule (§17; absent: `ink`) and where it counts a TAB's
+   *  stops from (§19.7; absent: `screen`).
    *  Absent (or `shape` absent): v1 only. */
-  layout?: () => Promise<{ cols: number; rule?: LayoutRule } | null>;
+  layout?: () => Promise<{ cols: number; rule?: LayoutRule; tabs?: "content" } | null>;
   /** v2: the value's shape at content width `width`, head row `first`,
-   *  under the wrap `rule` (absent: `ink`), its TAB stops counted from the
-   *  content area's terminal column `indent` (cols − width, §11.2). */
+   *  under the wrap `rule` (absent: `ink`), its TAB stops counted from
+   *  column `indent` (§11.2: `cols − width`, the content area's terminal
+   *  column, or 0 for a TUI that counts from the content area, §19.7). */
   shape?: (token: string, width: number, first: number, rule?: LayoutRule, indent?: number) => Promise<ReserveShape | null>;
   /** Row cap (reserve-block.ts parseReserveMax). */
   cap: number;
@@ -152,6 +154,9 @@ export class SseReserveExpander {
   private cols = 0;
   /** v2: the TUI's wrap rule (§17), fixed with the mode. */
   private rule: LayoutRule = "ink";
+  /** v2: the TUI counts a TAB's stops from the content area (§19.7), fixed
+   *  with the mode. */
+  private contentTabs = false;
 
   constructor(private readonly opts: ReserveExpandOptions) {}
 
@@ -239,12 +244,14 @@ export class SseReserveExpander {
     if (this.mode !== "unknown") return;
     let cols: number | null = null;
     let rule: LayoutRule = "ink";
+    let contentTabs = false;
     if (this.opts.layout && this.opts.shape) {
       try {
         const l = await this.opts.layout();
         if (l && Number.isInteger(l.cols) && l.cols > 0) {
           cols = l.cols;
           if (l.rule === "terminal") rule = "terminal";
+          contentTabs = l.tabs === "content";
         }
       } catch {
         cols = null;
@@ -254,6 +261,7 @@ export class SseReserveExpander {
       this.mode = "v2";
       this.cols = cols;
       this.rule = rule;
+      this.contentTabs = contentTabs;
     } else {
       this.mode = "v1";
     }
@@ -424,8 +432,10 @@ export class SseReserveExpander {
     if (!validLayout(d.width, d.first)) return null;
     let s: ReserveShape | null = null;
     try {
-      // The content area starts `cols − W` columns in (§11.2: TAB stops).
-      const indent = this.cols > d.width ? this.cols - d.width : 0;
+      // The content area starts `cols − W` columns in (§11.2: TAB stops),
+      // unless the TUI counts its TAB stops from the content area itself
+      // (§19.7: Claude Code), which is `indent` 0.
+      const indent = !this.contentTabs && this.cols > d.width ? this.cols - d.width : 0;
       s = (await this.opts.shape?.(canonical, d.width, d.first, this.rule !== "ink" ? this.rule : undefined, indent)) ?? null;
     } catch {
       s = null;
@@ -601,6 +611,9 @@ export interface ReserveRelay {
   wrap?: boolean;
   /** The agent's TUI wraps its reply by this rule (§17); absent: `ink`. */
   rule?: string;
+  /** Where the agent's TUI counts a reply TAB's stops from (§19.7); absent:
+   *  `screen`. */
+  tabs?: string;
 }
 
 /** The arbiter ops eligibility reads (both optional: absent = no expansion).
@@ -652,6 +665,8 @@ interface RelayVerdict {
   ok: boolean;
   cols: number | null;
   rule: LayoutRule;
+  /** The TUI counts a TAB's stops from the content area (§19.7). */
+  contentTabs: boolean;
 }
 
 /**
@@ -685,18 +700,19 @@ export class ReserveEligibility {
 
   /** This session's relay verdict (cached; a timeout or error is not). */
   private async relayVerdict(): Promise<RelayVerdict> {
-    if (!this.possible) return { ok: false, cols: null, rule: "ink" };
+    if (!this.possible) return { ok: false, cols: null, rule: "ink", contentTabs: false };
     const t = this.now();
     if (this.relay && t - this.relay.at < this.relayTtlMs) return this.relay.v;
     const r = await withDeadline(this.arbiter.sessionRelay!(this.opts.sessionKey!), this.timeoutMs);
     // A timeout or error is not cached: the next response asks again.
-    if (r === TIMEOUT) return { ok: false, cols: null, rule: "ink" };
+    if (r === TIMEOUT) return { ok: false, cols: null, rule: "ink", contentTabs: false };
     const ok = r !== null && typeof r === "object" && r.mode === "pty" && r.reserve === true;
     const cols = ok && r!.wrap === true && typeof r!.cols === "number" && Number.isInteger(r!.cols) && r!.cols > 0
       ? r!.cols
       : null;
     const rule: LayoutRule = ok && r!.rule === "terminal" ? "terminal" : "ink";
-    const v = { ok, cols, rule };
+    const contentTabs = ok && r!.tabs === "content";
+    const v = { ok, cols, rule, contentTabs };
     this.relay = { at: t, v };
     return v;
   }
@@ -707,11 +723,16 @@ export class ReserveEligibility {
   }
 
   /** The `layout` callback for SseReserveExpander: the relay's columns when
-   *  it paints v2 heads, with the TUI's wrap rule (§17), else null (v1). */
-  readonly layout = async (): Promise<{ cols: number; rule?: LayoutRule } | null> => {
+   *  it paints v2 heads, with the TUI's wrap rule (§17) and TAB origin
+   *  (§19.7), else null (v1). */
+  readonly layout = async (): Promise<{ cols: number; rule?: LayoutRule; tabs?: "content" } | null> => {
     const v = await this.relayVerdict();
     if (!v.ok || v.cols === null) return null;
-    return v.rule === "ink" ? { cols: v.cols } : { cols: v.cols, rule: v.rule };
+    return {
+      cols: v.cols,
+      ...(v.rule !== "ink" ? { rule: v.rule } : {}),
+      ...(v.contentTabs ? { tabs: "content" as const } : {}),
+    };
   };
 
   /** One bounded, cached symbolShape call. */

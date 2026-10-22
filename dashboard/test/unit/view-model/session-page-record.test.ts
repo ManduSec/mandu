@@ -22,7 +22,8 @@
  *   - "Your secrets" says the AI read the file's real value before the label,
  *     both moments as times, and lists the file ONCE (two tokens, one file);
  *     never "only a placeholder" after the label: the AI's 10:41 reply quoted
- *     the file, and the next line says the AI's own words are not masked;
+ *     the file, and the next line says the AI's own words are not masked,
+ *     then one says to change it if it holds a key or a password;
  *     under the person's home folder it names it `~/mandu-try/…`, as the
  *     tour's screenshot shows it, never with the account name;
  *   - each time on a "Your secrets" card opens the step it tells of (the
@@ -224,10 +225,12 @@ test("Your secrets: the file once, read as it was at 10:41, a placeholder from 1
   // "token = \"FAKE-…\""), and the proxies forward its own replies as
   // written: never "only a placeholder" after the label.
   assert.equal(lines[1], "warn: Anything the AI wrote from its real value went back to the AI as written with each later request: Mandu does not mask the AI's own words.");
+  // The value is out: the card says to change it, in the later label's words.
+  assert.equal(lines[2], "warn: If it holds a key or a password, change it: the AI saw it as it was.");
   assert.ok(!lines.some((l) => /never the real value|only a placeholder/.test(l)), lines.join("\n"));
-  // The secret masked from the start keeps its claim, and no own-words line.
+  // The secret masked from the start keeps its claim, and no own-words or advice line.
   assert.match(words(secrets.secrets[0]!.lines[0]!.parts), /^The AI got only a placeholder, never the real value\./);
-  assert.ok(!secrets.secrets[0]!.lines.some((l) => /own words/.test(words(l.parts))));
+  assert.ok(!secrets.secrets[0]!.lines.some((l) => /own words|change it|Change this key/.test(words(l.parts))));
 });
 
 test("Your secrets: each time opens its step under What happened: 10:38 the block, 10:39 the send, 10:41 the Read; \"from 10:42 on\" is a request, no step", () => {

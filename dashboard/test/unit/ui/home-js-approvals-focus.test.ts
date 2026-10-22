@@ -3,7 +3,10 @@
  * opens the same question in Approvals, marked (dashboard.md §4.25
  * "Details"): the link, the mark and its survival across a repaint, the
  * already-answered and gone cases, answering the marked card, a
- * notification click, and a plain Approvals visit marking nothing.
+ * notification click, and a plain Approvals visit marking nothing. A link to
+ * a rule change (§4.25 *Details*): a waiting request's card, a change made
+ * under Rule changes, the change an approved request made, and the words for
+ * one that is gone or past the rows drawn.
  *
  * Drives the PRODUCT page script (public/js/home.js) in jsdom over the shared
  * fetch stub (home-js-fixtures.ts). Axes: none (display only). Mandu-new test.
@@ -130,6 +133,125 @@ test("a plain visit to Approvals (the nav link) marks nothing and shows no note"
   (doc.querySelector('#nav [data-page-link="approvals"]') as any).click();
   await tick();
   assert.equal(where(window), "/mandu/approvals");
+  assert.deepEqual(marked(doc), []);
+  assert.equal(note(doc).hidden, true);
+});
+
+// ── A link to a rule change (§4.25 *Details*) ────────────────────────────────
+
+const PENDING = "GET policy/proposals?status=pending";
+const CHANGES = "GET policy/changes?limit=21";
+const request = (id: string) => ({
+  id, status: "pending", requester: "Your agent", session: "s1", createdAt: Date.now() - 60_000,
+  headline: "Your agent wants to change a rule",
+  rows: [[{ kind: "text", text: "Let " }, { kind: "code", text: "pypi.org" }, { kind: "text", text: " be reached" }]],
+  wouldLet: [], capped: false, overBroad: false, warnings: [], reason: null, onDisk: false,
+});
+const change = (id: string, over: Record<string, unknown> = {}) => ({
+  id, sentence: "Your agent tightened your rules", session: null, createdAt: Date.now() - 120_000, undone: false, undoable: true,
+  rows: [[{ kind: "text", text: "Make " }, { kind: "code", text: "/x.pem" }, { kind: "text", text: " a secret no AI may read" }]], ...over,
+});
+const at = (id: string) => "http://127.0.0.1:4500/mandu/approvals/" + encodeURIComponent(id);
+const ROUTES = {
+  [PENDING]: { proposals: [request("pp-000001"), request("pp-000002")] },
+  [CHANGES]: { changes: [change("pc-000002"), change("pc-000001", { sentence: "You approved a change your agent asked for", proposalId: "pp-000009" })] },
+};
+const ruleRow = (doc: any, id: string) => [...doc.querySelectorAll("#approvals-rule-history .row")].find((r: any) => r.dataset.id === id) as any;
+
+test("a waiting request: its card is marked, no note", async () => {
+  const { doc } = load({ url: at("pp-000002"), homeVm: two(), routes: ROUTES });
+  await tick(40);
+  assert.deepEqual(marked(doc), ["pp-000002"]);
+  assert.equal(note(doc).hidden, true);
+});
+
+test("a change made: its Rule changes row is marked, no note", async () => {
+  const { doc } = load({ url: at("pc-000002"), homeVm: two(), routes: ROUTES });
+  await tick(40);
+  assert.deepEqual(marked(doc), ["pc-000002"]);
+  assert.ok(ruleRow(doc, "pc-000002").classList.contains("focus"));
+  assert.equal(note(doc).hidden, true);
+});
+
+test("an approved request: the change it made is marked, and the note says so", async () => {
+  const { doc } = load({ url: at("pp-000009"), homeVm: two(), routes: ROUTES });
+  await tick(40);
+  assert.deepEqual(marked(doc), ["pc-000001"], "the row whose request it was");
+  assert.equal(note(doc).hidden, false);
+  assert.equal(note(doc).textContent, "That rule change was already answered. The change it made is marked below, under Rule changes.");
+});
+
+test("a rule change neither waiting nor listed: a request changed nothing; a change is not among those listed", async () => {
+  const gone = load({ url: at("pp-000404"), homeVm: two(), routes: ROUTES });
+  await tick(40);
+  assert.deepEqual(marked(gone.doc), []);
+  assert.equal(note(gone.doc).textContent, "That rule change is no longer waiting, and it changed none of your rules.");
+  const missing = load({ url: at("pc-000404"), homeVm: two(), routes: ROUTES });
+  await tick(40);
+  assert.deepEqual(marked(missing.doc), []);
+  assert.equal(note(missing.doc).hidden, false);
+  assert.equal(note(missing.doc).textContent, "That rule change is not among the changes listed.");
+});
+
+test("past the newest 20: the note says Show more reaches older ones, for a change and a request alike", async () => {
+  const many = Array.from({ length: 21 }, (_, i) => change("pc-" + String(100 + i).padStart(6, "0")));
+  for (const id of ["pc-000404", "pp-000404"]) {
+    const { doc } = load({ url: at(id), homeVm: two(), routes: { ...ROUTES, [CHANGES]: { changes: many } } });
+    await tick(40);
+    assert.ok(doc.querySelector("#approvals-rule-history .changes-more"), "Show more is offered");
+    assert.deepEqual(marked(doc), []);
+    assert.equal(note(doc).textContent, "That rule change is not among the changes listed. Show more, under Rule changes, reaches older ones.", id);
+  }
+});
+
+test("a rule change's id is compared as a value: one shaped like a selector marks nothing and throws nothing", async () => {
+  for (const id of ['pc-"],*,[x="', 'pp-"],.row,[x="']) {
+    const { doc, err } = load({ url: at(id), homeVm: two(), routes: ROUTES });
+    await tick(40);
+    assert.equal(err, null);
+    assert.deepEqual(marked(doc), [], id);
+    assert.match(note(doc).textContent, /^That rule change (is not among the changes listed|is no longer waiting)/);
+  }
+});
+
+test("nothing is said before the Rule changes list is read; the mark comes when it lands, and a redraw keeps it", async () => {
+  let release!: () => void;
+  const late = new Promise<void>((r) => { release = r; });
+  let list = ROUTES[CHANGES];
+  const { doc, window } = load({ url: at("pc-000001"), homeVm: two(), routes: { ...ROUTES, [CHANGES]: () => late.then(() => list) } });
+  await tick(40);
+  assert.equal(note(doc).hidden, true, "no 'not among the changes' while the list is out");
+  assert.deepEqual(marked(doc), []);
+  release();
+  await tick(40);
+  assert.deepEqual(marked(doc), ["pc-000001"], "marked once the list landed after Home's answer");
+  const before = ruleRow(doc, "pc-000001");
+  list = { changes: [change("pc-000003"), ...ROUTES[CHANGES].changes] };
+  // A poll whose list changed draws the rows again: the mark comes back.
+  Object.defineProperty(doc, "visibilityState", { value: "visible", configurable: true });
+  doc.dispatchEvent(new window.Event("visibilitychange"));
+  await tick(40);
+  assert.ok(ruleRow(doc, "pc-000003"), "the new row is drawn");
+  assert.notEqual(ruleRow(doc, "pc-000001"), before, "the rows were drawn again");
+  assert.deepEqual(marked(doc), ["pc-000001"]);
+});
+
+test("answering the marked request drops it from the URL, and the note never calls your answer an earlier one", async () => {
+  let pending = [request("pp-000001"), request("pp-000002")];
+  const { doc, window } = load({
+    url: at("pp-000002"), homeVm: two(),
+    routes: {
+      ...ROUTES,
+      [PENDING]: () => ({ proposals: pending }),
+      "POST policy/proposals/pp-000002": () => { pending = [request("pp-000001")]; return { proposal: { ...request("pp-000002"), status: "denied" } }; },
+    },
+  });
+  await tick(40);
+  assert.deepEqual(marked(doc), ["pp-000002"]);
+  const card = [...doc.querySelectorAll("#approvals-proposals .proposal")].find((c: any) => c.dataset.id === "pp-000002") as any;
+  ([...card.querySelectorAll("button")].find((b: any) => b.textContent === "Not now") as any).click();
+  await tick(40);
+  assert.equal(where(window), "/mandu/approvals", "the request left the URL");
   assert.deepEqual(marked(doc), []);
   assert.equal(note(doc).hidden, true);
 });

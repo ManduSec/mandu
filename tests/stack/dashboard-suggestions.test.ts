@@ -47,6 +47,14 @@
  * Not a secret dismisses; and no response of the view, nor policy.yaml,
  * holds any of the three values or an 8-character run of one.
  *
+ * The closed card's line (dashboard.md §4.25r *The closed card says whether
+ * any wait*), on the served page in jsdom over the same wiring: before any
+ * scan "None waiting. Press Review…"; after a scan of a project with no key,
+ * "None waiting. Mandu last looked at <when>: <the scan's summary>"; after a
+ * key is committed and the project scanned again, "Possible keys in this
+ * project's … that no rule covers yet." beside the count; no page or answer
+ * holds the key or a run of it.
+ *
  * Axes stated: secrets (confidentiality ON, integrity OFF).
  */
 import { test, after } from "node:test";
@@ -63,7 +71,9 @@ import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
 import type { EventSource, SessionRef } from "../../dashboard/src/event-source.js";
 import type { ManduEvent } from "../../dashboard/src/event-model.js";
-import { ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { ADMIN_COOKIE, ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
+import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { stateAxes } from "../lib/axes.js";
 import { randomSecretBody } from "../../arbiter/test/helpers/random-secret.js";
 
@@ -165,7 +175,7 @@ test("Suggested view over the real arbiter: scan, list, Save applies the lock, N
   const adoptedBase = `http://127.0.0.1:${await adoptedServer.listen(0)}`;
   const bodies: string[] = [];
   const call = async (method: "GET" | "POST", path: string, body?: unknown, headers: Record<string, string> = CSRF_ADMIN, at = base) => {
-    const r = await fetch(at + path, { method, headers: { ...headers, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const r = await pageFetch(at + path, { method, headers: { ...headers, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
     const text = await r.text();
     bodies.push(text);
     return { status: r.status, body: JSON.parse(text) as any };
@@ -284,7 +294,7 @@ test("Suggested view, a history git could not fully read: the page says part cou
   const base = `http://127.0.0.1:${await server.listen(0)}`;
   const bodies: string[] = [];
   try {
-    const r = await fetch(`${base}/api/suggestions/scan`, { method: "POST", headers: { ...CSRF_ADMIN, "Content-Type": "application/json" }, body: "{}" });
+    const r = await pageFetch(`${base}/api/suggestions/scan`, { method: "POST", headers: { ...CSRF_ADMIN, "Content-Type": "application/json" }, body: "{}" });
     const text = await r.text();
     bodies.push(text);
     assert.equal(r.status, 200, text);
@@ -369,7 +379,7 @@ test("Suggested view, workspace scan: a file found as it is now is listed, appli
   const base = `http://127.0.0.1:${await server.listen(0)}`;
   const bodies: string[] = [];
   const call = async (method: "GET" | "POST", path: string, body?: unknown) => {
-    const r = await fetch(base + path, { method, headers: { ...CSRF_ADMIN, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const r = await pageFetch(base + path, { method, headers: { ...CSRF_ADMIN, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
     const text = await r.text();
     bodies.push(text);
     return { status: r.status, body: JSON.parse(text) as any };
@@ -448,6 +458,103 @@ test("Suggested view, workspace scan: a file found as it is now is listed, appli
     await server.close();
     wired.close();
     gate.close();
+    await arbiter.close();
+  }
+});
+
+test("Keys Mandu found's closed card over the real arbiter: never looked, then none waiting and when Mandu looked, then where the keys were found; no value on the page", { timeout: 180_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-dash-suggest-line-"));
+  dirs.push(dir);
+  const home = join(dir, "home");
+  const repo = join(home, "proj");
+  mkdirSync(repo, { recursive: true });
+  const gitEnv = { ...process.env, HOME: home, GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
+  const git = (...a: string[]): string => execFileSync("git", a, { cwd: repo, env: gitEnv, encoding: "utf8" });
+  git("init", "-q", "-b", "main");
+  writeFileSync(join(repo, "README.md"), "a project with no key\n");
+  git("add", "."); git("commit", "-qm", "init");
+  const policy = join(dir, "policy.yaml");
+  writeFileSync(policy, "version: 1\n");
+  const dataSock = join(dir, "arbiter.sock");
+  const adminSock = join(dir, "admin.sock");
+  const arbiter = new ArbiterServer({
+    socketPath: dataSock, adminSocketPath: adminSock, dbPath: join(dir, "mandu.db"), eventDir: join(dir, "events"),
+    policyPath: policy, policyPollMs: 0, integrity: false, confidentiality: true, log: () => {},
+  });
+  await arbiter.listen();
+  const wired = await makeApprovalsArbiter(dataSock, () => ({ socketPath: adminSock }));
+  assert.ok(wired?.policyDoc);
+  const server = new DashboardServer({
+    source: sessionIn(repo), policyDocArbiter: wired.policyDoc, fileBrowserHome: home,
+    configEnv: { MANDU_HOME: join(dir, "mandu-home") }, log: () => {}, ...ADMIN_OPTS,
+  });
+  const base = `http://127.0.0.1:${await server.listen(0)}`;
+  const bodies: string[] = [];
+  const pages: string[] = [];
+  const call = async (method: "GET" | "POST", path: string, body?: unknown) => {
+    const r = await pageFetch(base + path, { method, headers: { ...CSRF_ADMIN, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const text = await r.text();
+    bodies.push(text);
+    return { status: r.status, body: JSON.parse(text) as any };
+  };
+  /** A scan of the project the recorded session worked in, followed to its end. */
+  const scanned = async () => {
+    const started = await call("POST", "/api/suggestions/scan", {});
+    assert.equal(started.status, 200, JSON.stringify(started.body));
+    let scan = started.body.scan;
+    for (const end = Date.now() + 60_000; scan.running && Date.now() < end; await new Promise((r) => setTimeout(r, 50))) {
+      scan = (await call("GET", "/api/suggestions")).body.scan;
+    }
+    assert.equal(scan.running, false, "the scan ended");
+    assert.equal(scan.error, null);
+    return scan;
+  };
+  /** The closed card's line and badge on the served Rules page, once the
+   *  suggestions were read (the line no longer says the static words). */
+  const card = async () => {
+    let seen: { line: string; badge: string; closed: boolean } | null = null;
+    await servedProductPage(base, "/rules", (doc) => !/^Mandu looks for keys/.test(doc.getElementById("suggested-line")?.textContent ?? "Mandu looks"), async (doc) => {
+      seen = { line: doc.getElementById("suggested-line").textContent, badge: doc.getElementById("files-suggested-count").textContent, closed: doc.getElementById("files-suggested-view").hidden };
+      pages.push(doc.body.textContent ?? "");
+    }, { headers: { Cookie: ADMIN_COOKIE } });
+    assert.ok(seen);
+    return seen as { line: string; badge: string; closed: boolean };
+  };
+  try {
+    // Before any scan: none waiting, and how to look.
+    const never = await card();
+    assert.equal(never.closed, true, "the card is closed until Review");
+    assert.equal(never.line, "None waiting. Press Review, then Scan for keys, to look through the projects your agents worked in.");
+    assert.equal(never.badge, "");
+
+    // A scan of the project with no key: none waiting, and when Mandu looked.
+    const clean = await scanned();
+    assert.equal(clean.filed, 0, clean.summary);
+    assert.ok(Number.isFinite(clean.finishedAt), "the scan says when it finished");
+    const looked = await card();
+    assert.match(looked.line, /^None waiting\. Mandu last looked at [A-Z][a-z]{2} \d{1,2}(?:, \d{4})?, \d{2}:\d{2} · just now: /);
+    assert.ok(looked.line.endsWith(": " + clean.summary), `the scan's own summary: ${looked.line}`);
+    assert.match(clean.summary, /^Scanned the git history of ~\/proj.*Nothing new to review\./);
+    assert.equal(looked.badge, "");
+
+    // A key committed, and the project scanned again: where it was found.
+    writeFileSync(join(repo, "config.py"), `API_TOKEN = "${TOKEN}"\n`);
+    git("add", "."); git("commit", "-qm", "add a token");
+    const found = await scanned();
+    assert.ok(found.filed >= 1, found.summary);
+    const count = (await call("GET", "/api/suggestions")).body.count;
+    assert.ok(count >= 1);
+    const waiting = await card();
+    assert.match(waiting.line, /^Possible keys in this project's (?:files and git history|git history|files) that no rule covers yet\.$/);
+    assert.equal(waiting.badge, String(count));
+
+    // The oracle: no answer and no page holds the key or a run of it.
+    assert.equal(pages.length, 3);
+    noValue("the answers", bodies.join("\n"));
+    noValue("the pages", pages.join("\n"));
+  } finally {
+    await server.close();
+    wired.close();
     await arbiter.close();
   }
 });

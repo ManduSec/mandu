@@ -163,7 +163,7 @@ test("each real answer of the policy server gives the page the words its outcome
     ]);
     const answer = egress === "allow" ? "Mandu answered that it may go there." : egress === "ask" ? "Mandu answered that it would ask you first." : "Mandu answered that it would be blocked.";
     assert.deepEqual(steps.map((s) => s.note), [
-      "Mandu applied it at once, because it only adds protection. You can undo it under Rule changes in Approvals.",
+      "Mandu applied it at once, because it only adds protection. You can undo it in Approvals.",
       "Nothing changed: your rules already said this.",
       "Not applied: it would loosen protection, so Mandu asked for your OK in Approvals.",
       "Mandu did not apply it, so nothing changed.",

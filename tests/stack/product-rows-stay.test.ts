@@ -23,7 +23,12 @@
  *       exits; the poll draws D in Running now, C's row the node already
  *       there, and B over A in Earlier, A's row the node already there;
  *   K4  the oracle: the model never got the value, and no drawn page
- *       carries it or a token.
+ *       carries it or a token;
+ *   K5  a live row names its last step (§4.25 *Agents, not sessions*): E,
+ *       whose launch the launcher recorded 10 minutes ago, asks through the
+ *       proxy and its Running now row reads "started 10 minutes ago · last
+ *       step just now"; after one more model call the poll moves that
+ *       moment in place, E's row the node already there.
  *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON).
  */
@@ -39,7 +44,7 @@ import { ArbiterClient } from "../../arbiter/ipc/client.js";
 import { AnthropicProxy, type UpstreamFetcher } from "../../interceptors/anthropic-proxy/src/proxy.js";
 import { ArbiterClientAdapter } from "../../interceptors/anthropic-proxy/src/arbiter-client.js";
 import { buildTextSse, sseEvent } from "../../interceptors/anthropic-proxy/test/helpers/mock-upstream.js";
-import { emitLauncherEvent, sessionExitEvent } from "../../launcher/src/services/observe.js";
+import { emitLauncherEvent, launchPostureEvent, sessionExitEvent } from "../../launcher/src/services/observe.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import type { HistoryVM } from "../../dashboard/src/view-model/home.js";
@@ -54,6 +59,7 @@ const A = `1791700000-${process.pid}`;
 const B = `1791700100-${process.pid}`;
 const C = `1791700200-${process.pid}`;
 const D = `1791700300-${process.pid}`;
+const E = `1791700400-${process.pid}`;
 const VALUE = `sk_live_rowsStayCanary_${process.pid}_000000`;
 
 function readTurn(path: string): string {
@@ -91,7 +97,7 @@ test("the product page's session lists keep the rows that did not change when th
   // One proxy per session, as each launch starts its own.
   const proxies = new Map<string, AnthropicProxy>();
   const ports = new Map<string, number>();
-  for (const id of [A, B, C, D]) {
+  for (const id of [A, B, C, D, E]) {
     const p = new AnthropicProxy({ arbiter: new ArbiterClientAdapter(data, human), upstream, sessionKey: id, log: () => {} });
     proxies.set(id, p);
     ports.set(id, await p.listen(0));
@@ -191,6 +197,30 @@ test("the product page's session lists keep the rows that did not change when th
       assert.equal(rowOf(doc, "home-agents", C), c, "C, unchanged, is the row already there");
       assert.deepEqual(ids(doc, "home-earlier"), [B, A], "B, ended, over A in Earlier");
       assert.equal(rowOf(doc, "home-earlier", A), a, "A, unchanged, is the row already there");
+      noValue(doc.body.textContent, "the rendered Home page");
+
+      // K5: E's launch was recorded 10 minutes ago (the launcher's own first
+      // event), then it asks through the proxy.
+      const launched = { ...launchPostureEvent({ scopeId: E, target: "claude", argv0: "claude", notes: [] }), ts: new Date(Date.now() - 10 * 60_000).toISOString() };
+      assert.ok(await emitLauncherEvent(sock, launched, humanSock), "the launcher's emit lands");
+      await ask(E, [{ role: "user", content: "Check the build." }]);
+      await history((h) => running(h, E));
+      poll(doc);
+      await waitWhile(() => !rowOf(doc, "home-agents", E)?.querySelector("time.agent-last"));
+      const e = rowOf(doc, "home-agents", E);
+      assert.equal(e.querySelector(".agent-when").textContent, "started 10 minutes ago · last step just now");
+      const before = e.querySelector("time.agent-last").getAttribute("datetime");
+      assert.ok(Date.parse(before) - Date.parse(launched.ts) >= 10 * 60_000 - 1_000, `the last step is the model call, not the launch: ${before}`);
+
+      // One more model call: the moment moves, the row stays.
+      await new Promise((r) => setTimeout(r, 20));
+      await ask(E, [{ role: "user", content: "Check the build again." }]);
+      await history((h) => h.rows.some((r) => r.id === E && r.lastAt !== null && Date.parse(r.lastAt) > Date.parse(before)));
+      poll(doc);
+      await waitWhile(() => e.querySelector("time.agent-last").getAttribute("datetime") === before);
+      assert.ok(Date.parse(e.querySelector("time.agent-last").getAttribute("datetime")) > Date.parse(before), "the last step moved on");
+      assert.equal(rowOf(doc, "home-agents", E), e, "E's row is the node already there");
+      assert.equal(e.querySelector(".agent-when").textContent, "started 10 minutes ago · last step just now");
       noValue(doc.body.textContent, "the rendered Home page");
     });
   } finally {

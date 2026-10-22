@@ -102,6 +102,14 @@ export interface Ullm {
   apiKey?: string;
   /** Binary hint (cli mode only): "claude" | "codex". */
   binary?: string;
+  /** That binary's absolute path past the session's `sdk-shims/` (cli mode
+   *  only; run.ts, before the services start), written into the inspect
+   *  server entry as MANDU_ULLM_BINARY_PATH. By name the quarantined `claude
+   *  -p` would meet the `claude` PATH shim, which routes it to the model
+   *  proxy (agent-sdks.md §3.5): the instrumented T-LLM path, and a port the
+   *  inspect server's network confine refuses, so every call hung to its
+   *  timeout (the 2026-10-18 nightly). Absent when none is on PATH. */
+  binaryPath?: string;
   /** The launcher's CODEX_HOME (cli mode with the codex binary only): the
    *  quarantined `codex exec` signs in from the same place as the agent's
    *  Codex. Codex hands a stdio MCP server a fixed env, without CODEX_HOME,
@@ -573,6 +581,10 @@ export interface LaunchPlan {
    *  desymbolized for the human. Default ON; --no-reply-filter / MANDU_REPLY_FILTER=0
    *  opts out. Utility-only — degrades to passthrough on any failure. */
   replyFilter: boolean;
+  /** The session's last line (session-kept-line.ts, packaging.md §5): what
+   *  Mandu kept from the AI, on stderr once the agent has exited. Default ON;
+   *  --no-session-summary / MANDU_SESSION_SUMMARY=0 opt out. Absent = on. */
+  sessionSummary?: false;
   /** `goose acp` only: the relay's JSON-aware display pass
    *  (goose-acp-display.ts) desymbolizes Goose's editor-bound messages over
    *  the human plane. The reply filter's switch, read before parse turns the

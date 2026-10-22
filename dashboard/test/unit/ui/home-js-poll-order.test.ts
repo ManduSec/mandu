@@ -113,14 +113,14 @@ test("a question answered on Home is never drawn as waiting again by a poll aske
   button(cardOf(doc, "egr-1"), "Block").click();
   await tick(30);
   assert.equal(cardOf(doc, "egr-1"), undefined, "answered: its card is gone");
-  assert.equal(doc.activeElement, cardOf(doc, "egr-2"), "the next question has the focus");
+  assert.equal(doc.activeElement, doc.querySelector("#home-waiting .answer-line"), "the line the answer left has the focus");
   // The poll asked before the answer comes now, with the question waiting.
   before.send(home({ waiting: [ASK, ASK2] }));
   await tick(30);
   assert.equal(cardOf(doc, "egr-1"), undefined, "never drawn as waiting again");
   assert.equal(doc.querySelectorAll("#home-waiting button").length, cardOf(doc, "egr-2").querySelectorAll("button").length, "only the other question's buttons");
   assert.equal(text(doc, "nav-approvals-count"), "1");
-  assert.equal(doc.activeElement, cardOf(doc, "egr-2"), "the focus stays");
+  assert.equal(doc.activeElement, doc.querySelector("#home-waiting .answer-line"), "the focus stays");
 });
 
 test("answers that come in the order they were asked are each taken, a failure too", async () => {

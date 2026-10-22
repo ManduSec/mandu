@@ -257,7 +257,7 @@ test("Settings › Prompt filters with the service stopped says what Models and 
 
   // Any other refusal keeps the words it had, the service down or not.
   for (const [why, answer, words] of [
-    ["signed out", { status: 403, body: { error: "admin session required: open the dashboard's sign-in link" } }, /^Sign in first: in your own terminal, run mandu dashboard/],
+    ["signed out", { status: 403, body: { error: "admin session required: open the dashboard's sign-in link" } }, /^Sign in first: reload this page and sign in with your dashboard account/],
     ["no service behind the route", { status: 404, body: { error: "The protection service is not connected." } }, /^The protection service is not connected\.$/],
     ["no answer", noAnswer, new RegExp(`^${WORDS.gone.replace(/\./g, "\\.")}$`)],
   ] as const) {

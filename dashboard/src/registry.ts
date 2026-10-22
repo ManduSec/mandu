@@ -23,7 +23,7 @@
  */
 
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /** Subdir of the runtime base holding one `<id>.json` per live dashboard. */
 export const DASHBOARDS_DIR = "dashboards";
@@ -51,6 +51,13 @@ export interface DashboardManifest {
    *  secret; the human-plane walls are the boundary. Absent before
    *  2026-10-05, or when the socket could not be served. */
   signInSock?: string;
+  /** How a person signs in (server.ts signInMode): `password`,
+   *  `basic-auth` and `account` (the Mandu dashboard account, dashboard.md
+   *  §6.z) ask before any page is served, so a URL given to a person says so
+   *  (`mandu scan`'s last line); `tickets` serves its pages and asks only for
+   *  real values. Written again when the account file changes while the
+   *  dashboard runs (rewriteDashboardEntry). Absent before 2026-10-22. */
+  signInMode?: "tickets" | "password" | "basic-auth" | "account" | "no-account" | "account-unusable" | "none";
 }
 
 /** The owner pid for this daemon: $MANDU_OWNER_PID (a spawner's explicit
@@ -124,6 +131,23 @@ export function registerDashboard(
     throw e;
   }
   return { id, path };
+}
+
+/** Write this dashboard's entry again at its `path` (a field changed: the
+ *  sign-in mode once the account is made, dashboard.md §6.z), the same way
+ *  registerDashboard writes it: a real registry directory, a fresh temp
+ *  file created exclusively, renamed over the entry. Throws on failure. */
+export function rewriteDashboardEntry(path: string, manifest: DashboardManifest): void {
+  if (!isRealDir(dirname(path))) throw new Error(`the dashboard registry ${dirname(path)} is not a real directory`);
+  const tmp = `${path}.tmp`;
+  try { unlinkSync(tmp); } catch { /* none left over */ }
+  try {
+    writeFileSync(tmp, JSON.stringify(manifest, null, 2) + "\n", { flag: "wx" });
+    renameSync(tmp, path);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* never created, or already renamed */ }
+    throw e;
+  }
 }
 
 /** Remove this dashboard's own entry (graceful exit / self-restart). Best-effort:

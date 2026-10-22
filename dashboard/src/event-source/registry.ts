@@ -12,6 +12,7 @@ import {
 import { firstUserPrompt, truncateLabel } from "../transcript.js";
 import type { SessionLabelFrom, SessionRef } from "./contract.js";
 import { AGENTS, type Agent } from "../generated/agents.js";
+import { sessionCwd } from "../session-paths.js";
 
 /** Mandu e2e TEST session-id classes (the run sets its id via
  *  `x-mandu-session-id`, or — for the header-less Codex CLI — the openai-proxy
@@ -223,6 +224,7 @@ const TEST_REGISTRY: ReadonlyArray<{ cls: string; name: string }> = [
   { cls: "openclaw-e2e", name: "secret-read-control" }, //       OCl9
   { cls: "openclaw-e2e", name: "prompt-secret" }, //             OCl10 (plan 15, 2026-10-02)
   { cls: "openclaw-e2e", name: "prompt-policy" }, //             OCl11 (plan 15 phase 2, 2026-10-02)
+  { cls: "openclaw-e2e", name: "secret-read-reply" }, //         OCl12 (a labelled read for the human, 2026-10-21)
   // OpenCode
   { cls: "opencode-e2e", name: "reasoning" }, //             OCo1
   { cls: "opencode-e2e", name: "benign-read" }, //           OCo2
@@ -237,6 +239,7 @@ const TEST_REGISTRY: ReadonlyArray<{ cls: string; name: string }> = [
   { cls: "opencode-e2e", name: "secret-read-control" }, //       OCo9
   { cls: "opencode-e2e", name: "prompt-secret" }, //             OCo10 (plan 15, 2026-10-02)
   { cls: "opencode-e2e", name: "prompt-policy" }, //             OCo11 (plan 15 phase 2, 2026-10-02)
+  { cls: "opencode-e2e", name: "secret-read-reply" }, //         OCo12 (a labelled read for the human, 2026-10-21)
   // Goose (2026-10-05, supported-agents.md §5.6). KEEP IN SYNC with
   // goose-e2e.test.ts SCENARIOS.
   { cls: "goose-e2e", name: "reasoning" }, //                G1
@@ -550,6 +553,15 @@ export function deriveSessionLabel(events: ManduEvent[], sessionId?: string): st
 export function sessionLabelFields(events: ManduEvent[], sessionId?: string): Pick<SessionRef, "label" | "labelFrom"> {
   const { label, from } = sessionLabel(events, sessionId);
   return from ? { label, labelFrom: from } : { label };
+}
+
+/** The folder field of a SessionRef: `sessionCwd`, the folder the session's
+ *  row names (HomeFacts reads the same function), read only from the agent's
+ *  own prompt blocks; absent when none is recorded. History's search matches
+ *  it (dashboard.md §4.25ae *Finding a session*). */
+export function withCwd(events: ManduEvent[]): Pick<SessionRef, "cwd"> {
+  const cwd = sessionCwd(events);
+  return cwd ? { cwd } : {};
 }
 
 function sessionLabel(events: ManduEvent[], sessionId?: string): { label: string | null; from: SessionLabelFrom | null } {

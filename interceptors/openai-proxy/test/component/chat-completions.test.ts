@@ -19,8 +19,12 @@
  *                   tool, unparseable JSON) is a 400; in every case the
  *                   provider receives NOTHING. An unreachable exec gate
  *                   blocks; an unreadable 2xx answer is a 502, never relayed.
+ *   response id     `tllm_call` carries the id the agent was sent (the first
+ *                   chunk's, the body's), none for an error or an ill-formed
+ *                   id; the bytes relayed unchanged (plan 17 §3 item 6).
  *
- * The real-arbiter version: tests/stack/proxy-route-fail-closed.test.ts.
+ * The real-arbiter version: tests/stack/proxy-route-fail-closed.test.ts
+ * (the response id: tests/stack/transcript-scan.test.ts).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -213,4 +217,65 @@ test("fail-closed: a body the reader cannot vouch for is a 400 and the provider 
     }
     assert.equal(upstream.requests.length, 0, "a refused request reached the provider");
   });
+});
+
+// ── The response id on tllm_call (confidentiality-plan-17 §3 item 6) ─────────
+// The agent keeps the Chat answer's id (`chatcmpl-…`); the proxy records the
+// id it sent the agent, read off the bytes after the gate (response-id.ts),
+// so `mandu scan` can tell a past session under Mandu exactly. Observability
+// only: the agent gets the same bytes either way.
+
+const CHAT_ID = "chatcmpl-KimiChatRoute000000000001";
+const textSse = (id: string | null): string => {
+  const e = id === null ? { object: "chat.completion.chunk", created: 1, model: "kimi-k2" } : { ...env, id };
+  return `data: ${JSON.stringify({ ...e, choices: [{ index: 0, delta: { role: "assistant", content: "All done." }, finish_reason: null }] })}\n\n`
+    + `data: ${JSON.stringify({ ...e, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n` + "data: [DONE]\n\n";
+};
+
+test("tllm_call responseId (streamed): the first chunk's id, the bytes relayed unchanged; with a gated call, the id the agent got", async () => {
+  const sse = textSse(CHAT_ID);
+  await withProxy({ sse, chunkInto: 6 }, SECRETS, async (port, _up, arbiter) => {
+    const r = await send(port, "/v1/chat/completions", request());
+    assert.equal(r.status, 200);
+    assert.equal(r.body, sse, "a stream with nothing to gate reaches the agent byte for byte");
+    const ev = arbiter.eventsOfKind("tllm_call")[0]!;
+    assert.equal(ev.model?.responseId, CHAT_ID);
+    assert.equal(ev.model?.id, "kimi-k2");
+  });
+  await withProxy({ sse: answerSse().replaceAll('"id":"c1"', `"id":"${CHAT_ID}"`), chunkInto: 4 }, SECRETS, async (port, _up, arbiter) => {
+    const r = await send(port, "/v1/chat/completions", request());
+    assert.equal(r.status, 200);
+    assert.match(r.body, /exit 77/, "the call was gated");
+    assert.ok(r.body.includes(`"id":"${CHAT_ID}"`));
+    assert.equal(arbiter.eventsOfKind("tllm_call")[0]!.model?.responseId, CHAT_ID);
+  });
+});
+
+test("tllm_call responseId (buffered): the body's id", async () => {
+  const json = { id: CHAT_ID, object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] };
+  await withProxy({ json }, SECRETS, async (port, _up, arbiter) => {
+    const r = await send(port, "/v1/chat/completions", request(false));
+    assert.equal(r.status, 200);
+    assert.deepEqual(JSON.parse(r.body), json, "the agent gets the body as sent");
+    assert.equal(arbiter.eventsOfKind("tllm_call")[0]!.model?.responseId, CHAT_ID);
+  });
+});
+
+test("tllm_call responseId: none for an error answer, an unreadable one, an id-less or an ill-formed id (nothing else of the answer is taken)", async () => {
+  const cases: MockUpstreamOptions[] = [
+    { status: 429, json: { id: CHAT_ID, error: { message: "Rate limit reached", type: "rate_limit" } } },
+    { raw: { body: "{not json", contentType: "application/json" } },
+    { sse: textSse(null) },
+    { sse: textSse("chatcmpl with spaces") },
+    { json: { id: "x".repeat(200), choices: [] } },
+  ];
+  for (const up of cases) {
+    await withProxy(up, SECRETS, async (port, _up, arbiter) => {
+      const r = await send(port, "/v1/chat/completions", request(up.sse !== undefined));
+      if (up.sse !== undefined) assert.equal(r.body, up.sse, "relayed unchanged");
+      const ev = arbiter.eventsOfKind("tllm_call")[0]!;
+      assert.equal(ev.model?.responseId, undefined, JSON.stringify(up).slice(0, 80));
+      assert.deepEqual(Object.keys(ev.model ?? {}), ["id"]);
+    });
+  }
 });

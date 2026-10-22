@@ -373,6 +373,24 @@ the model through Mandu's model proxy can work.
 `mandu claude` starts the real `claude` by path, past the shim (the launch
 applies the overlay and the rule to its own command line).
 
+**The quarantined `claude -p` (2026-10-19).** inspect_symbol's U-LLM is a
+`claude` the session starts too: the inspect server, which runs in the
+agent's world, spawns it. It must keep its own channel, the U-LLM
+forwarder (never the model proxy: the instrumented T-LLM path), so the
+launch resolves the CLI past `sdk-shims/` before the services start
+(`realExecutable`, run.ts; `Ullm.binaryPath`) and writes the path into the
+inspect server's entry as `MANDU_ULLM_BINARY_PATH`; the server spawns that
+path, never the bare name (a malformed value refuses the quarantine,
+fail-closed). Until then the shim caught it by name and re-pointed it at the
+model proxy, whose port the inspect server's network confine
+(inspect-net-confine.ts) refuses, so on Linux every quarantined call hung
+to its 60 s timeout: the 2026-10-18 nightly's 23 of 23 in the CI guest, and
+its agents declassified the any-model files instead. Without that confine
+(macOS, a kernel without Landlock TCP rules) the call would have gone
+through the model proxy. `tests/stack/inspect-ullm-shim.test.ts` holds it
+under a real `mandu claude` (red before: the U-LLM's base URL was the
+proxy's and the shim's `--settings` reached it).
+
 ### 3.6 Where the route lives: a file the agent cannot write (2026-10-18)
 
 Until this change the route rode the environment variable
@@ -685,6 +703,18 @@ changes.
   went to the capture server). The replay drill
   `claude-settings-route.test.ts` runs the same with the real Claude Code
   (a nested `claude -p` from the agent's Bash), also red before.
+- `tests/stack/inspect-ullm-shim.test.ts` (2026-10-19, §3.5 "The
+  quarantined `claude -p`"): under a real `mandu claude` a stand-in
+  `claude` reads an any-model file through the model proxy, gets its
+  symbol, starts the inspect server of its `--mcp-config` as Claude Code
+  does and calls inspect_symbol; every quarantined start (the extraction
+  and the content-kind classifier) ran as the CLI by its path, with the
+  entry's base URL (the forwarder), never the proxy's, and no `--settings`;
+  the answer came back as a symbol. Red before (both starts went through
+  the shim: the proxy's base URL and its `--settings`). Unit:
+  `launcher/test/unit/mcp.test.ts` (the entry's `MANDU_ULLM_BINARY_PATH`),
+  inspect-mcp `server-main.test.ts` (a relative or foreign path refuses)
+  and `cli-ullm-client.test.ts` (the path is spawned for its own CLI only).
 - `agent-sdk.test.ts` (`integration.agent-sdk`): host
   programs on the pinned SDKs (`tests/fixtures/agent-sdk-host`) under the
   real launcher against a scripted model, in `secrets`: a labelled file

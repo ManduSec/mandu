@@ -15,6 +15,7 @@ import {
   launchLoginKeying,
   otherAgentLoginsRaw,
   sessionLogins,
+  sessionMcpConfigs,
   sessionLoginsKey,
   loginKeptWhere,
   agentDisplayName,
@@ -470,6 +471,24 @@ test("sessionLogins: what the session's net-proxy is told (the walk's keying, th
   assert.equal(sessionLoginsKey(undefined), "");
   assert.equal(sessionLoginsKey({ target: "codex" }), "");
   assert.deepEqual(loginEnvOf({ CLAUDE_CONFIG_DIR: "/c", CODEX_HOME: "rel", HOME: "/h" }), { CLAUDE_CONFIG_DIR: "/c" });
+});
+
+test("sessionLogins' mcpConfigs (secret-discovery.md §2.10): the project .mcp.json Claude Code reads where it runs, those that exist; part of the identity only when there are some", () => {
+  const cli = (binary: string) => ({ mode: "cli" as const, binary });
+  const exists = (p: string): boolean => p === "/w/human/.mcp.json" || p === "/w/agent/.mcp.json";
+  assert.deepEqual(sessionMcpConfigs({ target: "claude", humanCwd: "/w/human", cwd: "/w/agent" }, exists), ["/w/human/.mcp.json", "/w/agent/.mcp.json"]);
+  assert.deepEqual(sessionMcpConfigs({ target: "claude", humanCwd: "/w/human", cwd: "/w/human" }, exists), ["/w/human/.mcp.json"], "one directory, once");
+  assert.deepEqual(sessionMcpConfigs({ target: "claude", humanCwd: "/w/none", cwd: "/w/none" }, exists), [], "no .mcp.json there: none");
+  assert.deepEqual(sessionMcpConfigs({ target: "shell", humanCwd: "/w/human" }, exists), ["/w/human/.mcp.json"], "a plain command keeps Claude Code's");
+  assert.deepEqual(sessionMcpConfigs({ target: "codex", humanCwd: "/w/human", cwd: "/w/agent" }, exists), [], "Codex does not read .mcp.json");
+  assert.deepEqual(sessionMcpConfigs({ target: "claude", humanCwd: "relative" }, () => true), [], "absolute directories only");
+  assert.deepEqual(sessionLogins({ target: "claude", writeMcp: true, ullm: cli("claude"), humanCwd: "/w/human", cwd: "/w/human" }, {}, "/h", exists),
+    { home: "/h", target: "claude", ullmBinary: "claude", mcpConfigs: ["/w/human/.mcp.json"] });
+  const without = sessionLoginsKey({ home: "/h", target: "claude", ullmBinary: "claude" });
+  assert.equal(without, JSON.stringify(["/h", "claude", "claude", false, []]), "no mcpConfigs: spelled as before, so an older proxy is adopted");
+  assert.notEqual(sessionLoginsKey({ home: "/h", target: "claude", ullmBinary: "claude", mcpConfigs: ["/w/a/.mcp.json"] }), without);
+  assert.equal(sessionLoginsKey({ home: "/h", target: "claude", ullmBinary: "claude", mcpConfigs: ["/b/.mcp.json", "/a/.mcp.json"] }),
+    sessionLoginsKey({ home: "/h", target: "claude", ullmBinary: "claude", mcpConfigs: ["/a/.mcp.json", "/b/.mcp.json"] }), "order does not matter");
 });
 
 test("loginKeptWhere / agentDisplayName: one wording of the keep-raw rule and of the agents' names for `mandu why` and doctor", () => {

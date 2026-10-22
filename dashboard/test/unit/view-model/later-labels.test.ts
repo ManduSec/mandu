@@ -169,6 +169,7 @@ test("the session page: the Read says the AI got it as it was and when it was ma
   assert.equal(card!.saw, "early");
   assert.equal(card!.since, LABEL_AT, "the tag says since when it is marked");
   assert.equal(card!.ref, undefined, "no placeholder: nothing to show");
+  assert.equal(card!.file, "~/mandu-try/deploy/staging.conf", "the card links its file to Rules (§4.25b)");
   assert.deepEqual(card!.lines.map((l) => `${l.tone}: ${words(l.parts)}`), [
     `warn: The AI read its real value at <${iso(T0 + 2000)}>, before it was marked a secret at <${LABEL_AT}>, so nothing in this session masked it.`,
     "warn: If it holds a key or a password, change it: the AI saw it as it was.",
@@ -216,6 +217,7 @@ test("a file a later read masked learns of the earlier read: never \"never the r
   const card = p.secrets.secrets[0]!;
   assert.equal(card.saw, "early");
   assert.ok(card.ref, "its placeholder can still be shown");
+  assert.equal(card.file, "~/mandu-try/deploy/staging.conf", "and its file links to Rules");
   assert.match(words(card.lines[0]!.parts), /^The AI read its real value at <[^>]+>, before it was marked a secret\. From <[^>]+> on it got a placeholder in its place/);
   assert.doesNotMatch(JSON.stringify(card.lines), /never the real value/);
   assert.deepEqual(p.secrets.counts, { masked: 0, early: 1 });

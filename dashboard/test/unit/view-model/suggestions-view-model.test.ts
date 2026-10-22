@@ -362,3 +362,26 @@ test("a names-only model's rule (plan 14 §14.10): a row on its folder, suggeste
   assert.equal(file!.impact, WORKSPACE_IMPACT);
   assert.equal(file!.found[0]!.mask, "from the file's name");
 });
+
+test("a file whose key mandu scan found in past sessions (plan 17 §3 item 13): a file row, the key names, the full advice, by mandu scan", () => {
+  const past = suggestion({
+    id: "pp-000009", source: "past-sessions", findingKey: `past-sessions:path:${HOME}/.config/cli/config.yml`, repoRoot: `${HOME}/.config/cli`,
+    edits: [{ op: "lock-path", path: `${HOME}/.config/cli/config.yml`, level: "no-model" }],
+    sentence: "Make ~/.config/cli/config.yml a secret no AI may read",
+    evidence: { paths: ["config.yml"], blobs: [], historyOnly: false, findings: [], pastSessions: { names: ["token"], sessions: 3, last: "2026-10-19T08:00:00.000Z" } },
+    impact: { historicalVersions: 0, workingTreeChanges: true, files: ["config.yml"] },
+    historyOnly: false, rotate: true,
+  });
+  const [row] = suggestionRows([past], HOME);
+  assert.equal(row!.source, "past-sessions");
+  assert.equal(row!.kind, "path");
+  assert.equal(row!.display, "~/.config/cli/config.yml");
+  assert.equal(row!.tag, null);
+  assert.deepEqual(row!.when, []);
+  assert.deepEqual(row!.found, [{ words: "Reached the AI in a past session", mask: "token" }]);
+  assert.equal(row!.note, "mandu scan found a key from this file in what your agents sent to the AI in 3 past sessions. Nothing protects the file yet.");
+  assert.equal(row!.impact, WORKSPACE_IMPACT);
+  assert.equal(row!.rotate, ROTATE_WORDS, "the key did leave: the full advice");
+  assert.equal(row!.rotateSoft, false);
+  assert.equal(row!.by, "Suggested by mandu scan");
+});

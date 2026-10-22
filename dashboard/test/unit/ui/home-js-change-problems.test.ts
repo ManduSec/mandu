@@ -161,7 +161,7 @@ test("a refusal with no problems keeps its words: the route's error, the sign-in
   const odd = await saveTyped({ "POST files/labels": notValid("this change is not valid", [null, 7, ""]) }, ["~/notes/[draft"]);
   assert.equal(odd.doc.getElementById("lock-error").textContent, "this change is not valid", "problems that are not lines are not shown");
   const out = await saveTyped({ "POST files/labels": { status: 403, body: { error: ADMIN_SESSION_REQUIRED } } }, ["~/notes/[draft"]);
-  assert.match(out.doc.getElementById("lock-error").textContent, /^Sign in first: in your own terminal, run mandu dashboard/);
+  assert.match(out.doc.getElementById("lock-error").textContent, /^Sign in first: reload this page and sign in with your dashboard account/);
   const other = await saveTyped({ "POST files/labels": { status: 502, body: { error: "the protection service did not answer", problems: ["paths[1].path: pattern \"/x\": y"] } } }, ["~/notes/[draft"]);
   assert.equal(other.doc.getElementById("lock-error").textContent, "the protection service did not answer", "only a 422 names problems");
 });

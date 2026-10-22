@@ -232,6 +232,24 @@ test("setSessionRelay (§17): `rule` round trip — terminal, ink, absent stays 
   });
 });
 
+test("setSessionRelay (§19.7): `tabs` round trip — content, screen, absent stays absent; anything else refused and nothing stored", () => {
+  withServer((srv) => {
+    set(srv, { sessionKey: "c", mode: "pty", reserve: true, cols: 80, rows: 24, wrap: true, tabs: "content" });
+    set(srv, { sessionKey: "x", mode: "pty", reserve: true, cols: 80, rows: 24, wrap: true, tabs: "screen" });
+    set(srv, { sessionKey: "o", mode: "pty", reserve: true, cols: 80, rows: 24, wrap: true });
+    assert.equal((get(srv, "c").result as { tabs?: string }).tabs, "content");
+    assert.equal((get(srv, "x").result as { tabs?: string }).tabs, "screen");
+    assert.ok(!("tabs" in (get(srv, "o").result as object)), "an older filter's report carries no tabs (read: screen)");
+    for (const tabs of ["Content", "", null, 2, true, {}]) {
+      const r = set(srv, { sessionKey: "bad", mode: "pty", reserve: true, tabs });
+      assert.equal(r.ok, false, JSON.stringify(tabs));
+      assert.equal(r.error, "setSessionRelay: tabs must be one of screen, content");
+    }
+    assert.equal(get(srv, "bad").result, null);
+    assert.equal(set(srv, { sessionKey: "c", mode: "pty", reserve: true, tabs: "content" }, "data").ok, false, "human plane only");
+  });
+});
+
 test("store: the wrap flag round-trips through set/get", () => {
   const s = new SessionRelayStore();
   s.set({ sessionKey: "k", mode: "pty", reserve: true, cols: 80, rows: 24, wrap: true }, 7);

@@ -260,9 +260,9 @@ const docsLane = [
   }),
   e({
     id: "integration.user-docs", kind: "unit", axis: "off", cwd: "tests", variantOf: "integration",
-    cmd: tsxTest("stack/user-docs.test.ts", "stack/agent-versions-parity.test.ts"),
+    cmd: tsxTest("stack/user-docs.test.ts", "stack/agent-versions-parity.test.ts", "stack/about-mandu-parity.test.ts"),
     needs: ["node"], timeout: 300, docsLane: true, idOnly: true, doc: "docs/README.md",
-    note: "README.md and docs/*.md: links and anchors resolve, required copy, the agents table",
+    note: "README.md and docs/*.md: links and anchors resolve, required copy, the agents table, About Mandu's links",
   }),
   e({
     id: "integration.tour-fixture", kind: "stack", axis: "secrets", cwd: "tests", variantOf: "integration",
@@ -402,6 +402,10 @@ const scriptTests = [
   // The host prep's agents are the agent registry's npm agents.
   scriptTest("fresh-agents-host", "scripts/test/fresh-agents-host.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
   scriptTest("node-major", "scripts/test/node-major.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
+  // The npm release gate's host prep (what the guest installs, which
+  // credentials it may hold) and its access-token-only Codex login.
+  scriptTest("npm-release-host", "scripts/test/npm-release-host.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
+  scriptTest("reduce-codex-auth", "scripts/test/reduce-codex-auth.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
   scriptTest("secrets-to-env", "scripts/test/secrets-to-env.test.mjs", { doc: "docs/design/testing/continuous-integration.md" }),
   scriptTest("set-api-key", "scripts/test/set-api-key.test.mjs", { doc: "docs/design/testing/continuous-integration.md" }),
   // The one path table: fails when a generated copy differs from it.
@@ -447,10 +451,26 @@ const scriptTests = [
   scriptTest("ci-vm-run", "scripts/test/ci-vm-run.test.sh", { needs: ["bash", "git"], doc: "docs/design/testing/continuous-integration.md" }),
   scriptTest("agent-latest", "scripts/test/agent-latest.test.sh", { needs: ["bash"], doc: "docs/design/testing/test-organization.md" }),
   scriptTest("ci-pins", "scripts/test/ci-pins.test.mjs", { doc: "docs/design/testing/continuous-integration.md" }),
+  // The release path: release.yml's gates and credential (no stored token,
+  // trusted publishing, the approval, the snapshot checks) and
+  // release-pack.sh's refusals of a tree that is not the public one.
+  scriptTest("release-workflow", "scripts/test/release-workflow.test.mjs", { doc: "docs/design/distribution/packaging.md", needs: ["node", "bash"] }),
+  scriptTest("release-assets", "scripts/test/release-assets.test.mjs", { doc: "docs/design/distribution/packaging.md" }),
   scriptTest("ci-pipeline", "scripts/test/ci-pipeline.test.sh", { needs: ["bash", "node"], doc: "docs/design/testing/continuous-integration.md" }),
   scriptTest("ci-port-bridge", "scripts/test/ci-port-bridge.test.mjs", { doc: "docs/design/testing/continuous-integration.md" }),
   // scripts/dep-audit.mjs: the reports read, the allow-list's rules, skip vs fail (§14.2).
   scriptTest("dep-audit", "scripts/test/dep-audit.test.mjs", { doc: "docs/design/testing/continuous-integration.md" }),
+];
+
+// ── unit: the GitHub Action's pure logic (packaging/github-action/lib) ─────────
+// Its end-to-end test is tests/stack/github-action.test.ts (integration).
+const githubAction = [
+  e({
+    id: "github-action", kind: "unit", axis: "secrets", cwd: "packaging/github-action",
+    cmd: ["node", "--test", "test/*.test.mjs"], needs: ["node"], timeout: 300,
+    doc: "docs/design/distribution/github-action.md",
+    note: "inputs, the policy source and assembly, the summary (names and hosts only), the launch argv and env, action.yml against the code and the pins.",
+  }),
 ];
 
 // ── unit, component: Rust, fs-preload, the matrix plumbing─────────────────────────
@@ -938,7 +958,9 @@ const kernel = [
       "out; an edited twin shows modified and its commit is named after the session; the trade-off pinned (the human's own " +
       "git shows .env ` M` with no diff during the session, clean after); a launcher SIGKILLed mid-session repaired by the " +
       "next launch from its crash record; bind-only (no guard, gated) never patched (a human's stash there would replace the " +
-      "real file and detach the bind).",
+      "real file and detach the bind); two overlapping launches with their own Mandu homes, the first ending first, leave " +
+      "the human's git clean (2026-10-21: the second's end wrote the first's twin stat back); only the launch's own " +
+      "repositories are patched: another repository under HOME keeps its index, the human's git there clean during the session.",
   }),
   suite("npmrc-wire-twin", "sandbox/launcher/npmrc-wire-twin.test.ts", {
     kind: "sandbox", axis: "secrets", needs: ["kernel", "node", "openssl", "bwrap", "userns", "seccomp", "native-bins"],
@@ -1045,7 +1067,10 @@ const kernel = [
     cmd: ["bash", "scripts/kernel-tests.sh", "--include-ignored"],
     // One skip is structural: exec-supervisor's 0111-directory test needs a
     // caller that cannot list such a directory, and kernel-tests.sh runs the
-    // crates as root of their user namespace (which can). Everything else runs.
+    // crates as root of their user namespace (which can). net-supervisor's
+    // cgroup test needs a user-owned cgroup, which the guest's boot.sh
+    // delegates to `ci` (continuous-integration.md §3), so it must run.
+    // Everything else runs.
     // 1200 s: a CI run takes 200-290 s, a host's cold build of the kernel
     // feature a few minutes more. It was 3600 s, past the CI guest's whole
     // 2700 s: a hung kernel test (pipelines 10978, 11050, 11099) ran out the
@@ -1056,7 +1081,7 @@ const kernel = [
       "kernel-tests.sh sets up: the #[ignore]d attachment tests AND the kernel-only tests that " +
       "`-- --ignored` never ran (test-organization.md §1). clone_filter_integration's Go leg (c) builds " +
       "net-supervisor's tests/fixtures/clone-probe.go with go (the guest's golang-go, provision.sh) and " +
-      "prints a SKIP without it, which the one allowed skip cannot absorb.",
+      "prints a SKIP without it, which the two allowed (structural) skips cannot absorb.",
   }),
   // scripts/ci/ns-run.sh's isolation, for real: it creates namespaces, so it
   // never runs inside ns-run itself; in the guest its bwrap has overlay support
@@ -1202,6 +1227,16 @@ const install = [
     note: "about 30 minutes and 4 boots; by hand.",
   }),
   e({
+    id: "install.npm-release", kind: "install", axis: "secrets", cwd: ".",
+    cmd: ["bash", "scripts/matrix/run.sh", "ubuntu-2404", "npm-release"],
+    files: [
+      "scripts/matrix/suites/npm-release.sh", "scripts/matrix/suites/npm-release.host.sh",
+      "scripts/matrix/suites/npm-release/timing-leg.sh",
+    ],
+    needs: ["kvm", "qemu", "network"], timeout: 60 * 60 * 3, parallel: false, doc: "docs/design/testing/os-test-matrix.md",
+    note: "the npm release gate (private release runbook): the candidate tarball before publish, the registry after; both Ubuntu targets; by hand.",
+  }),
+  e({
     id: "install.kernel-vm", kind: "install", axis: "off", cwd: ".", cmd: ["bash", "scripts/kernel-vm.sh"],
     needs: ["kvm", "qemu", "network"], timeout: 60 * 60 * 2, parallel: false, doc: "docs/design/testing/os-test-matrix.md",
     note: "the alternate-kernel vehicle.",
@@ -1276,6 +1311,25 @@ const internetOnly = [
     env: { MANDU_LIVE_TLS_COMPAT: "1" }, gate: "MANDU_LIVE_TLS_COMPAT",
     doc: "docs/design/confidentiality/confidentiality-plan-13-reader-set-labels.md",
     note: "every HTTPS client installed on the host fetches a public page through the inspecting proxy.",
+  }),
+];
+
+// ── env: the launch-time budget, the host's speed against a recorded baseline ──
+// runtime-instances.md §14.11: warm `mandu <agent> --version` launches from an
+// empty directory and a repository, medians against
+// tests/env/launch-budget-baseline.json (recorded in the CI guest). Nightly,
+// in the subscription lane's guest (it needs no login), alone (a timing beside
+// another suite is that suite's); never per push: a shared runner is too noisy
+// to block on, and a night is soon enough to hear of a slower launch.
+const launchBudget = [
+  suite("launch-budget", "env/launch-budget.test.ts", {
+    kind: "env", axis: "secrets", env: { MANDU_LAUNCH_BUDGET: "1" }, gate: "MANDU_LAUNCH_BUDGET",
+    needs: ["node", "git", "claude", "codex", "bwrap", "userns", "native-bins", "timing-baseline"],
+    files: ["tests/env/launch-budget-baseline.json"],
+    timeout: 1800, parallel: false, doc: "docs/design/architecture/runtime-instances.md",
+    note: "fails a cell more than 50% and 300 ms over its baseline wall time, WARNs past 20% and 150 ms " +
+      "(tests/lib/launch-budget.ts); cells: claude and codex from an empty dir, a repo and a developer-sized home; " +
+      "prints every step either way; re-baseline: runtime-instances.md §14.11.",
   }),
 ];
 
@@ -1448,6 +1502,7 @@ const NO_PROVES = {
   "integration.local-main-model": "the local model is the MAIN model (plan 11 §7): the session binds to the declared endpoint and the vendor sees nothing, which no property in the list names (ullm/local-endpoint is the helper's)",
   "integration.ollama-doctor": "checks what `mandu doctor` reports about a real Ollama",
   "integration.subscription-real": "relay mechanics with a real login (a token echoed, the OAuth credential relayed); no labelled data",
+  "integration.launch-budget": "a launch-time budget (the host's speed against a recorded baseline), not a data path",
   "deps.audit-npm": "a supply-chain check of the lockfiles against published advisories, not a data path",
   "deps.audit-cargo": "a supply-chain check of the Cargo lockfile against the RustSec database, not a data path",
 };
@@ -1458,6 +1513,7 @@ export const entries = [
   ...evalEntries,
   ...wrapperShell,
   ...scriptTests,
+  ...githubAction,
   ...docsLane,
   ...rustOffline,
   ...kernel,
@@ -1466,6 +1522,7 @@ export const entries = [
   ...install,
   ...frozen,
   ...internetOnly,
+  ...launchBudget,
   ...depAudit,
 ];
 

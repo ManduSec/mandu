@@ -28,6 +28,7 @@ import {
   deriveTenant,
   tenantedTags,
   testNumber,
+  withCwd,
 } from "./registry.js";
 import { deriveHealth } from "../session-health.js";
 import { withCounts } from "../view-model/session-counts.js";
@@ -237,6 +238,7 @@ export class ArbiterEventSource implements EventSource {
       const ref: SessionRef = {
         id: s.sessionId,
         ...sessionLabelFields(events, s.sessionId),
+        ...withCwd(events),
         eventCount: s.count ?? events.length,
         firstTs: s.firstTs ?? (events.length ? events[0]!.ts : null),
         lastTs: s.lastTs ?? (events.length ? events[events.length - 1]!.ts : null),

@@ -22,6 +22,7 @@ import assert from "node:assert/strict";
 import {
   CliUllmClient,
   buildCliArgs,
+  cliBinaryOfPath,
   codexStderrDetail,
   codexForwarderProvider,
   CODEX_ULLM_PROVIDER,
@@ -59,6 +60,7 @@ function makeClient(
     binary?: "claude" | "codex" | "auto";
     model?: string;
     baseUrl?: string;
+    binaryPath?: string;
     execResult?: CliExecResult;
     execImpl?: (spec: CliExecSpec) => CliExecResult | Promise<CliExecResult>;
   } = {},
@@ -77,6 +79,7 @@ function makeClient(
     binary: opts.binary,
     model: opts.model,
     baseUrl: opts.baseUrl,
+    ...(opts.binaryPath ? { binaryPath: opts.binaryPath } : {}),
     exec: (spec) => {
       specs.push(spec);
       return opts.execImpl ? opts.execImpl(spec) : defaultResult;
@@ -269,6 +272,25 @@ test("complete(claude): spawns claude with the tool-disabling argv, prompt on st
   // Clean temp cwd: created, used, removed.
   assert.equal(spec.cwd, made[0]);
   assert.deepEqual(removed, [made[0]], "temp cwd must be cleaned up after the call");
+});
+
+test("complete(claude): the launcher's binary path is spawned in place of the name (the session's claude shim would route it to the model proxy)", async () => {
+  const { client, specs } = makeClient({ binary: "claude", model: "claude-haiku-4-5", binaryPath: "/opt/claude/bin/claude" });
+  await client.complete({ system: SYSTEM, user: USER });
+  assert.equal(specs[0].file, "/opt/claude/bin/claude");
+  // A path naming the other CLI is not this call's binary: the name stands.
+  const other = makeClient({ binary: "auto", model: "gpt-5", binaryPath: "/opt/claude/bin/claude" });
+  await other.client.complete({ system: SYSTEM, user: USER }).catch(() => {});
+  assert.equal(other.specs[0].file, "codex");
+});
+
+test("cliBinaryOfPath: an absolute path whose file name is claude or codex (a Windows .exe too); anything else null", () => {
+  assert.equal(cliBinaryOfPath("/usr/local/bin/claude"), "claude");
+  assert.equal(cliBinaryOfPath("/opt/codex/codex.exe"), "codex");
+  assert.equal(cliBinaryOfPath("claude"), null);
+  assert.equal(cliBinaryOfPath("bin/claude"), null);
+  assert.equal(cliBinaryOfPath("/usr/bin/node"), null);
+  assert.equal(cliBinaryOfPath("/usr/bin/claude-real"), null);
 });
 
 test("complete(codex): the quarantine argv, the prompt file written in the fresh temp cwd, the user message on stdin, never argv", async () => {

@@ -87,7 +87,12 @@ export interface SuggestionWire {
   repoRoot: string;
   edits: SuggestionEditWire[];
   sentence: string;
-  evidence: { paths: string[]; blobs: string[]; findings: SuggestionFindingWire[]; historyOnly: boolean; label?: SuggestionLabelWire };
+  evidence: {
+    paths: string[]; blobs: string[]; findings: SuggestionFindingWire[]; historyOnly: boolean; label?: SuggestionLabelWire;
+    /** `source: "past-sessions"` only (plan 17 §3 item 13): the key names
+     *  in the file and how many past sessions sent one to the AI. */
+    pastSessions?: { names: string[]; sessions: number; last: string | null };
+  };
   impact: { historicalVersions: number; workingTreeChanges: boolean; files: string[] };
   historyOnly: boolean;
   rotate: boolean;
@@ -205,7 +210,7 @@ export interface SuggestionRowVM {
   /** Which scan found it: the git history, the files as they are now, or a
    *  document's sensitivity label (plan 14 §14.1); or the names-only model
    *  (plan 14 §14.10), or your own model reading documents (§14.11). */
-  source: "git-history" | "workspace" | "sensitivity-label" | "model-names" | "model-contents";
+  source: "git-history" | "workspace" | "sensitivity-label" | "model-names" | "model-contents" | "past-sessions";
   /** The level Save gives the file: `no-model` for a key; a label row's is
    *  the level its mapping names. */
   level: string;
@@ -282,6 +287,13 @@ export const ROTATE_SOFT_WORDS =
 export const WORKSPACE_IMPACT =
   "Hides this file from the AI from the next time an agent starts.";
 export const WORKSPACE_NOTE = "Found in the file as it is now, on this computer.";
+/** A file whose key `mandu scan` found in the agents' past sessions (plan 17
+ *  §3 item 13): where it comes from. */
+export const PAST_SESSIONS_BY = "Suggested by mandu scan";
+/** Its note: the key already reached the AI, in a session without this rule. */
+export function pastSessionsNote(sessions: number): string {
+  return `mandu scan found a key from this file in what your agents sent to the AI in ${sessions === 1 ? "a past session" : `${sessions.toLocaleString("en-US")} past sessions`}. Nothing protects the file yet.`;
+}
 /** A sensitivity-label row (plan 14 §14.1): where it comes from. */
 export const LABEL_BY = "From the document's sensitivity label";
 /** What Save changes for a label row: the file gets the level its label is
@@ -347,7 +359,7 @@ function plural(k: number, one: string, many: string): string {
  *  committed versions on Linux only, and says so (MACOS_HISTORY_WORDS); the
  *  file as it is now is made unreadable there. */
 function impactWords(s: SuggestionWire, kind: SuggestionRowVM["kind"], platform: NodeJS.Platform = process.platform): string {
-  if (s.source === "workspace") return WORKSPACE_IMPACT;
+  if (s.source === "workspace" || s.source === "past-sessions") return WORKSPACE_IMPACT;
   if (s.source === "sensitivity-label") return LABEL_IMPACT;
   if (s.source === "model-names" || s.source === "model-contents") {
     const m = s.model;
@@ -375,8 +387,11 @@ export function suggestionRows(views: readonly SuggestionWire[], home: string, p
   for (const s of views) {
     if (s.source === "model-names" || s.source === "model-contents") { rows.push(modelRow(s, home)); continue; }
     const labelRow = s.source === "sensitivity-label";
+    // A file whose key reached the AI in a past session (plan 17 §3 item
+    // 13): a file row like a workspace one, with the full rotation advice.
+    const pastRow = s.source === "past-sessions";
     // A label row is a file found as it is now, like a workspace row.
-    const workspace = s.source === "workspace" || labelRow;
+    const workspace = s.source === "workspace" || labelRow || pastRow;
     const label = labelRow ? s.evidence.label ?? null : null;
     const lockPath = s.edits.find((e) => e.op === "lock-path") as Extract<SuggestionEditWire, { op: "lock-path" }> | undefined;
     const kind: SuggestionRowVM["kind"] = lockPath ? "path" : "versions";
@@ -409,10 +424,12 @@ export function suggestionRows(views: readonly SuggestionWire[], home: string, p
     }
     // A label row: the mapping's name for the label, never the file's words.
     if (label) found.push({ words: "Sensitivity label", mask: label.name });
+    // A past-sessions row: the key names, never a value.
+    if (pastRow) for (const n of (s.evidence.pastSessions?.names ?? []).slice(0, 5)) found.push({ words: "Reached the AI in a past session", mask: n });
     rows.push({
       id: s.id,
       kind,
-      source: labelRow ? "sensitivity-label" : workspace ? "workspace" : "git-history",
+      source: labelRow ? "sensitivity-label" : pastRow ? "past-sessions" : workspace ? "workspace" : "git-history",
       level: lockPath?.level ?? "no-model",
       label: label ? { name: label.name, level: label.level, admin: typeof label.adminFile === "string" } : null,
       path,
@@ -423,15 +440,15 @@ export function suggestionRows(views: readonly SuggestionWire[], home: string, p
       tag: !workspace && s.historyOnly ? HISTORY_TAG : null,
       sentence: s.sentence,
       repo: tildePath(s.repoRoot, home),
-      note: labelRow ? LABEL_NOTE : workspace ? WORKSPACE_NOTE : null,
+      note: labelRow ? LABEL_NOTE : pastRow ? pastSessionsNote(s.evidence.pastSessions?.sessions ?? 1) : workspace ? WORKSPACE_NOTE : null,
       more,
       found,
       when: workspace ? [] : s.evidence.findings.map(whenWords),
       impact: impactWords(s, kind, platform),
       // A label is not a key: nothing to rotate.
-      rotate: labelRow ? null : workspace ? ROTATE_SOFT_WORDS : s.rotate ? (platform === "darwin" ? MACOS_ROTATE_WORDS : ROTATE_WORDS) : null,
-      rotateSoft: workspace && !labelRow,
-      by: labelRow ? LABEL_BY : SUGGESTED_BY,
+      rotate: labelRow ? null : pastRow ? ROTATE_WORDS : workspace ? ROTATE_SOFT_WORDS : s.rotate ? (platform === "darwin" ? MACOS_ROTATE_WORDS : ROTATE_WORDS) : null,
+      rotateSoft: workspace && !labelRow && !pastRow,
+      by: labelRow ? LABEL_BY : pastRow ? PAST_SESSIONS_BY : SUGGESTED_BY,
       applicable: s.applicable,
       blocked: s.applicable ? null : BLOCKED_WORDS,
       yaml: yamlLines(s.edits),

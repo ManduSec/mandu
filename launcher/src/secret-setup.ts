@@ -65,9 +65,10 @@ import {
 import type { CacheSealClient, CacheSealsWire, SealEntry, SealRejection } from "./cache-seals.js";
 import { launchHintFile } from "./launch-hint.js";
 import { preparePlaceholderWatch, type TwinSource, type WatchedRepo } from "./placeholder-commits.js";
-import { cleanTwinsInIndex, endTwinIndexSession, livePeerRecords, TwinIndexRecorder, twinIndexRecordDir, type CleanedIndex } from "./twin-index-stat.js";
+import { cleanTwinsInIndex, endTwinIndexSession, reposInWorkspace, TwinIndexRecorder, twinIndexWriteStore, type CleanedIndex } from "./twin-index-stat.js";
 import type { TwinPrefetch } from "./twin-prefetch.js";
 import type { GitSession } from "./git-session.js";
+import { shareGitAnswers, type SharedGitAnswers } from "./git-shared-answers.js";
 import { scopeTwinDir, watchTwins, type TwinWatch } from "./twin-writes.js";
 import { basename, dirname, join as pathJoin } from "node:path";
 import { manduPath } from "./generated/mandu-paths.js";
@@ -105,6 +106,7 @@ import { compileHistoryLabels, historyPathspecs, withRealSpellings } from "./his
 import { sandboxExecAvailable } from "./seatbelt-profile.js";
 import { cachedProbe } from "./probe-cache.js";
 import { publishFile } from "./safe-file.js";
+import type { StepSpans } from "./launch-timings.js";
 import { gooseRoutedKeyVars } from "./goose-route.js";
 import { AGENT_LOGIN_NAMES, LOGIN_ENV, launchLoginKeying, loginEnvOf, otherAgentLoginsRaw } from "./agent-login.js";
 
@@ -115,8 +117,9 @@ import { AGENT_LOGIN_NAMES, LOGIN_ENV, launchLoginKeying, loginEnvOf, otherAgent
  *  types; `asDiscoveryReport` normalizes both shapes. */
 export interface DiscoveryReport {
   /** `agentLogin`: another agent's login file, one this launch does not
-   *  run on (secret-discovery.md §1.10). */
-  files: Array<{ path: string; level?: string; rule?: string; agentLogin?: string }>;
+   *  run on (secret-discovery.md §1.10). `agentConfig`: THIS launch's
+   *  agent's own MCP config (§2.10), registered and left readable to it. */
+  files: Array<{ path: string; level?: string; rule?: string; agentLogin?: string; agentConfig?: string }>;
   skipped?: Array<{ path: string; reason: string }>;
   counts?: Record<string, number>;
   limits?: { maxDepth: number; maxFiles: number };
@@ -744,6 +747,9 @@ export interface SecretSetupDeps {
   /** The tracked twinned files made to look clean to git in the agent's
    *  world (twin-index-stat.ts `cleanTwinsInIndex`). A test knob. */
   twinIndex?: (repos: WatchedRepo[]) => Promise<CleanedIndex[]>;
+  /** The launch's timer (launch-timings.ts): the setup's parts are timed
+   *  as parts of its `secrets` step. Reads the clock only. */
+  timer?: StepSpans;
 }
 
 /** The repositories a macOS launch reaches, for `lockedHistoryRepos`. */
@@ -1089,7 +1095,7 @@ export interface SecretSetupResult {
   placeholderWatch?: WatchedRepo[];
   /** Linux: the index entries whose cached stat the launch set to their
    *  twin's (twin-index-stat.ts), so a tracked protected file looks clean to
-   *  git in the agent's world; the caller puts the launch stat back after
+   *  git in the agent's world; the caller puts the real file's stat back after
    *  the agent exits (`restoreTwinIndexes`). Absent when there is none. */
   twinIndex?: CleanedIndex[];
   /** The crash record of `twinIndex` (twin-index-stat.ts), removed by the
@@ -1443,7 +1449,14 @@ async function applySecretTwinsInner(
   /** The cache entries the object twins are served from, which the launcher
    *  keeps marked used while the session runs (`keepCopiesInUse`). */
   let servedCopies: string[] = [];
-  const hideGitHistory = async (realPaths: string[], denyFile: string): Promise<HiddenHistory> => {
+  /** The runner the history step shares with the placeholder watch while
+   *  both run (git-shared-answers.ts); null otherwise. */
+  let sharedGit: SharedGitAnswers | null = null;
+  // Each work tree's index file as the history step read it at this launch
+  // (git-object-twins.ts RepoFacts `index`): the twin-index patch below
+  // takes it instead of asking its own rev-parse.
+  let stepIndexPaths: Readonly<Record<string, string>> | undefined;
+  const hideGitHistory =async (realPaths: string[], denyFile: string): Promise<HiddenHistory> => {
     const refuseOrWarn = (why: string, fix: string): void => {
       if (onConfinementFailure("arbiter", strict) === "refuse") {
         throw new SecretConfinementError(
@@ -1497,7 +1510,10 @@ async function applySecretTwinsInner(
         // checked before use (twin-prefetch.ts).
         hintFile: launchHintFile(manduPath("object-walks", ownEnv, home), deps.workspaceRoots ?? []),
         ...(deps.twinPrefetch !== undefined ? { statePrefetch: deps.twinPrefetch, hashes: deps.twinPrefetch.hashes } : {}),
-        ...(deps.gitSession !== undefined ? { gitSession: deps.gitSession } : {}),
+        // Beside the placeholder watch, the step's calls go through the
+        // runner the two share (git-shared-answers.ts): a question both ask
+        // is asked once.
+        ...(sharedGit !== null ? { git: sharedGit.runner } : deps.gitSession !== undefined ? { gitSession: deps.gitSession } : {}),
         denyFile,
         maxRebuildBytes: maxRebuildBytesFromEnv(process.env),
         log: deps.log,
@@ -1519,6 +1535,7 @@ async function applySecretTwinsInner(
         // (no human socket) nothing cached is trusted.
         ...(seals !== undefined ? { seals } : {}),
       });
+      stepIndexPaths = got.indexPaths;
       for (const f of got.failed ?? []) {
         deps.log(`WARNING: mandu: the git history of a protected file could not be hidden (${f.reason}); the committed bytes in ${f.root} stay readable to programs the agent runs (--best-effort). Every other repository's history stays hidden.`);
       }
@@ -1665,17 +1682,20 @@ async function applySecretTwinsInner(
   // Each found file keeps the home its catalog rule is anchored to: the
   // launch's HOME, or (WSL) the Windows profile it was found under, so the
   // arbiter re-classifies it against the same home at registration.
-  let found: Array<{ path: string; home: string; level?: string; agentLogin?: string }>;
+  let found: Array<{ path: string; home: string; level?: string; agentLogin?: string; agentConfig?: string }>;
   try {
     // The launch's state base rides along (the same value fs-view handed
     // fs-sync-cli): the walk prunes it and reads the view map it holds.
     // With it, the caches this session's environment moves (CARGO_HOME, …),
     // recorded like the defaults (secret-discovery.md §1.9 G); the same
     // options run.ts prefetches with (`launchDiscoverOptions`).
+    const endDiscovery = deps.timer?.span("discovery");
     const report = asDiscoveryReport(await deps.arbiter.discoverSecrets(roots, home, discoverOpts));
+    endDiscovery?.();
     found = report.files.map((f) => ({
       path: f.path, home, ...(f.level !== undefined ? { level: f.level } : {}),
       ...(typeof f.agentLogin === "string" ? { agentLogin: f.agentLogin } : {}),
+      ...(typeof f.agentConfig === "string" ? { agentConfig: f.agentConfig } : {}),
     }));
     // The launched agent's own login a grant covers (§3.9): twinned too.
     for (const p of deps.grantedLoginFiles ?? []) {
@@ -1718,7 +1738,9 @@ async function applySecretTwinsInner(
     try {
       // Another agent's login: with the launch's login variables, so one
       // CODEX_HOME moved out of the catalog's places registers as found.
-      reg = f.agentLogin !== undefined && discoverOpts.loginEnv !== undefined
+      // The agent's own MCP config likewise (`.claude.json` where
+      // CLAUDE_CONFIG_DIR moved it, secret-discovery.md §2.10).
+      reg = (f.agentLogin !== undefined || f.agentConfig !== undefined) && discoverOpts.loginEnv !== undefined
         ? await deps.arbiter.registerSecret(f.path, f.home, discoverOpts.loginEnv)
         : await deps.arbiter.registerSecret(f.path, f.home);
     } catch (e) {
@@ -1735,6 +1757,18 @@ async function applySecretTwinsInner(
       // reaches the model) but left readable, or the agent could not log in
       // (it would send the placeholder as its key; supported-agents.md §5.6.1).
       deps.log(`mandu: ${f.path} is the agent's own key file: left readable to it, its values masked in what reaches the model`);
+      continue;
+    }
+    if (f.agentConfig !== undefined) {
+      // The launched agent's own MCP config (secret-discovery.md §2.10):
+      // registered, so its servers' tokens are placeholders in what reaches
+      // the model and known to the egress gate, but left readable to the
+      // agent, which starts its MCP servers with those values (a twin would
+      // hand each server a placeholder) and rewrites the file as its own
+      // state (`~/.claude.json`, Codex's `config.toml`). Where the guard
+      // runs, a project's `.mcp.json` is still its twin to every other
+      // program (its open is gated by its label; the agent's is not).
+      deps.log(`mandu: ${f.path} is ${loginName(f.agentConfig)}'s MCP config: left readable to it, so its MCP servers start with their real values; those values are masked in what reaches the model`);
       continue;
     }
     if (f.agentLogin !== undefined && otherLoginsRaw) {
@@ -1936,15 +1970,37 @@ async function applySecretTwinsInner(
     // launch, whether the watch rejects or throws, and each of its git calls
     // is cut off after 5 s, so a slow repository cannot hold the launch up.
     const sources: TwinSource[] = twinPlan.files.map((f) => ({ targetPath: f.targetPath, content: f.content, twinPath: f.twinPath }));
+    //
+    // The two run at the same point and ask the same repositories some of
+    // the same questions (each work tree's `rev-list --all --no-walk`, the
+    // index entries of its protected files): through one runner that asks
+    // an identical call once (git-shared-answers.ts), each caller keeping
+    // its own failure handling and deadline, closed once both are done (the
+    // check after the agent exits asks git afresh).
+    sharedGit = deps.gitSession !== undefined ? shareGitAnswers(deps.gitSession.runner()) : null;
+    const watchGit = sharedGit?.runner;
     const watch = deps.placeholderWatch ?? ((fs: TwinSource[]) => preparePlaceholderWatch(fs, {
-      log: deps.log, ...(deps.gitSession !== undefined ? { git: deps.gitSession.runner() } : {}),
+      log: deps.log, ...(watchGit !== undefined ? { git: watchGit } : {}),
     }));
     const watchP = Promise.resolve().then(() => watch(sources)).catch((): WatchedRepo[] => []);
     const denyFile = deniedFile(twinDir);
-    const history = await hideGitHistory(twinPlan.files.map((f) => f.targetPath), denyFile);
+    let history: HiddenHistory;
+    const endHistory = deps.timer?.span("history");
+    try {
+      history = await hideGitHistory(twinPlan.files.map((f) => f.targetPath), denyFile);
+    } catch (e) {
+      sharedGit?.close();
+      sharedGit = null;
+      throw e;
+    }
+    endHistory?.();
     objectTwins = history.twins;
     gitObjects = history.gitObjects;
+    const endWatch = deps.timer?.span("watch");
     placeholderWatch = await watchP;
+    endWatch?.();
+    sharedGit?.close();
+    sharedGit = null;
     // A tracked twinned file whose real bytes are its index blob: its
     // twin's stat goes into its index entry, so git in the agent's world
     // finds it clean (a clean tree for filter-branch, rebase, stash; a
@@ -1964,17 +2020,33 @@ async function applySecretTwinsInner(
     // (rootless-confinement-ubuntu-2404.md §13 finding 7); the guard's
     // by-path open covers it. So without the guard nothing is patched (the
     // twin shows modified there, as before).
-    const recordHome = manduPath("mandu-home", ownEnv, home);
-    const recordDir = twinIndexRecordDir(manduPath("object-walks", ownEnv, home));
+    //
+    // ONLY THE LAUNCH'S OWN REPOSITORIES (2026-10-21): a work tree that
+    // holds the workspace or that the workspace holds (twin-index-stat.ts
+    // `reposInWorkspace`). The walk finds every repository under the home
+    // with a twinned file; patching them all cost 160 to 225 ms at launch and
+    // 70 to 84 ms at exit on a dev host (4 to 7 repositories) and showed the human's git
+    // ` M` in repositories the session never touches. Every other one keeps
+    // the twin showing modified in the agent's world; the placeholder watch
+    // above still covers them all (`placeholderWatch`, unfiltered), which is
+    // what names a `commit -a` of a placeholder there.
+    //
+    // The crash record goes to the HOME's own Mandu home whatever MANDU_HOME
+    // says (twin-index-stat.ts `twinIndexWriteStore`): a scratch Mandu home
+    // removed after the run took the record with it.
+    const store = twinIndexWriteStore(home);
     const cleanIndex = deps.twinIndex ?? ((rs: WatchedRepo[]) => {
-      twinIndexRecorder = new TwinIndexRecorder(recordDir, recordHome, plan.scopeId);
+      twinIndexRecorder = new TwinIndexRecorder(store.dir, store.home, plan.scopeId);
       return cleanTwinsInIndex(rs, {
         log: deps.log, ...(deps.gitSession !== undefined ? { git: deps.gitSession.runner() } : {}),
-        recorder: twinIndexRecorder, peers: () => livePeerRecords(recordDir, recordHome),
+        recorder: twinIndexRecorder, indexPathOf: (root) => stepIndexPaths?.[root],
       });
     });
     if (deps.guardServesTwins === true) {
-      twinIndex = await Promise.resolve().then(() => cleanIndex(placeholderWatch)).catch((): CleanedIndex[] => []);
+      const own = reposInWorkspace(placeholderWatch, deps.workspaceRoots ?? []);
+      const endIndex = deps.timer?.span("twin-index");
+      twinIndex = own.length === 0 ? [] : await Promise.resolve().then(() => cleanIndex(own)).catch((): CleanedIndex[] => []);
+      endIndex?.();
       // The caller's wrapper puts it back if anything below throws (no
       // result reaches run.ts then).
       held.cleaned = twinIndex;

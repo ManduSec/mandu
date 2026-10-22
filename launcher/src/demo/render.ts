@@ -11,24 +11,10 @@
  */
 import { docsUrl } from "../docs-url.js";
 import { BOUND_HOST, UNBOUND_HOST, type SceneId } from "./fixture.js";
+import { ANSI, PLAIN, type Style } from "../term-style.js";
 
-export interface Style {
-  bold: (s: string) => string;
-  dim: (s: string) => string;
-  green: (s: string) => string;
-  red: (s: string) => string;
-  cyan: (s: string) => string;
-}
-
-const id = (s: string): string => s;
-export const PLAIN: Style = { bold: id, dim: id, green: id, red: id, cyan: id };
-export const ANSI: Style = {
-  bold: (s) => `\x1b[1m${s}\x1b[22m`,
-  dim: (s) => `\x1b[2m${s}\x1b[22m`,
-  green: (s) => `\x1b[32m${s}\x1b[39m`,
-  red: (s) => `\x1b[31m${s}\x1b[39m`,
-  cyan: (s) => `\x1b[36m${s}\x1b[39m`,
-};
+// The styles live in term-style.ts (`mandu scan` words its report with them too).
+export { ANSI, PLAIN, type Style };
 
 /** Color only on a terminal that has not opted out (no-color.org). */
 export function pickStyle(isTTY: boolean, env: Record<string, string | undefined>): Style {

@@ -11,9 +11,10 @@
  *   2. one isolated, tool-less call on the U-LLM channel (inspect-mcp's
  *      `selectUllmConfig` + `buildUllmClient`: `api` or `cli`, and NEVER the
  *      anthropic-proxy, which is T-LLM's chokepoint: the selector refuses a
- *      loopback base URL). No channel ⇒ {@link AssistantUnconfiguredError}; the
- *      page says so and links to Settings. There is no heuristic fallback that
- *      guesses edits from the words;
+ *      loopback base URL). No channel ⇒ {@link AssistantUnconfiguredError}
+ *      with a `reason`; the page says in its own words why and what to do
+ *      (dashboard.md, *Describe what you want*). There is no heuristic
+ *      fallback that guesses edits from the words;
  *   3. the model's answer is parsed strictly (one JSON object with `edits` and
  *      an optional `note`), then validated and classified by the arbiter's
  *      `policyPreview` (nothing written). Rows come from the page's own
@@ -55,9 +56,50 @@ export interface AssistantModel {
   complete(call: { system: string; user: string }): Promise<{ text: string; model: string }>;
 }
 
-/** No quarantined model channel is configured (fail closed, no fallback). */
+/** Why the helper cannot run, for the page to word (dashboard.md,
+ *  *Describe what you want*): `no-channel` no API key and no claude/codex
+ *  CLI found; `not-installed` the helper's module did not load;
+ *  `api-key-missing` / `cli-missing` MANDU_ULLM_MODE names a channel that is
+ *  not there; `other` anything else. */
+export type AssistantUnavailableReason = "no-channel" | "not-installed" | "api-key-missing" | "cli-missing" | "other";
+
+/** The known starts of inspect-mcp's `selectUllmConfig` refusals, each with
+ *  its reason. Read only: a unit test reads ullm-config.ts and fails when a
+ *  message no longer starts so, so a reworded one cannot fall to `other`. */
+export const HELPER_MESSAGE_STARTS: ReadonlyArray<readonly [string, AssistantUnavailableReason]> = [
+  ["no ANTHROPIC_API_KEY and no claude/codex CLI", "no-channel"],
+  ["MANDU_ULLM_MODE=api", "api-key-missing"],
+  ["MANDU_ULLM_MODE=cli", "cli-missing"],
+];
+
+/** The reason of a channel-selection error, by its known start. */
+export function helperReason(message: string): AssistantUnavailableReason {
+  for (const [start, reason] of HELPER_MESSAGE_STARTS) if (message.startsWith(start)) return reason;
+  return "other";
+}
+
+/** The page's words for each reason: why the helper cannot run and what
+ *  fixes it, never the internal message. home.js says the same, with the
+ *  commands as code (a unit test holds the two equal). The PATH of the
+ *  dashboard's service can differ from the person's shell, so no sentence
+ *  claims `claude` is not installed. */
+export const HELPER_WORDS: Readonly<Record<AssistantUnavailableReason, string>> = {
+  "no-channel": "Mandu's helper uses Claude Code or Codex on this computer, or an Anthropic API key, and found neither. Sign in to Claude Code (claude), then press Suggest rules again.",
+  "not-installed": "Mandu's helper is not installed with this copy of Mandu. Run mandu doctor to check this copy.",
+  "api-key-missing": "Mandu's helper is set to use an Anthropic API key, and found none. Set ANTHROPIC_API_KEY for Mandu, then press Suggest rules again.",
+  "cli-missing": "Mandu's helper is set to use Claude Code or Codex on this computer, and did not find it. Sign in to Claude Code (claude), then press Suggest rules again.",
+  other: "Mandu's helper cannot run right now.",
+};
+
+/** No quarantined model channel is configured (fail closed, no fallback).
+ *  `reason` is set where it is thrown; by default, from the message. */
 export class AssistantUnconfiguredError extends Error {
   readonly unconfigured = true;
+  readonly reason: AssistantUnavailableReason;
+  constructor(message: string, reason?: AssistantUnavailableReason) {
+    super(message);
+    this.reason = reason ?? helperReason(message);
+  }
 }
 
 /** The model answered, but not with a valid rule change. */
@@ -253,7 +295,7 @@ export function productionAssistantModel(env: NodeJS.ProcessEnv = process.env): 
     try {
       mod = await import(specifier);
     } catch (err) {
-      throw new AssistantUnconfiguredError(`the quarantined model channel is not installed (${(err as Error).message})`);
+      throw new AssistantUnconfiguredError(`the quarantined model channel is not installed (${(err as Error).message})`, "not-installed");
     }
     let config: unknown;
     try {

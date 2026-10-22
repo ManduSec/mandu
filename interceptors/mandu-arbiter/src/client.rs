@@ -109,7 +109,7 @@ pub const REPORT_IO_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How long a call may wait for its answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CallKind {
+pub(crate) enum CallKind {
     /// The client's deadline ([`DEFAULT_IO_TIMEOUT`] unless set).
     Decision,
     /// [`REPORT_IO_TIMEOUT`], capped by the client's deadline.
@@ -448,6 +448,9 @@ pub struct ArbiterClient {
     rediscover: Option<Arc<RediscoverFn>>,
     rediscoveries: u64,
     io_timeout: Option<Duration>,
+    /// Ops whose deadline replaces the client's ([`ArbiterClient::with_op_deadline`]).
+    #[cfg(any(test, feature = "mock"))]
+    op_deadlines: Vec<(String, Duration)>,
     /// Whether `emit` sends (observability only; every other op always does).
     events: bool,
 }
@@ -464,6 +467,8 @@ impl ArbiterClient {
             rediscover: None,
             rediscoveries: 0,
             io_timeout: Some(DEFAULT_IO_TIMEOUT),
+            #[cfg(any(test, feature = "mock"))]
+            op_deadlines: Vec::new(),
             events: true,
         }
     }
@@ -503,8 +508,28 @@ impl ArbiterClient {
         self.io_timeout
     }
 
-    /// The deadline of one call of `kind`.
-    fn timeout_for(&self, kind: CallKind) -> Option<Duration> {
+    /// The same client with `op`'s deadline set to `t`, in place of the
+    /// client's (and of [`REPORT_IO_TIMEOUT`]) for that op alone. A TEST SEAM
+    /// (the `mock` feature): a test that wedges one op of a sequence gives
+    /// that op a short deadline and the client a long one, so the ops its
+    /// mock answers are not lost to the short one on a loaded machine. With
+    /// one 200 ms deadline for all, a starved mock thread let the answered
+    /// `classifyExec` time out, and the plan failed closed before the wedged
+    /// op was ever asked (exec-supervisor's wedged orchestrate tests).
+    #[cfg(any(test, feature = "mock"))]
+    pub fn with_op_deadline(mut self, op: &str, t: Duration) -> Self {
+        self.op_deadlines.retain(|(o, _)| o != op);
+        self.op_deadlines.push((op.to_string(), t.max(Duration::from_millis(1))));
+        self
+    }
+
+    /// The deadline of one call of `kind` for `op`.
+    #[cfg_attr(not(any(test, feature = "mock")), allow(unused_variables))]
+    pub(crate) fn timeout_for(&self, kind: CallKind, op: &str) -> Option<Duration> {
+        #[cfg(any(test, feature = "mock"))]
+        if let Some((_, t)) = self.op_deadlines.iter().find(|(o, _)| o == op) {
+            return Some(*t);
+        }
         match kind {
             CallKind::Decision => self.io_timeout,
             CallKind::Report => self.io_timeout.map(|t| t.min(REPORT_IO_TIMEOUT)),
@@ -667,7 +692,7 @@ impl ArbiterClient {
     /// unparsable line, a reply to another request) drops the connection, so
     /// a late answer is never read as the next request's.
     fn request_as<T: DeserializeOwned>(&mut self, kind: CallKind, op: &str, args: Value) -> Result<T> {
-        let timeout = self.timeout_for(kind);
+        let timeout = self.timeout_for(kind, op);
         let deadline = timeout.map(|t| Instant::now() + t);
         let failed = |e: io::Error| match timeout {
             Some(after) if is_timeout_io(&e) => ArbiterError::Timeout { op: op.to_string(), after },
@@ -1104,6 +1129,38 @@ impl ArbiterClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A request whose deadline passed before it was written (the client's
+    /// own thread starved past it on a loaded machine) is never sent, and the
+    /// call is a `Timeout`: the caller's unreachable branch, fail closed,
+    /// exactly as for a wedged arbiter. The next request dials the first
+    /// connection the arbiter accepts. (A zero deadline, set here past
+    /// `set_io_timeout`'s 1 ms floor, has passed before the connect.)
+    #[test]
+    fn a_deadline_that_passed_before_the_write_sends_nothing() {
+        use crate::mock::{op_stall, Stall, StallingArbiter};
+        let arbiter = StallingArbiter::start(op_stall(|_, _| Stall::Answer(Ok(serde_json::json!({ "pong": true, "protocolVersion": 1 })))));
+        let mut c = ArbiterClient::new(&arbiter.socket_path);
+        c.io_timeout = Some(Duration::ZERO);
+        match c.classify_exec(&ClassifyExecArgs { argv: vec!["curl".into()], ..Default::default() }) {
+            Err(e @ ArbiterError::Timeout { .. }) => {
+                let msg = e.to_string();
+                assert!(msg.contains("classifyExec") && msg.contains("fail closed"), "{msg}");
+            }
+            other => panic!("expected a timeout, got {other:?}"),
+        }
+        assert!(c.stream.is_none(), "no connection was made or kept");
+        // A deadline that passes between the connect and the write: the
+        // write gives up before a byte, as a timeout.
+        let mut s = connect_before(&arbiter.socket_path, Some(Instant::now() + DEFAULT_IO_TIMEOUT)).unwrap();
+        let e = write_all_before(&mut s, b"{\"id\":1,\"op\":\"classifyExec\"}\n", Some(Instant::now())).unwrap_err();
+        assert!(is_timeout_io(&e), "{e:?}");
+        drop(s);
+        c.set_io_timeout(Some(DEFAULT_IO_TIMEOUT));
+        assert!(c.ping().unwrap().pong);
+        let seen = arbiter.requests_after(1);
+        assert_eq!(seen, vec![(2, "ping".to_string())], "only the ping reached the arbiter, on the second connection made");
+    }
 
     /// The human plane has no fallback (docs/design/architecture/arbiter-human-plane.md):
     /// unset or empty → an error, whatever the data socket says.

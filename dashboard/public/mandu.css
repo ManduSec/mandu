@@ -44,6 +44,9 @@
   --warn-line: #e8c48f;
   --bad: #b4342a;
   --bad-bg: #f6dcd9;
+  --bad-line: #e2a9a3;
+  --ok-line: #9fcfb2;
+  --key: #a07400;
   --code-bg: #f0efe8;
   /* Inline code on the product page: its own ink, apart from the accent
      (links) and the three semantic colors (the masked / secret chips). */
@@ -81,6 +84,9 @@
     --warn-line: #6a4d1c;
     --bad: #e8756b;
     --bad-bg: #44231f;
+    --bad-line: #7a3a33;
+    --ok-line: #2f6a49;
+    --key: #e3c35a;
     --code-bg: #2a2c32;
     --code-ink: #c9b3f5;
     --sym: #d9bd5c;
@@ -109,6 +115,9 @@
   --warn-line: #6a4d1c;
   --bad: #e8756b;
   --bad-bg: #44231f;
+  --bad-line: #7a3a33;
+  --ok-line: #2f6a49;
+  --key: #e3c35a;
   --code-bg: #2a2c32;
   --code-ink: #c9b3f5;
   --sym: #d9bd5c;
@@ -134,7 +143,14 @@ code { font-size: 0.9em; }
 h1, h2, h3 { margin: 0; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
-[hidden] { display: none !important; }
+[hidden]:not([hidden="until-found"]) { display: none !important; }
+/* A fold the browser's Find in page can open (hidden="until-found",
+   dashboard.md §4.25b *Find in page opens a fold*): the browser keeps it as
+   a box whose content it skips (content-visibility: hidden) but still
+   searches. Out of the flow, with no border, padding or size, that box
+   takes no room and no gap, as display: none did. Opened, the attribute
+   goes and so does this rule. */
+[hidden="until-found"] { position: absolute !important; width: 0 !important; height: 0 !important; margin: 0 !important; padding: 0 !important; border: 0 !important; overflow: hidden !important; }
 /* Motion follows the system's setting (dashboard.md §4.25k): under "reduce
    motion" a change of state on either page happens at once. Every
    transition ends at once (!important: a page's own later rule cannot bring

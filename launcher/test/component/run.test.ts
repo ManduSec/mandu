@@ -190,11 +190,9 @@ test("launch display policy (packaging.md §5, 2026-10-18): by default ONE banne
     assert.ok(verbose.lines.length > quiet.lines.length);
     assert.ok(verbose.log.some((l) => /\bLIVE\b/.test(l)), "verbose still writes the log");
     const flag = await mainCapturingStderr(["--verbose", ...argv], base);
-    assert.deepEqual(
-      flag.lines.filter((l) => !/\d{4,}/.test(l)),
-      verbose.lines.filter((l) => !/\d{4,}/.test(l)),
-      "--verbose == MANDU_VERBOSE=1 (modulo per-run ids/ports)",
-    );
+    // The step times at the end (runtime-instances.md §14.11) differ run to run.
+    const steady = (lines: string[]): string[] => lines.map((l) => l.replace(/ +\d+ ms\b/g, " N ms")).filter((l) => !/\d{4,}/.test(l));
+    assert.deepEqual(steady(flag.lines), steady(verbose.lines), "--verbose == MANDU_VERBOSE=1 (modulo per-run ids/ports and times)");
   });
 });
 

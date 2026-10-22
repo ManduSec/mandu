@@ -20,6 +20,7 @@ import assert from "node:assert/strict";
 import {
   detectSecretShapes,
   entropy,
+  findSecretValues,
   githubTokenChecksumOk,
   historyDetectorFingerprint,
   HISTORY_DETECTOR_VERSION,
@@ -44,8 +45,11 @@ stateAxes("secrets"); // this suite states its axes (protection-modes.md §4); n
  *  the old rule are looked at again (wanted: the old rule missed keys).
  *  Moved on purpose again 2026-10-02 from c2a0c08d… (the stand-in words
  *  forgiven inside a random run, a letters-only assignment value): one more
- *  full rescan, again wanted (the old rule missed those keys). */
-const PINNED_FINGERPRINT = "a94dcab6ac93792258353141ecdd397c5abe43a546b9aec4db3463fbfe0c3a0a";
+ *  full rescan, again wanted (the old rule missed those keys). Moved on
+ *  purpose 2026-10-22 from a94dcab6… (a newer GitLab token's
+ *  `.version.id` suffix is part of the value): one more full rescan, wanted
+ *  (the old rule left the suffix in the clear). */
+const PINNED_FINGERPRINT = "53d82a4fbe3c079902732ac4d06bd6844ebf1056f39ef197e7f3ec9cbf9463e4";
 
 test("the fingerprint is pinned: only a deliberate detector change moves it", () => {
   assert.equal(HISTORY_DETECTOR_VERSION, 1);
@@ -580,4 +584,15 @@ test("MISS (c): github_pat_ has no checksum to check; its exact layout takes the
   assert.ok(!githubTokenChecksumOk(pat), "the classic checksum does not apply to the fine-grained layout");
   assert.deepEqual(detectSecretShapes(`GH_TOKEN=${pat}\n`).map((h) => h.preview), ["github_pat_…"]);
   assert.deepEqual(detectSecretShapes(`GH_TOKEN=${"github" + "_pat_"}${"x".repeat(22)}_${"x".repeat(59)}\n`), [], "the all-x template is no token");
+});
+
+test("gitlab-token: a newer token's .version.id suffix is part of the value; an older one ends where it did, a sentence's dot not taken (step 0, 2026-10-22)", () => {
+  const body = `${"gl" + "pat-"}${R1}${R2}`;
+  const dotted = `${body}.01.${"0x7k" + "2m9qa"}`;
+  const v = (text: string): string[] => findSecretValues(text).filter((h) => h.shape === "gitlab-token").map((h) => h.value);
+  assert.deepEqual(v(`token: ${dotted}\n`), [dotted], "the whole dotted token");
+  assert.deepEqual(v(`GITLAB_TOKEN=${dotted} next`), [dotted]);
+  assert.deepEqual(v(`use ${body}.`), [body], "a sentence's dot is not the token's");
+  assert.deepEqual(v(`use ${body}`), [body], "an older token as before");
+  assert.equal(findSecretValues(dotted).find((h) => h.shape === "gitlab-token")?.preview, "glpat-…");
 });

@@ -85,6 +85,7 @@ import { StringDecoder } from "node:string_decoder";
 import { CHILD_CLOSE_GRACE_MS, CHILD_KILL_GRACE_MS, runChild, type RunningChild } from "./child-run.js";
 import type { GitRun, GitRunner } from "./git-object-twins.js";
 import { gitCommand, hardenedGitArgs, hardenedGitEnv, isSeatbeltGitSandbox, type BwrapGitSandbox, type GitSandbox } from "./hardened-git.js";
+import { countGitCall, countGitSandbox } from "./launch-timings.js";
 import { launchGitSandbox } from "./probe-cache.js";
 
 /** Collected stdout over this many characters fails a call of the
@@ -114,6 +115,12 @@ export function isProductionGitRunner(r: GitRunner): boolean {
   return PRODUCTION.has(r);
 }
 
+/** `wrapper` runs every call on `base` (git-shared-answers.ts): when `base`
+ *  is a production runner, so is it. */
+export function markProductionLike(wrapper: GitRunner, base: GitRunner): void {
+  if (PRODUCTION.has(base)) PRODUCTION.add(wrapper);
+}
+
 /**
  * The per-call runner: `git` HARDENED (hardened-git.ts, write-protection.md
  * §8), in a sandbox of its own (`gitCommand`: bubblewrap on Linux, Seatbelt
@@ -124,6 +131,9 @@ export function isProductionGitRunner(r: GitRunner): boolean {
 export function perCallGitRunner(children?: Set<RunningChild>, sandbox: () => GitSandbox | null = launchGitSandbox): GitRunner {
   const run: GitRunner = async (args, opts) => {
     const cmd = gitCommand(productionGitArgs(args), sandbox(), opts.writable ?? []);
+    // The launch's costs (launch-timings.ts): one git, in a sandbox of its
+    // own unless none could be made.
+    countGitCall(cmd.file !== "git");
     const r = await runChild(cmd.file, cmd.args, {
       cwd: opts.cwd,
       env: productionGitEnv(opts.env),
@@ -131,6 +141,7 @@ export function perCallGitRunner(children?: Set<RunningChild>, sandbox: () => Gi
       timeoutMs: opts.timeoutMs ?? GIT_RUNNER_DEFAULT_TIMEOUT_MS,
       maxStdout: GIT_RUNNER_MAX_STDOUT,
       maxStderr: GIT_RUNNER_MAX_STDERR,
+      ...(opts.binary === true ? { stdoutEncoding: "latin1" as const } : {}),
     }, children);
     return { code: r.code, stdout: r.stdout, stderr: r.stderr };
   };
@@ -451,6 +462,7 @@ export class GitSession {
     const sb = this.sandbox!;
     const cmd = (this.opts.runnerCommand ?? sessionRunnerCommand)(sb);
     this.stats.sandboxes++;
+    countGitSandbox();
     this.ready = false;
     this.rx = [];
     this.rxLen = 0;
@@ -491,7 +503,7 @@ export class GitSession {
       // Enough bytes for GIT_RUNNER_MAX_STDERR characters whatever they are.
       errBytes: GIT_RUNNER_MAX_STDERR * 4,
     }) + "\n";
-    const outDec = new StringDecoder("utf8");
+    const outDec = new StringDecoder(opts.binary === true ? "latin1" : "utf8");
     const errDec = new StringDecoder("utf8");
     let out = "";
     let err = "";
@@ -586,6 +598,9 @@ export class GitSession {
     };
     this.calls.set(id, p);
     this.stats.inSession++;
+    // The launch's costs: a git started in the session's sandbox (a call the
+    // runner never ran, redone per call, counts again there).
+    countGitCall(false);
     children?.add(handle);
     deadline = setTimeout(() => kill(`killed at its ${timeoutMs} ms deadline`), Math.max(1, timeoutMs));
     this.busy();

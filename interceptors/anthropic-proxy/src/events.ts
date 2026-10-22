@@ -115,6 +115,52 @@ export interface EventModelMeta {
   id: string;
   inputTokens?: number;
   outputTokens?: number;
+  /** The provider's id for this response (the Messages API's `msg_…`; on a
+   *  routed OpenAI-family wire Chat's `chatcmpl-…` or the Responses API's
+   *  `resp_…`, as the agent was sent it, response-id.ts), as the agent's own
+   *  transcript keeps it: `mandu scan` joins on it to tell a past session
+   *  under Mandu exactly (confidentiality-plan-17 §3 item 6). Only on a
+   *  tllm_call whose response carried one. */
+  responseId?: string;
+  /** The agent's own id of its session, as the request carried it
+   *  (OpenCode 1.x and 2.x send it with every model request, whatever the
+   *  wire, and keep it as the session's row id; {@link agentSessionIdOf}):
+   *  `mandu scan` joins on it where the agent keeps no response id
+   *  (confidentiality-plan-17 §3 item 6). An opaque id the agent made up,
+   *  already sent to the provider; never a secret. */
+  agentSessionId?: string;
+}
+
+/** A provider's response id as an event keeps it: a short run of id
+ *  characters (`msg_…`, `resp_…`), else nothing. Nothing else from the
+ *  response is taken. Pure. */
+export function responseIdOf(v: unknown): string | undefined {
+  return typeof v === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(v) ? v : undefined;
+}
+
+/** The request headers that carry the agent's own session id, the first
+ *  present one deciding: OpenCode 2.x's `x-opencode-session-id` (the
+ *  session's own id; its `X-Session-Id` may name another), OpenCode 1.x's
+ *  `X-Session-Id` (with `x-session-affinity`, sent to every provider but
+ *  its own), and 1.x's `x-opencode-session` (its own `opencode` provider).
+ *  Read off OpenCode 1.18.13's and 2.0.23's requests
+ *  (confidentiality-plan-17 §3 item 6). */
+export const AGENT_SESSION_HEADERS = ["x-opencode-session-id", "x-session-id", "x-opencode-session"] as const;
+
+/** OpenCode's session id: `ses_` and id characters. */
+const AGENT_SESSION_ID_RE = /^ses_[A-Za-z0-9]{8,120}$/;
+
+/** The agent's session id a request carried, when it has OpenCode's shape
+ *  (`ses_` and id characters, at most 124 in all), else nothing: a header
+ *  of another shape is never taken, so nothing else a header holds can
+ *  reach the event. Pure; never throws. */
+export function agentSessionIdOf(headers: Record<string, string | string[] | undefined>): string | undefined {
+  for (const h of AGENT_SESSION_HEADERS) {
+    const v = headers[h];
+    if (v === undefined) continue;
+    return typeof v === "string" && AGENT_SESSION_ID_RE.test(v) ? v : undefined;
+  }
+  return undefined;
 }
 
 /**
@@ -393,6 +439,10 @@ export interface TllmCallArgs {
   /** Structural shape of the forwarded request (tools/max_tokens/user turns) —
    *  the dashboard's side-call detection seam (dashboard.md §4.2c). */
   callShape?: TllmCallShape;
+  /** The response's id (`msg_…`, `chatcmpl-…`, `resp_…`), when it carried a well-formed one. */
+  responseId?: string;
+  /** The agent's session id the request carried ({@link agentSessionIdOf}). */
+  agentSessionId?: string;
 }
 
 export function makeTllmCall(a: TllmCallArgs): ManduEvent {
@@ -402,7 +452,11 @@ export function makeTllmCall(a: TllmCallArgs): ManduEvent {
   return baseEvent(a.ctx, "tllm_call", {
     input: makeDualRepr(a.inputSymbolized, a.inputOriginal, a.inputSymbols),
     output: makeDualRepr(a.outputText, null, []),
-    model: { id: a.model },
+    model: {
+      id: a.model,
+      ...(responseIdOf(a.responseId) ? { responseId: a.responseId! } : {}),
+      ...(a.agentSessionId !== undefined && AGENT_SESSION_ID_RE.test(a.agentSessionId) ? { agentSessionId: a.agentSessionId } : {}),
+    },
     invariant: inv,
     ...(a.fullInput ? { fullInput: a.fullInput } : {}),
     ...(a.callShape ? { callShape: a.callShape } : {}),

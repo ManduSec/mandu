@@ -92,6 +92,8 @@
   "scripts.ci-live-events": 0.4,
   "scripts.ci-ns-run": 3.3,
   "scripts.ci-pins": 0.2,
+  "scripts.release-assets": 0.5,
+  "scripts.release-workflow": 1,
   "scripts.ci-pipeline": 10.5,
   "scripts.ci-port-bridge": 3.1,
   "scripts.ci-vm-run": 23,

@@ -36,7 +36,11 @@
  *     user, closed to group and other writes, under 256 KiB; written by
  *     safe-file's rename. A `checkedAt` in the future counts as stale, so a
  *     forged entry silences the notice for at most a day; `mandu doctor`
- *     always asks afresh. The residual is in packaging.md §11.5.
+ *     always asks afresh. The residual is in packaging.md §11.5. The
+ *     dashboard reads the same file for Settings › About Mandu through a
+ *     mirror of the pure parts and this reader
+ *     (dashboard/src/update-notice.ts); tests/stack/update-notice-parity
+ *     keeps the two equal, so change both together.
  *
  * Mandu-new (no reference origin).
  */

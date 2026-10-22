@@ -807,6 +807,38 @@ test("§11.2 indent: the expander asks the arbiter with cols − W (2, 4 in a li
   assert.deepEqual(await run1(`${TSV}\n`, "terminal"), [{ width: 80, first: 80, indent: 0 }], "Goose prints at column 0");
 });
 
+test("§19.7 TAB origin: a relay that reports `tabs: content` (Claude Code) gets indent 0 everywhere; the eligibility forwards it", async () => {
+  const TSV = "$MDU:nomodel_Read[7ab5]";
+  const tsv = "name\tport\towner\nweb\t8080\talice\n";
+  const run1 = async (text: string, layout: { cols: number; tabs?: "content" }): Promise<Array<{ width: number; first: number; indent?: number }>> => {
+    const seen: Array<{ width: number; first: number; indent?: number }> = [];
+    const x = new SseReserveExpander({
+      lines: async () => 2,
+      layout: async () => layout,
+      shape: async (_t, width, first, r, indent) => {
+        seen.push({ width, first, ...(indent !== undefined ? { indent } : {}) });
+        return { lines: 2, rows: layoutRows(tsv, width, first, r ?? "ink", indent).length };
+      },
+      cap: 40,
+    });
+    await textOf(x, text);
+    return seen;
+  };
+  const content = { cols: 80, tabs: "content" as const };
+  assert.deepEqual(await run1(`${TSV}\n`, content), [{ width: 78, first: 78, indent: 0 }], "the reply's own column 0");
+  assert.deepEqual(await run1(`- ${TSV}\n`, content), [{ width: 76, first: 76, indent: 0 }], "a list item's text, not the screen");
+  assert.deepEqual(await run1(`The table is ${TSV}\n`, content), [{ width: 78, first: 65, indent: 0 }], "mid-line: F places the head");
+  assert.deepEqual(await run1(`${TSV}\n`, { cols: 80 }), [{ width: 78, first: 78, indent: 2 }], "screen (absent): cols − W, as before");
+  // The eligibility reads `tabs` off the relay and hands it to the expander.
+  const base: Relay2 = { mode: "pty", reserve: true, cols: 80, wrap: true, updatedAt: 1 };
+  const layoutOf = async (relay: Relay2 & { tabs?: string }) =>
+    new ReserveEligibility({ sessionRelay: async () => relay, symbolShape: async () => null }, { enabled: true, sessionKey: "s" }).layout();
+  assert.deepEqual(await layoutOf({ ...base, tabs: "content" }), { cols: 80, tabs: "content" });
+  assert.deepEqual(await layoutOf({ ...base, tabs: "screen" }), { cols: 80 });
+  assert.deepEqual(await layoutOf(base), { cols: 80 });
+  assert.deepEqual(await layoutOf({ ...base, tabs: "Content" }), { cols: 80 }, "anything else is the screen's");
+});
+
 test("§11.2 indent: eligibility passes `indent` to symbolShape only when it moves a stop, and caches per indent", async () => {
   const relay: Relay2 = { mode: "pty", reserve: true, cols: 80, wrap: true, updatedAt: 1 };
   type Opts3 = Opts2 & { indent?: number };

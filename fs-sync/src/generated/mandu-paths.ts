@@ -29,6 +29,8 @@ export type ManduPathName =
   | "paired-approvals"
   | "browser-profile"
   | "launch-logs"
+  | "dashboard-account"
+  | "last-scan"
   | "events"
   | "events-test"
   | "runs-root"
@@ -118,6 +120,10 @@ export const MANDU_PATHS: Readonly<Record<ManduPathName, ManduPathEntry>> = {
   "browser-profile": { name: "browser-profile", base: "state-root", rel: "browser", kind: "dir", mode: 0o700, agentReadable: false, env: null },
   // one log per launch: every launch line and Mandu helper message the terminal did not show by default; the last 20 kept (packaging.md §5 "Launch display policy")
   "launch-logs": { name: "launch-logs", base: "state-root", rel: "launch-logs", kind: "dir", mode: 0o700, agentReadable: false, env: null },
+  // the Mandu dashboard account: a username and a salted scrypt hash of its password, never the password (dashboard.md §6.z); `mandu dashboard --set-password` writes it
+  "dashboard-account": { name: "dashboard-account", base: "state-root", rel: "dashboard-account.json", kind: "file", mode: 0o600, agentReadable: false, env: null },
+  // the last `mandu scan`'s report: kinds, masks, names, files, counts, hosts, dates, never a value (confidentiality-plan-17 §3 item 12)
+  "last-scan": { name: "last-scan", base: "state-root", rel: "last-scan.json", kind: "file", mode: 0o600, agentReadable: false, env: null },
   // session history; holds originals
   "events": { name: "events", base: "mandu-home", rel: "events", kind: "dir", mode: 0o700, agentReadable: false, env: null },
   // the test tenant's events

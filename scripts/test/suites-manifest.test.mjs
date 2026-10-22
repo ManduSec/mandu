@@ -866,8 +866,10 @@ test("ci.yml: the packages, shell and rust steps build valid outputs, and every 
     }
   });
 
-// Every workflow GitHub would run.
+// Every workflow GitHub would run. The release workflow is the one a tag
+// starts; every other one is the pull-request / manual kind.
 const WORKFLOWS = readdirSync(join(REPO_ROOT, ".github", "workflows")).filter((f) => /\.ya?ml$/.test(f)).sort();
+const RELEASE_WORKFLOW = "release.yml";
 
 test("every workflow parses as YAML, and each job's needs and outputs name what exists",
   { skip: (() => { try { execFileSync("python3", ["-c", "import yaml"], { stdio: "ignore" }); return false; } catch { return "needs python3 with PyYAML"; } })() },
@@ -878,9 +880,11 @@ test("every workflow parses as YAML, and each job's needs and outputs name what 
         join(REPO_ROOT, ".github", "workflows", f)], { encoding: "utf8" }));
       assert.ok(doc.jobs && Object.keys(doc.jobs).length, `${f} has jobs`);
       // On a private repository (the free plan's metered minutes) only a manual
-      // run starts a job; a job that needs another skips with it (§12).
+      // run starts a job; a job that needs another skips with it (§12). The
+      // release workflow (a v* tag, never a pull request) refuses a private
+      // repository in its own first step instead (scripts/test/release-workflow.test.mjs).
       for (const [name, job] of Object.entries(doc.jobs)) {
-        if (job.needs) continue;
+        if (job.needs || f === RELEASE_WORKFLOW) continue;
         assert.ok(isPrivateGated(job.if), `${f}: root job ${name} runs on a private repository only when started by hand (if: ${job.if})`);
       }
       for (const [name, job] of Object.entries(doc.jobs)) {
@@ -909,11 +913,11 @@ test("every workflow parses as YAML, and each job's needs and outputs name what 
   });
 
 // ── when GitHub runs (continuous-integration.md §12, "When GitHub runs") ──────
-// Only where GitHub is the only signal: a manual run (the release check), and
-// a pull request once the repository is public. No macOS: a maintainer runs the
-// darwin entries on a Mac by hand (decided 2026-10-09).
-// Never a snapshot push to main/master (GitLab ran a superset on the commit),
-// never a v* tag (GitHub makes it when the release is published: after the check).
+// Only where GitHub is the only signal: the release check (ci.yml called by
+// release.yml on a v* tag), a manual run, and a pull request once the
+// repository is public. No macOS: a maintainer runs the darwin entries on a
+// Mac by hand (decided 2026-10-09). Never a snapshot push to main/master
+// (GitLab ran a superset on the commit); a v* tag starts only release.yml.
 
 const NO_PYYAML = (() => { try { execFileSync("python3", ["-c", "import yaml"], { stdio: "ignore" }); return false; } catch { return "needs python3 with PyYAML"; } })();
 const workflowDoc = (f) => JSON.parse(execFileSync("python3", ["-c",
@@ -922,16 +926,19 @@ const workflowDoc = (f) => JSON.parse(execFileSync("python3", ["-c",
 // PyYAML reads the key `on` as YAML 1.1's boolean true.
 const triggers = (doc) => doc.on ?? doc.true;
 
-test("workflows: no push, tag or schedule trigger runs a job; a pull request and a manual run do", { skip: NO_PYYAML }, () => {
-  for (const f of WORKFLOWS) {
+test("workflows: no push, tag or schedule trigger runs a job; a pull request, a manual run and the release's call do", { skip: NO_PYYAML }, () => {
+  for (const f of WORKFLOWS.filter((w) => w !== RELEASE_WORKFLOW)) {
     const doc = workflowDoc(f);
     const on = triggers(doc);
-    assert.deepEqual(Object.keys(on).sort(), ["pull_request", "workflow_dispatch"], `${f}: triggers`);
+    assert.deepEqual(Object.keys(on).sort(), ["pull_request", "workflow_call", "workflow_dispatch"], `${f}: triggers`);
     assert.ok(!JSON.stringify(on).includes("tags"), `${f}: no tag filter`);
     assert.ok(!("branches" in (on.pull_request ?? {})), `${f}: a pull request against any branch`);
     // A newer push to a pull request cancels the older run; nothing else does.
     assert.equal(doc.concurrency["cancel-in-progress"], "${{ github.event_name == 'pull_request' }}", `${f}: cancel-in-progress`);
   }
+  // The release workflow: a v* tag push and nothing else (no branch push).
+  const rel = triggers(workflowDoc(RELEASE_WORKFLOW));
+  assert.deepEqual(rel, { push: { tags: ["v*"] } }, `${RELEASE_WORKFLOW}: a v* tag only`);
 });
 
 test("ci.yml: a documentation-only pull request runs nothing, the same cut as the GitLab docs lane (lane.mjs isDocsPath)",
@@ -954,7 +961,7 @@ test("ci.yml: a documentation-only pull request runs nothing, the same cut as th
   });
 
 test("workflows: no job runs on a macOS runner (the darwin entries run on a Mac by hand, development.md)", { skip: NO_PYYAML }, () => {
-  assert.deepEqual(WORKFLOWS, ["ci.yml"], "the one workflow; a new one is checked by the tests above");
+  assert.deepEqual(WORKFLOWS, ["ci.yml", RELEASE_WORKFLOW], "CI and the release; a new one is checked by the tests above");
   for (const f of WORKFLOWS) {
     for (const [name, job] of Object.entries(workflowDoc(f).jobs)) {
       const where = JSON.stringify([job["runs-on"], job.strategy ?? {}]);

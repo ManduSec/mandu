@@ -7,7 +7,8 @@
  *     more" reads the next page after the last row and gives the first new
  *     row the focus; a page that could not be read says why;
  *   - the agent page's *What the leak check found*: each place, its time a
- *     button that opens the step; no word names the trace;
+ *     button that opens the step; no word names the trace; then *What to do
+ *     now*, its Report a problem link the issue tracker in a new tab;
  *   - a turn's background: *List them* asks for its steps
  *     (`&background=<turn id>`), and the first line takes the focus;
  *   - an original cut at the page's cap: signed in, *Show the whole original*
@@ -19,6 +20,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { AGENT, T, home, load, tick } from "./home-js-fixtures.js";
+import { ISSUES_URL } from "../../../src/agent-versions.js";
 
 const row = (id: string, over: Record<string, unknown> = {}) => ({
   id, agent: "Claude Code", title: `Task ${id}`, cwd: "/home/u/ws", startedAt: "2026-09-01T10:00:00.000Z", lastAt: "2026-09-01T10:05:00.000Z", state: "idle",
@@ -97,6 +99,11 @@ const flaggedAgent = {
       { ts: "2026-09-25T10:00:01.000Z", step: "t1", parts: [T("At "), { kind: "time", text: "2026-09-25T10:00:01.000Z", step: "t1" }, T(", the result of this step reached the AI without a mask: Read "), { kind: "code", text: "notes.md" }, T(". It held your secret "), { kind: "code", text: "API_KEY" }, T(".")] },
       { ts: "2026-09-25T10:00:05.000Z", parts: [T("At "), { kind: "time", text: "2026-09-25T10:00:05.000Z" }, T(", a request to the AI carried an item as it was, though Mandu had masked it.")] },
     ],
+    todo: [
+      [T("Change "), { kind: "code", text: "API_KEY" }, T(" where it was issued, and turn the old one off: the AI's provider received it as it was.")],
+      [T("If what reached the AI held a key or a password, change it the same way. Open the step to see what it was.")],
+      [T("This is a fault in Mandu, not in your rules. "), { kind: "text", text: "Report a problem", href: ISSUES_URL }, T(", with this session's time. Never paste the key itself.")],
+    ],
   },
 };
 
@@ -119,10 +126,36 @@ test("the agent page says what the leak check found: each place, its time openin
   assert.equal(items[1].querySelector("button.step-link"), null, "a request is no step");
   assert.doesNotMatch(shownText(doc.getElementById("page-agent")), /detailed trace|developer view/i);
   assert.deepEqual(reachableDevLinks(doc), []);
+  // What to do now, after the lines: each line, the report linked.
+  const title = doc.getElementById("agent-finding-todo-title");
+  const todo = doc.getElementById("agent-finding-todo");
+  assert.equal(title.hidden, false);
+  assert.equal(title.textContent, "What to do now");
+  assert.equal(todo.hidden, false);
+  assert.ok(doc.getElementById("agent-finding").compareDocumentPosition(todo) & 4, "the list follows the lines");
+  const todos = [...todo.querySelectorAll("li")] as any[];
+  assert.deepEqual(todos.map((li) => li.textContent), [
+    "Change API_KEY where it was issued, and turn the old one off: the AI's provider received it as it was.",
+    "If what reached the AI held a key or a password, change it the same way. Open the step to see what it was.",
+    "This is a fault in Mandu, not in your rules. Report a problem, with this session's time. Never paste the key itself.",
+  ]);
+  assert.equal(todos[0].querySelector("code").textContent, "API_KEY");
+  const links = [...todo.querySelectorAll("a")] as any[];
+  assert.equal(links.length, 1);
+  assert.equal(links[0].textContent, "Report a problem");
+  assert.equal(links[0].getAttribute("href"), ISSUES_URL);
+  assert.equal(links[0].getAttribute("target"), "_blank");
+  assert.match(links[0].getAttribute("rel"), /\bnoopener\b/);
+  // An address that is not https is drawn as plain words, never a link.
+  const odd = load({ extensions: "", url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...flaggedAgent, finding: { ...flaggedAgent.finding, todo: [[{ kind: "text", text: "Report a problem", href: "javascript:alert(1)" }]] } } } });
+  await tick();
+  assert.equal(odd.doc.querySelector("#agent-finding-todo a"), null);
+  assert.equal(odd.doc.getElementById("agent-finding-todo").textContent, "Report a problem");
   // A session the check did not flag: no block.
   const clean = load({ extensions: "", url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, finding: null } } });
   await tick();
   assert.equal(clean.doc.getElementById("agent-finding-block").hidden, true);
+  assert.equal(clean.doc.querySelector("#agent-finding-todo li"), null);
 });
 
 test("a turn's background: List them asks for its steps and the first line takes the focus; once listed, each step with its time", async () => {

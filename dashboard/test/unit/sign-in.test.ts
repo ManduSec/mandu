@@ -1,134 +1,72 @@
 /**
- * sign-in.test — the dashboard's one-time sign-in links (src/sign-in.ts;
- * policy-surface.md §2.6 "Signing in").
+ * sign-in.test — the dashboard's human-plane socket (src/sign-in.ts;
+ * policy-surface.md §2.6 "Signing in", dashboard.md §6.z).
  *
  * Pins:
- *   - a ticket signs in ONCE, only before it expires; a guess, an empty or
- *     oversized value signs nobody in; the outstanding set is capped;
- *   - the decision: an unknown op is refused; a password or Basic-auth
- *     dashboard mints nothing; no exposure answer (absent, throwing,
- *     malformed) mints nothing (fail closed); a live launch with no wall
- *     mints nothing and names it; otherwise a path under the base path;
+ *   - `signInLink` never mints a link now: it answers how the dashboard
+ *     signs a person in (the account, no account yet, an account that
+ *     cannot be used, an in-memory username and password); an unknown op
+ *     is refused;
  *   - the socket: one NDJSON answer per connection over a real Unix socket,
  *     created 0600 in a 0700 directory; a directory with group/other bits or
  *     a symlinked one refuses to serve; dead dashboards' sockets are swept,
- *     the arbiter's are not.
+ *     the arbiter's are not;
+ *   - `sessionKept` (dashboard.md §4.25ah): a session id or a refusal; no
+ *     source, an unknown session: `found: false`; a failure to read:
+ *     `unknown`; the answer's line and facts over the same socket.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect, createServer } from "node:net";
+import { connect } from "node:net";
 
 import {
-  SignInTickets,
   answerSignIn,
-  arbiterHumanSocks,
-  askHumanPlaneStatus,
-  combinedHumanPlaneStatus,
   serveSignInChannel,
   signInDepsFor,
   signInSockPath,
   sweepDeadSignInSocks,
   SIGN_IN_OP,
+  SESSION_KEPT_OP,
+  answerSessionKept,
   type SignInDeps,
+  type SignInMode,
 } from "../../src/sign-in.js";
-import type { HumanPlaneStatus } from "../../src/event-source/contract.js";
-
-const WALLED: HumanPlaneStatus = { exposed: false, since: null, launches: [] };
-const EXPOSED: HumanPlaneStatus = {
-  exposed: true, since: 1, launches: [{ pid: 4242, mode: "secrets", posture: "gated", session: "abc123" }],
-};
+import type { SessionKept } from "../../src/view-model/session-kept.js";
 
 function deps(over: Partial<SignInDeps> = {}): SignInDeps {
-  let n = 0;
-  return {
-    mode: () => "tickets",
-    mintPath: () => ({ path: `/login?ticket=t${++n}`, expiresAt: 99 }),
-    humanPlaneStatus: async () => WALLED,
-    ...over,
-  };
+  return { mode: () => "account", ...over };
 }
 
-test("a ticket signs in once, and only before it expires", () => {
-  let now = 1_000;
-  const t = new SignInTickets({ ttlMs: 100, now: () => now });
-  const a = t.mint();
-  assert.equal(a.expiresAt, 1_100);
-  assert.match(a.ticket, /^[0-9a-f]{32}$/, "128 random bits");
-  assert.equal(t.redeem(a.ticket), true);
-  assert.equal(t.redeem(a.ticket), false, "spent on first use");
-  const b = t.mint();
-  now = 1_200;
-  assert.equal(t.redeem(b.ticket), false, "expired");
-  const c = t.mint();
-  assert.equal(t.redeem(c.ticket + "0"), false, "a near-guess");
-  assert.equal(t.redeem(""), false);
-  assert.equal(t.redeem("x".repeat(300)), false);
-  assert.equal(t.redeem(c.ticket), true, "a failed guess does not spend the real one");
-});
-
-test("tickets are distinct and the outstanding set is capped (oldest dropped)", () => {
-  const t = new SignInTickets({ max: 3 });
-  const minted = [t.mint(), t.mint(), t.mint(), t.mint()];
-  assert.equal(new Set(minted.map((m) => m.ticket)).size, 4);
-  assert.equal(t.size(), 3);
-  assert.equal(t.redeem(minted[0]!.ticket), false, "the oldest was dropped");
-  assert.equal(t.redeem(minted[3]!.ticket), true);
-});
-
-test("answerSignIn: unknown op, password, Basic auth: no link", async () => {
-  assert.equal((await answerSignIn({ op: "nope" }, deps())).ok, false);
-  assert.equal((await answerSignIn(null, deps())).ok, false);
-  const pw = await answerSignIn({ op: SIGN_IN_OP }, deps({ mode: () => "password" }));
-  assert.deepEqual([pw.ok, !pw.ok && pw.reason], [false, "password"]);
-  const ba = await answerSignIn({ op: SIGN_IN_OP }, deps({ mode: () => "basic-auth" }));
-  assert.deepEqual([ba.ok, !ba.ok && ba.reason], [false, "basic-auth"]);
-});
-
-test("answerSignIn fails closed when the exposure cannot be read", async () => {
-  let minted = 0;
-  const count = { mintPath: () => { minted++; return { path: "/login?ticket=x", expiresAt: 1 }; } };
-  for (const humanPlaneStatus of [
-    undefined,
-    async (): Promise<HumanPlaneStatus> => { throw new Error("no human socket"); },
-    async () => ({}) as unknown as HumanPlaneStatus,
-  ]) {
-    const d = deps({ ...count });
-    if (humanPlaneStatus) d.humanPlaneStatus = humanPlaneStatus; else delete d.humanPlaneStatus;
-    const a = await answerSignIn({ op: SIGN_IN_OP }, d);
-    assert.equal(a.ok, false);
-    assert.equal(!a.ok && a.reason, "unknown");
-    assert.match(!a.ok ? a.error : "", /no sign-in link/);
+test("signInLink answers how the dashboard signs a person in; never a link", async () => {
+  const cases: Array<[SignInMode, string, RegExp]> = [
+    ["account", "account", /your Mandu dashboard account/],
+    ["no-account", "no-account", /no account yet; run `mandu dashboard --set-password`/],
+    ["none", "no-account", /no account yet/],
+    ["account-unusable", "account-unusable", /cannot be used; run `mandu dashboard --set-password`/],
+    ["basic-auth", "basic-auth", /username and password/],
+  ];
+  for (const [mode, reason, words] of cases) {
+    const a = await answerSignIn({ op: SIGN_IN_OP }, deps({ mode: () => mode }));
+    assert.equal(a.ok, false, mode);
+    assert.equal(a.reason, reason, mode);
+    assert.match(a.error, words, mode);
+    assert.ok(!("path" in a), `${mode}: no link`);
   }
-  assert.equal(minted, 0, "nothing minted");
+  const bad = await answerSignIn({ op: "mint" }, deps());
+  assert.equal(bad.reason, "bad-request");
+  assert.equal((await answerSignIn(null, deps())).reason, "bad-request");
 });
 
-test("answerSignIn mints nothing while a launch with no wall is live, and names it", async () => {
-  let minted = 0;
-  const a = await answerSignIn({ op: SIGN_IN_OP }, deps({
-    humanPlaneStatus: async () => EXPOSED,
-    mintPath: () => { minted++; return { path: "/login?ticket=x", expiresAt: 1 }; },
-  }));
-  assert.equal(a.ok, false);
-  assert.equal(!a.ok && a.reason, "exposed");
-  assert.match(!a.ok ? a.error : "", /pid 4242 \(session abc123\)/);
-  assert.match(!a.ok ? a.error : "", /DASHBOARD_PASSWORD/);
-  assert.equal(minted, 0);
-});
-
-test("answerSignIn: walled → a login path", async () => {
-  const a = await answerSignIn({ op: SIGN_IN_OP }, deps());
-  assert.deepEqual(a, { ok: true, path: "/login?ticket=t1", expiresAt: 99 });
-});
-
-test("signInDepsFor: the server's mode and mint, the source's exposure read (none → no link)", async () => {
-  const server = { signInMode: () => "tickets" as const, mintSignInPath: () => ({ path: "/m/login?ticket=z", expiresAt: 5 }) };
-  const withStatus = signInDepsFor(server, { humanPlaneStatus: async () => WALLED });
-  assert.deepEqual(await answerSignIn({ op: SIGN_IN_OP }, withStatus), { ok: true, path: "/m/login?ticket=z", expiresAt: 5 });
-  const fileSource = signInDepsFor(server, {});
-  assert.equal((await answerSignIn({ op: SIGN_IN_OP }, fileSource)).ok, false);
+test("signInDepsFor: the server's mode, read at each ask, and its sessionKept", async () => {
+  let mode: SignInMode = "no-account";
+  const d = signInDepsFor({ signInMode: () => mode });
+  assert.equal((await answerSignIn({ op: SIGN_IN_OP }, d)).reason, "no-account");
+  mode = "account"; // `mandu dashboard --set-password` while it runs
+  assert.equal((await answerSignIn({ op: SIGN_IN_OP }, d)).reason, "account");
+  assert.equal(d.sessionKept, undefined);
 });
 
 function ask(path: string, line: string): Promise<string> {
@@ -152,12 +90,50 @@ test("the socket: one answer per connection, 0600 in a 0700 directory, removed o
     assert.equal(statSync(join(base, "human")).mode & 0o777, 0o700);
     assert.equal(statSync(path).mode & 0o777, 0o600);
     const a1 = JSON.parse(await ask(path, JSON.stringify({ op: SIGN_IN_OP }) + "\n"));
-    const a2 = JSON.parse(await ask(path, JSON.stringify({ op: SIGN_IN_OP }) + "\n"));
-    assert.deepEqual([a1.ok, a1.path, a2.path], [true, "/login?ticket=t1", "/login?ticket=t2"]);
+    assert.deepEqual([a1.ok, a1.reason], [false, "account"]);
     const bad = JSON.parse(await ask(path, "not json\n"));
     assert.equal(bad.ok, false);
     await ch.close();
     assert.equal(existsSync(path), false);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+const KEPT: SessionKept = {
+  mode: "secrets", flagged: false, masked: { count: 1, names: ["DB_PASSWORD in ~/proj/.env"] }, early: { count: 0, names: [] },
+  unmasked: { count: 0, names: [] }, blocked: 0, sent: { count: 0, names: [] },
+};
+
+test("answerSessionKept: a session id or a refusal; nothing known is found: false; a failed read is unknown", async () => {
+  const known = deps({ sessionKept: async (id) => (id === "1791-1" ? { kept: KEPT, line: "mandu: in this session: …" } : null) });
+  assert.deepEqual(await answerSessionKept({ op: SESSION_KEPT_OP, session: "1791-1" }, known), { ok: true, found: true, line: "mandu: in this session: …", kept: KEPT });
+  assert.deepEqual(await answerSessionKept({ op: SESSION_KEPT_OP, session: "other" }, known), { ok: true, found: false });
+  assert.deepEqual(await answerSessionKept({ op: SESSION_KEPT_OP, session: "1791-1" }, deps()), { ok: true, found: false }, "no source wired");
+  for (const session of [undefined, "", 7, "a b", "../x\n", "x".repeat(201)]) {
+    const a = await answerSessionKept({ op: SESSION_KEPT_OP, session }, known);
+    assert.deepEqual([a.ok, !a.ok && a.reason], [false, "bad-request"], JSON.stringify(session));
+  }
+  const failing = await answerSessionKept({ op: SESSION_KEPT_OP, session: "1791-1" }, deps({ sessionKept: async () => { throw new Error("arbiter gone"); } }));
+  assert.deepEqual([failing.ok, !failing.ok && failing.reason], [false, "unknown"]);
+  const server = { signInMode: () => "account" as const, sessionKept: async () => ({ kept: KEPT, line: "L" }) };
+  assert.deepEqual(await answerSessionKept({ session: "s" }, signInDepsFor(server)), { ok: true, found: true, line: "L", kept: KEPT }, "signInDepsFor wires the server's sessionKept");
+});
+
+test("the socket answers sessionKept beside signInLink", async () => {
+  const base = mkdtempSync(join(tmpdir(), "mandu-signin-kept-"));
+  try {
+    const path = signInSockPath(base, 778);
+    const ch = await serveSignInChannel(path, deps({
+      sessionKept: async (id) => (id === "s-1" ? { kept: KEPT, line: "mandu: in this session: 1 secret masked before the AI saw it (DB_PASSWORD in ~/proj/.env)" } : null),
+    }));
+    const a = JSON.parse(await ask(path, JSON.stringify({ op: SESSION_KEPT_OP, session: "s-1" }) + "\n"));
+    assert.deepEqual([a.ok, a.found, a.kept.masked.count], [true, true, 1]);
+    assert.match(a.line, /1 secret masked before the AI saw it/);
+    assert.deepEqual(JSON.parse(await ask(path, JSON.stringify({ op: SESSION_KEPT_OP, session: "s-2" }) + "\n")), { ok: true, found: false });
+    const how = JSON.parse(await ask(path, JSON.stringify({ op: SIGN_IN_OP }) + "\n"));
+    assert.deepEqual([how.ok, how.reason], [false, "account"]);
+    await ch.close();
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -180,66 +156,6 @@ test("the socket is not served from a directory with group/other bits, or a syml
   }
 });
 
-test("combinedHumanPlaneStatus: every arbiter in the directory is asked; exposed if any is; a dead socket is skipped; any other failure or nothing answering is unknown", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "mandu-signin-hp-"));
-  try {
-    for (const n of ["a.sock", "b.sock", "dashboard-12.sock", "notes.txt"]) writeFileSync(join(dir, n), "");
-    const asked: string[] = [];
-    const answers: Record<string, HumanPlaneStatus | Error> = {};
-    const ask = async (s: string): Promise<HumanPlaneStatus> => {
-      asked.push(s.slice(dir.length + 1));
-      const a = answers[s.slice(dir.length + 1)];
-      if (a instanceof Error) throw a;
-      return a!;
-    };
-    answers["a.sock"] = WALLED; answers["b.sock"] = WALLED;
-    assert.deepEqual(await combinedHumanPlaneStatus(null, dir, ask), WALLED);
-    assert.deepEqual(asked.sort(), ["a.sock", "b.sock"], "never a dashboard's own sign-in socket");
-
-    // One of them (the test tenant's arbiter, say) holds an unwalled launch.
-    answers["b.sock"] = EXPOSED;
-    const both = await combinedHumanPlaneStatus(async () => EXPOSED, dir, ask);
-    assert.equal(both.exposed, true);
-    assert.deepEqual(both.launches.map((l) => l.pid), [4242], "the same launch named once");
-
-    // A dead arbiter's leftover socket is skipped; a live one that fails is unknown.
-    answers["b.sock"] = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
-    assert.equal((await combinedHumanPlaneStatus(null, dir, ask)).exposed, false);
-    answers["b.sock"] = new Error("unknown op 'humanPlaneStatus'");
-    await assert.rejects(combinedHumanPlaneStatus(null, dir, ask), /unknown op/);
-    await assert.rejects(combinedHumanPlaneStatus(async () => { throw new Error("own source down"); }, dir, async () => WALLED), /own source down/);
-
-    // Nothing answering is unknown, not walled.
-    await assert.rejects(combinedHumanPlaneStatus(null, join(dir, "empty"), ask), /no protection service answered/);
-    answers["a.sock"] = Object.assign(new Error("gone"), { code: "ENOENT" });
-    answers["b.sock"] = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
-    await assert.rejects(combinedHumanPlaneStatus(null, dir, ask), /no protection service answered/);
-    assert.deepEqual(arbiterHumanSocks(dir).map((p) => p.slice(dir.length + 1)), ["a.sock", "b.sock"]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("askHumanPlaneStatus: the arbiter's NDJSON protocol over a real socket; a file that is not a socket is ECONNREFUSED", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "mandu-signin-ask-"));
-  const sock = join(dir, "x.sock");
-  const seen: string[] = [];
-  const srv = createServer((c) => {
-    c.setEncoding("utf8");
-    c.on("data", (d: string) => { seen.push(d); c.end(JSON.stringify({ id: 1, ok: true, result: EXPOSED }) + "\n"); });
-  });
-  await new Promise<void>((r) => srv.listen(sock, r));
-  try {
-    assert.deepEqual(await askHumanPlaneStatus(sock), EXPOSED);
-    assert.deepEqual(JSON.parse(seen[0]!), { id: 1, op: "humanPlaneStatus" });
-    writeFileSync(join(dir, "plain.sock"), "");
-    await assert.rejects(askHumanPlaneStatus(join(dir, "plain.sock")), (e: NodeJS.ErrnoException) => e.code === "ECONNREFUSED");
-  } finally {
-    await new Promise<void>((r) => srv.close(() => r()));
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test("sweepDeadSignInSocks removes dead dashboards' sockets only", () => {
   const dir = mkdtempSync(join(tmpdir(), "mandu-signin-sweep-"));
   try {
@@ -253,7 +169,6 @@ test("sweepDeadSignInSocks removes dead dashboards' sockets only", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 test("sweepDeadSignInSocks refuses a planted directory link or a shared directory before deleting anything", () => {
   const base = mkdtempSync(join(tmpdir(), "mandu-signin-sweep-planted-"));

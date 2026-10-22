@@ -20,8 +20,8 @@
  *       scrolled to its end, when it ends less than a window below the
  *       card), the heading in view, the hash still in the address;
  *   L2  the row of links under each title is in the page's flow (never
- *       sticky or fixed), a link per card (five on Rules, six on Settings
- *       since Appearance, 2026-10-18), inside the page's width;
+ *       sticky or fixed), a link per card (five on Rules, seven on Settings
+ *       since About, 2026-10-20), inside the page's width;
  *   L3  the oracle: no page carries the registered key or a token.
  *
  * Self-SKIPs without a Chromium (scripts/tour-screenshots.mjs probeBrowser:
@@ -67,7 +67,10 @@ const VIEWS = [
 ];
 const CASES = [
   { path: "/rules#who", page: "rules", card: "by-who-block", head: "by-who-title", links: 5 },
-  { path: "/settings#prompt-filters", page: "settings", card: "settings-prompt-block", head: "settings-prompt-title", links: 6 },
+  { path: "/settings#prompt-filters", page: "settings", card: "settings-prompt-block", head: "settings-prompt-title", links: 7 },
+  // The last product card (About Mandu, 2026-10-20): the page ends less
+  // than a window below it, so it lands with the page at its end.
+  { path: "/settings#about", page: "settings", card: "settings-about-block", head: "settings-about-title", links: 7 },
 ];
 
 test("an address naming a card of Rules or Settings opens there, its heading focused at the top, in a real Chromium over the real arbiter; no value on the page", {

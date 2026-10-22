@@ -373,7 +373,15 @@ can be written back over a pattern (plan 15 §13.7 item 4).
 Test rigs serve the admin channel on a path too (`MANDU_ADMIN_SOCK`, with a
 loud warning; `scripts/dev-arbiter.sh` exports it).
 
-**Signing in (2026-10-05).** The per-boot link alone left the default flow
+**Signing in (2026-10-05; links retired 2026-10-22).** *Superseded:* since
+2026-10-22 a person signs in with the Mandu dashboard account
+(dashboard.md §6.z): one username and password, a scrypt hash in the Mandu
+home, asked on the dashboard's own sign-in page; with no account yet the
+dashboard serves nothing. No link is minted any more, and the human-plane
+socket below only says how the dashboard signs a person in (account, none
+yet, unusable) and answers the end-of-session line. What follows is the
+design the links had, kept for its reasoning about the agent's reach.
+The per-boot link alone left the default flow
 with no way in: the launcher's stack autostart and `mandu dashboard` start
 the dashboard as a background daemon whose stderr is a log, so the link was
 never shown, no password is set up, and every held send timed out (fail
@@ -384,7 +392,9 @@ world cannot reach:
 - *The channel.* The dashboard serves a second listener, a Unix socket in
   the arbiter's human-plane directory: `<runtime>/human/dashboard-<pid>.sock`
   (`dashboard/src/sign-in.ts serveSignInChannel`, named in its registry
-  entry as `signInSock`). One NDJSON op, `signInLink`. Every wall the
+  entry as `signInSock`). One NDJSON op, `signInLink` (and, since
+  2026-10-21, `sessionKept`, which hands the launcher its end-of-session
+  line and no credential: dashboard.md §4.25ah). Every wall the
   launcher builds around that directory covers it: the guard's always-deny
   `unixDeny` entry (refused on the opened inode, so a symlink or hard link
   is refused too), the secret-twins `--tmpfs`, Seatbelt, the Unix allow-list
@@ -433,9 +443,10 @@ world cannot reach:
   the dashboard cannot read (a live arbiter that fails or lacks the op,
   nothing answering, the file source of a demo) mints nothing either. A
   launcher with no wall asks for its own link before its `beginLaunch`, so
-  its own record does not cost it the link. A password or Basic-auth
-  dashboard mints no link (its credentials are the session) and the launcher
-  says "sign in with its password". The launcher dials only a socket that
+  its own record does not cost it the link. A password, Basic-auth or
+  account dashboard mints no link (its credentials are the session) and the
+  launcher says "sign in with its password", "… with its username and
+  password" or "sign in with your Mandu dashboard account". The launcher dials only a socket that
   lies directly in its runtime's human-plane directory (a planted registry
   entry naming another path is never dialled), and without a link it prints
   the plain line plus one `mandu: ! no dashboard sign-in link: …` line.
@@ -444,10 +455,24 @@ world cannot reach:
   no-password `/login` page all say: run `mandu dashboard` in your own
   terminal and open the sign-in link it prints (or use the password).
 
+- *The dashboard account (2026-10-22, dashboard.md §6.z).* One username
+  and password for the whole dashboard, set by `mandu dashboard
+  --set-password` in the person's own terminal and kept as a salted scrypt
+  hash in `~/.mandu/state/dashboard-account.json` (0600). While it is set,
+  every request past the Host check needs its sign-in session (the
+  dashboard's own sign-in page, never the browser's prompt) or its
+  credentials as a Basic header, and no ticket is minted. The file is a
+  same-uid file: a confined agent cannot reach it (the Mandu home is hidden
+  and write-protected for every confined launch, on-disk-layout.md §4), a
+  program of the person outside Mandu can, as it can reach
+  `dashboard.env`; a file that is not the person's own private regular file
+  signs nobody in, and a change while the dashboard runs ends every session,
+  is logged and is shown on Home. `DASHBOARD_BASIC_AUTH` moves into it once.
+
 Who can obtain an admin session. Before: whoever saw the dashboard's stderr
 on a TTY (in the default flow, nobody), whoever knows `DASHBOARD_PASSWORD` /
-`DASHBOARD_BASIC_AUTH` / a pinned `DASHBOARD_ADMIN_TOKEN`, or an allowlisted
-authenticating front. After: the same, plus any process of the account
+`DASHBOARD_BASIC_AUTH` / the dashboard account / a pinned
+`DASHBOARD_ADMIN_TOKEN`, or an allowlisted authenticating front. After: the same, plus any process of the account
 OUTSIDE an agent's walled world (the human's terminal, through the launcher
 or `mandu dashboard`) while no unwalled launch runs. Never a program inside a
 walled agent's world.
@@ -712,8 +737,10 @@ split) to feed the impact preview of §2.4.
   the cookie, the token login, the password session and the 503 for an
   adopted arbiter, and the one-time sign-in link (once, expiry, the
   password mode, the no-password `/login` page, the refusal's remedy).
-  Signing in (§2.6): `dashboard/test/unit/sign-in.test.ts` (the tickets, the
-  fail-closed decision, the socket's mode and directory checks, the sweep),
+  Signing in (§2.6; the account since 2026-10-22, dashboard.md §6.z, whose
+  tests are listed there): `dashboard/test/unit/sign-in.test.ts` (the
+  socket's answer of how to sign in, its mode and directory checks, the
+  sweep; the tickets until 2026-10-22),
   `launcher/test/unit/dashboard-sign-in.test.ts` (TTY only, a socket outside
   the human-plane directory never dialled, the terminal line carries the
   link and the kept line never does, `mandu dashboard`'s lines),
@@ -1617,8 +1644,9 @@ which would symbolize the assistant's own inputs and put the call in the
 wrong trust class). The client is tool-less, so the agent schema and the
 *assistant* audience of `policyExplain` ride in the system prompt, and the
 model answers one JSON object `{ edits, note }`; anything else is a 422,
-never a guess. With no channel configured the box says so and links to
-Settings (`AssistantUnconfiguredError`); there is no heuristic fallback.
+never a guess. With no channel configured the box says why in plain words
+and what fixes it, by the error's `reason` (`AssistantUnconfiguredError`,
+dashboard.md *Describe what you want*); there is no heuristic fallback.
 
 Each edit renders as a Rules row from the grammar, not from the model, marked
 where it loosens (`policyPreview`; an edit that cannot be judged alone counts

@@ -17,9 +17,11 @@
  *     config, read fresh by the launch, equal the ones it was computed from,
  *     and (2) a FINGERPRINT of everything the tips are read from is
  *     unchanged: the `.git` entry of each work tree; HEAD, packed-refs, the
- *     config files, the shallow and grafts files; every directory and file
+ *     config files, the shallow file (no grafts: they are off); every directory and file
  *     under refs/, logs/ and reftable/; each linked worktree's HEAD,
- *     commondir, gitdir, refs/ and logs/; and every object directory the
+ *     commondir, gitdir, config.worktree, refs/, logs/ and reftable/ (a
+ *     reftable repository keeps the worktree's HEAD, its own refs and their
+ *     reflogs there); and every object directory the
  *     store reads, its pack/ and info/ and each loose-object fan-out
  *     directory (whether a reflog's object exists decides whether it is a
  *     tip). Each entry is (type, device, inode, size, mtime, ctime in ns),
@@ -54,6 +56,7 @@ import {
 } from "./git-object-twins.js";
 import { manduPath } from "./generated/mandu-paths.js";
 import { launchHintFile, readLaunchHint } from "./launch-hint.js";
+import { Pacer } from "./reflog-tips.js";
 
 /** An entry younger than this when the fingerprint is taken makes it
  *  unusable (2 s: over the coarsest timestamp granularity of a common
@@ -66,7 +69,13 @@ export const PREFETCH_MAX_HASH_BYTES = 2048 * 1048576;
 
 class Doubt extends Error {}
 
-interface Acc { lines: string[]; newest: bigint }
+interface Acc { lines: string[]; newest: bigint; pace: Pacer }
+
+/** Hand the event loop back when the slice is spent (reflog-tips.ts Pacer). */
+async function paced(acc: Acc): Promise<void> {
+  const y = acc.pace.tick();
+  if (y !== null) await y;
+}
 
 function lst(path: string): BigIntStats | null {
   try {
@@ -99,24 +108,32 @@ function one(acc: Acc, path: string): BigIntStats | null {
 }
 
 /** A directory tree: every directory and every entry in it. */
-function tree(acc: Acc, path: string, depth: number): void {
+async function tree(acc: Acc, path: string, depth: number): Promise<void> {
   const st = one(acc, path);
+  await paced(acc);
   if (st === null || !st.isDirectory()) return;
   if (depth > FINGERPRINT_MAX_DEPTH) throw new Doubt(`${path} is deeper than ${FINGERPRINT_MAX_DEPTH}`);
   let names: string[];
   try { names = readdirSync(path); } catch (e) { throw new Doubt(`${path}: ${(e as Error).message}`); }
-  for (const n of names.sort()) tree(acc, join(path, n), depth + 1);
+  for (const n of names.sort()) await tree(acc, join(path, n), depth + 1);
 }
 
 /**
- * The fingerprint of everything the history state of the work trees `roots`
- * (one object store, `facts` the first one's) is read from (the module
- * comment), and the newest timestamp in it; null on any doubt.
+ * Every entry of the fingerprint of the history state of the work trees
+ * `roots` (one object store, `facts` the first one's), one line each
+ * (`path NUL type NUL dev NUL ino NUL size NUL mtime NUL ctime NUL extra`,
+ * or `path NUL -` for an absent one) in a fixed order, and the newest
+ * timestamp among them; null on any doubt. The module comment lists what
+ * it covers (a unit test pins the set). PACED (2026-10-21): the walk is the
+ * same synchronous lstat and readdir calls, in the same order, but hands
+ * the event loop back every few milliseconds (reflog-tips.ts Pacer): in a
+ * store with many worktrees it is thousands of entries, 25-35 ms in one go
+ * on the dev host.
  */
-export function stateFingerprint(
-  roots: readonly string[], facts: RepoFacts, io?: AlternatesIo,
-): { digest: string; newestNs: bigint } | null {
-  const acc: Acc = { lines: [], newest: 0n };
+export async function fingerprintEntries(
+  roots: readonly string[], facts: RepoFacts, io?: AlternatesIo, pace: Pacer = new Pacer(),
+): Promise<{ lines: string[]; newestNs: bigint } | null> {
+  const acc: Acc = { lines: [], newest: 0n, pace };
   try {
     for (const r of roots) {
       const p = join(r, ".git");
@@ -133,8 +150,9 @@ export function stateFingerprint(
     const c = facts.commonDir;
     for (const f of ["HEAD", "packed-refs", "config", "config.worktree"]) one(acc, join(c, f));
     one(acc, facts.shallow);
-    one(acc, facts.grafts);
-    for (const t of ["refs", "logs", "reftable"]) tree(acc, join(c, t), 0);
+    // No grafts file: every hardened call reads an empty one
+    // (GIT_GRAFT_FILE=/dev/null, which `--git-path info/grafts` now names).
+    for (const t of ["refs", "logs", "reftable"]) await tree(acc, join(c, t), 0);
     const wt = join(c, "worktrees");
     const wst = one(acc, wt);
     if (wst !== null && wst.isDirectory()) {
@@ -145,7 +163,11 @@ export function stateFingerprint(
         const dst = one(acc, d);
         if (dst === null || !dst.isDirectory()) continue;
         for (const f of ["HEAD", "commondir", "gitdir", "config.worktree"]) one(acc, join(d, f));
-        for (const t of ["refs", "logs"]) tree(acc, join(d, t), 0);
+        // A reftable repository keeps each linked worktree's HEAD, its own
+        // refs (refs/bisect, refs/worktree, refs/rewritten) and their
+        // reflogs in the worktree's OWN reftable/ (its HEAD file is a stub):
+        // without it a HEAD moved there went unseen (fixed 2026-10-21).
+        for (const t of ["refs", "logs", "reftable"]) await tree(acc, join(d, t), 0);
       }
     }
     // Every object directory the store reads (its alternates followed, as
@@ -159,13 +181,30 @@ export function stateFingerprint(
       for (const f of ["pack", "info", join("info", "alternates")]) one(acc, join(d, f));
       let names: string[];
       try { names = readdirSync(d); } catch (e) { throw new Doubt(`${d}: ${(e as Error).message}`); }
-      for (const n of names.sort()) if (/^[0-9a-f]{2}$/.test(n)) one(acc, join(d, n));
+      for (const n of names.sort()) {
+        if (/^[0-9a-f]{2}$/.test(n)) one(acc, join(d, n));
+        await paced(acc);
+      }
     }
   } catch (e) {
     if (e instanceof Doubt) return null;
     throw e;
   }
-  return { digest: createHash("sha256").update(acc.lines.join("\n")).digest("hex"), newestNs: acc.newest };
+  return { lines: acc.lines, newestNs: acc.newest };
+}
+
+/**
+ * The fingerprint of everything the history state of the work trees `roots`
+ * (one object store, `facts` the first one's) is read from (the module
+ * comment; fingerprintEntries), and the newest timestamp in it; null on any
+ * doubt.
+ */
+export async function stateFingerprint(
+  roots: readonly string[], facts: RepoFacts, io?: AlternatesIo, pace?: Pacer,
+): Promise<{ digest: string; newestNs: bigint } | null> {
+  const e = await fingerprintEntries(roots, facts, io, pace);
+  if (e === null) return null;
+  return { digest: createHash("sha256").update(e.lines.join("\n")).digest("hex"), newestNs: e.newestNs };
 }
 
 /** The wall clock in nanoseconds (the file timestamps' clock). */
@@ -267,7 +306,7 @@ export class TwinPrefetch implements StatePrefetch {
     if (this.closed) return null;
     // The fingerprint BEFORE the state's git calls: a change after it shows.
     const at = (this.opts.now ?? nowNs)();
-    const fp = stateFingerprint(roots, facts[0]!, this.opts.alternatesIo);
+    const fp = await stateFingerprint(roots, facts[0]!, this.opts.alternatesIo);
     if (fp === null || fp.newestNs >= at - RACY_WINDOW_NS) return null;
     const state = await reads.stateOf(roots);
     if (this.closed) return null;
@@ -297,7 +336,7 @@ export class TwinPrefetch implements StatePrefetch {
       if (JSON.stringify(facts) !== JSON.stringify(snap.facts) || JSON.stringify(config) !== JSON.stringify(snap.config)) {
         return discard("the repository's facts or config changed");
       }
-      const fp = stateFingerprint(roots, facts[0]!, this.opts.alternatesIo);
+      const fp = await stateFingerprint(roots, facts[0]!, this.opts.alternatesIo);
       if (fp === null || fp.digest !== snap.digest) return discard("its refs, reflogs or objects changed");
       this.stats.used++;
       return snap.state;

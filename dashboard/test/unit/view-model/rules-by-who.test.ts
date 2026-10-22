@@ -53,23 +53,21 @@ test("pathOpeners: each reader entry as the arbiter judges it; no readers: list 
   assert.deepEqual(pathOpeners({ path: "/x", level: "no-model", bindings: [], recursive: false, readers: [{ app: "python3", script: "/opt/r.py" }] })?.[0], { name: "python3", script: "/opt/r.py", how: "masked" }, "a pinned script is no vetted program: it needs the human's word");
 });
 
-test("per program: what each may open raw and how, what it gets masked, never gets, or is refused (Figure 7 (b))", () => {
+test("per program: what each may open raw and how, or never gets; the rest counted as any other program's (Figure 7 (b), §4.25aa Only what differs)", () => {
   const { programs } = vm();
   assert.deepEqual(programs.rows.map((r) => r.name), ["mysql", "psql", "python3 running ~/proj/report.py", "ssh", "Any other program"]);
-  assert.deepEqual(lists(row(programs.rows, "python3 running ~/proj/report.py")), {
+  const python = row(programs.rows, "python3 running ~/proj/report.py");
+  assert.deepEqual(lists(python), {
     [BY_WHO_WORDS.opens]: ["~/proj/.env (your word)", "~/proj/customers.csv (your word)"],
-    [BY_WHO_WORDS.masked]: ["~/.ssh (and everything inside)", "~/proj/contract.pdf"],
-    [BY_WHO_WORDS.refused]: ["~/.my.cnf"],
   });
-  assert.deepEqual(lists(row(programs.rows, "mysql")), {
-    [BY_WHO_WORDS.opens]: ["~/.my.cnf (checked by Mandu)"],
-    [BY_WHO_WORDS.masked]: ["~/.ssh (and everything inside)", "~/proj/contract.pdf"],
-    [BY_WHO_WORDS.refused]: ["~/proj/.env", "~/proj/customers.csv"],
-  });
+  assert.equal(python.rest, "The rest (3): as any other program, below.");
+  const mysql = row(programs.rows, "mysql");
+  assert.deepEqual(lists(mysql), { [BY_WHO_WORDS.opens]: ["~/.my.cnf (checked by Mandu)"] }, "its other four repeat Any other program word for word");
+  assert.equal(mysql.rest, BY_WHO_WORDS.sameAsAny(4));
   // A database shell is never a reader: it prints what it reads.
-  assert.deepEqual(lists(row(programs.rows, "psql"))[BY_WHO_WORDS.never], ["~/proj/.env"]);
-  assert.equal(lists(row(programs.rows, "psql"))[BY_WHO_WORDS.opens], undefined);
-  assert.deepEqual(lists(row(programs.rows, "ssh"))[BY_WHO_WORDS.opens], ["~/.ssh (and everything inside, checked by Mandu)"]);
+  assert.deepEqual(lists(row(programs.rows, "psql")), { [BY_WHO_WORDS.never]: ["~/proj/.env"] });
+  assert.equal(row(programs.rows, "psql").rest, BY_WHO_WORDS.sameAsAny(4));
+  assert.deepEqual(lists(row(programs.rows, "ssh")), { [BY_WHO_WORDS.opens]: ["~/.ssh (and everything inside, checked by Mandu)"] });
   // Any other program: a masked copy where there is no list or `others: twin`, else refused.
   const any = row(programs.rows, "Any other program");
   assert.equal(any.kind, "any");
@@ -77,7 +75,51 @@ test("per program: what each may open raw and how, what it gets masked, never ge
     [BY_WHO_WORDS.masked]: ["~/.ssh (and everything inside)", "~/proj/contract.pdf"],
     [BY_WHO_WORDS.refused]: ["~/.my.cnf", "~/proj/.env", "~/proj/customers.csv"],
   });
+  assert.equal(any.rest ?? null, null, "the closing row has no rest line");
   assert.equal(programs.note, BY_WHO_WORDS.programsNote);
+});
+
+test("§4.25aa Only what differs: a named masked copy stays where any other program is refused; one as any other program reads Everything", () => {
+  const paths: Paths = [
+    // An unvetted reader on an `others: twin` rule: masked, as any other program.
+    { path: "/home/u/.aws", level: "no-model", bindings: [], recursive: true, readers: ["aws"], others: "twin" },
+  ];
+  const alone = toByWhoVM(byWhoRules(paths, []), null, { home: HOME }).programs.rows;
+  assert.deepEqual(alone.map((r) => r.name), ["aws", "Any other program"]);
+  assert.deepEqual(row(alone, "aws").groups, []);
+  assert.equal(row(alone, "aws").rest, BY_WHO_WORDS.allAsAny, "never \"Nothing under your rules\"");
+  assert.deepEqual(lists(row(alone, "Any other program")), { [BY_WHO_WORDS.masked]: ["~/.aws (and everything inside)"] });
+  // The same reader where other programs are refused: its masked copy differs, so it is listed.
+  const refusedOthers = toByWhoVM(byWhoRules([
+    ...paths,
+    { path: "/home/u/.netrc", level: "no-model", bindings: [], recursive: false, readers: ["aws"] },
+  ], []), null, { home: HOME }).programs.rows;
+  assert.deepEqual(lists(row(refusedOthers, "aws")), { [BY_WHO_WORDS.masked]: ["~/.netrc"] });
+  assert.equal(row(refusedOthers, "aws").rest, BY_WHO_WORDS.sameAsAny(1));
+  assert.deepEqual(lists(row(refusedOthers, "Any other program"))[BY_WHO_WORDS.refused], ["~/.netrc"]);
+});
+
+test("§4.25aa Only what differs: no file goes missing: a named row's items plus what its rest counts are every secret rule, once", () => {
+  for (const [what, paths] of [
+    ["Figure 7", PATHS],
+    ["mixed", [
+      ...PATHS,
+      { path: "/home/u/.aws", level: "no-model", bindings: [], recursive: true, readers: ["aws", "mysql"], others: "twin" },
+      { path: "/home/u/.netrc", level: "any-model", bindings: [], recursive: false, readers: ["aws", { app: "deploy", prints: "nothing" }] },
+      { path: "**/*.pem", level: "no-model", bindings: [], recursive: true, glob: true },
+    ]],
+  ] as const) {
+    const rules = byWhoRules(paths as Paths, []);
+    const secret = rules.filter((r) => r.level !== "public").length;
+    const named = toByWhoVM(rules, null, { home: HOME }).programs.rows.filter((r) => r.kind === "named");
+    assert.ok(named.length > 0, what);
+    for (const r of named) {
+      const shown = r.groups.flatMap((g) => g.items.map((i) => i.rule));
+      assert.equal(new Set(shown).size, shown.length, `${what}: ${r.name} lists each file once`);
+      const rest = r.rest === BY_WHO_WORDS.allAsAny ? secret : Number(/^The rest \((\d+)\)/.exec(r.rest ?? "")?.[1] ?? 0);
+      assert.equal(shown.length + rest, secret, `${what}: ${r.name}: ${shown.length} listed + ${rest} as any other program`);
+    }
+  }
 });
 
 test("per host: which files reach it without asking (the rules' hosts); any other host gets no secret (Figure 7 (a))", () => {
@@ -110,6 +152,11 @@ test("per AI: any AI reads Not secret, may read any-model when it asks; your own
   const none = toByWhoVM(byWhoRules(PATHS, []), [], { home: HOME }).models.rows;
   assert.deepEqual(none.map((r) => r.name), ["Any AI", "Your own AI"]);
   assert.equal(row(none, "Your own AI").about, BY_WHO_WORDS.noOwnAIAbout);
+  // Its line names Settings › Models as a link part; joined, the same words.
+  const about = row(none, "Your own AI").aboutParts!;
+  assert.equal(about.map((x) => x.text).join(""), BY_WHO_WORDS.noOwnAIAbout);
+  assert.deepEqual(about.filter((x) => x.kind === "link"), [{ kind: "link", text: "Settings › Models", to: "models" }]);
+  assert.equal(row(none, "Any AI").aboutParts, undefined, "a line that names no place has no parts");
   assert.deepEqual(lists(row(none, "Your own AI")), { [BY_WHO_WORDS.alwaysMasked]: ["~/proj/customers.csv"] });
 });
 
@@ -150,8 +197,8 @@ test("the words: the closed vocabulary, no inspector term, no retired word, neve
   const RETIRED = /placeholder|twin|taint|binding|reader|opener|principal|level|policy\.yaml|no-model|any-model|local-model/i;
   const v = vm();
   const copy = [
-    ...Object.values(BY_WHO_WORDS),
-    ...[v.programs, v.hosts, v.models].flatMap((t) => [t.note, ...t.rows.flatMap((r) => [r.name, r.about ?? "", ...r.groups.flatMap((g) => [g.label, ...g.items.map((i) => `${i.reach ?? ""} ${i.how ?? ""}`)])])]),
+    ...Object.values(BY_WHO_WORDS).map((w) => (typeof w === "function" ? w(3) : w)),
+    ...[v.programs, v.hosts, v.models].flatMap((t) => [t.note, ...t.rows.flatMap((r) => [r.name, r.about ?? "", r.rest ?? "", ...r.groups.flatMap((g) => [g.label, ...g.items.map((i) => `${i.reach ?? ""} ${i.how ?? ""}`)])])]),
   ].join("\n");
   assert.doesNotMatch(copy, FORBIDDEN);
   assert.doesNotMatch(copy, RETIRED);

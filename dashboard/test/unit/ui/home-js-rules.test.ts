@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { tick, pressed, opened, treeRow, treeRows, rulesPage, rowOf, openRule, CLOCK, home, load, HTML, RULES_PANEL, PUB } from "./home-js-fixtures.js";
+import { ISSUER_TABLE, issuerItem } from "../../../src/view-model/issuer-words.js";
 import { declValue, flattenCss, resolveCssVars, stripComments } from "./css-flatten.js";
 
 const button = (row: any, label: string) => ([...row.querySelectorAll("button")] as any[]).find((b) => b.textContent === label);
@@ -308,6 +309,48 @@ test("built-in protections: with masking on the masking sentence is shown; befor
   const b = builtIn(down.doc);
   assert.equal(b.note, "not connected");
   assert.ok(!b.items.some((t) => /masked/.test(t)), b.items.join(" | "));
+});
+
+test("built-in protections: the issuer item lists each company with its hosts as code under a fold; off and unknown draw their words (§4.25z)", async () => {
+  const SECRETS = { note: "always on in the Secrets mode", items: ["Keys and secret files leave this computer only where a rule or your OK allows."] };
+  const draw = async (issuers: unknown) => {
+    const { doc } = load({ url: RULES_URL, homeVm: home({ protection: { level: "secrets", configured: "secrets", connected: true }, builtIn: { ...SECRETS, issuers } }) });
+    await tick();
+    const items = [...doc.querySelectorAll("#builtin-list > li")] as any[];
+    return { items, li: doc.querySelector("#builtin-list > li.builtin-issuers") as any };
+  };
+  // on, Stripe asking
+  const partly = await draw(issuerItem({ read: true, raw: { issuers_off: ["stripe"] } }));
+  assert.equal(partly.items.length, 2, "the sentence beside it stays, the item is one more");
+  assert.equal(partly.items[0].textContent, "Keys and secret files leave this computer only where a rule or your OK allows.");
+  const li = partly.li;
+  assert.equal(li.dataset.state, "partly");
+  assert.match(li.querySelector("span").textContent, /without asking\. Off for: Stripe\.$/);
+  const fold = li.querySelector("details.more");
+  assert.ok(fold, "the list is folded");
+  assert.equal(fold.open, false);
+  assert.equal(fold.querySelector("summary").textContent, "Which companies");
+  const rows = [...fold.querySelectorAll(".issuer-list > li")] as any[];
+  assert.deepEqual(rows.map((r) => r.textContent), ISSUER_TABLE.map((i) => `${i.name}${i.id === "stripe" ? " (asks)" : ""}: ${i.hosts.join(", ")}`));
+  for (const [n, r] of rows.entries()) {
+    assert.deepEqual([...r.querySelectorAll("code")].map((c: any) => c.textContent), [...ISSUER_TABLE[n]!.hosts], "each host is code");
+  }
+  const change = li.querySelector(".issuer-change");
+  assert.deepEqual([...change.querySelectorAll("code")].map((c: any) => c.textContent), ["issuer_bindings: false", "policy.yaml", "issuer_bindings: { issuers_off: [stripe] }"]);
+  assert.equal(li.querySelector("button, input, [role=switch]"), null, "no switch: policy.yaml text only");
+  // off
+  const off = (await draw(issuerItem({ read: true, raw: false }))).li;
+  assert.equal(off.dataset.state, "off");
+  assert.equal(off.querySelector("span").textContent, "Every key asks before it goes to its company's API (issuer_bindings is off in policy.yaml).");
+  assert.equal(off.querySelector("details"), null, "no company list when it is off");
+  assert.equal(off.querySelector(".issuer-change").textContent, "To turn it back on, remove issuer_bindings from policy.yaml.");
+  // not read
+  const unknown = (await draw(issuerItem({ read: false }))).li;
+  assert.equal(unknown.dataset.state, "unknown");
+  assert.match(unknown.textContent, /^Mandu could not read whether/);
+  assert.equal(unknown.querySelector("details, .issuer-change"), null);
+  // an older server sends no item: none is drawn
+  assert.equal((await draw(undefined)).li, null);
 });
 
 // ── dashboard.md §4.34 "`~` is the dashboard's home" ─────────────────────────

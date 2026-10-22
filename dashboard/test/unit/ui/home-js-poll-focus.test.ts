@@ -240,7 +240,7 @@ const answerIn = (doc: any, list: string, id: string, label: string) =>
 // Until 2026-10-12 a card or a list's line an answer landed on (focusThere
 // gives it a tabindex) was drawn anew by the next changed answer without
 // one, and focus() alone left the focus on <body>.
-test("Home: the card an answer gave the focus keeps it when a poll brings another question", async () => {
+test("Home: the line an answer gave the focus keeps it when a poll brings another question", async () => {
   const ASK2 = { ...ASK, id: "egr-2" };
   const ASK3 = { ...ASK, id: "egr-3" };
   // eslint-disable-next-line prefer-const
@@ -253,13 +253,22 @@ test("Home: the card an answer gave the focus keeps it when a poll brings anothe
   press(answerIn(doc, "home-waiting", "egr-1", "Block"));
   await tick(40);
   const card = (id: string) => doc.querySelector(`#home-waiting .ask[data-id="${id}"]`);
+  const answered = () => doc.querySelector("#home-waiting .answer-line");
   const old = card("egr-2");
-  assert.equal(doc.activeElement, old, "the answer gave the next card the focus");
+  assert.equal(doc.activeElement, answered(), "the answer gave its line the focus");
   page.setHome(home({ waiting: [ASK2, ASK3] }));
   await poll(doc);
   assert.notEqual(card("egr-2"), old, "the list was drawn again");
+  assert.equal(doc.activeElement, answered(), "the line, put back, never <body>");
+  assert.equal(answered().getAttribute("tabindex"), "-1", "a line is no Tab stop");
+  // The next card, given the focus, keeps it the same way.
+  card("egr-2").setAttribute("tabindex", "-1");
+  card("egr-2").focus();
+  const next = card("egr-2");
+  page.setHome(home({ waiting: [ASK2] }));
+  await poll(doc);
+  assert.notEqual(card("egr-2"), next, "the list was drawn again");
   assert.equal(doc.activeElement, card("egr-2"), "the same question's card, never <body>");
-  assert.equal(card("egr-2").getAttribute("tabindex"), "-1", "a card is no Tab stop");
 });
 
 test("Approvals: the list's line an answer gave the focus keeps it when a poll draws the list again", async () => {
@@ -275,7 +284,10 @@ test("Approvals: the list's line an answer gave the focus keeps it when a poll d
   await tick(40);
   const line = () => doc.querySelector("#approvals-waiting .empty");
   const old = line();
-  assert.equal(doc.activeElement, old, "the last answer lands on the list's line");
+  assert.equal(doc.activeElement, doc.querySelector("#approvals-waiting .answer-line"), "the last answer lands on the line it left");
+  // Moved to the list's own line by the person.
+  old.setAttribute("tabindex", "-1");
+  old.focus();
   // An answer given elsewhere: Answered earlier has a new row, and the
   // poll draws both lists again.
   page.setHome(none([{ id: "old", sentence: [{ kind: "text", text: "An old send" }], outcome: "blocked", decidedAt: Date.now() - 5_000, actions: [] }]));

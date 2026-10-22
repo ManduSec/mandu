@@ -98,12 +98,14 @@ export interface ReserveExpandOptions {
    *  leave it (v1 heads). Should be bounded in time; a rejection counts as
    *  null. */
   lines: (token: string) => Promise<number | null>;
-  /** v2: the relay's terminal columns when it paints v2 heads, else null.
-   *  Absent (or `shape` absent): v1 only. */
-  layout?: () => Promise<{ cols: number } | null>;
+  /** v2: the relay's terminal columns when it paints v2 heads, else null,
+   *  and where the TUI counts a TAB's stops from (§19.7; absent: `screen`,
+   *  Codex's). Absent (or `shape` absent): v1 only. */
+  layout?: () => Promise<{ cols: number; tabs?: "content" } | null>;
   /** v2: the value's shape at content width `width`, head row `first`, its
-   *  TAB stops counted from the content area's terminal column `indent`
-   *  (cols − width, §11.2). */
+   *  TAB stops counted from column `indent` (§11.2: `cols − width`, the
+   *  content area's terminal column, or 0 for a TUI that counts from the
+   *  content area, §19.7). */
   shape?: (token: string, width: number, first: number, indent?: number) => Promise<ReserveShape | null>;
   /** Row cap (reserve-block.ts parseReserveMax). */
   cap: number;
@@ -190,6 +192,9 @@ export class ResponsesReserveExpander {
   private mode: "unknown" | "v1" | "v2" = "unknown";
   /** v2: the relay's columns; null = v1 heads. */
   private cols: number | null = null;
+  /** v2: the TUI counts a TAB's stops from the content area (§19.7), fixed
+   *  with the mode. */
+  private contentTabs = false;
 
   constructor(private readonly opts: ReserveExpandOptions) {}
 
@@ -382,14 +387,19 @@ export class ResponsesReserveExpander {
   private async resolveMode(): Promise<void> {
     if (this.mode !== "unknown") return;
     let cols: number | null = null;
+    let contentTabs = false;
     if (this.opts.layout && this.opts.shape) {
       try {
         const l = await this.opts.layout();
-        if (l && Number.isInteger(l.cols) && l.cols > 0) cols = l.cols;
+        if (l && Number.isInteger(l.cols) && l.cols > 0) {
+          cols = l.cols;
+          contentTabs = l.tabs === "content";
+        }
       } catch {
         cols = null;
       }
     }
+    this.contentTabs = contentTabs;
     this.mode = cols !== null ? "v2" : "v1";
     this.cols = cols;
   }
@@ -468,7 +478,8 @@ export class ResponsesReserveExpander {
     let s: ReserveShape | null = null;
     try {
       // The content area starts `cols − W` columns in (§11.2: TAB stops).
-      const indent = this.cols !== null && this.cols > d.width ? this.cols - d.width : 0;
+      // (0 when the TUI counts its TAB stops from the content area, §19.7.)
+      const indent = !this.contentTabs && this.cols !== null && this.cols > d.width ? this.cols - d.width : 0;
       s = (await this.opts.shape?.(canonical, d.width, d.first, indent)) ?? null;
     } catch {
       s = null;

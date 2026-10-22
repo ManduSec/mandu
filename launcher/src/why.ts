@@ -378,13 +378,30 @@ export function agentLoginLines(agent: string): string[] {
 
 /** `mandu why` on an agent's own data (secret-discovery.md §1.10): raw in
  *  every session; only a command naming the path is masked. */
-export function agentStoreLines(agent: string): string[] {
+export function agentStoreLines(agent: string, mcpConfig = false): string[] {
   const name = agentDisplayName(agent);
   return [
     `  left raw   ${name}'s own data (its sessions, settings, tool outputs): left raw in every session, because the agent`,
-    "             reads and writes it; programs the agent runs read it as it is, and its values are not registered",
+    mcpConfig
+      ? "             reads and writes it; programs the agent runs read it as it is (but for its MCP servers', below)"
+      : "             reads and writes it; programs the agent runs read it as it is, and its values are not registered",
     "  the AI     sees a placeholder for what a command that names this path prints (a tool's read of it asks first);",
     "             a program that reads it without naming it is not masked. MANDU_OTHER_AGENT_LOGINS does not apply: it is no login",
+  ];
+}
+
+/** `mandu why` on Claude Code's `.claude.json` or Codex's `config.toml`
+ *  (secret-discovery.md §2.10): also the agent's MCP config, whose servers'
+ *  credentials every launch registers. Empty for any other path. */
+export function agentMcpConfigLines(path: string): string[] {
+  const agent = /(?:^|\/)\.claude\.json$/.test(path) ? "claude" : /(?:^|\/)\.codex\/config\.toml$/.test(path) ? "codex" : null;
+  if (agent === null) return [];
+  const name = agentDisplayName(agent);
+  return [
+    `  MCP config ${name}'s MCP servers too: when one holds a credential, every launch registers this file, so each value`,
+    `             reaches the AI as a placeholder and the egress proxy knows it; a session that runs ${name} leaves the file`,
+    "             readable to it, so its servers start with their real values, and an HTTP server's credential goes only to",
+    "             the host its own entry names",
   ];
 }
 
@@ -426,9 +443,10 @@ export function renderWhyPath(a: WhyPathAnswer, home: string, send?: { host: str
   if (agent?.kind === "store") {
     // An agent's own data (secret-discovery.md §1.10): raw in every session,
     // so no placeholder copy and no reader list apply.
-    L.push(...agentStoreLines(agent.agent));
+    const mcp = agentMcpConfigLines(a.path);
+    L.push(...agentStoreLines(agent.agent, mcp.length > 0), ...mcp);
   } else if (a.level !== "public") {
-    if (agent?.kind === "login") L.push(...agentLoginLines(agent.agent));
+    if (agent?.kind === "login") L.push(...agentLoginLines(agent.agent), ...agentMcpConfigLines(a.path));
     L.push(`  the AI     sees ${twinWords(a)}`);
     const inert = a.readersAdmitNothing ?? [];
     const nameOf = (r: unknown): string => {

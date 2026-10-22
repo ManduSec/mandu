@@ -326,6 +326,9 @@ export interface YourRuleRowVM {
   /** A caution under the row: a "your own model only" lock while no model of
    *  your own is declared (dashboard.md §4.25l). Absent otherwise. */
   warning?: string;
+  /** `warning` as parts: "Settings › Models" a link part the page draws as
+   *  a link there (dashboard.md §4.25p). Absent with `warning`. */
+  warningParts?: Array<{ kind: "text"; text: string } | { kind: "link"; text: string; to: "models" }>;
   /** The buttons the product Rules page offers (dashboard.md §4.25c). The
    *  server plans the edit from the row id (rule-actions.ts); this only says
    *  which buttons exist. */

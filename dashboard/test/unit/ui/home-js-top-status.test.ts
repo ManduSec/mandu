@@ -36,6 +36,30 @@ test("off reads 'Protection off' with a warning dot; no protection service reads
   assert.equal(unknown.dot, "dot ");
 });
 
+test("Mandu not running at all (§4.25, *Protection is off when nothing runs*): the top bar and the hero say off, never unknown or connected", async () => {
+  const notRunning = { level: "unknown", configured: "secrets", connected: false, notRunning: true };
+  const s = await status(notRunning);
+  assert.equal(s.text, "Protection off");
+  assert.equal(s.dot, "dot warn");
+  assert.match(s.name, /^Protection off: open Settings$/);
+  // The hero as the server words it: its commands drawn as code, no count.
+  const { doc } = load({ homeVm: home({
+    verdict: "off", headline: "Protection is off: no agent runs with Mandu.",
+    sentence: "Your agents send what they read to the AI as it is, secrets included. To protect one, start it with mandu claude (or mandu codex).",
+    sentenceParts: [
+      { kind: "text", text: "Your agents send what they read to the AI as it is, secrets included. To protect one, start it with " },
+      { kind: "code", text: "mandu claude" }, { kind: "text", text: " (or " }, { kind: "code", text: "mandu codex" }, { kind: "text", text: ")." },
+    ],
+    protection: notRunning, waitingKnown: false, waiting: [], agents: [], history: { total: 0 },
+  }) });
+  await tick();
+  assert.equal(doc.getElementById("hero").dataset.verdict, "off");
+  assert.equal(doc.getElementById("hero-headline").textContent, "Protection is off: no agent runs with Mandu.");
+  assert.deepEqual([...doc.querySelectorAll("#hero-sentence code")].map((c: { textContent: string }) => c.textContent), ["mandu claude", "mandu codex"]);
+  assert.equal(doc.getElementById("hero-facts").textContent, "", "no count is claimed");
+  assert.doesNotMatch(doc.getElementById("top-status").textContent, /Not connected|unknown|Protection on/);
+});
+
 test("a change saved for the next start says which way it goes; a change between two levels that protect says nothing", async () => {
   assert.equal((await status({ level: "secrets", configured: "off", connected: true })).text, "Protection on · off from the next start");
   assert.equal((await status({ level: "off", configured: "secrets", connected: true })).text, "Protection off · on from the next start");

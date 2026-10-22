@@ -530,6 +530,14 @@ test("reply row reservation over the REAL client: the filter's setSessionRelay r
     assert.deepEqual(await proxyAdapter.symbolShape!(wide, { width: 80, first: 80, rule: "terminal" }), { lines: 1, rows: 3, last: 1 });
     assert.deepEqual(await proxyAdapter.symbolShape!(wide, { width: 80, first: 67, rule: "terminal" }), { lines: 1, rows: 3, last: 14 });
     await assert.rejects(proxyAdapter.symbolShape!(wide, { width: 80, first: 80, rule: "char" as never }), /rule must be one of/);
+    // §19.7: the TAB origin rides through both production wirings. The
+    // filter reports `content` (Claude Code), the proxy reads it back and
+    // sends indent 0: the last line's TAB then takes the full 8 columns
+    // (`last` 25, as without an indent above).
+    await filterAdapter.setSessionRelay({ sessionKey: `${key}-claude`, mode: "pty", reserve: true, wrap: true, cols: 80, rows: 24, tabs: "content" });
+    assert.equal((await proxyAdapter.sessionRelay!(`${key}-claude`))?.tabs, "content");
+    assert.deepEqual(await proxyAdapter.symbolShape!(token, { width: 78, first: 0, indent: 0 }), { lines: 4, rows: 5, last: 25 });
+    await assert.rejects(filterAdapter.setSessionRelay({ sessionKey: key, mode: "pty", reserve: true, tabs: "text" as never }), /tabs must be one of/);
     // Unknown token, and text around a token: null (the proxy does not expand).
     assert.equal(await proxyAdapter.symbolShape!("$MDU:nomodel_Read[0badc0de]"), null);
     assert.equal(await proxyAdapter.symbolShape!(`see ${token}`), null);

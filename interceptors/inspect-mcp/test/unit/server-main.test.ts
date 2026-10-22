@@ -202,6 +202,23 @@ test("cli mode: honors the MANDU_ULLM_BINARY hint", () => {
   assert.equal(cfg.binary, "claude");
 });
 
+test("cli mode: MANDU_ULLM_BINARY_PATH (the CLI past the session's claude shim) reaches the config; a relative or foreign path fails closed", () => {
+  const cfg = selectUllmConfig({ MANDU_ULLM_MODE: "cli", MANDU_ULLM_BINARY: "claude", MANDU_ULLM_BINARY_PATH: "/opt/claude/bin/claude" }, ALWAYS);
+  assert.equal(cfg.mode, "cli");
+  if (cfg.mode !== "cli") return;
+  assert.equal(cfg.binaryPath, "/opt/claude/bin/claude");
+  const auto = selectUllmConfig({ MANDU_ULLM_BINARY_PATH: "/opt/claude/bin/claude" }, ALWAYS);
+  assert.equal(auto.mode === "cli" ? auto.binaryPath : "api", "/opt/claude/bin/claude");
+  assert.equal((selectUllmConfig({ MANDU_ULLM_MODE: "cli" }, ALWAYS) as { binaryPath?: string }).binaryPath, undefined);
+  for (const bad of ["claude", "bin/claude", "/usr/bin/node"]) {
+    assert.throws(
+      () => selectUllmConfig({ MANDU_ULLM_MODE: "cli", MANDU_ULLM_BINARY_PATH: bad }, ALWAYS),
+      /MANDU_ULLM_BINARY_PATH.*fail closed/,
+      bad,
+    );
+  }
+});
+
 test("cli mode: the binary not on PATH fails closed", () => {
   assert.throws(
     () => selectUllmConfig({ MANDU_ULLM_MODE: "cli", MANDU_ULLM_BINARY: "claude" }, NEVER),

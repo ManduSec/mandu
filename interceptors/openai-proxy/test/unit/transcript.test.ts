@@ -102,3 +102,20 @@ test("ResponseSniffer (JSON): the stream:false body's output, or its error", () 
   err.feed(JSON.stringify({ error: { message: "quota exceeded", type: "insufficient_quota" } }));
   assert.deepEqual(err.finish(), { text: "", error: "quota exceeded" });
 });
+
+test("ResponseSniffer: the response id (plan 17 §3 item 6), SSE from the first response.* event, JSON from the body; only a well-formed one", () => {
+  const id = "resp_0977abcdef0123456789";
+  const sse = new ResponseSniffer("sse");
+  const body = buildTextSse("ok").replaceAll('"id":"r"', `"id":"${id}"`);
+  for (let i = 0; i < body.length; i += 11) sse.feed(body.slice(i, i + 11));
+  assert.equal(sse.finish().responseId, id);
+  const json = new ResponseSniffer("json");
+  json.feed(JSON.stringify({ id, output: [] }));
+  assert.equal(json.finish().responseId, id);
+  const bad = new ResponseSniffer("json");
+  bad.feed(JSON.stringify({ id: "resp <script>", output: [] }));
+  assert.equal("responseId" in bad.finish(), false);
+  const none = new ResponseSniffer("sse");
+  none.feed(sseEvent("response.output_item.done", { type: "response.output_item.done", item: { type: "message", role: "assistant", content: [] } }));
+  assert.equal("responseId" in none.finish(), false);
+});

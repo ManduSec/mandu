@@ -170,7 +170,7 @@ test("with the protection service down, the product page shows no question it ca
       assert.deepEqual(sectionWords(doc, "home-waiting"), [["empty", NOT_CHECKED.waiting]]);
       assert.deepEqual(sectionWords(doc, "home-agents"), [["empty", NOT_CHECKED.agents]], "no agent row is left");
       assert.equal(doc.getElementById("home-earlier-block").hidden, true);
-      assert.equal(w.document.title, "Mandu", "the tab drops its count");
+      assert.equal(w.document.title, "Not connected · Mandu", "the tab drops its count and says why (dashboard.md §4.25 *The tab says the protection state*)");
       rendered.push(doc.body.textContent ?? "");
     });
 

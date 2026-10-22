@@ -14,8 +14,9 @@
  * - the served page draws the 10:41 Read with its "Masked only later" tag
  *   and a `<time>` for the moment masking began, Your secrets' warn line
  *   with both moments as `<time>`s, then the line that the AI's own words
- *   are not masked (never "only a placeholder"), and "ended", never
- *   "running now";
+ *   are not masked (never "only a placeholder"), then "If it holds a key or
+ *   a password, change it" (STRIPE_KEY's card, masked from the start, has
+ *   no such line), and "ended", never "running now";
  * - its tiles count what the page shows: 1 secret masked before the AI saw
  *   it, 1 the AI read before it was marked (amber), the blocked send and
  *   the one let out; never "3 items masked before the AI saw them";
@@ -200,14 +201,20 @@ test("the served page: the raw read with its later-mask time, the warn line, and
     const cards = [...doc.querySelectorAll("#agent-secrets .secret-card")] as HTMLElement[];
     const conf = cards.filter((c) => /staging\.conf/.test(c.textContent!));
     assert.equal(conf.length, 1);
-    const [warn, ownWords, ...moreWarn] = [...conf[0]!.querySelectorAll(".secret-line.warn")] as HTMLElement[];
+    const [warn, ownWords, changeIt, ...moreWarn] = [...conf[0]!.querySelectorAll(".secret-line.warn")] as HTMLElement[];
     assert.match(warn!.textContent!, /^The AI read its real value at \d{2}:\d{2}, before it was marked a secret\. From \d{2}:\d{2} on it got a placeholder in its place, in 2 requests\.$/);
     assert.equal(warn!.querySelectorAll("time").length, 2);
     // The AI's 10:41 reply quoted the file, and Mandu forwards the AI's own
     // replies as written: the card says so, next, never "only a placeholder".
     assert.equal(ownWords?.textContent, "Anything the AI wrote from its real value went back to the AI as written with each later request: Mandu does not mask the AI's own words.");
+    // Then what to do about it, in the later label's words (§4.25b).
+    assert.equal(changeIt?.textContent, "If it holds a key or a password, change it: the AI saw it as it was.");
     assert.deepEqual(moreWarn, []);
     assert.doesNotMatch(conf[0]!.textContent!, /only a placeholder/);
+    // STRIPE_KEY, masked from the start, says nothing of the kind.
+    const stripe = cards.filter((c) => /STRIPE_KEY/.test(c.querySelector(".secret-what")!.textContent!));
+    assert.equal(stripe.length, 1);
+    assert.doesNotMatch(stripe[0]!.textContent!, /change it|Change this key/);
     const when = doc.querySelector("#page-agent .agent-when").textContent as string;
     assert.match(when, /ended/);
     assert.doesNotMatch(when, /running now/);
@@ -351,8 +358,13 @@ test("Your secrets says the 10:38 block asked for your OK, linking the row its e
   const send = stripe.lines.find((l) => /^Mandu sent/.test(words(l.parts)))!;
   assert.doesNotMatch(words(send.parts), /OK|Approvals|answer/, "the send says nothing of an answer");
   await servedPage(`/agents/${ID}`, (doc) => !!doc.querySelector("#agent-secrets .secret-card"), (doc) => {
-    const links = [...doc.querySelectorAll("#agent-secrets a")] as HTMLAnchorElement[];
-    assert.equal(links.length, 1, "one link in Your secrets");
+    // The cards' own lines link one Approvals row; each file's card also
+    // links its file to Rules (§4.25b *A card opens its file in Rules*).
+    const rules = [...doc.querySelectorAll("#agent-secrets a.secret-rule-link")] as HTMLAnchorElement[];
+    assert.deepEqual(rules.map((a) => a.getAttribute("href")).sort(), ["/rules?file=~/mandu-try/.env", "/rules?file=~/mandu-try/deploy/staging.conf"], "the tour's two files, each its card's own link");
+    assert.equal([...doc.querySelectorAll("#agent-secrets a")].length, rules.length + 1, "and no other link");
+    const links = [...doc.querySelectorAll("#agent-secrets .secret-line a")] as HTMLAnchorElement[];
+    assert.equal(links.length, 1, "one link in Your secrets' lines");
     const line = links[0]!.closest(".secret-line")!;
     assert.match(line.textContent!, /^Mandu blocked 1 attempt to send it to api\.stripe\.com/, "on the block line");
     assert.ok(/STRIPE_KEY/.test(line.closest(".secret-card")!.querySelector(".secret-what")!.textContent!), "of STRIPE_KEY's card");
@@ -527,12 +539,12 @@ test("signed out, the served page says to sign in with its command as code, neve
   await servedPage(`/agents/${ID}`, (doc) => doc.getElementById("agent-values-note")?.hidden === false && doc.querySelectorAll("#agent-story .values-withheld").length > 0, (doc) => {
     const codes = (n: Element) => [...n.querySelectorAll("code")].map((c) => c.textContent);
     const note = doc.getElementById("agent-values-note");
-    assert.equal(note.textContent, "Sign in to see real values: in your own terminal, run mandu dashboard and open the sign-in link it prints.");
-    assert.deepEqual(codes(note), ["mandu dashboard"]);
+    assert.equal(note.textContent, "Sign in to see real values: reload this page and sign in with your dashboard account.");
+    assert.deepEqual(codes(note), []);
     // The 10:35 Read of .env and the 10:42 Read of staging.conf, signed out.
     const lines = [...doc.querySelectorAll("#agent-story .values-withheld")] as Element[];
     assert.equal(lines.length, 2);
-    for (const l of lines) assert.deepEqual(codes(l), ["mandu dashboard"]);
+    for (const l of lines) assert.deepEqual(codes(l), []);
     const all = doc.getElementById("page-agent").textContent;
     assert.doesNotMatch(all, /"mandu dashboard"|`mandu dashboard`/);
     assert.doesNotMatch(all, /FAKE-STRIPE-KEY-0000|FAKE-STAGING-TOKEN-0000/, "signed out, no real value on the page");
@@ -543,7 +555,7 @@ test("the agent's call to Mandu's rule tool says what it asked and what Mandu an
   const STEP = "tool:toolu_014TbrrRqbyKEeE2yrALZJWq";
   // The file under the server's home reads ~/…, as on Approvals and Rules (§4.34).
   const SENTENCE = "Asked Mandu to make ~/mandu-try/deploy/staging.conf a secret no AI may read";
-  const ANSWER = "Mandu applied it at once, because it only adds protection. You can undo it under Rule changes in Approvals.";
+  const ANSWER = "Mandu applied it at once, because it only adds protection. You can undo it in Approvals.";
   const page = (await (await pageFetch(`${base}/api/home/agent?session=${ID}`)).json()) as {
     story: { prompt: string | null; steps: { id: string; icon?: string; outcome?: string; note?: string | null; sentence?: Part[] }[] }[];
   };
@@ -563,6 +575,10 @@ test("the agent's call to Mandu's rule tool says what it asked and what Mandu an
     assert.equal(what.firstElementChild!.textContent, SENTENCE);
     assert.equal(what.querySelector("code")!.textContent, "~/mandu-try/deploy/staging.conf");
     assert.equal(what.querySelector(".note")!.textContent, ANSWER);
+    // Its last word links the change it made, which Approvals marks (§4.25b).
+    const link = what.querySelector(".note a") as HTMLAnchorElement;
+    assert.equal(link.textContent, "Approvals");
+    assert.match(link.getAttribute("href")!, /\/approvals\/pc-\d{6}$/);
     const story = doc.getElementById("agent-story").textContent as string;
     assert.doesNotMatch(story, /mandu_policy_propose|Used mandu-policy/);
   });

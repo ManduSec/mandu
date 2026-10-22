@@ -139,11 +139,12 @@ export const NEEDS = {
   qemu: "qemu-system-x86_64, qemu-img",
   network: "network access (the install kind's image downloads)",
   "cli-latest": "the newest released agent CLI, installed over the pinned one",
+  "timing-baseline": "a host as fast as the one the suite's recorded timings came from (the CI guest; runtime-instances.md §14.11)",
 };
 
 /** The needs that make an env suite's result the host's (test-reorganization.md §3): an env
  *  entry names at least one, or reaches the internet. */
-export const ENV_NEEDS = ["ollama", "claude-login", "chatgpt-login", "anthropic-api-key", "openai-api-key", "cli-latest"];
+export const ENV_NEEDS = ["ollama", "claude-login", "chatgpt-login", "anthropic-api-key", "openai-api-key", "cli-latest", "timing-baseline"];
 
 /** The properties a suite can prove (test-reorganization.md §5.1): each a path in or out of
  *  the model, or a mechanism the invariant leans on. */

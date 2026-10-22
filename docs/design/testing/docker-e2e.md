@@ -165,9 +165,11 @@ decoy keys and proves they do not reach the container.
   continuous-integration.md §13) into a mode-600 `--env-file`, never as `-e
   KEY=value`, which would expose the secret to `docker inspect` and `ps`. Only
   third-party clients that cannot use the subscription need it.
-- **`--with-npm-token`** forwards `$NPM_TOKEN`; **`--out DIR`** bind-mounts
-  one host dir at `/repo/release` for a release tarball. Nothing else is
-  mounted.
+- **`--out DIR`** bind-mounts one host dir at `/repo/release` for a release
+  tarball. Nothing else is mounted. No publish credential enters a container
+  (the `--with-npm-token` flag is gone since 2026-10-21): releases publish
+  from the public repository's release workflow by npm trusted publishing
+  ([`packaging.md §11.3`](../distribution/packaging.md)).
 
 ### 1.5 Grouped live runs and the posture guard
 

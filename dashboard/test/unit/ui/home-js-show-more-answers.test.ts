@@ -181,7 +181,7 @@ test("M4: the file browser's failed Show more names each cause in the page's wor
     [NO_ANSWER, "Could not read more of this folder. The dashboard could not reach its own server. Refresh in a moment.", []],
     [{ status: 503, body: { error: "arbiter connection failed", unreachable: true } }, "Could not read more of this folder. The protection service is not running. Start it under Settings, or try again in a moment.", [["Start it under Settings", "settings"]]],
     [{ status: 500, body: { error: "could not list the folder: EIO: i/o error" } }, "Could not read more of this folder: could not list the folder: EIO: i/o error.", []],
-    [{ status: 403, body: { error: "admin session required: open the sign-in link" } }, "Could not read more of this folder. Sign in first: in your own terminal, run mandu dashboard and open the sign-in link it prints (each link works once), or sign in with the dashboard's password if it has one.", []],
+    [{ status: 403, body: { error: "admin session required: open the sign-in link" } }, "Could not read more of this folder. Sign in first: reload this page and sign in with your dashboard account (if there isn't one yet, run mandu dashboard --set-password in your own terminal).", []],
     [{ status: 502, body: null }, "Could not read more of this folder. The dashboard server answered with an error (502). Refresh in a moment.", []],
   ];
   for (const [answer, words, links] of causes) {

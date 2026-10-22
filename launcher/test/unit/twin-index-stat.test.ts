@@ -24,8 +24,9 @@
  *      a path the index does not hold: nothing written.
  *   C5 git's lock wins: an `index.lock` present leaves the index as is; a
  *      symlinked index and a split index are refused.
- *   C6 the restore puts the launch stat back only when the entry still
- *      holds the session's stat and blob.
+ *   C6 the restore writes the real file's stat (here: unchanged since the
+ *      launch, so the launch's index byte for byte) only when the entry
+ *      still holds the session's stat and blob.
  *   C7 parse: a truncated or corrupted index throws, never a wrong patch.
  *
  * The crash record (in a scratch Mandu home):
@@ -35,8 +36,8 @@
  *      a live one is left.
  *   R3 a record that cannot be written (the walk cache a link) leaves the
  *      index alone and the lock released.
- *   R4 two sessions on one repository, both end orders: the launch index
- *      at the end.
+ *   R4 two sessions on one repository, both end orders: the real file's
+ *      stat at the end.
  *   R5 a lock held through the end keeps the record; the next launch
  *      finishes it.
  *   R6 the record's exact shape; a broken one dropped, another version's
@@ -45,22 +46,42 @@
  *   R8 a final failure (a symlinked or split index since): said once, the
  *      record dropped.
  *   R9 a lock held past TWIN_RECORD_MAX_AGE_MS: the record goes.
+ *   R10 THE 2026-10-21 INCIDENT: two overlapping sessions in two Mandu
+ *      homes (the demo battery's sides), the first ends first: the second
+ *      put back its launch stat, the first's twin stat, and git outside
+ *      showed ` M` with no record left anywhere. Now the real file's stat.
+ *   R11 a launcher killed in a Mandu home removed with it (no record
+ *      anywhere): the next session on the repository, in another home,
+ *      leaves the real file's stat at its end.
+ *   R12 a real file changed (or removed) during the session: the restore
+ *      writes a zero stat, so git reads it and shows the change as it is.
  *   U1 a twinned file the session untracked is reported, and named unless
  *      .gitignore names it.
  *   C8 a required extension (first byte not A-Z) other than `sdir` refused.
+ *   S1 the scope (`reposInWorkspace`): a workspace inside a repository, one
+ *      holding several, a plain dir, symlinked spellings, a worktree inside
+ *      its main checkout's directory and one beside it.
+ *   W1 the record store: the HOME's own Mandu home whatever MANDU_HOME says;
+ *      the reads add MANDU_HOME's own.
+ *   W2 a record that outlived a removed scratch home is restored from any
+ *      other MANDU_HOME; one an older launcher left in MANDU_HOME's home too.
+ *   X1 the index file from the history step's facts: no rev-parse; each
+ *      fallback asks once; a failed call leaves the index alone, said.
+ *   X2 the facts name each work tree's own index (a checkout, its worktree).
  */
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import type { GitRunner } from "../../src/git-object-twins.js";
+import { basename, join } from "node:path";
+import { parseRepoFacts, repoFactsOf, type GitRunner } from "../../src/git-object-twins.js";
 import type { WatchedRepo } from "../../src/placeholder-commits.js";
 import {
-  cleanTwinsInIndex, endTwinIndexSession, indexStatOf, parseIndex, parseTwinIndexRecord, patchIndexBuffer, patchIndexFile, readTwinIndexRecords,
-  restorePendingTwinIndexes, restoreTwinIndexes, IndexUnsupported, TwinIndexRecorder, twinIndexRecordDir, TWIN_MTIME_BACK_S, TWIN_RECORD_MAX_AGE_MS,
-  untrackedNotice,
+  cleanTwinsInIndex, endTwinIndexSession, indexStatOf, parseIndex, parseTwinIndexRecord, patchIndexBuffer, patchIndexFile, readStat, readTwinIndexRecords,
+  realFileNow, restorePendingTwinIndexes, restoreStatFor, restoreTwinIndexes, IndexUnsupported, TwinIndexRecorder, twinIndexRecordDir, TWIN_MTIME_BACK_S,
+  TWIN_RECORD_MAX_AGE_MS, UNSTATED, untrackedNotice, reposInWorkspace, restorePendingFromStores, twinIndexReadStores, twinIndexWriteStore,
+  type IndexStat, type RealFile,
 } from "../../src/twin-index-stat.js";
 import { stateAxes } from "../axes.js";
 import { tmpDir } from "../lib/tmp-dir.js";
@@ -113,6 +134,48 @@ const clean = (r: Repo, index?: string[]): ReturnType<typeof cleanTwinsInIndex> 
   cleanTwinsInIndex(watched(r, index), { git: runner, readReal: () => Buffer.from(REAL) });
 const status = (r: Repo): string => git(r.root, ["status", "--porcelain"]);
 const indexPath = (r: Repo): string => join(r.root, ".git", "index");
+
+/** The restore's view of a real file unchanged since the launch, where the
+ *  work tree's `.env` is the twin (these cases simulate the agent's world in
+ *  place): REAL's bytes with the stat its entry held in `launch`. */
+const asLaunched = (launch: Buffer) => (path: string): RealFile => {
+  const e = parseIndex(launch, 20).entries.find((x) => x.path === basename(path))!;
+  return { bytes: Buffer.from(REAL), stat: readStat(launch, e.offset) };
+};
+/** A stat without its mode word (an entry's mode is git's, never a file's). */
+const noMode = (s: IndexStat): Omit<IndexStat, "mode"> => { const { mode: _m, ...rest } = s; return rest; };
+const entryStat = (r: Repo, rel = ".env"): IndexStat => {
+  const b = readFileSync(indexPath(r));
+  return readStat(b, parseIndex(b, 20).entries.find((x) => x.path === rel)!.offset);
+};
+const fileStat = (p: string): IndexStat => indexStatOf(lstatSync(p, { bigint: true }));
+
+/** As `repo()`, but the work tree's `.env` is the REAL file (the human's
+ *  view: untouched for a minute, its entry refreshed), and each session's
+ *  twin a file of its own outside the work tree, as the guard serves it. */
+function realRepo(): Repo {
+  const r = repo();
+  writeFileSync(join(r.root, ".env"), REAL);
+  const old = Date.now() / 1000 - 60;
+  utimesSync(join(r.root, ".env"), old, old);
+  git(r.root, ["update-index", "-q", "--refresh"]);
+  assert.equal(status(r), "");
+  return r;
+}
+function twinFile(): string {
+  const p = join(tmpDir("twin-index-twin-"), ".env");
+  writeFileSync(p, TWIN);
+  return p;
+}
+let atSeq = 0;
+/** One session's launch on `r`: its own twin, its record in `h`. */
+async function launchOn(r: Repo, h: { home: string; dir: string }, scope: string): Promise<{ got: Awaited<ReturnType<typeof cleanTwinsInIndex>>; rec: TwinIndexRecorder }> {
+  const rec = new TwinIndexRecorder(h.dir, h.home, scope, Date.now() + ++atSeq);
+  const w: WatchedRepo[] = [{ root: r.root, tips: null, paths: [{ rel: ".env", ids: [], index: [r.oid], twin: twinFile() }] }];
+  const got = await cleanTwinsInIndex(w, { git: runner, recorder: rec });
+  assert.equal(got.length, 1, `${scope}: patched`);
+  return { got, rec };
+}
 
 test("C0 (the defect): without the patch the twin of a tracked file is modified, and filter-branch refuses", () => {
   const r = repo();
@@ -253,14 +316,14 @@ test("C5 git's lock wins; a symlinked index and a split index are refused", asyn
   rmSync(s.root, { recursive: true, force: true });
 });
 
-test("C6 the restore puts the launch stat back only over the session's own stat and blob", async () => {
+test("C6 the restore writes the real file's stat only over the session's own stat and blob", async () => {
   const r = repo();
   const launch = readFileSync(indexPath(r));
   const got = await clean(r);
   assert.equal(got.length, 1);
-  assert.deepEqual(restoreTwinIndexes(got).back, [join(r.root, ".env")]);
+  assert.deepEqual(restoreTwinIndexes(got, { readReal: asLaunched(launch) }).back, [join(r.root, ".env")]);
   const back = readFileSync(indexPath(r));
-  assert.ok(back.equals(launch), "byte for byte the launch's index");
+  assert.ok(back.equals(launch), "the real file unchanged since the launch: byte for byte the launch's index");
   // The agent staged the twin: another blob; the restore leaves it.
   const r2 = repo();
   const got2 = await clean(r2);
@@ -292,9 +355,9 @@ test("C6b THE TRADE-OFF: during the session git OUTSIDE sees the real file as mo
   const fb = gitRun(r.root, ["filter-branch", "-f", "--index-filter", "true", "--", "--all"]);
   assert.match(fb.out, /unstaged changes/, "a clean-tree command refuses outside while the session runs");
   assert.equal(restoreTwinIndexes(got).back.length, 1);
-  // The launch stat is back; a refresh (the human's next status) finds the
-  // real file clean.
-  git(r.root, ["update-index", "-q", "--refresh"]);
+  // The real file's stat is in the entry: clean with no refresh at all.
+  assert.deepEqual(noMode(entryStat(r)), noMode(fileStat(join(r.root, ".env"))));
+  assert.equal(gitRun(r.root, ["diff-files", "--quiet"]).code, 0, "clean by stat alone, nothing re-read");
   assert.equal(status(r), "");
   // A change of the real file is never hidden.
   writeFileSync(join(r.root, ".env"), `${REAL}NEW=1\n`);
@@ -344,17 +407,16 @@ test("R1 the record is written BEFORE the patched index lands, 0600, in the Mand
   assert.equal(back.length, 1);
   assert.deepEqual(back[0]!.rec.indexes, got);
   // The session's end: put back and the record gone.
-  const end = endTwinIndexSession(got, rec);
+  const end = endTwinIndexSession(got, rec, { readReal: asLaunched(launch) });
   assert.equal(end.complete, true);
   assert.ok(readFileSync(indexPath(r)).equals(launch));
   assert.deepEqual(readTwinIndexRecords(h.dir, h.home), []);
   for (const d of [r.root, h.home]) rmSync(d, { recursive: true, force: true });
 });
 
-test("R2 a crashed session (no end ran): the next launch puts the launch stat back and removes the record; a live session's record is left", async () => {
+test("R2 a crashed session (no end ran): the next launch writes the real file's stat and removes the record; a live session's record is left", async () => {
   const r = repo();
   const h = manduHome();
-  const launch = readFileSync(indexPath(r));
   const rec = new TwinIndexRecorder(h.dir, h.home, "crashed");
   await cleanTwinsInIndex(watched(r), { git: runner, readReal: () => Buffer.from(REAL), recorder: rec });
   // The human's view meanwhile: the real file, which shows modified.
@@ -364,9 +426,9 @@ test("R2 a crashed session (no end ran): the next launch puts the launch stat ba
   assert.deepEqual(restorePendingTwinIndexes(h.dir, h.home, { live: LIVE }), [], "a live session is never restored under it");
   assert.equal(readTwinIndexRecords(h.dir, h.home).length, 1);
   assert.deepEqual(restorePendingTwinIndexes(h.dir, h.home, { live: DEAD }), [r.root]);
-  assert.ok(readFileSync(indexPath(r)).equals(launch), "byte for byte the launch's index");
+  assert.deepEqual(noMode(entryStat(r)), noMode(fileStat(join(r.root, ".env"))), "the real file's stat (the human's .env, rewritten since the launch)");
   assert.deepEqual(readTwinIndexRecords(h.dir, h.home), [], "the record removed");
-  git(r.root, ["update-index", "-q", "--refresh"]);
+  assert.equal(gitRun(r.root, ["diff-files", "--quiet"]).code, 0, "clean with no refresh");
   assert.equal(status(r), "");
   for (const d of [r.root, h.home]) rmSync(d, { recursive: true, force: true });
 });
@@ -389,35 +451,104 @@ test("R3 a record that cannot be written leaves the index alone", async () => {
   for (const d of [r.root, h.home, elsewhere]) rmSync(d, { recursive: true, force: true });
 });
 
-test("R4 two sessions on one repository: the second inherits the first's launch stat; whichever ends last puts the real one back", async () => {
+test("R4 two sessions on one repository (one Mandu home), both end orders: the real file's stat at the end, never a twin's", async () => {
   for (const order of ["first-ends-first", "second-ends-first"] as const) {
-    const r = repo();
+    const r = realRepo();
     const h = manduHome();
-    const launch = readFileSync(indexPath(r));
-    const rec1 = new TwinIndexRecorder(h.dir, h.home, "one");
-    const got1 = await cleanTwinsInIndex(watched(r), { git: runner, readReal: () => Buffer.from(REAL), recorder: rec1 });
-    // The second session's twin: another file, another stat.
-    const twin2 = join(r.root, "twin2");
-    writeFileSync(twin2, TWIN);
-    const rec2 = new TwinIndexRecorder(h.dir, h.home, "two", Date.now() + 1);
-    const w2: WatchedRepo[] = [{ root: r.root, tips: null, paths: [{ rel: ".env", ids: [], index: [r.oid], twin: twin2 }] }];
-    const got2 = await cleanTwinsInIndex(w2, {
-      git: runner, readReal: () => Buffer.from(REAL), recorder: rec2,
-      peers: () => readTwinIndexRecords(h.dir, h.home).map((x) => x.rec).filter((x) => x.scopeId === "one"),
-    });
-    assert.equal(got2.length, 1);
-    assert.deepEqual(got2[0]!.entries[0]!.before, got1[0]!.entries[0]!.before, "the second's launch stat is the real one");
+    const real = fileStat(join(r.root, ".env"));
+    const one = await launchOn(r, h, "one");
+    const two = await launchOn(r, h, "two");
+    assert.deepEqual(noMode(two.got[0]!.entries[0]!.before), noMode(one.got[0]!.entries[0]!.after), "the second's launch stat is the first's twin stat");
+    assert.match(status(r), /^ M \.env$/m, "outside, during both sessions");
     if (order === "first-ends-first") {
-      assert.equal(endTwinIndexSession(got1, rec1).back.length, 0, "the first finds the second's stat: left");
-      assert.equal(endTwinIndexSession(got2, rec2).back.length, 1);
+      assert.equal(endTwinIndexSession(one.got, one.rec).back.length, 0, "the first finds the second's stat: left");
+      assert.equal(endTwinIndexSession(two.got, two.rec).back.length, 1);
     } else {
-      assert.equal(endTwinIndexSession(got2, rec2).back.length, 1);
-      assert.equal(endTwinIndexSession(got1, rec1).back.length, 0, "already the real stat");
+      assert.equal(endTwinIndexSession(two.got, two.rec).back.length, 1);
+      assert.equal(endTwinIndexSession(one.got, one.rec).back.length, 0, "already the real stat");
     }
-    assert.ok(readFileSync(indexPath(r)).equals(launch), `${order}: the launch's index at the end`);
+    assert.deepEqual(noMode(entryStat(r)), noMode(real), `${order}: the real file's stat at the end`);
+    assert.equal(gitRun(r.root, ["diff-files", "--quiet"]).code, 0, `${order}: clean outside, no refresh`);
     assert.deepEqual(readTwinIndexRecords(h.dir, h.home), []);
     for (const d of [r.root, h.home]) rmSync(d, { recursive: true, force: true });
   }
+});
+
+test("R10 THE 2026-10-21 INCIDENT: two overlapping sessions in two Mandu homes (the demo battery's sides), the first ends first: the real stat comes back, not the first's twin stat", async () => {
+  for (const order of ["first-ends-first", "second-ends-first"] as const) {
+    const r = realRepo();
+    // Each side its own Mandu home: neither sees the other's record.
+    const hA = manduHome();
+    const hB = manduHome();
+    const real = fileStat(join(r.root, ".env"));
+    const a = await launchOn(r, hA, "side-a");
+    const b = await launchOn(r, hB, "side-b");
+    const first = order === "first-ends-first" ? [a, b] : [b, a];
+    for (const s of first) assert.equal(endTwinIndexSession(s.got, s.rec).complete, true);
+    // Before the fix the second's end put back its launch stat, side a's
+    // twin stat: ` M .env` with no diff, and no crash record anywhere.
+    assert.notDeepEqual(noMode(entryStat(r)), noMode(a.got[0]!.entries[0]!.after), `${order}: never the first's twin stat`);
+    assert.deepEqual(noMode(entryStat(r)), noMode(real), `${order}: the real file's stat`);
+    assert.equal(status(r), "", `${order}: clean outside`);
+    assert.deepEqual([...readTwinIndexRecords(hA.dir, hA.home), ...readTwinIndexRecords(hB.dir, hB.home)], []);
+    for (const d of [r.root, hA.home, hB.home]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("R11 a launcher killed in a Mandu home removed with it (no record left): the next session on the repository, in another home, leaves the real stat at its end", async () => {
+  const r = realRepo();
+  const gone = manduHome();
+  const real = fileStat(join(r.root, ".env"));
+  await launchOn(r, gone, "killed"); // no end runs
+  rmSync(gone.home, { recursive: true, force: true }); // the side's home goes with it
+  assert.match(status(r), /^ M \.env$/m, "the dead session's twin stat, no record anywhere");
+  const h = manduHome();
+  assert.deepEqual(restorePendingTwinIndexes(h.dir, h.home, { live: DEAD }), [], "no record to find");
+  const next = await launchOn(r, h, "next");
+  endTwinIndexSession(next.got, next.rec);
+  assert.deepEqual(noMode(entryStat(r)), noMode(real));
+  assert.equal(status(r), "");
+  for (const d of [r.root, h.home]) rmSync(d, { recursive: true, force: true });
+});
+
+test("R12 a real file changed or removed during the session: the restore writes a zero stat, and git shows the change as it is", async () => {
+  for (const how of ["edited same size", "edited", "removed", "made a link"] as const) {
+    const r = realRepo();
+    const h = manduHome();
+    const s = await launchOn(r, h, "s");
+    const p = join(r.root, ".env");
+    if (how === "edited same size") writeFileSync(p, REAL.replace("sk-real", "sk-REAL"));
+    else if (how === "edited") writeFileSync(p, `${REAL}NEW=1\n`);
+    else if (how === "removed") rmSync(p);
+    else { rmSync(p); const t = join(tmpDir("twin-index-link-"), ".env"); writeFileSync(t, REAL); symlinkSync(t, p); }
+    assert.equal(endTwinIndexSession(s.got, s.rec).back.length, 1, how);
+    assert.deepEqual(noMode(entryStat(r)), noMode(UNSTATED), `${how}: git never stat'ed it, so it reads it`);
+    assert.match(status(r), how === "removed" ? /^ D \.env$/m : how === "made a link" ? /^ T \.env$/m : /^ M \.env$/m, how);
+    if (how.startsWith("edited")) assert.notEqual(git(r.root, ["diff", "--", ".env"]), "", `${how}: a real diff`);
+    // Put back as it was: git reads it and finds it clean again.
+    rmSync(p, { force: true });
+    writeFileSync(p, REAL);
+    assert.equal(status(r), "", `${how}: the committed bytes again: clean`);
+    for (const d of [r.root, h.home]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("R13 realFileNow and restoreStatFor: the real stat only for the entry's own bytes", () => {
+  const d = tmpDir("twin-index-real-");
+  const p = join(d, ".env");
+  writeFileSync(p, REAL);
+  const oid = createHash("sha1").update(`blob ${Buffer.byteLength(REAL)}\0`).update(REAL).digest("hex");
+  const got = realFileNow(p)!;
+  assert.equal(got.bytes.toString(), REAL);
+  assert.deepEqual(got.stat, fileStat(p));
+  assert.deepEqual(restoreStatFor(d, { rel: ".env", oid }, realFileNow), fileStat(p));
+  assert.deepEqual(restoreStatFor(d, { rel: ".env", oid: "1".repeat(40) }, realFileNow), UNSTATED, "another blob");
+  assert.deepEqual(restoreStatFor(d, { rel: "gone", oid }, realFileNow), UNSTATED, "no file");
+  symlinkSync(".env", join(d, "link"));
+  assert.equal(realFileNow(join(d, "link")), null, "a link is never followed");
+  mkdirSync(join(d, "dir"));
+  assert.equal(realFileNow(join(d, "dir")), null, "not a file");
+  rmSync(d, { recursive: true, force: true });
 });
 
 test("R5 a lock held through the restore: the record is kept, and the next launch finishes it", async () => {
@@ -432,7 +563,7 @@ test("R5 a lock held through the restore: the record is kept, and the next launc
   assert.equal(readTwinIndexRecords(h.dir, h.home).length, 1, "kept for later");
   assert.equal(readFileSync(`${indexPath(r)}.lock`, "utf8"), "", "the other git's lock untouched");
   rmSync(`${indexPath(r)}.lock`);
-  assert.deepEqual(restorePendingTwinIndexes(h.dir, h.home, { live: DEAD }), [r.root]);
+  assert.deepEqual(restorePendingTwinIndexes(h.dir, h.home, { live: DEAD, readReal: asLaunched(launch) }), [r.root]);
   assert.ok(readFileSync(indexPath(r)).equals(launch));
   assert.deepEqual(readTwinIndexRecords(h.dir, h.home), []);
   for (const d of [r.root, h.home]) rmSync(d, { recursive: true, force: true });
@@ -534,4 +665,128 @@ test("R6 a record is read only in its exact shape; a broken one is dropped, anot
   assert.deepEqual(readTwinIndexRecords(h.dir, h.home), []);
   assert.deepEqual(readdirSync(h.dir).sort(), ["1-3-newer.json", "notes.txt"]);
   rmSync(h.home, { recursive: true, force: true });
+});
+
+// ── The scope: only the launch's own repositories ───────────────────────────
+
+/** A tree of real repositories: `a` (with `sub/` and a nested repository
+ *  `a/vendor/c`), `b`, a worktree of `a` placed inside it
+ *  (`a/.claude/worktrees/w`, as Claude Code places one) and one beside it
+ *  (`a-wt`), a plain dir, and a symlink `link` -> `a`. */
+function scopeTree(): { top: string; a: string; b: string; c: string; w: string; wt: string; plain: string; link: string } {
+  const top = tmpDir("twin-index-scope-");
+  const mk = (p: string): string => { mkdirSync(p, { recursive: true }); git(p, ["init", "-q", "-b", "main", "."]); return p; };
+  const a = mk(join(top, "a"));
+  writeFileSync(join(a, "f"), "f\n");
+  git(a, ["add", "f"]);
+  git(a, ["commit", "-q", "-m", "f"]);
+  mkdirSync(join(a, "sub"));
+  const c = mk(join(a, "vendor", "c"));
+  const b = mk(join(top, "b"));
+  const w = join(a, ".claude", "worktrees", "w");
+  git(a, ["worktree", "add", "-q", "-b", "w", w]);
+  const wt = join(top, "a-wt");
+  git(a, ["worktree", "add", "-q", "-b", "wt", wt]);
+  const plain = join(top, "plain");
+  mkdirSync(join(plain, "deep"), { recursive: true });
+  const link = join(top, "link");
+  symlinkSync(a, link);
+  return { top, a, b, c, w, wt, plain, link };
+}
+
+test("S1 reposInWorkspace: the work tree holding the workspace, and those it holds; never another", () => {
+  const t = scopeTree();
+  const all = [t.a, t.b, t.c, t.w, t.wt].map((root) => ({ root }));
+  const roots = (ws: string[]): string[] => reposInWorkspace(all, ws).map((r) => r.root).sort();
+  assert.deepEqual(roots([join(t.a, "sub")]), [t.a], "a workspace inside a repository: that one, not its nested repository nor its worktrees");
+  assert.deepEqual(roots([t.a]), [t.a, t.c, t.w].sort(), "a repository's root: it, and what its directory holds (a nested repository, a worktree placed inside)");
+  assert.deepEqual(roots([t.top]), [t.a, t.b, t.c, t.w, t.wt].sort(), "a workspace above several: all it holds");
+  assert.deepEqual(roots([t.plain]), [], "a plain dir: none");
+  assert.deepEqual(roots([join(t.plain, "deep")]), [], "a plain dir's subdir: none");
+  assert.deepEqual(roots([join(t.link, "sub")]), [t.a], "a symlinked spelling of the workspace");
+  assert.deepEqual(reposInWorkspace([{ root: join(t.link) }], [join(t.a, "sub")]).length, 1, "a symlinked spelling of the repository");
+  assert.deepEqual(roots([t.w]), [t.w], "a worktree inside its main checkout's directory: the worktree only, never the main checkout");
+  assert.deepEqual(roots([join(t.wt)]), [t.wt], "a worktree beside it: that one");
+  assert.deepEqual(roots([join(t.b, "x", "not-there")]), [t.b], "a workspace path that does not exist yet: the work tree above it");
+  assert.deepEqual(roots([]), [], "no workspace: none");
+  assert.deepEqual(roots([join(t.plain), join(t.b)]), [t.b], "two roots: the union");
+  rmSync(t.top, { recursive: true, force: true });
+});
+
+// ── The record store: the HOME's, whatever MANDU_HOME says ──────────────────
+
+test("W1 the record store is the HOME's own Mandu home's, whatever MANDU_HOME says; the reads add MANDU_HOME's own", () => {
+  const w = twinIndexWriteStore("/h");
+  assert.deepEqual(w, { dir: "/h/.mandu/state/object-walks/twin-index", home: "/h/.mandu" });
+  assert.deepEqual(twinIndexReadStores({}, "/h"), [w], "no MANDU_HOME: one store");
+  assert.deepEqual(twinIndexReadStores({ MANDU_HOME: "/h/.mandu" }, "/h"), [w], "MANDU_HOME naming the same home: one store");
+  assert.deepEqual(twinIndexReadStores({ MANDU_HOME: "/scratch/m" }, "/h"), [w, { dir: "/scratch/m/state/object-walks/twin-index", home: "/scratch/m" }],
+    "another MANDU_HOME: the HOME's store first, then that home's (records an earlier launcher left there)");
+});
+
+test("W2 a launcher killed while its MANDU_HOME was a scratch home, removed since: the record is in the HOME's store, and a restore from any other MANDU_HOME finds it", async () => {
+  const r = realRepo();
+  const home = tmpDir("twin-index-account-");
+  const scratch = tmpDir("twin-index-scratch-");
+  const real = fileStat(join(r.root, ".env"));
+  // The launch writes where secret-setup.ts writes: the HOME's store.
+  const store = twinIndexWriteStore(home);
+  await launchOn(r, store, "killed"); // no end runs
+  rmSync(scratch, { recursive: true, force: true });
+  assert.match(status(r), /^ M \.env$/m);
+  assert.equal(readTwinIndexRecords(store.dir, store.home).length, 1, "the record outlived the scratch home");
+  const roots = restorePendingFromStores(twinIndexReadStores({ MANDU_HOME: join(home, "another") }, home), { live: DEAD });
+  assert.deepEqual(roots, [r.root]);
+  assert.deepEqual(noMode(entryStat(r)), noMode(real));
+  assert.equal(status(r), "");
+  assert.deepEqual(readTwinIndexRecords(store.dir, store.home), [], "the record removed");
+  // A record an older launcher left in MANDU_HOME's own home is read too.
+  const legacy = { dir: twinIndexRecordDir(join(home, "another", "state", "object-walks")), home: join(home, "another") };
+  await launchOn(r, legacy, "legacy");
+  assert.deepEqual(restorePendingFromStores(twinIndexReadStores({ MANDU_HOME: legacy.home }, home), { live: DEAD }), [r.root]);
+  assert.equal(status(r), "");
+  for (const d of [r.root, home]) rmSync(d, { recursive: true, force: true });
+});
+
+// ── The index path: from the history step's facts ───────────────────────────
+
+test("X1 the patch takes each work tree's index file from the history step's facts: no rev-parse of its own; a work tree the step did not read asks as before", async () => {
+  for (const [name, of, calls] of [
+    ["the step's fact", (r: Repo) => () => indexPath(r), 0],
+    ["no fact for this work tree", () => () => undefined, 1],
+    ["a fact not absolute", () => () => ".git/index", 1],
+    ["no step at all", () => undefined, 1],
+  ] as Array<[string, (r: Repo) => (() => string | undefined) | undefined, number]>) {
+    const r = repo();
+    let revParse = 0;
+    const counting: GitRunner = async (args, o) => { if (args[0] === "rev-parse") revParse++; return runner(args, o); };
+    const f = of(r);
+    const got = await cleanTwinsInIndex(watched(r), { git: counting, readReal: () => Buffer.from(REAL), ...(f !== undefined ? { indexPathOf: f } : {}) });
+    assert.equal(got.length, 1, `${name}: patched`);
+    assert.equal(got[0]!.indexPath, indexPath(r), `${name}: the work tree's own index`);
+    assert.equal(revParse, calls, `${name}: rev-parse calls`);
+    assert.equal(status(r), "", `${name}: clean to the agent's git`);
+    rmSync(r.root, { recursive: true, force: true });
+  }
+  // A failed rev-parse still leaves the index alone and says so, as before.
+  const r = repo();
+  const logs: string[] = [];
+  const failing: GitRunner = async (args, o) => (args[0] === "rev-parse" ? { code: 128, stdout: "", stderr: "fatal: boom" } : runner(args, o));
+  assert.deepEqual(await cleanTwinsInIndex(watched(r), { git: failing, readReal: () => Buffer.from(REAL), log: (m) => logs.push(m), indexPathOf: () => undefined }), []);
+  assert.match(logs.join("\n"), /the index was left as is: fatal: boom/);
+  rmSync(r.root, { recursive: true, force: true });
+});
+
+test("X2 the step's facts name each work tree's own index, as `rev-parse --path-format=absolute --git-path index` does (a main checkout and its worktree)", async () => {
+  const r = repo();
+  const wt = join(r.root, "..", `${basename(r.root)}-wt`);
+  git(r.root, ["worktree", "add", "-q", "-b", "wt", wt]);
+  for (const root of [r.root, wt]) {
+    const facts = await repoFactsOf(runner, root);
+    assert.equal(facts.index, git(root, ["rev-parse", "--path-format=absolute", "--git-path", "index"]).trim(), root);
+  }
+  assert.notEqual((await repoFactsOf(runner, wt)).index, (await repoFactsOf(runner, r.root)).index, "each work tree its own");
+  assert.equal(parseRepoFacts("sha1\n.git\n.git/shallow\n.git/info/grafts\n.git/info/attributes\n", "/w")?.index, undefined, "five lines (an older answer): no index, the patch asks");
+  assert.equal(parseRepoFacts("sha1\n.git\n.git/shallow\n.git/info/grafts\n.git/info/attributes\n.git/index\n", "/w")?.index, "/w/.git/index");
+  for (const d of [r.root, wt]) rmSync(d, { recursive: true, force: true });
 });

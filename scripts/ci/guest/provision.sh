@@ -25,6 +25,10 @@
 #   3. bubblewrap BWRAP_VERSION from source (sha256-pinned) into
 #      /usr/local/lib/mandu-ci/bwrap, OFF the PATH: ns-run.sh's overlay needs
 #      >= 0.10, the product under test keeps the distro's /usr/bin/bwrap;
+#      and git GIT_REFTABLE_VERSION from source (sha256-pinned, zlib1g-dev
+#      from step 1) into /usr/local/lib/mandu-ci/git, OFF the PATH: the
+#      reftable tests put it first on their own PATH (24.04's git is 2.43,
+#      a reftable repository needs 2.45);
 #   4. the agent CLIs, globally, at their pins: the npm ones (claude, codex,
 #      opencode, openclaw) and the release binaries (goose), each checked
 #      to run, and cargo-audit (the dependency audit) the same way; then the
@@ -132,7 +136,7 @@ provision() {
     netcat-openbsd curl bzip2 ca-certificates uidmap slirp4netns pkg-config xz-utils jq \
     iproute2 nftables iptables procps file \
     gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user \
-    meson ninja-build libcap-dev cmake \
+    meson ninja-build libcap-dev cmake zlib1g-dev \
     socat ripgrep python3-venv unzip \
     golang-go \
     mksh yash luajit
@@ -163,6 +167,20 @@ provision() {
   install -d "$LIB"
   install -m 0755 "$d/bubblewrap-$BWRAP_VERSION/_build/bwrap" "$LIB/bwrap"
   "$LIB/bwrap" --version
+
+  # 3b. a git for the reftable tests, from source, OFF the PATH (pins.env
+  #     GIT_REFTABLE_*): no gettext, Tcl/Tk, Perl, Python, curl or expat (no
+  #     transport is needed: the tests run on local repositories), checked
+  #     to make a reftable repository.
+  stamp "git $GIT_REFTABLE_VERSION (source, for the reftable tests)"
+  curl -fsSL --retry 5 -o "$d/git.tar.xz" \
+    "https://mirrors.edge.kernel.org/pub/software/scm/git/git-$GIT_REFTABLE_VERSION.tar.xz"
+  echo "$GIT_REFTABLE_SHA256  $d/git.tar.xz" | sha256sum -c -
+  tar -xJf "$d/git.tar.xz" -C "$d"
+  make -C "$d/git-$GIT_REFTABLE_VERSION" -j"$(nproc)" prefix="$LIB/git" \
+    NO_GETTEXT=1 NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_CURL=1 NO_EXPAT=1 NO_OPENSSL=1 install >/dev/null
+  "$LIB/git/bin/git" --version
+  "$LIB/git/bin/git" init -q --ref-format=reftable "$d/reftable-probe"
   rm -rf "$d"
 
   # 4. the agent CLIs. openclaw's engine floor is above Mandu's node, so it

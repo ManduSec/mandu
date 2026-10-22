@@ -35,6 +35,9 @@ export interface ReserveRelay {
   cols?: number;
   /** The filter paints v2 heads. */
   wrap?: boolean;
+  /** Where the agent's TUI counts a reply TAB's stops from (§19.7); absent:
+   *  `screen`. */
+  tabs?: string;
 }
 
 /** The arbiter ops eligibility reads (both optional: absent = no expansion).
@@ -84,6 +87,8 @@ function withDeadline<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMEOUT>
 interface RelayVerdict {
   ok: boolean;
   cols: number | null;
+  /** The TUI counts a TAB's stops from the content area (§19.7). */
+  contentTabs: boolean;
 }
 
 /**
@@ -117,17 +122,17 @@ export class ReserveEligibility {
 
   /** This session's relay verdict (cached; a timeout or error is not). */
   private async relayVerdict(): Promise<RelayVerdict> {
-    if (!this.possible) return { ok: false, cols: null };
+    if (!this.possible) return { ok: false, cols: null, contentTabs: false };
     const t = this.now();
     if (this.relay && t - this.relay.at < this.relayTtlMs) return this.relay.v;
     const r = await withDeadline(this.arbiter.sessionRelay!(this.opts.sessionKey!), this.timeoutMs);
     // A timeout or error is not cached: the next response asks again.
-    if (r === TIMEOUT) return { ok: false, cols: null };
+    if (r === TIMEOUT) return { ok: false, cols: null, contentTabs: false };
     const ok = r !== null && typeof r === "object" && r.mode === "pty" && r.reserve === true;
     const cols = ok && r!.wrap === true && typeof r!.cols === "number" && Number.isInteger(r!.cols) && r!.cols > 0
       ? r!.cols
       : null;
-    const v = { ok, cols };
+    const v = { ok, cols, contentTabs: ok && r!.tabs === "content" };
     this.relay = { at: t, v };
     return v;
   }
@@ -138,10 +143,11 @@ export class ReserveEligibility {
   }
 
   /** The `layout` callback for SseReserveExpander: the relay's columns when
-   *  it paints v2 heads, else null (v1). */
-  readonly layout = async (): Promise<{ cols: number } | null> => {
+   *  it paints v2 heads, with the TUI's TAB origin (§19.7), else null (v1). */
+  readonly layout = async (): Promise<{ cols: number; tabs?: "content" } | null> => {
     const v = await this.relayVerdict();
-    return v.ok && v.cols !== null ? { cols: v.cols } : null;
+    if (!v.ok || v.cols === null) return null;
+    return v.contentTabs ? { cols: v.cols, tabs: "content" } : { cols: v.cols };
   };
 
   /** One bounded, cached symbolShape call. */

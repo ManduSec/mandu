@@ -1,0 +1,120 @@
+{
+  "generatedAt": "2026-10-21",
+  "generator": "tests/transcript-fixtures/generate.ts",
+  "model": "a scripted local Anthropic Messages endpoint (no API key, no live model)",
+  "agents": [
+    {
+      "id": "opencode",
+      "version": "1.18.13",
+      "model": "claude-sonnet-4-5",
+      "exit": 0,
+      "modelRequests": 4,
+      "stores": [
+        {
+          "fixture": "opencode-1.18.13.jsonl",
+          "kind": "opencode-db",
+          "store": "xdg-data/opencode/opencode.db",
+          "records": 15,
+          "bytes": 4096
+        }
+      ]
+    },
+    {
+      "id": "opencode2",
+      "version": "2.0.23",
+      "model": "claude-sonnet-4-5",
+      "exit": 0,
+      "modelRequests": 4,
+      "stores": [
+        {
+          "fixture": "opencode2-2.0.23.jsonl",
+          "kind": "opencode-db",
+          "store": "xdg-data/opencode/opencode.db",
+          "records": 6,
+          "bytes": 245760
+        }
+      ]
+    },
+    {
+      "id": "goose",
+      "version": "1.53.0",
+      "model": "claude-sonnet-4-5",
+      "exit": 0,
+      "modelRequests": 4,
+      "stores": [
+        {
+          "fixture": "goose-1.53.0.jsonl",
+          "kind": "goose-db",
+          "store": "goose/data/sessions/sessions.db",
+          "records": 8,
+          "bytes": 4096
+        },
+        {
+          "fixture": "goose-1.53.0-request-log.0.jsonl",
+          "kind": "goose-request-log",
+          "store": "goose/state/logs/llm_request.0.jsonl",
+          "records": 3,
+          "bytes": 18744
+        },
+        {
+          "fixture": "goose-1.53.0-request-log.1.jsonl",
+          "kind": "goose-request-log",
+          "store": "goose/state/logs/llm_request.1.jsonl",
+          "records": 3,
+          "bytes": 18525
+        },
+        {
+          "fixture": "goose-1.53.0-request-log.2.jsonl",
+          "kind": "goose-request-log",
+          "store": "goose/state/logs/llm_request.2.jsonl",
+          "records": 3,
+          "bytes": 18179
+        },
+        {
+          "fixture": "goose-1.53.0-request-log.3.jsonl",
+          "kind": "goose-request-log",
+          "store": "goose/state/logs/llm_request.3.jsonl",
+          "records": 3,
+          "bytes": 2594
+        }
+      ]
+    },
+    {
+      "id": "openclaw",
+      "version": "2026.7.1-2",
+      "model": "claude-opus-4-6",
+      "exit": 0,
+      "modelRequests": 3,
+      "stores": [
+        {
+          "fixture": "openclaw-2026.7.1-2.jsonl",
+          "kind": "openclaw-jsonl",
+          "store": "state/agents/main/sessions/fixture-openclaw.jsonl",
+          "records": 11,
+          "bytes": 4003
+        },
+        {
+          "kind": "trace",
+          "store": "state/agents/main/sessions/fixture-openclaw.trajectory.jsonl",
+          "bytes": 157847
+        }
+      ]
+    },
+    {
+      "id": "openclaw9",
+      "version": "2026.9.9",
+      "model": "claude-sonnet-4-5",
+      "exit": 0,
+      "modelRequests": 3,
+      "stores": [
+        {
+          "fixture": "openclaw9-2026.9.9.jsonl",
+          "kind": "openclaw-db",
+          "store": "state/agents/main/agent/openclaw-agent.sqlite",
+          "records": 15,
+          "bytes": 765952
+        }
+      ]
+    }
+  ]
+}

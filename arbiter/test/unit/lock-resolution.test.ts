@@ -144,6 +144,30 @@ test("resolver: a gone path's every version is locked; the key is the launcher's
   } finally { await res.stop(); }
 });
 
+test("resolver (security fix 2026-10-21): a version once resolved stays resolved when a walk anew no longer reaches it (an orphan branch, the reflogs expired, another base)", async () => {
+  const r = repo();
+  const labels = [L(join(r.root, "deploy", "key"))];
+  const { git: g, calls } = counting();
+  const res = new LockResolver({ labels: () => labels, blobLocks: () => [], home: tmp(), git: g });
+  try {
+    res.note([r.root], "launch");
+    await res.runCycle(); await res.idle();
+    assert.deepEqual(res.snapshot([r.root]).lockedSet.sha1, [r.gone, r.kept].sort());
+    // An agent cuts the history away: an orphan branch, main deleted, the
+    // reflogs expired; a shallow file on the orphan root (a true boundary:
+    // it has no parent) moves the base, so the next cycle walks anew.
+    git(r.root, "checkout", "-q", "--orphan", "fresh");
+    git(r.root, "commit", "-q", "--allow-empty", "-m", "fresh");
+    git(r.root, "branch", "-D", "main");
+    git(r.root, "reflog", "expire", "--expire=now", "--all");
+    writeFileSync(join(r.root, ".git", "shallow"), `${git(r.root, "rev-parse", "HEAD").trim()}\n`);
+    const before = calls.filter((c) => c.includes("log")).length;
+    await res.runCycle(); await res.idle();
+    assert.ok(calls.filter((c) => c.includes("log")).length > before, "walked anew");
+    assert.deepEqual(res.snapshot([r.root]).lockedSet.sha1, [r.gone, r.kept].sort(), "both versions still locked");
+  } finally { await res.stop(); }
+});
+
 test("resolver: a restart is served from mandu.db without a walk; a label change is pending until resolved, the old versions kept meanwhile", async () => {
   const r = repo();
   const home = tmp();

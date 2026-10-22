@@ -184,6 +184,9 @@ export interface DoctorSecretsReport {
     /** MANDU_OTHER_AGENT_LOGINS=raw: a launch registers it but leaves it
      *  readable (no placeholder copy), as the agent's own key file. */
     readable?: true;
+    /** The launched agent's own MCP config (secret-discovery.md §2.10):
+     *  whose. A launch registers it and leaves it readable to that agent. */
+    agentConfig?: string;
   }>;
   notCovered: {
     counts: Record<string, number>; skipped: Array<{ path: string; reason: string }>; limits: { maxDepth: number; maxFiles: number }; truncated: boolean;
@@ -318,6 +321,10 @@ export async function gatherSecrets(env: Env, layout: Layout, deps: DoctorSecret
         row.agentLogin = f.agentLogin;
         if (otherLoginsRaw) row.readable = true;
       }
+      if (typeof f.agentConfig === "string") {
+        row.agentConfig = f.agentConfig;
+        row.readable = true;
+      }
       const why = skipped.get(f.path);
       if (why !== undefined) row.skipReason = why;
       report.files.push(row);
@@ -421,7 +428,9 @@ export function renderSecrets(r: DoctorSecretsReport, home: string = r.roots[0] 
     L.push(`  ${f.bind === "bind" ? OK : DOT} ${where.padEnd(48)} ${levelShort(f.level).padEnd(16)} ${f.rule}${how}`);
   }
   for (const f of readable) {
-    L.push(`  ${DOT} ${tilde(f.path, home).padEnd(48)} left readable: ${agentDisplayName(f.agentLogin ?? "")}'s login (MANDU_OTHER_AGENT_LOGINS=raw), its values masked in what reaches the AI`);
+    L.push(f.agentConfig !== undefined
+      ? `  ${DOT} ${tilde(f.path, home).padEnd(48)} left readable: ${agentDisplayName(f.agentConfig)}'s MCP config (its servers start with their real values), its values masked in what reaches the AI`
+      : `  ${DOT} ${tilde(f.path, home).padEnd(48)} left readable: ${agentDisplayName(f.agentLogin ?? "")}'s login (MANDU_OTHER_AGENT_LOGINS=raw), its values masked in what reaches the AI`);
   }
   L.push("");
   const m = r.env.masked;

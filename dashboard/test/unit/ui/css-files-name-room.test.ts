@@ -280,3 +280,52 @@ test("M2: beside the name, the first menu's column shows every label whole, \"Yo
   }
   assert.ok(n >= 4, `the lists draw menus: ${n}`);
 });
+
+// ── H1: Add a rule's browser names its menus (§4.25p, 2026-10-22) ──────────
+
+/** Where each track of a grid starts, from its content box's left edge
+ *  `left` px into the panel, its content `width` and its `gap`: the fixed
+ *  tracks as written, the `minmax(0, 1fr)` ones sharing what is left. */
+function trackStarts(tracks: string[], left: number, width: number, gap: number, w: number): number[] {
+  const fr = tracks.filter((t) => t === "minmax(0,1fr)");
+  const fixed = tracks.filter((t) => t !== "minmax(0,1fr)").reduce((sum, t) => sum + px(t, w), 0);
+  const share = (width - fixed - (tracks.length - 1) * gap) / fr.length;
+  const out: number[] = [];
+  let x = left;
+  for (const t of tracks) { out.push(x); x += (t === "minmax(0,1fr)" ? share : px(t, w)) + gap; }
+  return out;
+}
+
+test("H1: wider than 1000 px, Add a rule's browser has heads whose second and third start within 2 px of its rows' two menus (1001 and 1280 px); at 860 px they are hidden and each menu shows its caption", async () => {
+  const browser = FILE_LISTS[1];
+  const border = (sel: string, w: number): number => Number(/^(\d+(?:\.\d+)?)px\b/.exec(ROOM.at(w, sel, "border"))![1]);
+  const headTracks = (w: number): string[] => ROOM.at(w, ".files-heads.browse-heads", "grid-template-columns").replace(/,\s+/g, ",").split(/\s+/);
+  for (const w of [1001, 1280]) {
+    // The panel's content box, which holds the heads and the list.
+    let panel = ROOM.pageColumn(w);
+    for (const box of [".card", ".lock-form"]) panel -= sidePadding(ROOM.at(w, box, "padding"), w) + 2 * border(box, w);
+    const headPad = sidePadding(ROOM.at(w, ".files-heads", "padding"), w);
+    const heads = trackStarts(headTracks(w), headPad / 2, panel - headPad, px(ROOM.at(w, ".files-heads", "gap"), w), w);
+    const row = ROOM.columns(browser, w);
+    const rowLeft = border(".table", w) + sidePadding(ROOM.at(w, browser.pad, "padding"), w) / 2;
+    const rows = trackStarts(row.tracks, rowLeft, ROOM.rowContent(browser, w), px(ROOM.at(w, browser.pad, "gap"), w), w);
+    assert.equal(heads.length, rows.length, `${w}px: a head per column of the row (${headTracks(w).join(" ")} over ${row.tracks.join(" ")})`);
+    assert.ok(wideTracks(row.tracks), `${w}px: the rows keep their menus beside the name`);
+    for (const [i, what] of [[2, "Which AI may read it"], [3, "Where it may be sent"]] as const) {
+      assert.ok(Math.abs(heads[i]! - rows[i]!) <= 2, `${w}px: "${what}" starts at ${heads[i]!.toFixed(1)}px, its menu at ${rows[i]!.toFixed(1)}px`);
+    }
+  }
+  const wide = await rulesAt(1280);
+  const ww = wide.defaultView;
+  const heads = wide.getElementById("files-list-heads");
+  assert.equal(heads.hidden, false, "1280px: the browser lists rows, so its heads show");
+  assert.equal(ww.getComputedStyle(heads).display, "grid");
+  assert.equal(ww.getComputedStyle(heads).gridTemplateColumns, "20px minmax(0, 1fr) 240px 230px 32px", "1280px: the browser rows' own tracks, the tick box first");
+  for (const c of wide.querySelectorAll("#files-list .q-cap")) assert.equal(ww.getComputedStyle(c).display, "none", "1280px: the heads name the menus, not captions");
+  const middle = await rulesAt(860);
+  const mw = middle.defaultView;
+  assert.equal(mw.getComputedStyle(middle.getElementById("files-list-heads")).display, "none", "860px: the browser's heads are hidden");
+  const caps = [...middle.querySelectorAll("#files-list .row.file .q-cap")] as El[];
+  assert.ok(caps.length >= 2);
+  for (const c of caps) assert.equal(mw.getComputedStyle(c).display, "block", "860px: each menu shows its caption");
+});

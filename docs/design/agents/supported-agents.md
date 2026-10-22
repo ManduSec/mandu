@@ -4387,6 +4387,18 @@ launcher bundle needs no manifest entry for its copy: esbuild bundles what
 `src/` imports. `node scripts/agents/agent-copies.mjs generate` writes them
 all; `check` fails on a stale one.
 
+**The scan-only agents** (2026-10-21). `mandu scan` also reads, or only
+counts, the local session stores of agents Mandu does not run (Gemini CLI,
+Copilot CLI, Cursor: plan 17 §4, phase 3). They are not lines (no launch,
+no suite, no pin), so they are a second table of the same module,
+`SCAN_ONLY_AGENTS` (`id`, `name`, `read`: whether the scan reads its
+sessions or only counts them), with `SCAN_ONLY_IDS`, `SCAN_ONLY_NAMES` and
+`SCAN_READ_IDS`; the copies carry `SCAN_ONLY_AGENTS` and `SCAN_ONLY_NAMES`
+(the arbiter's also `SCAN_READ_AGENTS`). A scan-only id is never a line
+nor a launch target (the soundness check and the registry test hold it),
+and the sweep below counts its ids too. When Mandu comes to run one, its
+row moves to `AGENT_LINES`.
+
 **The product packages' lists** (2026-10-18). What each was, and what it is
 now; no value changed:
 

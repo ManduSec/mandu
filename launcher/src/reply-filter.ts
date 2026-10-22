@@ -81,7 +81,7 @@ export function applyReplyFilter(
   // rule, so the proxy counts reserved rows by it and the filter paints by
   // it. OpenCode's wrap is unmodelled (`none`: v1 heads only, §35). Every
   // other agent lays its reply out by word wrap (the default).
-  Object.assign(filterEnv, replyWrapRuleEnv(plan.target));
+  Object.assign(filterEnv, replyWrapRuleEnv(plan.target), replyTabOriginEnv(plan.target));
   if (!opts.handOff) {
     mut.launchPrefix = [...rf.tokens, `--mandu-output-format=${outputFormat}`, "--", ...mut.launchPrefix];
     Object.assign(mut.env, filterEnv);
@@ -110,6 +110,22 @@ export function replyWrapRuleEnv(target: LaunchPlan["target"]): Record<string, s
   if (target === "goose") return { [REPLY_WRAP_RULE_ENV]: "terminal" };
   if (target === "opencode") return { [REPLY_WRAP_RULE_ENV]: "none" };
   return {};
+}
+
+// PROVENANCE: mirrors interceptors/reply-filter/src/reserve-block.ts
+// TAB_ORIGIN_ENV (independent TS package roots); test/unit/reply-filter.test.ts
+// pins the name.
+/** The filter's TAB-origin variable (reply-row-reservation.md §19.7). */
+export const REPLY_TAB_ORIGIN_ENV = "MANDU_REPLY_TAB_ORIGIN";
+
+/** The filter's TAB-origin variable for a target: `content` for Claude
+ *  Code, whose renderer expands each TAB in its reply itself, counting the
+ *  stops from the left edge of the text the TAB is in (Claude Code 2.1.295
+ *  and later, §19.7); nothing for every other target (the screen's column 0,
+ *  the filter's default: Codex leaves its stops on the screen's grid, Goose
+ *  prints at column 0). Pure. */
+export function replyTabOriginEnv(target: LaunchPlan["target"]): Record<string, string> {
+  return target === "claude" ? { [REPLY_TAB_ORIGIN_ENV]: "content" } : {};
 }
 
 // ── early start (packaging.md §5.3) ─────────────────────────────────────────

@@ -22,7 +22,8 @@
  *
  * Security posture (dashboard.md §6): the dashboard reveals symbol→original, so
  * it binds to loopback by default (server-main, since 2026-09-25) and sits
- * behind optional DASHBOARD_PASSWORD / DASHBOARD_BASIC_AUTH auth. It must never
+ * behind the Mandu dashboard account's sign-in page (dashboard.md §6.z;
+ * DASHBOARD_BASIC_AUTH moves into it) or DASHBOARD_PASSWORD. It must never
  * be reachable by the monitored agent or an untrusted network. When bound wider
  * than loopback (server-main's DASHBOARD_HOST, e.g. to sit behind a trusted
  * reverse proxy — which server-main refuses without an authenticator), a
@@ -52,6 +53,10 @@ import { apiHome, apiHomeAgent, apiHomeAnswered, apiHomeHistory, apiHomeOriginal
 import { labelTimesArbiter, type LabelTimesArbiter } from "./server/label-times.js";
 import { getSuggestions, postApply as postSuggestionApply, postDismiss as postSuggestionDismiss, postModelPreview, postModelSend, postScan as postSuggestionScan, type SuggestionRouteDeps } from "./server/suggestion-routes.js";
 import { buildDataLocations, homeOf } from "./data-locations.js";
+import type { LastScanWire } from "./view-model/last-scan.js";
+import { apiScan, apiScanItem, apiScanSection, LastScanCache, scanRouteOf } from "./server/scan-routes.js";
+import { dashboardChannel, UpdateCacheReader, type UpdateChannel } from "./update-notice.js";
+import { manduPath } from "./generated/mandu-paths.js";
 import { apiSessions, apiPolicyPanel, apiEvents, apiStream } from "./server/api-routes.js";
 
 // Re-exported so importers keep reading it from server.js (the
@@ -103,14 +108,18 @@ import { buildServiceSummary } from "./view-model/service-summary.js";
 
 export type { DashboardServerOptions, Tenant, TenantSurfaces, DashboardSelfControl } from "./server/options.js";
 import { type DashboardServerOptions, type Tenant, type TenantState, type DashboardSelfControl } from "./server/options.js";
-import { SignInTickets, SIGN_IN_REMEDY } from "./sign-in.js";
+import { SIGN_IN_REMEDY } from "./sign-in.js";
+import { type AccountFile, type AccountRead, verifyAccount } from "./account.js";
+import {
+  SIGN_IN_COOKIE, SIGN_IN_PAGE_HEADERS, SignInSessions, SignInThrottle, arrivedOverHttps, fromOwnPage, isNavigation,
+  readSmallBody, safeNext, signInCookieOf, signInPage, type SignInNotice,
+} from "./server/sign-in-gate.js";
+import { keptLine, type SessionKept } from "./view-model/session-kept.js";
 import { requestedTenant, isArbiterUnreachable, unreachableBody } from "./server/tenant.js";
 import { hostAllowed, interfaceAddresses, readAccessOf, sameOriginRead, READ_ROUTES, type ReadRoute } from "./server/read-gate.js";
 
 /** The 403 body every mutating route answers without an admin session. */
-export const ADMIN_SESSION_REQUIRED =
-  `admin session required — ${SIGN_IN_REMEDY} (each link works once), ` +
-  "or sign in with DASHBOARD_PASSWORD where one is set; without it the dashboard shows only what the AI saw";
+export const ADMIN_SESSION_REQUIRED = `admin session required — ${SIGN_IN_REMEDY}`;
 
 /** Where the two front-ends live (dashboard.md §4.25). From source the server
  *  is dashboard/src/server.ts, so they are `../public` and `../dev`. In the
@@ -184,7 +193,6 @@ export class DashboardServer {
   }
   /** Per-tenant home-facts caches (home-routes.ts), keyed by the tenant's source. */
   private readonly homeFacts = new WeakMap<EventSource, HomeFacts>();
-  private readonly password: string;
   private readonly basePath: string;
   private readonly supervisor?: Supervisor;
   /** MUTABLE (the one exception): a supervised cold boot cannot connect these
@@ -200,6 +208,20 @@ export class DashboardServer {
   private readonly assistantModel: () => Promise<AssistantModel>;
   private readonly modelProbeDeps: ProbeDeps;
   private readonly configEnv: Record<string, string | undefined>;
+  /** Is Mandu running at all (options.ts `manduNotRunning`); the live tenant's. */
+  private readonly manduNotRunning?: () => { everRan: boolean } | null;
+  /** The last `mandu scan` the launcher kept (§4.25ai), read per request. */
+  private readonly scanCache = new LastScanCache(() => manduPath("last-scan", this.configEnv, homeOf(this.configEnv)));
+  private readonly lastScan = (): LastScanWire | null => this.scanCache.record();
+  /** The launcher's update-check cache and this package's update channel
+   *  (About Mandu's *A newer release*, §4.25): a stat per Home poll, never
+   *  a network request. Made on first use (configEnv is set by then). */
+  private updateReader?: UpdateCacheReader;
+  private updateChannel?: UpdateChannel;
+  private readonly updateCheck = {
+    cache: () => (this.updateReader ??= new UpdateCacheReader(manduPath("update-check", this.configEnv, homeOf(this.configEnv)))).get(),
+    channel: () => (this.updateChannel ??= dashboardChannel(this.configEnv)),
+  };
   private readonly allowedClientIps: ReadonlySet<string>;
   /** Host names besides loopback at the bound port (read-gate.ts hostAllowed). */
   private readonly allowedHosts: readonly string[];
@@ -212,7 +234,9 @@ export class DashboardServer {
   private readonly adminToken: string;
   /** One-time sign-in tickets (sign-in.ts): minted over the human-plane
    *  sign-in socket, redeemed by `GET /login?ticket=`. */
-  private readonly signInTickets: SignInTickets;
+  /** The admin token was pinned (DASHBOARD_ADMIN_TOKEN, a TEST SEAM): its
+   *  cookie and its `/login?token=` pass the sign-in gate. */
+  private readonly pinnedAdminToken: boolean;
   private readonly trustFront: boolean;
   /** What `~` means in the file browser (dashboard.md §4.25m). */
   private readonly fileBrowserHome?: string;
@@ -220,6 +244,25 @@ export class DashboardServer {
   private readonly suggestScanWaitMs?: number;
   private readonly policyModelOffered?: boolean;
   private readonly basicAuth?: { user: string; password: string };
+  /** The Mandu dashboard account (account.ts, dashboard.md §6.z): read per
+   *  request (one lstat), so `mandu dashboard --set-password` applies at
+   *  once. Undefined: no account file is consulted (tests). */
+  private readonly account?: AccountFile;
+  /** The sign-in page's sessions and throttle (server/sign-in-gate.ts). */
+  private readonly signInSessions: SignInSessions;
+  private readonly signInThrottle: SignInThrottle;
+  /** Requests that passed the sign-in gate with credentials or a sign-in
+   *  session (`hasAdminSession` reads it), and those of a sign-in session
+   *  (Settings shows Sign out to them). */
+  private readonly gatePassed = new WeakSet<IncomingMessage>();
+  private readonly gateSession = new WeakSet<IncomingMessage>();
+  /** A Basic header the account already accepted, by a digest under a
+   *  per-boot key, with the account's fingerprint then: a script's every
+   *  request is not a fresh scrypt. Cleared when the account changes. */
+  private readonly headerOk = new Map<string, string>();
+  private readonly headerKey = randomBytes(32);
+  /** The account's last change this server acted on (ended the sessions). */
+  private accountChangeSeen: number | null = null;
   /** The test tenant's surfaces (§2.7 1c); undefined = live only. Mutable
    *  fields for the same set-once late-bind the live surfaces get. */
   private readonly testTenant?: TenantState;
@@ -231,15 +274,20 @@ export class DashboardServer {
     this.publicDir = opts.publicDir ?? DEFAULT_PUBLIC_DIR;
     this.extensions = opts.extensions ?? [];
     this.readRoutes = [...READ_ROUTES, ...this.extensions.flatMap((x) => x.readRoutes ?? [])];
-    this.password = opts.password ?? "";
     this.adminToken = opts.adminToken ?? randomBytes(16).toString("hex");
-    this.signInTickets = opts.signInTickets ?? new SignInTickets();
+    this.pinnedAdminToken = opts.pinnedAdminToken === true;
     this.sessionSecret = opts.sessionSecret ?? randomBytes(32).toString("hex");
     this.trustFront = opts.trustFront ?? false;
     this.fileBrowserHome = opts.fileBrowserHome;
     this.suggestScanWaitMs = opts.suggestScanWaitMs;
     this.policyModelOffered = opts.policyModelOffered;
     this.basicAuth = opts.basicAuth;
+    this.account = opts.account;
+    // The file as this server starts is the baseline a change is seen from.
+    this.account?.read();
+    this.accountChangeSeen = this.account?.changedAt()?.getTime() ?? null;
+    this.signInSessions = new SignInSessions(opts.signInClock);
+    this.signInThrottle = new SignInThrottle(opts.signInClock);
     this.basePath = (opts.basePath ?? "").replace(/\/+$/, "");
     this.supervisor = opts.supervisor;
     this.approvalsArbiter = opts.approvalsArbiter;
@@ -250,6 +298,7 @@ export class DashboardServer {
     this.assistantModel = opts.assistantModel ?? productionAssistantModel();
     this.modelProbeDeps = opts.modelProbeDeps ?? realProbeDeps();
     this.configEnv = opts.configEnv ?? process.env;
+    this.manduNotRunning = opts.manduNotRunning;
     this.allowedClientIps = new Set((opts.allowedClientIps ?? []).map(normalizeClientIp));
     this.allowedHosts = opts.allowedHosts ?? [];
     this.testTenant = opts.testTenant
@@ -418,10 +467,17 @@ export class DashboardServer {
 
   // ── auth helpers (adapted from reference server.ts) ─────────────────────────
 
-  /** The session cookie value: derived from the password when one is set,
-   *  else from the per-boot admin token — one cookie, two ways to earn it. */
+  /** The admin-token cookie's value (a TEST SEAM, `adminCookie`): derived
+   *  from the per-boot admin token. */
   private token(): string {
-    return createHash("sha256").update((this.password || this.adminToken) + this.sessionSecret).digest("hex");
+    return createHash("sha256").update(this.adminToken + this.sessionSecret).digest("hex");
+  }
+
+  /** Is `token` the admin token? Compared by digest, constant-time. */
+  private adminTokenMatches(token: string): boolean {
+    const a = createHash("sha256").update(token).digest();
+    const b = createHash("sha256").update(this.adminToken).digest();
+    return timingSafeEqual(a, b);
   }
 
   private hasSessionCookie(req: IncomingMessage): boolean {
@@ -431,11 +487,6 @@ export class DashboardServer {
       if (k === "mandu_session" && v.join("=") === this.token()) return true;
     }
     return false;
-  }
-
-  private isAuthed(req: IncomingMessage): boolean {
-    if (!this.password) return true;
-    return this.hasSessionCookie(req);
   }
 
   /** `Authorization: Basic base64(user:password)` matches the configured pair.
@@ -450,13 +501,198 @@ export class DashboardServer {
     return got.length === want.length && timingSafeEqual(got, want);
   }
 
-  private challengeBasicAuth(res: ServerResponse): void {
-    res.writeHead(401, {
-      "WWW-Authenticate": 'Basic realm="Mandu dashboard", charset="UTF-8"',
-      "Content-Type": "text/plain",
+  // ── the sign-in gate (server/sign-in-gate.ts, dashboard.md §6.z) ─────────────
+
+  /** The account as it stands (one lstat), ending every sign-in session and
+   *  forgetting every accepted header once it changed. */
+  private accountNow(): AccountRead {
+    if (!this.account) return { kind: "none" };
+    const read = this.account.read();
+    const changed = this.account.changedAt()?.getTime() ?? null;
+    if (changed !== this.accountChangeSeen) {
+      this.accountChangeSeen = changed;
+      this.signInSessions.dropAll();
+      this.headerOk.clear();
+      this.log("the dashboard account changed: every sign-in session ended");
+    }
+    return read;
+  }
+
+  /** Which sign-in gate runs: `account` (an account file, usable or not:
+   *  an unusable one signs nobody in; or none yet, which signs nobody in and
+   *  says how to make one: FAIL CLOSED), `basic` (the in-memory `basicAuth`
+   *  pair while no file exists), or `off` (a server built with neither: tests
+   *  only; server-main always passes the account). */
+  private gateMode(read: AccountRead = this.accountNow()): "account" | "basic" | "off" {
+    if (read.kind !== "none") return "account";
+    if (this.basicAuth) return "basic";
+    return this.account ? "account" : "off";
+  }
+
+  /** `user` and `password` against the gate's credentials: the account's
+   *  scrypt hash, or the in-memory pair (constant-time, as basicAuthOk). */
+  private async credentialsOk(read: AccountRead, user: string, password: string): Promise<boolean> {
+    if (read.kind === "ok") return verifyAccount(read.account, user, password);
+    if (read.kind === "none" && this.basicAuth) {
+      const got = Buffer.from(`${user}:${password}`);
+      const want = Buffer.from(`${this.basicAuth.user}:${this.basicAuth.password}`);
+      return got.length === want.length && timingSafeEqual(got, want);
+    }
+    return false;
+  }
+
+  /** An `Authorization: Basic` header against the account (a script, curl
+   *  -u, the live suites). An accepted one is remembered by digest until the
+   *  account changes. */
+  private async headerCredentialsOk(req: IncomingMessage, read: AccountRead): Promise<boolean> {
+    if (read.kind !== "ok") return read.kind === "none" ? this.basicAuthOk(req) : false;
+    const header = req.headers.authorization ?? "";
+    const m = /^Basic\s+([A-Za-z0-9+/=]+)\s*$/.exec(header);
+    if (!m) return false;
+    const key = createHash("sha256").update(this.headerKey).update(m[1]!).digest("hex");
+    if (this.headerOk.get(key) === read.fingerprint) return true;
+    const decoded = Buffer.from(m[1]!, "base64").toString("utf8");
+    const i = decoded.indexOf(":");
+    if (i < 0) return false;
+    const ok = await verifyAccount(read.account, decoded.slice(0, i), decoded.slice(i + 1));
+    if (ok) {
+      if (this.headerOk.size >= 32) this.headerOk.clear();
+      this.headerOk.set(key, read.fingerprint);
+    }
+    return ok;
+  }
+
+  /** Is `hostHeader` a name of this dashboard (the Host check's rule)? The
+   *  login-CSRF check reads it for an Origin that is not the request's Host. */
+  private isOwnHost(hostHeader: string): boolean {
+    return hostAllowed(hostHeader, this.boundPort, this.boundAddress, this.allowedHosts, this.hostAddresses);
+  }
+
+  /** A failed sign-in: counted for the whole dashboard and logged (never
+   *  the password, never the username typed: it may be a password). Answers
+   *  the lock it started, in ms (0: none). */
+  private signInFailed(req: IncomingMessage, via: "form" | "header"): number {
+    const lock = this.signInThrottle.fail();
+    const from = req.socket.remoteAddress ?? "<no address>";
+    const what = via === "form" ? "the sign-in page" : "a Basic header";
+    const after = lock > 0 ? `sign-in locked for ${Math.ceil(lock / 1000)} s` : `${this.signInThrottle.recent()} in the last minute`;
+    this.log(`sign-in failed (wrong username or password, ${what}) from ${from}; ${after}`);
+    return lock;
+  }
+
+  /** The gate's answer to a request it does not admit: the sign-in page to
+   *  a browser navigation (and to the form's own POST), a short 401 to
+   *  anything else. No `WWW-Authenticate` (no native prompt), no app data. */
+  private answerSignIn(req: IncomingMessage, res: ServerResponse, url: string, read: AccountRead, status = 401, notice?: SignInNotice, user = ""): void {
+    const wait = this.signInThrottle.waitMs();
+    const noAccount = read.kind === "none" && !this.basicAuth;
+    const n: SignInNotice =
+      read.kind === "unsafe" ? { kind: "unsafe" }
+      : noAccount ? { kind: "no-account" }
+      : notice ?? (wait > 0 ? { kind: "wait", seconds: Math.ceil(wait / 1000) } : { kind: "none" });
+    const method = (req.method ?? "GET").toUpperCase();
+    const path = url.split("?")[0]!;
+    if (isNavigation(req) || (method === "POST" && path === "/login")) {
+      const query = new URLSearchParams(url.split("?")[1] ?? "");
+      const shown: SignInNotice = n.kind === "none" && path === "/login" && query.has("out") ? { kind: "signed-out" } : n;
+      res.writeHead(status, SIGN_IN_PAGE_HEADERS);
+      res.end(method === "HEAD" ? undefined : signInPage(this.basePath, method === "POST" ? "/" : safeNext(url), shown, user));
+      return;
+    }
+    const words = read.kind === "unsafe"
+      ? "sign in required: the dashboard account cannot be used; run `mandu dashboard --set-password`"
+      : noAccount
+        ? "sign in required: this dashboard has no account yet; run `mandu dashboard --set-password` in your own terminal"
+        : "sign in required: open the dashboard in your browser and sign in";
+    if (path.startsWith("/api/")) {
+      json(res, status, { error: words });
+      return;
+    }
+    res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(method === "HEAD" ? undefined : words);
+  }
+
+  /**
+   * The sign-in gate, THIRD in handle(): a sign-in session or valid
+   * credentials pass (marked for hasAdminSession); `POST <base>/login` is
+   * answered here; every other request gets the sign-in page or a 401.
+   * True when it answered.
+   */
+  private async signInGate(req: IncomingMessage, res: ServerResponse, url: string, urlPath: string, read: AccountRead): Promise<boolean> {
+    const sid = signInCookieOf(req);
+    if (sid !== null && this.signInSessions.valid(sid)) {
+      this.gatePassed.add(req);
+      this.gateSession.add(req);
+      return false;
+    }
+    // The pinned admin token (a TEST SEAM, DASHBOARD_ADMIN_TOKEN): its
+    // cookie, and the `/login?token=` that sets it (checked there).
+    if (this.pinnedAdminToken) {
+      if (this.hasSessionCookie(req)) return false;
+      if (urlPath === "/login" && (req.method ?? "GET").toUpperCase() === "GET" && new URLSearchParams(url.split("?")[1] ?? "").has("token")) return false;
+    }
+    if (req.headers.authorization !== undefined) {
+      // A lock refuses every check, a right one too: answering a right
+      // guess during the lock would let the guessing go on.
+      if (this.signInThrottle.waitMs() === 0) {
+        if (await this.headerCredentialsOk(req, read)) {
+          this.gatePassed.add(req);
+          return false;
+        }
+        this.signInFailed(req, "header");
+      }
+      this.answerSignIn(req, res, url, read, this.signInThrottle.waitMs() > 0 ? 429 : 401);
+      return true;
+    }
+    if (urlPath === "/login" && (req.method ?? "").toUpperCase() === "POST") {
+      await this.postSignIn(req, res, url, read);
+      return true;
+    }
+    this.answerSignIn(req, res, url, read);
+    return true;
+  }
+
+  /** `POST <base>/login`: the sign-in page's form. */
+  private async postSignIn(req: IncomingMessage, res: ServerResponse, url: string, read: AccountRead): Promise<void> {
+    const from = req.socket.remoteAddress ?? "<no address>";
+    if (!fromOwnPage(req, (h) => this.isOwnHost(h))) {
+      this.log(`refused a sign-in from another site (Origin ${JSON.stringify(req.headers.origin ?? null)}, from ${from})`);
+      this.answerSignIn(req, res, url, read, 403, { kind: "other-site" });
+      return;
+    }
+    const body = await readSmallBody(req);
+    if (body === null) {
+      res.writeHead(413, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+      res.end("Too large");
+      return;
+    }
+    const wait = this.signInThrottle.waitMs();
+    if (wait > 0) {
+      this.answerSignIn(req, res, url, read, 429, { kind: "wait", seconds: Math.ceil(wait / 1000) });
+      return;
+    }
+    if (read.kind === "unsafe" || (read.kind === "none" && !this.basicAuth)) {
+      this.answerSignIn(req, res, url, read, 401);
+      return;
+    }
+    const form = new URLSearchParams(body);
+    const user = form.get("user") ?? "";
+    const ok = await this.credentialsOk(read, user, form.get("password") ?? "");
+    if (!ok) {
+      const lock = this.signInFailed(req, "form");
+      this.answerSignIn(req, res, url, read, lock > 0 ? 429 : 401,
+        lock > 0 ? { kind: "wait", seconds: Math.ceil(lock / 1000) } : { kind: "wrong" }, user.length <= 256 ? user : "");
+      return;
+    }
+    this.signInThrottle.succeed();
+    const id = this.signInSessions.create();
+    this.log(`signed in on the sign-in page (${from})`);
+    res.writeHead(303, {
+      "Set-Cookie": `${SIGN_IN_COOKIE}=${id}; Path=${this.basePath || "/"}; HttpOnly; SameSite=Strict${arrivedOverHttps(req) ? "; Secure" : ""}`,
+      Location: `${this.basePath}${safeNext(form.get("next"))}`,
       "Cache-Control": "no-store",
     });
-    res.end("Unauthorized");
+    res.end();
   }
 
   /** Mutating verbs need an ADMIN SESSION (see DashboardServerOptions.adminToken). */
@@ -490,8 +726,9 @@ export class DashboardServer {
   }
 
   private hasAdminSession(req: IncomingMessage): boolean {
-    if (this.hasSessionCookie(req)) return true; // password session or token session
+    if (this.hasSessionCookie(req)) return true; // the admin-token cookie (a test seam)
     if (this.basicAuthOk(req)) return true; // the Basic-auth front: credentials ARE the session
+    if (this.gatePassed.has(req)) return true; // the account: its sign-in session or its credentials
     if (this.trustFront && !isLoopbackAddress(req.socket.remoteAddress)) return true; // came through the front
     return false;
   }
@@ -511,60 +748,41 @@ export class DashboardServer {
     return `mandu_session=${this.token()}`;
   }
 
-  /** The one-time login path that sets that cookie in a browser. */
+  /** The login path that sets that cookie in a browser: a TEST SEAM (a
+   *  server without an account, or one whose admin token is pinned). */
   adminLoginPath(): string {
     return `${this.basePath}/login?token=${this.adminToken}`;
   }
 
-  /** How a human signs in to this dashboard (sign-in.ts SignInDeps.mode):
-   *  its Basic-auth credentials, its password, or a one-time ticket. */
-  signInMode(): "tickets" | "password" | "basic-auth" {
-    if (this.basicAuth) return "basic-auth";
-    if (this.password) return "password";
-    return "tickets";
+  /** How a person signs in to this dashboard (sign-in.ts SignInDeps.mode,
+   *  the registry's `signInMode`; dashboard.md §6.z): the account
+   *  (`account`; `no-account` when there is none yet, `account-unusable`
+   *  when its file cannot be used), or the in-memory pair (`basic-auth`).
+   *  `none`: a server built without an account (tests only: no sign-in
+   *  gate). */
+  signInMode(): "account" | "no-account" | "account-unusable" | "basic-auth" | "none" {
+    const read = this.accountNow();
+    const gate = this.gateMode(read);
+    if (gate === "basic") return "basic-auth";
+    if (gate === "off") return "none";
+    return read.kind === "ok" ? "account" : read.kind === "unsafe" ? "account-unusable" : "no-account";
   }
 
-  /** Mint a one-time sign-in ticket and answer its login path. Called only
-   *  by the human-plane sign-in socket (server-main.ts serveSignInChannel),
-   *  which decides first whether a link may be handed out at all. */
-  mintSignInPath(): { path: string; expiresAt: number } {
-    const { ticket, expiresAt } = this.signInTickets.mint();
-    return { path: `${this.basePath}/login?ticket=${ticket}`, expiresAt };
-  }
-
-  /** The page for a sign-in that did not happen (no password configured):
-   *  what to run, never a form that invites guessing. */
-  private signInHelpPage(headline: string): string {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Mandu Dashboard — Sign in</title>
-<style>body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;display:flex;
-justify-content:center;align-items:center;min-height:100vh;margin:0}
-.login{background:#161b22;padding:2rem;border-radius:8px;max-width:30rem;border:1px solid #30363d;line-height:1.5}
-code{background:#0d1117;padding:.1rem .3rem;border-radius:4px}
-a{color:#58a6ff}</style></head><body>
-<div class="login"><h1>Mandu Dashboard</h1>
-<p>${headline}</p>
-<p>To sign in, run <code>mandu dashboard</code> in your own terminal and open the sign-in link it prints.
-Each link works once. A Mandu launch prints one too, on its dashboard line.</p>
-<p>You can still look around without signing in: <a href="${this.basePath}/">open the dashboard</a>.</p>
-</div></body></html>`;
-  }
-
-  private loginPage(): string {
-    const bp = this.basePath;
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Mandu Dashboard — Login</title>
-<style>body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;display:flex;
-justify-content:center;align-items:center;min-height:100vh;margin:0}
-.login{background:#161b22;padding:2rem;border-radius:8px;width:320px;border:1px solid #30363d}
-.login input{width:100%;padding:.6rem;margin-bottom:1rem;border:1px solid #30363d;border-radius:4px;
-background:#0d1117;color:#e6edf3;box-sizing:border-box}
-.login button{width:100%;padding:.6rem;background:#3fb950;color:#0d1117;border:none;border-radius:4px;
-font-weight:600;cursor:pointer}</style></head><body>
-<form class="login" method="POST" action="${bp}/login">
-<h1>Mandu Dashboard</h1>
-<input type="password" name="password" placeholder="Password" autofocus required>
-<button type="submit">Log in</button></form></body></html>`;
+  /** What Mandu kept from the AI in the session `id`, with the line the
+   *  launcher prints when that session ends (dashboard.md §4.25ah): the
+   *  live tenant's record first, then the test tenant's. Computed by the
+   *  same home facts Home counts the session by (home-routes.ts
+   *  `HomeFacts`), so the line and Home agree. null: no record holds it.
+   *  Called only by the human-plane socket (sign-in.ts serveSignInChannel). */
+  async sessionKept(id: string): Promise<{ kept: SessionKept; line: string } | null> {
+    for (const source of [this.source, this.testTenant?.source]) {
+      if (!source) continue;
+      const facts = this.homeFactsFor(source);
+      let f: Awaited<ReturnType<HomeFacts["ofId"]>> = null;
+      try { f = await facts.ofId(id, facts.labelTimes()); } catch { f = null; } // an unreadable record holds nothing to say
+      if (f?.kept) return { kept: f.kept, line: keptLine(f.kept) };
+    }
+    return null;
   }
 
   // ── request dispatch ────────────────────────────────────────────────────────
@@ -589,60 +807,28 @@ font-weight:600;cursor:pointer}</style></head><body>
       return;
     }
 
-    // HTTP Basic auth (basicAuth option) — THIRD, still before every route:
-    // a client without the credentials learns nothing but the challenge.
-    if (this.basicAuth && !this.basicAuthOk(req)) {
-      if (req.headers.authorization) {
-        this.log(`rejected Basic-auth credentials from ${req.socket.remoteAddress ?? "<no address>"}`);
-      }
-      this.challengeBasicAuth(res);
-      return;
-    }
-
     const rawUrl = req.url ?? "";
     const url = stripBasePath(rawUrl, this.basePath);
     const urlPath = url.split("?")[0]!;
 
-    // Login (always accessible)
-    if (urlPath === "/login" && req.method === "GET") {
-      const query = new URLSearchParams(url.split("?")[1] ?? "");
-      // Ticket login (sign-in.ts, policy-surface.md §2.6 "Signing in"): a
-      // one-time link minted over the human-plane sign-in socket. Spent on
-      // first use; a used, expired or guessed ticket signs nobody in. A
-      // browser that already holds the session is just let in (an old launch
-      // line still opens the dashboard).
-      const ticket = query.get("ticket");
-      if (ticket !== null) {
-        if (!this.password && !this.basicAuth && this.signInTickets.redeem(ticket)) {
-          this.log(`signed in with a one-time link (${req.socket.remoteAddress ?? "<no address>"})`);
-          res.writeHead(302, {
-            "Set-Cookie": `mandu_session=${this.token()}; Path=${this.basePath || "/"}; HttpOnly; SameSite=Strict`,
-            Location: `${this.basePath}/`,
-            "Cache-Control": "no-store",
-          });
-          res.end();
-          return;
-        }
-        if (this.hasAdminSession(req)) {
-          res.writeHead(302, { Location: `${this.basePath}/`, "Cache-Control": "no-store" });
-          res.end();
-          return;
-        }
-        this.log(`rejected a sign-in link (used, expired or unknown) from ${req.socket.remoteAddress ?? "<no address>"}`);
-        if (this.password) {
-          res.writeHead(302, { Location: `${this.basePath}/login` });
-          res.end();
-          return;
-        }
-        res.writeHead(403, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-        res.end(this.signInHelpPage("This sign-in link was already used, or it has expired."));
-        return;
-      }
-      // Token login (no password configured): the admin link server-main
-      // printed. A wrong token is a plain 403 — no page that invites guessing.
-      const token = query.get("token");
-      if (token !== null) {
-        if (!this.password && token === this.adminToken) {
+    // The sign-in gate (the Mandu dashboard account, or the basicAuth pair)
+    // — THIRD, still before every route: a client without a sign-in session
+    // or valid credentials gets the sign-in page or a 401 and nothing of the
+    // app; only `POST <base>/login` is answered past it (dashboard.md §6.z).
+    const accountRead = this.accountNow();
+    const gate = this.gateMode(accountRead);
+    if (gate !== "off" && (await this.signInGate(req, res, url, urlPath, accountRead))) return;
+
+    // `/login` past the gate. The sign-in page lives in the gate; a browser
+    // that reaches this already holds a session, so it goes Home. One test
+    // seam stays: `/login?token=<admin token>` sets the admin-token cookie
+    // (a server built without an account, or with a pinned admin token:
+    // DASHBOARD_ADMIN_TOKEN, `pinnedAdminToken`); a wrong token is a plain
+    // 403, a page that invites no guessing.
+    if (urlPath === "/login") {
+      const token = new URLSearchParams(url.split("?")[1] ?? "").get("token");
+      if (token !== null && (req.method ?? "GET").toUpperCase() === "GET") {
+        if ((gate === "off" || this.pinnedAdminToken) && this.adminTokenMatches(token)) {
           res.writeHead(302, {
             "Set-Cookie": `mandu_session=${this.token()}; Path=${this.basePath || "/"}; HttpOnly; SameSite=Strict`,
             Location: `${this.basePath}/`,
@@ -655,36 +841,30 @@ font-weight:600;cursor:pointer}</style></head><body>
         res.end("Forbidden");
         return;
       }
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-      // No password: there is no form to fill, only a link to get.
-      res.end(this.password ? this.loginPage() : this.signInHelpPage(this.hasAdminSession(req) ? "This browser is signed in." : "This browser is not signed in."));
-      return;
-    }
-    if (urlPath === "/login" && req.method === "POST") {
-      const body = await readBody(req);
-      const password = new URLSearchParams(body).get("password") ?? "";
-      if (this.password && password === this.password) {
-        res.writeHead(302, {
-          "Set-Cookie": `mandu_session=${this.token()}; Path=${this.basePath || "/"}; HttpOnly; SameSite=Strict`,
-          Location: `${this.basePath}/`,
-        });
-      } else {
-        res.writeHead(302, { Location: `${this.basePath}/login` });
-      }
+      res.writeHead(303, { Location: `${this.basePath}/`, "Cache-Control": "no-store" });
       res.end();
       return;
     }
     if (urlPath === "/logout") {
-      res.writeHead(302, {
-        "Set-Cookie": `mandu_session=; Path=${this.basePath || "/"}; HttpOnly; Max-Age=0`,
-        Location: `${this.basePath}/login`,
+      // Sign out (Settings, dashboard.md §6.z): the session ends here, not
+      // only in this browser. A POST must come from this dashboard's page.
+      if ((req.method ?? "").toUpperCase() === "POST" && !fromOwnPage(req, (h) => this.isOwnHost(h))) {
+        res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+        res.end("Forbidden: sign out from the dashboard's own page");
+        return;
+      }
+      const sid = signInCookieOf(req);
+      if (sid !== null) this.signInSessions.drop(sid);
+      this.log(`signed out (${req.socket.remoteAddress ?? "<no address>"})`);
+      const path = this.basePath || "/";
+      res.writeHead(303, {
+        "Set-Cookie": [
+          `${SIGN_IN_COOKIE}=; Path=${path}; HttpOnly; SameSite=Strict; Max-Age=0`,
+          `mandu_session=; Path=${path}; HttpOnly; SameSite=Strict; Max-Age=0`,
+        ],
+        Location: `${this.basePath}/login?out=1`,
+        "Cache-Control": "no-store",
       });
-      res.end();
-      return;
-    }
-
-    if (!this.isAuthed(req)) {
-      res.writeHead(302, { Location: `${this.basePath}/login` });
       res.end();
       return;
     }
@@ -771,8 +951,15 @@ font-weight:600;cursor:pointer}</style></head><body>
     // read-gate.ts) read the same deps.
     if ((urlPath === "/api/home" || urlPath === "/api/home/agent" || urlPath === "/api/home/history" || urlPath === "/api/home/answered" || urlPath === "/api/home/original") && req.method === "GET") {
       const facts = this.homeFactsFor(t.source);
-      const deps = { source: t.source, facts, approvals: t.approvalsArbiter, prompt: t.policyDocArbiter, proposals: t.policyDocArbiter, ...this.sessionRuns(), env: this.configEnv, home: this.fileBrowserHome, dev: this.hasDev };
-      if (urlPath === "/api/home") return apiHome(deps, res);
+      const deps = { source: t.source, facts, approvals: t.approvalsArbiter, prompt: t.policyDocArbiter, proposals: t.policyDocArbiter, policy: t.policyDocArbiter, ...this.sessionRuns(), env: this.configEnv, home: this.fileBrowserHome, dev: this.hasDev, lastScan: this.lastScan, updateCheck: this.updateCheck, ...(tenant !== "test" && this.manduNotRunning ? { notRunning: this.manduNotRunning } : {}) };
+      if (urlPath === "/api/home") {
+        // The account's sign-in (dashboard.md §6.z): Settings' Sign out for a
+        // browser that holds a sign-in session, and a change of the account
+        // file this dashboard saw.
+        const changed = this.account?.changedAt() ?? null;
+        const signIn = { signOut: this.gateSession.has(req), accountChangedAt: changed ? changed.toISOString() : null };
+        return apiHome({ ...deps, signIn }, res);
+      }
       if (urlPath === "/api/home/history") return apiHomeHistory(deps, url, res);
       if (urlPath === "/api/home/answered") return apiHomeAnswered(deps, url, res);
       // Admin only: the read gate refused it signed out before this ran.
@@ -790,6 +977,16 @@ font-weight:600;cursor:pointer}</style></head><body>
     // each location of the path table, `stat`ed only (metadata; never opened
     // or listed), resolved with this process's MANDU_HOME / HOME. The same for
     // every tenant: it describes this machine, not a session store.
+    // The Scan page (§4.25ai): the last `mandu scan` the launcher kept under
+    // the Mandu home (this machine's, like the data locations), never a value.
+    // Its head; a section's further rows (and the filter's query) and a
+    // row's examples are read when opened (§4.25ai *A long scan, in pages*).
+    if (urlPath === "/api/scan" && req.method === "GET") return apiScan(this.scanCache, res);
+    const scanRoute = req.method === "GET" ? scanRouteOf(urlPath) : null;
+    if (scanRoute !== null) {
+      const params = new URLSearchParams(url.split("?")[1] ?? "");
+      return scanRoute[0] === "section" ? apiScanSection(this.scanCache, scanRoute[1], params, res) : apiScanItem(this.scanCache, scanRoute[1], params, res);
+    }
     if (urlPath === "/api/data-locations" && req.method === "GET") {
       json(res, 200, buildDataLocations(this.configEnv, homeOf(this.configEnv)));
       return;

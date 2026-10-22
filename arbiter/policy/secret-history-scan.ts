@@ -50,10 +50,11 @@
  * (the packages ship standalone and do not import each other).
  */
 import { runChild } from "../src/child-run.js";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { gitCommand, gitSandbox, hardenedGitArgs, hardenedGitEnv } from "../src/hardened-git.js";
 import { historyTipsOf, reflogNamesOf, reflogRevArgs, type ReflogNames, type TipsGit } from "./history-tips.js";
+import { IGNORE_SHALLOW_ARGS, walkShallowRule } from "./history-labels.js";
 import {
   historyCacheBase,
   planHistoryScan,
@@ -555,13 +556,16 @@ export async function scanSecretHistory(roots: readonly string[], opts: HistoryS
   return scan;
 
   /** The cache key of a repository (secret-history-cache.ts), or null when
-   *  it is not cacheable: a shallow clone or grafts (they rewrite what is
-   *  reachable without moving a tip), or a git call that failed. */
+   *  it is not cacheable: a shallow clone (its file rewrites what is
+   *  reachable without moving a tip), or a git call that failed. Grafts no
+   *  longer count: every hardened call reads an empty graft file
+   *  (hardened-git.ts, GIT_GRAFT_FILE=/dev/null, which `--git-path
+   *  info/grafts` now names), so a repository's `info/grafts` rewrites
+   *  nothing the scan lists. */
   async function cacheKeyOf(root: string): Promise<{ base: string; tips: string[] } | null> {
-    const rp = await git(["rev-parse", "--show-object-format", "--is-shallow-repository", "--git-path", "info/grafts"], { cwd: root, timeoutMs: left() });
-    const [format, shallow, grafts] = rp.stdout.split("\n").map((l) => l.trim());
-    if (rp.code !== 0 || !format || shallow !== "false" || !grafts) return null;
-    if (existsSync(isAbsolute(grafts) ? grafts : join(root, grafts))) return null;
+    const rp = await git(["rev-parse", "--show-object-format", "--is-shallow-repository"], { cwd: root, timeoutMs: left() });
+    const [format, shallow] = rp.stdout.split("\n").map((l) => l.trim());
+    if (rp.code !== 0 || !format || shallow !== "false") return null;
     const ver = await git(["version"], { cwd: root, timeoutMs: left() });
     // What `rev-list --all --reflog --no-walk` names, the reflogs read once.
     const revs = await historyTipsOf(tipsGit(root), await namesOf(root));
@@ -583,8 +587,28 @@ export async function scanSecretHistory(roots: readonly string[], opts: HistoryS
     };
   }
 
+  /** The global options the scan's listing and walks run with: the history
+   *  walk's shallow rule (history-labels.ts walkShallowRule), so what the
+   *  scan reads is what the object twins walk (a shallow file is honoured
+   *  only where it is true). A failure to tell ignores the shallow file. */
+  async function shallowArgsOf(root: string): Promise<string[]> {
+    const rp = await git(["rev-parse", "--show-object-format", "--git-path", "shallow"], { cwd: root, timeoutMs: left() });
+    const [fmt, path] = rp.stdout.split("\n").map((l) => l.trim());
+    if (rp.code !== 0 || (fmt !== "sha1" && fmt !== "sha256") || !path) return [...IGNORE_SHALLOW_ARGS];
+    let text = "";
+    try { text = readFileSync(isAbsolute(path) ? path : join(root, path), "utf8"); } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") return [...IGNORE_SHALLOW_ARGS];
+    }
+    const rule = await walkShallowRule(
+      async (args, input) => { const r = await git(args, { cwd: root, input, timeoutMs: left() }); return { code: r.code, stdout: r.stdout }; },
+      text, fmt === "sha256" ? 64 : 40,
+    );
+    return rule.args;
+  }
+
   async function scanRepo(root: string, rec: SecretHistoryScan["repos"][number]): Promise<void> {
     const cache = opts.cache;
+    const sh = await shallowArgsOf(root);
     const keyed = cache ? await cacheKeyOf(root) : null;
     const entry = cache && keyed ? cache.load(root) : null;
     let plan: HistoryScanPlan = keyed ? planHistoryScan(entry, root, keyed.base, keyed.tips) : { kind: "fresh" };
@@ -603,13 +627,13 @@ export async function scanSecretHistory(roots: readonly string[], opts: HistoryS
     let rangeInput: string | null = null;
     if (plan.kind === "incremental") {
       rangeInput = `${plan.include.join("\n")}\n${plan.exclude.map((t) => `^${t}`).join("\n")}\n`;
-      const r = await git(["rev-list", "--objects", "--stdin"], { cwd: root, input: rangeInput, timeoutMs: left() });
+      const r = await git([...sh, "rev-list", "--objects", "--stdin"], { cwd: root, input: rangeInput, timeoutMs: left() });
       if (r.code === 0) listed = parseRevListObjects(r.stdout);
       else { plan = { kind: "relist" }; rangeInput = null; if (use) use.plan = "relist"; }
     }
     if (plan.kind === "fresh" || plan.kind === "relist") {
       const from = reflogRevArgs(await namesOf(root));
-      const rl = await git(["rev-list", ...from.args, "--objects"], {
+      const rl = await git([...sh, "rev-list", ...from.args, "--objects"], {
         cwd: root, timeoutMs: left(), ...(from.input !== undefined ? { input: from.input } : {}),
       });
       if (rl.code !== 0) {
@@ -778,7 +802,7 @@ export async function scanSecretHistory(roots: readonly string[], opts: HistoryS
       let touched: Set<string> | null = new Set();
       if (plan.kind === "incremental" && known.length > 0) {
         const t = new Set<string>();
-        const lg = await gitLines(["log", "--stdin", "-m", "--root", "--no-renames", "--raw", "--no-abbrev", "--format=commit %H"], {
+        const lg = await gitLines([...sh, "log", "--stdin", "-m", "--root", "--no-renames", "--raw", "--no-abbrev", "--format=commit %H"], {
           cwd: root, input: rangeInput ?? "", timeoutMs: left(),
           onLine: (line) => {
             const rec = parseRawRecord(line);
@@ -804,7 +828,7 @@ export async function scanSecretHistory(roots: readonly string[], opts: HistoryS
     if (need.length === 1 && !late()) {
       const oid = need[0]!;
       const lg = await git(
-        ["log", ...whole.args, "-m", "--root", "--no-renames", "--raw", "--no-abbrev", "--format=commit %H", `--find-object=${oid}`],
+        [...sh, "log", ...whole.args, "-m", "--root", "--no-renames", "--raw", "--no-abbrev", "--format=commit %H", `--find-object=${oid}`],
         { cwd: root, timeoutMs: left(), ...wholeInput },
       );
       if (lg.code === 0) {
@@ -815,7 +839,7 @@ export async function scanSecretHistory(roots: readonly string[], opts: HistoryS
       const want = new Set(need);
       const acc = new Map<string, { commits: string[]; paths: Set<string> }>();
       let commit: string | null = null;
-      const lg = await gitLines(["log", ...whole.args, "-m", "--root", "--no-renames", "--raw", "--no-abbrev", "--format=commit %H"], {
+      const lg = await gitLines([...sh, "log", ...whole.args, "-m", "--root", "--no-renames", "--raw", "--no-abbrev", "--format=commit %H"], {
         cwd: root, timeoutMs: left(), ...wholeInput,
         onLine: (line) => {
           if (line.startsWith("commit ")) { commit = line.slice(7).trim(); return; }

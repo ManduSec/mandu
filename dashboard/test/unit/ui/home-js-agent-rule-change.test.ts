@@ -72,14 +72,15 @@ test("the agent page of the agent that asked: Needs your OK, 'No question is wai
   assert.deepEqual(lines(doc), [NO_QUESTION], "never 'Nothing' over its own request");
   const a = link(doc);
   assert.equal(a.textContent, LINK);
-  assert.equal(a.getAttribute("href"), "/mandu/approvals");
+  assert.equal(a.getAttribute("href"), "/mandu/approvals/pp-000001", "its one request, which Approvals marks (§4.25 *Details*)");
   assert.equal(a.dataset.pageLink, "approvals");
   assert.equal(doc.querySelector("#agent-waiting button"), null, "no Allow or Not now on the agent page");
-  // The link opens Approvals, with the request's card.
+  // The link opens Approvals, with the request's card, marked.
   a.click();
   await tick(40);
   assert.equal(doc.getElementById("page-approvals").hidden, false);
   assert.ok(cardOf(doc, "pp-000001"), "the request's card");
+  assert.ok(cardOf(doc, "pp-000001").classList.contains("focus"), "marked");
 });
 
 test("two of its requests: the plural; another agent's request is not counted", async () => {
@@ -89,6 +90,7 @@ test("two of its requests: the plural; another agent's request is not counted", 
   } });
   await tick(40);
   assert.equal(link(doc).textContent, "2 rule changes this agent asked for are in Approvals");
+  assert.equal(link(doc).getAttribute("href"), "/mandu/approvals", "two: Approvals itself");
   assert.equal(doc.getElementById("nav-approvals-count").textContent, "3", "the badge counts every request, as before");
 });
 
@@ -146,6 +148,7 @@ test("a poll that brings its request, or takes it away, draws the block again; a
   pending = [request("pp-000001"), request("pp-000002")];
   await poll(doc);
   assert.equal(link(doc).textContent, "2 rule changes this agent asked for are in Approvals");
+  assert.equal(link(doc).getAttribute("href"), "/mandu/approvals", "two: Approvals itself");
   assert.equal(doc.activeElement, block(doc).querySelector("h2"));
   // Answered in another tab: the next poll reads none.
   pending = [];
@@ -175,4 +178,5 @@ test("the request's card links the agent that asked: 'See what the agent was doi
   assert.equal(doc.getElementById("page-agent").hidden, false);
   assert.equal(doc.getElementById("agent-name").textContent, "Claude Code");
   assert.equal(link(doc).textContent, "2 rule changes this agent asked for are in Approvals");
+  assert.equal(link(doc).getAttribute("href"), "/mandu/approvals", "two: Approvals itself");
 });

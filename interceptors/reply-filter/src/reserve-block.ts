@@ -100,6 +100,35 @@ export function wrapRule(env: NodeJS.ProcessEnv = process.env): LayoutRule {
   return env[WRAP_RULE_ENV]?.trim() === "terminal" ? "terminal" : "ink";
 }
 
+/** The variable the launcher sets for an agent whose TUI expands each TAB
+ *  in its reply ITSELF, counting the stops from the left edge of the text
+ *  the TAB is in rather than from the terminal's column 0 (`content`:
+ *  Claude Code, reply-row-reservation.md §19.7). The filter reads it,
+ *  reports it (`tabs`), and lays TABs out by it; the agent never sees it
+ *  (arbiter-client.ts childEnv). */
+export const TAB_ORIGIN_ENV = "MANDU_REPLY_TAB_ORIGIN";
+
+/** Where the agent's TUI counts a reply TAB's stops from (§19.7):
+ *   - `screen`: the terminal's column 0 (the TUI leaves the TAB to the
+ *     terminal, or expands it as the terminal would: Codex; the default);
+ *   - `content`: the left edge of the text the TAB is in (Claude Code's
+ *     renderer expands each TAB from its text box's column 0: a reserved
+ *     block's content area, CONTENT_TAB_COL for a value the filter splices
+ *     into a row). */
+export type TabOrigin = "screen" | "content";
+
+/** The terminal column a `content`-origin TUI's reply text starts at, the
+ *  origin of a TAB in a value spliced into a row with no block around it:
+ *  Claude Code's reply indent (§11.1; a list item's own indent is not known
+ *  there, §19.7). */
+export const CONTENT_TAB_COL = 2;
+
+/** This session's TAB origin (§19.7): `content` when TAB_ORIGIN_ENV says so,
+ *  else `screen` (every other agent, and anything malformed). */
+export function tabOrigin(env: NodeJS.ProcessEnv = process.env): TabOrigin {
+  return env[TAB_ORIGIN_ENV]?.trim() === "content" ? "content" : "screen";
+}
+
 /** False when WRAP_RULE_ENV is `none`: the agent's TUI wraps its reply by a
  *  rule no layout here models (OpenCode breaks a word at its punctuation and
  *  lays the reply out narrower than Ink, differential-interactive.md §35), so
@@ -116,7 +145,9 @@ export function wrapLayoutKnown(env: NodeJS.ProcessEnv = process.env): boolean {
  *  kill switch is off; `wrap: true` rides with `reserve` (this filter paints
  *  v2 heads, §11.3) unless the agent's wrap is unmodelled (`none`,
  *  wrapLayoutKnown), and with it `rule: "terminal"` when the agent's TUI
- *  leaves the wrap to the terminal (§17; absent means Ink's);
+ *  leaves the wrap to the terminal (§17; absent means Ink's), and
+ *  `tabs: "content"` when it counts a TAB's stops from its text's left
+ *  edge (§19.7; absent means the screen's column 0);
  *  `cols`/`rows` when known (v2's W derives from `cols`).
  *  run.ts sends it over the HUMAN-plane client only (§11.5: the data socket
  *  refuses the op). */
@@ -133,6 +164,7 @@ export function sessionRelay(
     reserve,
     ...(reserve && wrapLayoutKnown(env) ? { wrap: true } : {}),
     ...(reserve && wrapRule(env) === "terminal" ? { rule: "terminal" as const } : {}),
+    ...(reserve && tabOrigin(env) === "content" ? { tabs: "content" as const } : {}),
     ...(typeof size.cols === "number" ? { cols: size.cols } : {}),
     ...(typeof size.rows === "number" ? { rows: size.rows } : {}),
   };
@@ -298,6 +330,9 @@ export interface HeadShape {
   /** The wrap rule the block's rows are laid out by (§17): the session's,
    *  stamped by the cache. Absent: `ink`. */
   rule?: LayoutRule | undefined;
+  /** Where the block's TAB stops count from (§19.7): the session's, stamped
+   *  by the cache. Absent: `screen`. */
+  tabs?: TabOrigin | undefined;
 }
 
 /**
@@ -346,13 +381,17 @@ export function blockLayout(value: string, w: number, f: number, rule: LayoutRul
 }
 
 /**
- * The terminal column a v2 block's content area starts at (§11.2, the TAB
- * stops): the width the block was first seen at minus its W, which is the
- * proxy's `cols − W` (the content indent, plus a list item's). A resize
- * keeps it: the rows start where they did (paintLayout). 0 for a v1 head or
- * an unknown width (TAB stops then count from each line's own start).
+ * The column a v2 block's TAB stops count from, as `layoutRows`' `indent`
+ * (§11.2, §19): under a `screen` origin the terminal column the content
+ * area starts at, the width the block was first seen at minus its W, which
+ * is the proxy's `cols − W` (the content indent, plus a list item's). A
+ * resize keeps it: the rows start where they did (paintLayout). 0 under a
+ * `content` origin (§19.7: the TUI counts from the content area's own left
+ * edge, as the proxy then sends), for a v1 head, or for an unknown width
+ * (TAB stops then count from each line's own start).
  */
 export function blockIndent(head: HeadShape): number {
+  if (head.tabs === "content") return 0;
   if (head.w === undefined || head.cols === undefined) return 0;
   return Math.max(0, head.cols - head.w);
 }
@@ -369,8 +408,9 @@ export function blockIndent(head: HeadShape): number {
  *   - `colsNow`, the terminal's current columns: a v2 block on a terminal
  *     narrower than when its head was first seen is laid out anew
  *     (paintLayout, §13).
- *   - a TAB reaches the terminal's tab stop, counted from the content
- *     area's column (blockIndent), as the arbiter counted the rows.
+ *   - a TAB reaches the TUI's tab stop, counted from the column blockIndent
+ *     gives (the screen's, or the content area's own), as the arbiter
+ *     counted the rows.
  */
 export function blockRowText(value: string, i: number, head: HeadShape, colsNow?: number | null): string {
   const at = paintLayout(head, colsNow);
@@ -432,8 +472,18 @@ export class ReserveValueCache {
 
   /** `rule`: the session's wrap rule (§17, run.ts wrapRule), stamped on every
    *  head so a block's rows are painted by the rule the proxy counted them
-   *  by. */
-  constructor(private readonly max = RESERVE_CACHE_MAX, readonly rule: LayoutRule = "ink") {}
+   *  by; `tabs`, the session's TAB origin (§19.7, run.ts tabOrigin), stamped
+   *  the same way and read by the writers for a value spliced into a row. */
+  constructor(
+    private readonly max = RESERVE_CACHE_MAX, readonly rule: LayoutRule = "ink", readonly tabs: TabOrigin = "screen",
+  ) {}
+
+  /** The screen column a TAB in a value spliced into a row (no block around
+   *  it) counts its stops from (§19.7): 0, or CONTENT_TAB_COL under a
+   *  `content` origin. */
+  get spliceTabOrigin(): number {
+    return this.tabs === "content" ? CONTENT_TAB_COL : 0;
+  }
 
   /** True once any head was seen this session (the main-screen reconcile
    *  gate: no block, no scan). */
@@ -464,6 +514,7 @@ export class ReserveValueCache {
       ...(w !== undefined ? { w, f: fNow } : {}),
       ...(width !== undefined ? { cols: width } : {}),
       ...(this.rule !== "ink" ? { rule: this.rule } : {}),
+      ...(this.tabs !== "screen" ? { tabs: this.tabs } : {}),
     });
   }
 

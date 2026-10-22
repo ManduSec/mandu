@@ -95,3 +95,38 @@ test("Codex tllm_call (upstream 429): the explainer the dashboard keeps out of t
   assert.equal(res.status, 429);
   assert.equal(ev.output!.symbolized, "⚠ no model response — upstream HTTP 429: Rate limit reached");
 });
+
+// ── The response id on tllm_call (confidentiality-plan-17 §3 item 6) ─────────
+// Codex's rollout keeps each response's id (`token_usage_record.response_id`);
+// the proxy records the same id, read by the passive sniffer off the relayed
+// bytes, so `mandu scan` can tell a past session under Mandu exactly.
+
+const RESP_ID = "resp_097734745bd7c833016ac81d2dc05c87d0bc74a92a960ac8e6";
+
+test("Codex tllm_call (SSE, gate on and off): the response id from the first response.* event; the body relayed with it", async () => {
+  for (const execGate of [true, false]) {
+    const sse = buildTextSse("Done.").replaceAll('"id":"r"', `"id":"${RESP_ID}"`);
+    const { res, ev } = await exchange({ sse, chunkInto: 7 }, { execGate });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.includes(RESP_ID), "the agent gets the id as sent");
+    assert.equal(ev.model?.responseId, RESP_ID, `execGate ${execGate}`);
+  }
+});
+
+test("Codex tllm_call (stream:false JSON): the body's id", async () => {
+  const { ev } = await exchange({ json: { id: RESP_ID, output: [] } }, { stream: false });
+  assert.equal(ev.model?.responseId, RESP_ID);
+});
+
+test("Codex tllm_call: no response id for an error, an id-less answer or an ill-formed id", async () => {
+  const cases: MockUpstreamOptions[] = [
+    { status: 429, json: { error: { message: "Rate limit reached", type: "rate_limit" } } },
+    { sse: buildTextSse("Done.") },
+    { sse: buildTextSse("Done.").replaceAll('"id":"r"', '"id":"resp with spaces"') },
+  ];
+  for (const up of cases) {
+    const { ev } = await exchange(up);
+    assert.equal(ev.model?.responseId, undefined);
+    assert.deepEqual(Object.keys(ev.model ?? {}), ["id"]);
+  }
+});

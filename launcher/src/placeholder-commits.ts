@@ -80,8 +80,9 @@ import { createHash } from "node:crypto";
 import {
   closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { defaultGitRunner, repoRootOf, type GitRun, type GitRunner } from "./git-object-twins.js";
+import { IGNORE_SHALLOW_ARGS, walkShallowRule } from "./history-labels.js";
 import { publishFile } from "./safe-file.js";
 
 /** The mark every placeholder carries (secret-twins.ts). */
@@ -292,9 +293,12 @@ export async function preparePlaceholderWatch(files: readonly TwinSource[], opts
     const call = { cwd: root, timeoutMs: opts.timeoutMs ?? WATCH_GIT_TIMEOUT_MS };
     try {
       // Which of them the index holds (every other one is untracked, and
-      // watched all the same, ignored or not), and the tips.
+      // watched all the same, ignored or not), and the tips. Spelled as the
+      // history step asks them (git-object-twins.ts protectedBlobsOf,
+      // historyStateOfRoots), so the launch's shared runner asks each once
+      // (git-shared-answers.ts).
       const [ls, t] = await Promise.all([
-        git(["ls-files", "-z", "-s", "--", ...rels], call),
+        git(["ls-files", "-s", "-z", "--", ...rels], call),
         git(["rev-list", "--all", "--no-walk"], call),
       ]);
       if (ls.code !== 0) throw new Error(ls.stderr.trim().split("\n").slice(-1)[0] || `exit ${ls.code}`);
@@ -603,6 +607,22 @@ export interface RepoCheck {
   failed?: boolean;
 }
 
+/** The global options a walk in the work tree `root` runs with under the
+ *  shallow rule (history-labels.ts walkShallowRule), read now. A failure to
+ *  tell ignores the shallow file (the walk then goes through every present
+ *  parent, or fails and the check says so). */
+export async function shallowArgsAt(git: GitRunner, root: string, timeoutMs: number): Promise<string[]> {
+  const r = await git(["rev-parse", "--show-object-format", "--git-path", "shallow"], { cwd: root, timeoutMs });
+  const [fmt, path] = r.stdout.split("\n").map((l) => l.trim());
+  if (r.code !== 0 || (fmt !== "sha1" && fmt !== "sha256") || path === undefined || path === "") return [...IGNORE_SHALLOW_ARGS];
+  let text = "";
+  try { text = readFileSync(resolve(root, path), "utf8"); } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") return [...IGNORE_SHALLOW_ARGS];
+  }
+  const rule = await walkShallowRule((args, input) => git(args, { cwd: root, input, timeoutMs }), text, fmt === "sha256" ? 64 : 40);
+  return rule.args;
+}
+
 /** One repository of a record, checked now. A git call that fails is named
  *  (in the finding, or as `error`), never thrown. */
 export async function checkPlaceholderRepo(repo: WatchedRepo, opts: CheckOpts = {}): Promise<RepoCheck> {
@@ -648,8 +668,14 @@ export async function checkPlaceholderRepo(repo: WatchedRepo, opts: CheckOpts = 
       // (Recent git's `-m` keeps that side as well; the documented switch
       // keeps the check from resting on it.) The walk is bounded to the new
       // commits anyway.
+      // History as the objects record it: grafts and replace refs are off
+      // for every hardened call, and a shallow file the session may have
+      // written is honoured only where it is true (history-labels.ts
+      // walkShallowRule), so neither can cut a placeholder commit out of
+      // this walk.
+      const walkArgs = await shallowArgsAt(git, repo.root, walkMs);
       const out = await run(
-        ["log", "--ignore-missing", "--stdin", "--full-history", "--raw", "-z", "--no-abbrev", "--no-renames", "-m", "--format=%x01%H", "--", ...rels],
+        [...walkArgs, "log", "--ignore-missing", "--stdin", "--full-history", "--raw", "-z", "--no-abbrev", "--no-renames", "-m", "--format=%x01%H", "--", ...rels],
         `${fresh.join("\n")}\n${repo.tips.map((t) => `^${t}`).join("\n")}\n`,
       );
       if (out !== null) commits = parseCommitChanges(out);

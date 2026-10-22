@@ -29,11 +29,14 @@ import { join } from "node:path";
 import { manduPath } from "./generated/mandu-paths.js";
 import { openSafeLog } from "./safe-log.js";
 import { SUBCOMMAND_USAGE } from "./subcommand-help.js";
+import { formatTimingsTable, timingsFromLog, type LaunchTimings } from "./launch-timings.js";
 
 type Env = Record<string, string | undefined>;
 
 /** How many launch logs are kept. */
 export const LAUNCH_LOG_KEEP = 20;
+/** How many launches `mandu log --timings` shows side by side. */
+export const TIMINGS_SHOWN = 5;
 /** The env var that names the launch's log to Mandu's helpers. */
 export const LAUNCH_LOG_ENV = "MANDU_LAUNCH_LOG";
 
@@ -194,10 +197,12 @@ const realOut: LogOut = {
 export function runLog(rest: string[], env: Env, io: LogOut = realOut, read: (p: string) => string = (p) => readFileSync(p, "utf8")): number {
   let list = false;
   let pathOnly = false;
+  let timings = false;
   let id: string | undefined;
   for (const a of rest) {
     if (a === "--list") list = true;
     else if (a === "--path") pathOnly = true;
+    else if (a === "--timings") timings = true;
     else if (a.startsWith("-")) { io.err(`mandu log: unknown option ${a}\n${LOG_USAGE.join("\n")}\n`); return 2; }
     else if (id === undefined) id = a;
     else { io.err(`mandu log: one session id at most\n${LOG_USAGE.join("\n")}\n`); return 2; }
@@ -212,7 +217,8 @@ export function runLog(rest: string[], env: Env, io: LogOut = realOut, read: (p:
     for (const e of logs) io.out(`${localStamp(e.startedAt)}  ${e.sessionId}  ${e.path}\n`);
     return 0;
   }
-  const pick = id === undefined ? logs[0] : logs.find((e) => e.sessionId === id) ?? logs.find((e) => e.sessionId.startsWith(id));
+  if (timings && !pathOnly) return showTimings(id === undefined ? logs : matching(logs, id), id, io, read);
+  const pick = id === undefined ? logs[0] : matching(logs, id)[0];
   if (pick === undefined) {
     io.err(`mandu log: no kept launch log for session ${id} (\`mandu log --list\` names the kept ones)\n`);
     return 1;
@@ -230,5 +236,35 @@ export function runLog(rest: string[], env: Env, io: LogOut = realOut, read: (p:
   }
   io.out(printable(text));
   if (text !== "" && !text.endsWith("\n")) io.out("\n");
+  return 0;
+}
+
+/** The kept logs of session `id`: the exact id, else the ones it is a prefix of. */
+function matching(logs: LaunchLogEntry[], id: string): LaunchLogEntry[] {
+  const exact = logs.filter((e) => e.sessionId === id);
+  return exact.length > 0 ? exact : logs.filter((e) => e.sessionId.startsWith(id));
+}
+
+/**
+ * `mandu log --timings`: how long each step of the last launches took
+ * (runtime-instances.md §14.11), one column per launch, newest first, with
+ * their median; with a session id, that launch's. A log written before the
+ * timings existed, or one that cannot be read, is passed over.
+ */
+function showTimings(logs: LaunchLogEntry[], id: string | undefined, io: LogOut, read: (p: string) => string): number {
+  const found: Array<{ label: string; timings: LaunchTimings }> = [];
+  for (const e of logs) {
+    if (found.length >= (id === undefined ? TIMINGS_SHOWN : 1)) break;
+    let t: LaunchTimings | null = null;
+    try { t = timingsFromLog(read(e.path)); } catch { /* passed over */ }
+    if (t !== null) found.push({ label: localStamp(e.startedAt).slice(5, 16), timings: t });
+  }
+  if (found.length === 0) {
+    io.err(id === undefined
+      ? "mandu log: no kept launch log has its timings yet (an older Mandu did not keep them)\n"
+      : `mandu log: no kept launch log for session ${id} has its timings\n`);
+    return 1;
+  }
+  for (const l of formatTimingsTable(found)) io.out(`${l}\n`);
   return 0;
 }

@@ -275,6 +275,31 @@ export interface SessionLogins {
   ullmBinary?: string;
   otherLoginsRaw?: boolean;
   loginEnv?: Record<string, string>;
+  /** The project MCP configs the session's agent reads in its own process
+   *  (secret-discovery.md §2.10): Claude Code's `.mcp.json` in the
+   *  directories it runs in, those that exist at the launch. */
+  mcpConfigs?: string[];
+}
+
+/** The agents whose project `.mcp.json` the session's agent reads: Claude
+ *  Code under every target whose login the walk keeps for it (its own, a
+ *  plain command's, OpenClaw's). Mirrors the arbiter's `keptLoginOwners`
+ *  for `claude`; the arbiter keeps a path only when a kept agent reads it. */
+const CLAUDE_MCP_TARGETS: ReadonlySet<string> = new Set(["claude", "shell", "openclaw"]);
+
+/**
+ * The project MCP configs the session's agent reads in its own process
+ * (secret-discovery.md §2.10): `<dir>/.mcp.json` for the human's and the
+ * agent's directories, those that exist (`exists`), when the target runs
+ * Claude Code. Pure but for `exists`.
+ */
+export function sessionMcpConfigs(
+  plan: { target: string; cwd?: string; humanCwd?: string },
+  exists: (p: string) => boolean = existsSync,
+): string[] {
+  if (!CLAUDE_MCP_TARGETS.has(plan.target)) return [];
+  const dirs = [...new Set([plan.humanCwd, plan.cwd].filter((d): d is string => typeof d === "string" && d.startsWith("/")))];
+  return dirs.map((d) => join(d, ".mcp.json")).filter((p) => exists(p));
 }
 
 /**
@@ -289,17 +314,20 @@ export interface SessionLogins {
  * arbiter turns this into login-file paths only. Pure.
  */
 export function sessionLogins(
-  plan: { target: string; writeMcp?: boolean; ullm?: { mode: "api" | "cli"; binary?: string } },
+  plan: { target: string; writeMcp?: boolean; ullm?: { mode: "api" | "cli"; binary?: string }; cwd?: string; humanCwd?: string },
   env: Env,
   home: string,
+  exists: (p: string) => boolean = existsSync,
 ): SessionLogins {
   const k = launchLoginKeying(plan);
   const loginEnv = loginEnvOf(env);
+  const mcpConfigs = sessionMcpConfigs(plan, exists);
   return {
     home, target: k.target,
     ...(k.ullmBinary !== undefined ? { ullmBinary: k.ullmBinary } : {}),
     ...(otherAgentLoginsRaw(env) ? { otherLoginsRaw: true } : {}),
     ...(Object.keys(loginEnv).length > 0 ? { loginEnv } : {}),
+    ...(mcpConfigs.length > 0 ? { mcpConfigs } : {}),
   };
 }
 
@@ -313,7 +341,13 @@ export function sessionLoginsKey(v: unknown): string {
   if (typeof o["home"] !== "string") return "";
   const envIn = o["loginEnv"] !== null && typeof o["loginEnv"] === "object" ? o["loginEnv"] as Record<string, unknown> : {};
   const env = Object.keys(envIn).filter((k) => typeof envIn[k] === "string").sort().map((k) => [k, envIn[k]]);
-  return JSON.stringify([o["home"], o["target"] ?? null, o["ullmBinary"] ?? null, o["otherLoginsRaw"] === true, env]);
+  const key: unknown[] = [o["home"], o["target"] ?? null, o["ullmBinary"] ?? null, o["otherLoginsRaw"] === true, env];
+  // Since 2026-10-21 (§2.10), only when a value has some: a key with none
+  // is spelled as before, so a launch with no project MCP config adopts a
+  // proxy that predates the field.
+  const mcp = Array.isArray(o["mcpConfigs"]) ? (o["mcpConfigs"] as unknown[]).filter((p): p is string => typeof p === "string").sort() : [];
+  if (mcp.length > 0) key.push(mcp);
+  return JSON.stringify(key);
 }
 
 /** The opt-out (`MANDU_OTHER_AGENT_LOGINS=raw`, config `other-agent-logins`):

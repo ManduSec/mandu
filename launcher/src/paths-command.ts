@@ -49,6 +49,8 @@ export const PATH_DESCRIPTIONS: Readonly<Record<ManduPathName, string>> = {
   "paired-approvals": "one-time approvals for evaluation runs (developers)",
   "browser-profile": "the Chrome profile of the browser Mandu starts for your agent (mandu --browser): your logins on the sites it uses",
   "launch-logs": "what each launch said: its notices, warnings and helper messages (mandu log shows the latest); the last 20 launches",
+  "dashboard-account": "your dashboard account: its username and a scrambled form of its password, never the password itself (mandu dashboard --set-password sets it)",
+  "last-scan": "the last mandu scan of your agents' past sessions: which secrets reached the AI, by name and file, never a value",
   "events": "session history, kept 90 days; it includes the real values behind placeholders",
   "events-test": "session history of Mandu's own tests",
   "runs-root": "test and evaluation results (developers)",

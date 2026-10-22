@@ -33,7 +33,8 @@ One function or module; every push and MR, blocking.
 |---|---|---|---|---|---|---|---|---|
 | `arbiter.docs-sweep` | off | `arbiter` | `npx tsx --test test/unit/symbol-prefix-sweep.test.ts` | node, git |  |  |  | [design/architecture/mandu.md](../design/architecture/mandu.md) |
 | `eval.lib` | secrets | `eval` | `npm test --silent` | node | sandbox |  |  | [design/testing/evaluation.md](../design/testing/evaluation.md) |
-| `integration.user-docs` | off | `tests` | `npx tsx --test stack/user-docs.test.ts stack/agent-versions-parity.test.ts` | node |  |  |  | [README.md](../README.md) |
+| `github-action` | secrets | `packaging/github-action` | `node --test test/*.test.mjs` | node |  |  |  | [design/distribution/github-action.md](../design/distribution/github-action.md) |
+| `integration.user-docs` | off | `tests` | `npx tsx --test stack/user-docs.test.ts stack/agent-versions-parity.test.ts stack/about-mandu-parity…` | node |  |  |  | [README.md](../README.md) |
 | `launcher.docs` | off | `launcher` | `npx tsx --test test/unit/docs-url.test.ts test/unit/license-manifest.test.ts` | node |  |  |  | [design/distribution/packaging.md](../design/distribution/packaging.md) |
 | `openclaw-inspect-plugin` | secrets | `interceptors/openclaw-inspect-plugin` | `npm test --silent` | node |  | ullm/quarantine |  | [design/agents/supported-agents.md](../design/agents/supported-agents.md) |
 | `policy-mcp` | secrets | `interceptors/policy-mcp` | `npm test --silent` | node |  | policy/monotonic |  | [design/ui/policy-surface.md](../design/ui/policy-surface.md) |
@@ -55,7 +56,11 @@ One function or module; every push and MR, blocking.
 | `scripts.install-deps` | off | `.` | `node --test scripts/test/install-deps.test.mjs` | node |  |  |  | [development.md](../development.md) |
 | `scripts.mandu-paths` | off | `.` | `node --test scripts/test/mandu-paths.test.mjs` | node |  |  |  | [design/architecture/on-disk-layout.md](../design/architecture/on-disk-layout.md) |
 | `scripts.node-major` | off | `.` | `node --test scripts/test/node-major.test.mjs` | node |  |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
+| `scripts.npm-release-host` | off | `.` | `node --test scripts/test/npm-release-host.test.mjs` | node |  |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
+| `scripts.reduce-codex-auth` | off | `.` | `node --test scripts/test/reduce-codex-auth.test.mjs` | node |  |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
 | `scripts.reduce-credential` | off | `.` | `node --test scripts/test/reduce-credential.test.mjs` | node |  |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
+| `scripts.release-assets` | off | `.` | `node --test scripts/test/release-assets.test.mjs` | node |  |  |  | [design/distribution/packaging.md](../design/distribution/packaging.md) |
+| `scripts.release-workflow` | off | `.` | `node --test scripts/test/release-workflow.test.mjs` | node, bash |  |  |  | [design/distribution/packaging.md](../design/distribution/packaging.md) |
 | `scripts.replay-retention` | off | `.` | `node --test scripts/test/replay-retention.test.mjs` | node |  |  |  | [design/testing/continuous-integration.md](../design/testing/continuous-integration.md) |
 | `scripts.run-suites` | off | `.` | `node --test scripts/test/run-suites.test.mjs` | node |  |  |  | [design/testing/test-organization.md](../design/testing/test-organization.md) |
 | `scripts.run-suites-timeout` | off | `.` | `node --test scripts/test/run-suites-timeout.test.mjs` | node |  |  |  | [design/testing/test-organization.md](../design/testing/test-organization.md) |
@@ -222,6 +227,7 @@ The host decides the result (a local model server, a login, the internet, a newl
 |---|---|---|---|---|---|---|---|---|
 | `deps.audit-cargo` | off | `.` | `node scripts/dep-audit.mjs cargo` | node, cargo-audit | manual, internet | none: a supply-chain check of the Cargo lockfile against the RustSec database, not a data path |  | [design/testing/continuous-integration.md](../design/testing/continuous-integration.md) |
 | `deps.audit-npm` | off | `.` | `node scripts/dep-audit.mjs npm` | node | manual, internet | none: a supply-chain check of the lockfiles against published advisories, not a data path |  | [design/testing/continuous-integration.md](../design/testing/continuous-integration.md) |
+| `integration.launch-budget` | secrets | `tests` | `npx tsx --test env/launch-budget.test.ts` | node, git, claude, codex, bwrap, userns, native-bins, timing-baseline | serial, gate `MANDU_LAUNCH_BUDGET` | none: a launch-time budget (the host's speed against a recorded baseline), not a data path |  | [design/architecture/runtime-instances.md](../design/architecture/runtime-instances.md) |
 | `integration.local-main-model` | secrets | `tests` | `npm run test:env:local-main-model --silent` | node, ollama | serial, gate `MANDU_LIVE_LOCAL_MAIN_MODEL` | none: the local model is the MAIN model (plan 11 §7): the session binds to the declared endpoint and the vendor sees nothing, which no property in the list names (ullm/local-endpoint is the helper's) | `local-main-model-e2e` | [design/confidentiality/model-endpoints.md](../design/confidentiality/model-endpoints.md) |
 | `integration.local-model` | secrets | `tests` | `npm run test:env:local-model --silent` | node, claude, claude-login, ollama | serial, gate `MANDU_LIVE_LOCAL_MODEL`, credential subscription | model-ingress/file, ullm/local-endpoint, ullm/quarantine, reply/desymbolize | `local-model-e2e` | [design/confidentiality/model-endpoints.md](../design/confidentiality/model-endpoints.md) |
 | `integration.local-model-netns` | secrets | `tests` | `npm run test:env:local-model-netns --silent` | node, claude, claude-login, ollama, userns | internet, serial, gate `MANDU_LIVE_LOCAL_MODEL_NETNS`, credential subscription | model-ingress/file, ullm/local-endpoint, reply/desymbolize |  | [design/confidentiality/model-endpoints.md](../design/confidentiality/model-endpoints.md) |
@@ -246,6 +252,7 @@ A real install in a disposable VM (/dev/kvm and the network); on a release tag a
 |---|---|---|---|---|---|---|---|---|
 | `install.kernel-vm` | off | `.` | `bash scripts/kernel-vm.sh` | kvm, qemu, network | serial |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
 | `install.matrix` | secrets | `.` | `bash scripts/matrix/run-matrix.sh` | kvm, qemu, network | serial |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
+| `install.npm-release` | secrets | `.` | `bash scripts/matrix/run.sh ubuntu-2404 npm-release` | kvm, qemu, network | serial |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
 | `install.release-upgrade` | secrets | `.` | `bash scripts/matrix/run.sh ubuntu-2404 release-upgrade` | kvm, qemu, network | serial |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
 
 ## frozen

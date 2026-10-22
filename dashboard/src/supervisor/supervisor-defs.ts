@@ -191,6 +191,17 @@ export interface SupervisorOptions {
    *  socket-owner.ts). The Replace fallback when the daemon never answered
    *  hello, and the ownerPid enrichment on adopted identity-less rows. */
   discoverSocketOwner?: (sockPath: string) => { pid: number; cmdline: string | null } | null;
+  /** Replace, rather than adopt, a STALE arbiter found answering at start
+   *  when no `mandu` session uses its stack (instance mode only:
+   *  runtime-instances.md §4.1b). Default true. */
+  replaceStaleOnAdopt?: boolean;
+  /** TEST SEAM — the `mandu` sessions on the stack at a runtime base, or null
+   *  when that cannot be told, which counts as in use (default:
+   *  stack-sessions.ts liveSessionsOn). */
+  liveSessions?: (base: string) => number[] | null;
+  /** Called once when a service this supervisor started exits on its own
+   *  while it was running (state `crashed`); not for a stop or a restart. */
+  onCrash?: (id: ServiceId, reason: string) => void;
 }
 
 /** ServiceDefinition.ready: the three readiness kinds. */

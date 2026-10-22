@@ -42,3 +42,10 @@ test("childEnv: the agent's env loses MANDU_ARBITER_HUMAN_SOCK and keeps the res
   assert.equal(env.MANDU_SCOPE_ID, "s1");
   assert.equal(parent.MANDU_ARBITER_HUMAN_SOCK, "/run/h/x.sock", "the wrapper's own env is not mutated");
 });
+
+test("childEnv: the filter's own layout hints (wrap rule, TAB origin) never reach the agent", () => {
+  const env = childEnv({ MANDU_REPLY_WRAP_RULE: "terminal", MANDU_REPLY_TAB_ORIGIN: "content", PATH: "/usr/bin" });
+  assert.equal("MANDU_REPLY_WRAP_RULE" in env, false);
+  assert.equal("MANDU_REPLY_TAB_ORIGIN" in env, false);
+  assert.equal(env.PATH, "/usr/bin");
+});

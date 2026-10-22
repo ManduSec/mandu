@@ -9,7 +9,8 @@
  *   - the answer comes only from a well-formed envelope of the same tool:
  *     applied (because it only adds protection), nothing changed, waiting
  *     for your OK (loosening or not), not applied; anything else says
- *     nothing;
+ *     nothing; a change made, or a request waiting, links it in Approvals
+ *     ("Approvals" carries its id), an id of another shape links nothing;
  *   - a test call says it was only a question, with Mandu's allow, ask or
  *     block; a read call has no answer;
  *   - a file under the dashboard's home folder reads `~/…`, as on Approvals
@@ -25,7 +26,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  MANDU_POLICY_TOOL_SPELLINGS, POLICY_ROWS_CAP, manduPolicyTool, policyToolAnswer, policyToolSentence,
+  MANDU_POLICY_TOOL_SPELLINGS, POLICY_ROWS_CAP, manduPolicyTool, policyToolAnswer, policyToolAnswerParts, policyToolSentence,
 } from "../../../src/view-model/mandu-tool-words.js";
 
 const words = (parts: { text: string }[]) => parts.map((p) => p.text).join("");
@@ -139,8 +140,8 @@ const env = (o: Record<string, unknown>) => JSON.stringify({ tool: "mandu_policy
 test("the propose answer: applied, nothing changed, waiting for your OK, not applied (the server's envelope cases)", () => {
   const cases: [string, string][] = [
     [env({ applied: true, message: "Applied: the rule is in force now. The user can undo it from the Mandu dashboard.", changeId: "pc-000001", tightens: [{ facet: "paths", subject: "/p/a" }] }),
-      "Mandu applied it at once, because it only adds protection. You can undo it under Rule changes in Approvals."],
-    [env({ applied: true, changeId: "pc-000002", tightens: [] }), "Mandu applied it at once. You can undo it under Rule changes in Approvals."],
+      "Mandu applied it at once, because it only adds protection. You can undo it in Approvals."],
+    [env({ applied: true, changeId: "pc-000002", tightens: [] }), "Mandu applied it at once. You can undo it in Approvals."],
     [env({ applied: true, message: "Nothing changed: the rules already say this." }), "Nothing changed: your rules already said this."],
     [env({ applied: false, proposalId: "pp-000003", relaxes: [{ facet: "destinations", subject: "pypi.org" }] }),
       "Not applied: it would loosen protection, so Mandu asked for your OK in Approvals."],
@@ -148,6 +149,38 @@ test("the propose answer: applied, nothing changed, waiting for your OK, not app
     [env({ applied: false, message: "Not applied: the edits are not valid.", problems: ["edits[0].level: must be one of …"] }), "Mandu did not apply it, so nothing changed."],
   ];
   for (const [result, want] of cases) assert.equal(policyToolAnswer("propose", result), want, result);
+});
+
+test("§4.25b the answer links the change it made, or the request waiting for you, on its word Approvals", () => {
+  const linked = (result: string) => (policyToolAnswerParts("propose", result) ?? []).filter((p) => p.ask).map((p) => [p.text, p.ask]);
+  assert.deepEqual(policyToolAnswerParts("propose", env({ applied: true, changeId: "pc-000001", tightens: [{ facet: "paths", subject: "/p/a" }] })), [
+    { kind: "text", text: "Mandu applied it at once, because it only adds protection. You can undo it in " },
+    { kind: "text", text: "Approvals", ask: "pc-000001" },
+    { kind: "text", text: "." },
+  ]);
+  assert.deepEqual(linked(env({ applied: true, changeId: "pc-000002", tightens: [] })), [["Approvals", "pc-000002"]]);
+  assert.deepEqual(policyToolAnswerParts("propose", env({ applied: false, proposalId: "pp-000003", relaxes: [{ facet: "destinations", subject: "pypi.org" }] })), [
+    { kind: "text", text: "Not applied: it would loosen protection, so Mandu asked for your OK in " },
+    { kind: "text", text: "Approvals", ask: "pp-000003" },
+    { kind: "text", text: "." },
+  ]);
+  assert.deepEqual(linked(env({ applied: false, proposalId: "pp-000004", relaxes: [] })), [["Approvals", "pp-000004"]]);
+  // No id: today's words, nothing linked.
+  for (const r of [env({ applied: true, message: "Nothing changed" }), env({ applied: false, problems: ["x"] })]) assert.deepEqual(linked(r), [], r);
+  // An id of another shape (a question's, or one carrying a path or a
+  // selector) links nothing and keeps the words of before.
+  for (const [result, want] of [
+    [env({ applied: true, changeId: "egr-1", tightens: [] }), "Mandu applied it at once. You can undo it under Rule changes in Approvals."],
+    [env({ applied: true, changeId: "pc-1/../x", tightens: [] }), "Mandu applied it at once. You can undo it under Rule changes in Approvals."],
+    [env({ applied: false, proposalId: 'pp-1"]', relaxes: [] }), "Not applied: Mandu asked for your OK in Approvals."],
+    [env({ applied: false, proposalId: "pc-000001", relaxes: [] }), "Not applied: Mandu asked for your OK in Approvals."],
+  ] as const) {
+    assert.deepEqual(linked(result), [], result);
+    assert.equal(policyToolAnswer("propose", result), want);
+  }
+  // A test call's answer and a masked result link nothing.
+  assert.deepEqual(policyToolAnswerParts("test", JSON.stringify({ tool: "mandu_policy_test", egress: "ask" }))!.filter((p) => p.ask), []);
+  assert.equal(policyToolAnswerParts("propose", "$MDU:untrusted_mcp__mandu-policy__mandu_policy_propose[1a2b]"), null);
 });
 
 test("the answer says nothing it cannot back: a masked, missing, malformed or other tool's result has no answer", () => {

@@ -5,7 +5,11 @@
  * /api/sessions as an AMBER health verdict carrying the posture, the one
  * honest sentence, and the upgrade command. The event is built by the
  * LAUNCHER's own `launchPostureEvent`, so the wire shape cannot drift from
- * what a real launch emits.
+ * what a real launch emits. The product page (§4.23 *Product page*): the
+ * newest launch's `gated` posture reaches `/api/home` as `secretsPosture`
+ * (the card under Home's headline) and a session's own reaches
+ * `/api/home/agent`, both with the fix, signed in and signed out; a
+ * `confined` launch carries none.
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -15,10 +19,14 @@ import { join } from "node:path";
 import { DashboardServer } from "../../src/server.js";
 import { FileEventSource } from "../../src/event-source.js";
 import { tmpDir } from "../unit/tmp-dir.js";
+import { ADMIN_OPTS, CSRF_ADMIN } from "../unit/admin-session.js";
 
 let dir: string;
 let server: DashboardServer;
 let baseUrl: string;
+/** Home's newest launch: gated (`gatedHome`), then confined (`confinedHome`). */
+let gatedHome: { dir: string; server: DashboardServer; base: string };
+let confinedHome: { dir: string; server: DashboardServer; base: string };
 
 const NOTICE = [
   "mandu: secrets are GATED, not confined, on this host.",
@@ -35,20 +43,55 @@ before(async () => {
   const { launchPostureEvent } = (await import(src)) as {
     launchPostureEvent: (i: Record<string, unknown>) => Record<string, unknown>;
   };
-  const mk = (scopeId: string, notes: string[], secrets: Record<string, string>): string =>
-    JSON.stringify(launchPostureEvent({ scopeId, tenant: "live", target: "claude", argv0: "claude", notes, secrets })) + "\n";
+  // `minutesAgo` moves the launch back in time (the event as written, its ts only).
+  const mk = (scopeId: string, notes: string[], secrets: Record<string, string>, minutesAgo = 0): string => {
+    const e = launchPostureEvent({ scopeId, tenant: "live", target: "claude", argv0: "claude", notes, secrets });
+    if (minutesAgo) e["ts"] = new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    return JSON.stringify(e) + "\n";
+  };
   writeFileSync(join(dir, "sess-gated.ndjson"),
     mk("sess-gated", ["mandu: fs rung ACTIVE: cooperative", NOTICE], { posture: "gated", gap: "apparmor-userns" }));
   writeFileSync(join(dir, "sess-confined.ndjson"),
     mk("sess-confined", ["mandu: fs rung ACTIVE: cooperative"], { posture: "confined" }));
-  server = new DashboardServer({ source: new FileEventSource(dir), log: () => {} });
+  server = new DashboardServer({ ...ADMIN_OPTS, source: new FileEventSource(dir), log: () => {}, extensions: [] });
   baseUrl = `http://127.0.0.1:${await server.listen(0)}`;
+  const serve = async (files: Record<string, string>): Promise<{ dir: string; server: DashboardServer; base: string }> => {
+    const d = tmpDir("mdu-secrets-posture-home-");
+    for (const [id, body] of Object.entries(files)) writeFileSync(join(d, `${id}.ndjson`), body);
+    const srv = new DashboardServer({ ...ADMIN_OPTS, source: new FileEventSource(d), log: () => {}, extensions: [] });
+    return { dir: d, server: srv, base: `http://127.0.0.1:${await srv.listen(0)}` };
+  };
+  gatedHome = await serve({
+    "sess-confined-before": mk("sess-confined-before", ["mandu: fs rung ACTIVE: cooperative"], { posture: "confined" }, 90),
+    "sess-gated-now": mk("sess-gated-now", ["mandu: fs rung ACTIVE: cooperative", NOTICE], { posture: "gated", gap: "apparmor-userns" }, 5),
+  });
+  confinedHome = await serve({
+    "sess-gated-before": mk("sess-gated-before", ["mandu: fs rung ACTIVE: cooperative", NOTICE], { posture: "gated", gap: "apparmor-userns" }, 90),
+    "sess-confined-now": mk("sess-confined-now", ["mandu: fs rung ACTIVE: cooperative"], { posture: "confined" }, 5),
+  });
 });
 
 after(async () => {
   await server.close();
   rmSync(dir, { recursive: true, force: true });
+  for (const h of [gatedHome, confinedHome]) {
+    await h.server.close();
+    rmSync(h.dir, { recursive: true, force: true });
+  }
 });
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function read(base: string, path: string, admin: boolean): Promise<any> {
+  const r = await fetch(`${base}${path}`, admin ? { headers: CSRF_ADMIN } : {});
+  assert.equal(r.status, 200, `${path} (${admin ? "signed in" : "signed out"})`);
+  return r.json();
+}
+
+/** The card and the line carry the launcher's words and a command: no path,
+ *  no credential file, no value. */
+function namesNothing(posture: unknown): void {
+  assert.doesNotMatch(JSON.stringify(posture), /\/|\.aws|credentials\b|sk_|AKIA/);
+}
 
 interface Ref { id: string; health?: { verdict: string; reasons: string[]; secrets?: { posture: string; gap?: string; fix?: string; sentence: string } } }
 
@@ -71,4 +114,41 @@ test("a gated launch reaches /api/sessions as AMBER with the posture, the honest
   assert.equal(confined.health!.verdict, "ok");
   assert.equal(confined.health!.secrets?.posture, "confined");
   assert.equal(confined.health!.secrets?.fix, undefined);
+});
+
+test("Home: a gated newest launch reaches /api/home as the card's posture with `mandu setup`, signed in and signed out; a newer confined launch, none (§4.23 *Product page*)", async () => {
+  for (const admin of [true, false]) {
+    const home = await read(gatedHome.base, "/api/home", admin);
+    const p = home.secretsPosture;
+    assert.ok(p, `the card (${admin ? "signed in" : "signed out"})`);
+    assert.equal(p.session, "sess-gated-now", "the newest launch decides");
+    assert.equal(p.gap, "apparmor-userns");
+    assert.equal(p.headline, "Programs your agent runs can still read your credential files.");
+    assert.match(p.sentence, /programs the AI runs can still read your credential files/);
+    assert.doesNotMatch(p.sentence, /absent from the agent's world|placeholder copy of each credential file/, "never the confined claim");
+    assert.equal(p.fix, "mandu setup");
+    assert.deepEqual(p.fixParts.filter((x: { kind: string }) => x.kind === "code").map((x: { text: string }) => x.text), ["mandu setup"]);
+    assert.equal(p.note, null);
+    namesNothing(p);
+    const after = await read(confinedHome.base, "/api/home", admin);
+    assert.equal(after.secretsPosture, null, "a confined newest launch: no card");
+    assert.equal(home.headline, after.headline, "the headline is the same either way");
+  }
+});
+
+test("a session's page: a gated launch's own posture with the fix reaches /api/home/agent, signed in and signed out; a confined one's, none (§4.23 *Product page*)", async () => {
+  for (const admin of [true, false]) {
+    const gated = await read(baseUrl, "/api/home/agent?session=sess-gated", admin);
+    assert.equal(gated.found, true);
+    assert.equal(gated.secretsPosture?.headline, "Programs this agent ran could read your credential files.");
+    assert.equal(gated.secretsPosture?.fix, "mandu setup");
+    assert.match(gated.secretsPosture?.sentence, /can still read your credential files/);
+    namesNothing(gated.secretsPosture);
+    const confined = await read(baseUrl, "/api/home/agent?session=sess-confined", admin);
+    assert.equal(confined.found, true);
+    assert.equal(confined.secretsPosture, null);
+    // An old gated session keeps saying what it ran with after a confined launch.
+    const old = await read(confinedHome.base, "/api/home/agent?session=sess-gated-before", admin);
+    assert.equal(old.secretsPosture?.gap, "apparmor-userns");
+  }
 });

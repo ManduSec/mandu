@@ -27,7 +27,7 @@ import {
   whereLabel,
 } from "../../../src/view-model/policy-panel.js";
 import type { PolicySnapshot, UsageGateRow, VerdictEntry } from "../../../src/policy-model.js";
-import { NO_OWN_MODEL_WARNING } from "../../../src/view-model/model-endpoints.js";
+import { NO_OWN_MODEL_WARNING, NO_OWN_MODEL_WARNING_PARTS } from "../../../src/view-model/model-endpoints.js";
 import { describeAsk } from "../../../src/view-model/ask-words.js";
 import { describeAsk as homeDescribeAsk } from "../../../src/view-model/home.js";
 
@@ -1264,4 +1264,35 @@ test("§4.25l: a local-model lock row warns while no model of your own is declar
   const own = rowsWith([{ name: "ollama", url: "http://127.0.0.1:11434", wire: "openai-chat", local: true }]);
   assert.equal(own.find((r) => r.id === "lock:/srv/contract.md")!.warning, undefined, "with a model of your own, no warning");
   assert.doesNotMatch(NO_OWN_MODEL_WARNING, /\b(egress|arbiter|symboliz|T-LLM|U-LLM)\b|—/);
+});
+
+test("§4.25p: a rule's warning comes as parts too, Settings › Models a link part; joined, the same words", () => {
+  const joined = (parts: ReadonlyArray<{ text: string }>) => parts.map((x) => x.text).join("");
+  const links = (parts: ReadonlyArray<{ kind: string }>) => parts.filter((x) => x.kind === "link");
+  assert.equal(joined(NO_OWN_MODEL_WARNING_PARTS), NO_OWN_MODEL_WARNING, "the plain words are unchanged");
+  assert.deepEqual(links(NO_OWN_MODEL_WARNING_PARTS), [{ kind: "link", text: "Settings › Models", to: "models" }]);
+  const vm = toPolicyPanelViewModel({
+    ...BARE, ...EXT,
+    document: { ...DOC_EXT.document, paths: [
+      { path: "/srv/contract.md", level: "local-model", bindings: [], recursive: false },
+      { path: "/srv/db.md", level: "local-model", bindings: [], recursive: false, readers: ["psql"] },
+      { path: "/srv/.pgpass", level: "no-model", bindings: [], recursive: false, readers: ["psql"] },
+      { path: "/srv/.env", level: "no-model", bindings: [], recursive: false },
+    ] },
+  } as PolicySnapshot);
+  const row = (id: string) => vm.yourRules!.find((r) => r.id === id)!;
+  for (const r of vm.yourRules!) {
+    if (r.warning) assert.equal(joined(r.warningParts!), r.warning, r.id);
+    else assert.equal(r.warningParts, undefined, r.id);
+  }
+  assert.deepEqual(row("lock:/srv/contract.md").warningParts, [...NO_OWN_MODEL_WARNING_PARTS]);
+  // Two warnings joined: the place still a link, the readers' words text.
+  const db = row("lock:/srv/db.md");
+  assert.ok(db.warning!.startsWith(NO_OWN_MODEL_WARNING + " "), db.warning);
+  assert.equal(links(db.warningParts!).length, 1);
+  // The readers' warning alone names no place: one text part, no link.
+  const pg = row("lock:/srv/.pgpass");
+  assert.ok(pg.warning, "psql runs what it reads: a warning");
+  assert.deepEqual(pg.warningParts, [{ kind: "text", text: pg.warning }]);
+  assert.equal(row("lock:/srv/.env").warning, undefined);
 });

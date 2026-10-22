@@ -872,6 +872,52 @@ The rule, line by line (`noteShow` in `launch-banner.ts`, the state in
   changed in a placeholder copy, a placeholder git recorded, the recap of
   another launch's exposure, what the teardown stopped) print as they are,
   and are copied to the log.
+- **The session's last line** (2026-10-21, `session-kept-line.ts`): what
+  Mandu kept from the AI in this session, so the protection is visible on
+  every session and not only when something goes wrong:
+
+  ```
+  mandu: in this session: 2 secrets masked before the AI saw them (DB_PASSWORD in ~/proj/.env and the file ~/.aws/credentials) · 1 send with a real value filled in (api.stripe.com) · details: `mandu dashboard`
+  ```
+
+  The launcher counts nothing itself. Once the `session_exit` event is on
+  the record and the scope dir is handled, it asks the newest live
+  dashboard of this runtime (then the next; at most two, 4 s in all) over
+  the dashboard's human-plane socket, op `sessionKept` beside the sign-in
+  op, and only a socket inside this runtime's human-plane directory
+  (`trustedDashboardSock`, the sign-in link's rule). The dashboard counts
+  the session by the same facts as its Home row and its page and words the
+  line in the product's vocabulary (dashboard.md §4.25ah), so the three
+  never disagree. The line names secrets by name and file (home as `~`) and
+  sends by host, never a value; the launcher prints it with every control
+  character replaced (`printablePath`), and only when it is one `mandu: `
+  line.
+  - *Where*: stderr, after the agent and its reply filter (the PTY relay
+    included) have exited, so it never lands on a full-screen agent's
+    screen or in the machine output of `claude -p --output-format json` or
+    `codex exec` on stdout. Copied to the launch's log like every line said
+    after the agent. Printed TTY or not, like those lines: a script's log
+    gets it too.
+  - *Nothing to say*: one short line, `mandu: no secret came up in this
+    session, so Mandu had nothing to mask`. A missing line then always
+    means the line was turned off or could not be read, never that nothing
+    happened, and a session that touched no secret still shows the check
+    ran.
+  - *`off` (observe only)*: ``mandu: protection was off this session
+    (observe only), so Mandu masked nothing · `mandu mode secrets` turns it
+    on · …``, or, when the record names secrets anyway (a placeholder of an
+    earlier session used again), `so Mandu did not mask N secrets (…)`.
+    Nothing is said about what Secrets mode would have masked: in `off` the
+    proxies neither classify nor mask, so the record does not hold it, and
+    the line claims only what the record holds.
+  - *A fired leak check*: `mandu: Mandu's leak check flagged this session,
+    so Mandu cannot say what the AI saw · …`, the session page's rule.
+  - *Best-effort*: no dashboard, an older one without the op, a socket
+    outside the directory, no answer in time, a session the dashboard does
+    not know, or a malformed answer: no line. The launch's exit code is the
+    agent's either way; observability is off the security path.
+  - *Opt-out*: `--no-session-summary` or `MANDU_SESSION_SUMMARY=0`
+    (`--session-summary` turns it back on for one run).
 
 Under `--verbose` / `MANDU_VERBOSE=1` every line prints in full as it is
 said, as before 2026-10-18: the mode line (`mandu: mode secrets (14
@@ -919,7 +965,11 @@ agent's own output: the agent keeps the real terminal.
   characters a helper's message may carry shown as `?`); `mandu log <session
   id>` (or a prefix) that launch's; `mandu log --list` the kept launches,
   newest first; `mandu log --path` the file's path (`tail -f "$(mandu log
-  --path)"` follows a running session's helpers).
+  --path)"` follows a running session's helpers); `mandu log --timings`
+  the last launches' step times and their median, read from the
+  `mandu: launch timings {…}` lines each launch writes there
+  (runtime-instances.md §14.11). The same breakdown is the last thing a
+  `--verbose` launch prints; the default display never prints it.
 
 The `^@` before a helper's line in the first report of the problem
 (2026-10-18) was not Mandu's: it came from the capture, a `script(1)` whose
@@ -956,7 +1006,14 @@ kind, `postureLine`, `bannerLine`, `modeFacts`, the must-hear notices),
 `launch-console.test.ts` (what goes where, the console hooked, teed and put
 back, a held block folded, an aborted launch), `launch-log.test.ts` (the
 place, the modes, no link followed, retention, `mandu log`),
-`dashboard-sign-in.test.ts` (`bannerDashboard`), `arbiter.test.ts` (the
+`dashboard-sign-in.test.ts` (`bannerDashboard`), `session-kept-line.test.ts`
+(the session's last line: only a one-line `mandu: ` answer, printable; the
+dashboards asked newest first, at most two, only inside the human-plane
+directory, within the deadline), `tests/stack/session-end-kept-line.test.ts`
+(the real launcher over a stand-in agent and model with a real arbiter and
+dashboard: the last line on stderr with Home's count, nothing of it on
+stdout, the model never given the value; the opt-outs; no dashboard, no
+line), `arbiter.test.ts` (the
 fallback reads only this start's part of the log), `subcommands.test.ts`,
 `launcher/test/component/run.test.ts` (the default prints the banner first
 and only short posture lines after it; the launch's log holds every line
@@ -1453,7 +1510,8 @@ host's own script(1)).
 
 ## 11. Release engineering: one version, one tag, one artifact
 
-Status: **BUILT 2026-09-25**; npm from `0.2.0-beta.6` (2026-10-19, §11.4). A product needs three things a placeholder version
+Status: **BUILT 2026-09-25**; npm from `0.2.0-beta.6` (2026-10-19, §11.4); built and
+published by the public repository's release workflow from 2026-10-21 (§11.3). A product needs three things a placeholder version
 cannot give: a number a user can report, a commit that number points at, and
 an artifact that is provably that commit. The fresh-install proof is
 [`os-test-matrix.md §10`](../testing/os-test-matrix.md).
@@ -1484,45 +1542,90 @@ an artifact that is provably that commit. The fresh-install proof is
 
 ### 11.3 The release steps
 
-A `v*` tag builds, tests on fresh guests, packs and publishes. No automatic
-step holds a credential; only the manual publish sees a token.
+A release is built **from the public tree**, on GitHub, by
+`.github/workflows/release.yml`, so the artifact users install is provably
+the public snapshot and nothing the public tree leaves out. The development
+repository's pipeline gates the source first; the publish waits for a
+maintainer's approval. No publish credential is stored anywhere.
 
-1. **Test**: `scripts/ci/vm-run.sh --kind unit,component,stack,replay-drill,sandbox`,
-   the per-push kinds ([`test-organization.md`](../testing/test-organization.md)
-   §3) in a disposable KVM guest with no network and no credential.
-2. **Fresh install**: `scripts/matrix/run-matrix.sh --require ubuntu-2404
-   --require ubuntu-2604` (the `install` kind): the fresh-install suite on a
-   real 24.04 and a real 26.04 guest (`npm install -g <tarball>` as a fresh
-   user, no sudo, `confined`, a launch that exits 0). `--require` makes a
-   SKIP a FAIL.
-3. **Pack**: `scripts/ci/release-pack.sh`, inside the same kind of guest
-   (`vm-run.sh --exec`): tag == version; version-parity + license-manifest +
-   node-floor; `scripts/build-native.sh` for linux-x64 and `--target
-   aarch64-unknown-linux-gnu` for linux-arm64 (the bundle's native bins,
-   which a plain `cargo build` skips; both ride in the one tarball via
-   `MANDU_NATIVE_BIN_DIRS`, §5); each arm64 bin started once under
-   qemu-user; the tarball must hold all three bins for both tags; the
-   npm-pack self-contained-artifact oracle; `npm pack` →
-   `release/mandusec-mandu-<v>.tgz` + `SHA256SUMS` + `COMMIT`.
-4. **Publish** (manual): checks `SHA256SUMS`, then `npm publish
-   --ignore-scripts` of that artifact, executing no code from the commit.
-   npm refuses a tarball packed in the source repository, whose
-   `launcher/package.json` is `private: true` (and whose bundle can carry a
-   module the public tree leaves out); one packed in the public tree has no
-   `private`. Until this step packs the public tree, the npm tarball is
-   packed by hand from it (§11.4).
+1. **Gate the source.** The development repository's own `v<version>` tag
+   runs what GitHub cannot: the per-push kinds
+   ([`test-organization.md`](../testing/test-organization.md) §3,
+   `scripts/ci/vm-run.sh` in a disposable KVM guest with no network and no
+   credential), the kernel lane on Linux 7.0, the dependency audit, and the
+   fresh-install matrix (`scripts/matrix/run-matrix.sh --require ubuntu-2404
+   --require ubuntu-2604`: `npm install -g <tarball>` as a fresh user on a
+   real 24.04 and 26.04 guest, no sudo, `confined`; `--require` makes a SKIP
+   a FAIL). The release continues only when that pipeline passed on the
+   tagged commit.
+2. **Snapshot and tag.** The public snapshot of that commit is pushed to
+   `main` (§11.4a), and the public repository gets the annotated tag
+   `v<version>` on it; the tag's message is the release notes. The tag starts
+   the release workflow.
+3. **Check**: the public CI (`ci.yml`, called by the release workflow;
+   [`continuous-integration.md §12`](../testing/continuous-integration.md))
+   on the snapshot.
+4. **Pack**: first the workflow refuses a lightweight tag, a commit that is
+   not a snapshot of `main`, and a private repository (where the check's
+   jobs would skip and pass). Then `scripts/ci/release-pack.sh` in the
+   checkout: the tree must be the public one (a `private: true` launcher is
+   refused, and the build must name its public commit); tag == version;
+   version-parity + license-manifest + node-floor; `scripts/build-native.sh`
+   for linux-x64 and `--target aarch64-unknown-linux-gnu` for linux-arm64
+   (the bundle's native bins, which a plain `cargo build` skips; both ride in
+   the one tarball via `MANDU_NATIVE_BIN_DIRS`, §5) with
+   `--remap-path-prefix`, so no bin names a build path; each arm64 bin
+   started once under qemu-user; the npm-pack self-contained-artifact oracle;
+   `npm pack`; then the tarball itself: all three bins for both tags,
+   `NOTICE` and `LICENSE`, `dist/build-info.json` naming the public commit
+   (§11.7), no `private`, no module the public tree leaves out, no source
+   map. `scripts/ci/release-assets.mjs` then writes the release copy of
+   `install.sh` (§11.4) and the notes (the tag's message and a line naming
+   the tarball and its SHA-256). They are kept as the run's `release`
+   artifact.
+5. **Approve**: the publish job runs in the `release` environment, which
+   requires a maintainer's approval. Before approving, the maintainer
+   downloads the artifact and checks it (the export's deny-list and
+   gitleaks over the unpacked package, an install whose `mandu doctor` reports
+   `posture: confined`, and the `npm-release` VM suite on the candidate
+   tarball, [`os-test-matrix.md §10.18`](../testing/os-test-matrix.md)).
+6. **Publish**: the job checks out no code. It checks the artifact against
+   `SHA256SUMS`, creates the GitHub release `v<version>` with the tarball,
+   `SHA256SUMS` and the release `install.sh`, and runs `npm publish
+   <tarball> --access public --tag latest --provenance --ignore-scripts`
+   with the same file (a pinned npm 11). npm accepts it by **trusted
+   publishing**: the job's short-lived OIDC identity, which the package's
+   settings on npmjs.com admit only from `release.yml` in this repository
+   and in the `release` environment, to publish but not to move a dist-tag;
+   there is no npm token to leak. The provenance statement on the npm page
+   names the repository, the workflow and the commit. A rerun skips a
+   version npm already holds with the same SHA-1 and fails on different
+   bytes.
+
+   **One gate, chosen (2026-10-21).** npm's stricter setting lets a trusted
+   publisher only *stage* a version (`npm stage publish`), which goes live
+   when a maintainer approves it with 2FA on npm, so a reviewer's GitHub
+   account alone could not publish. The maintainers chose the single GitHub
+   approval per release instead; moving to staging is a new trusted
+   publisher without "Allow npm publish" and `npm stage publish` (npm 11.15
+   or newer) in this step.
+
+The GitHub Action (`packaging/github-action/`,
+[`github-action.md`](github-action.md)) installs this version by default:
+`scripts/set-version.sh` moves its `mandu-version` default with the rest.
+Once the action has its own Marketplace repository, copying the folder there
+and moving its tags is a step after the publish (github-action.md §8).
 
 Each step runs by hand on any host with `/dev/kvm`: `scripts/ci/vm-run.sh`
 for the test step, `scripts/matrix/run-matrix.sh --require ubuntu-2404
---require ubuntu-2604` for the fresh install, and `scripts/ci/vm-run.sh
---exec "bash scripts/ci/release-pack.sh v<version>"` for the pack (the
-tarball comes back under the run's `artifacts/release/`). The frozen
+--require ubuntu-2604` for the fresh install, and, in a checkout of a public
+snapshot (or an exported tree with `MANDU_BUILD_PUBLIC_COMMIT` set),
+`bash scripts/ci/release-pack.sh v<version>` for the pack. The frozen
 integrity lane is not a release step: it runs only when the integrity axis is
 revived ([`protection-modes.md §10`](../architecture/protection-modes.md) §5).
-The public repository's GitHub CI ([`continuous-integration.md §12`](../testing/continuous-integration.md))
-runs the offline subset and must be green on the tagged commit (while the
-repository is private no push starts it: both workflows are started by hand on
-the snapshot before the release is published).
+Nor is macOS (2026-10-21): no step runs the darwin entries, which the
+maintainers test on a Mac separately
+([`continuous-integration.md §12`](../testing/continuous-integration.md)).
 
 ### 11.4 Channels and the publish gate
 
@@ -1530,13 +1633,13 @@ the snapshot before the release is published).
   `scripts/bootstrap.sh`. A version has one artifact: the public-tree
   tarball that went to npm. Any other channel for that version (a GitHub
   release, `install.sh --package`) carries that same file and its
-  `SHA256SUMS`, never a tarball `release-pack` packed in the source
-  repository.
+  `SHA256SUMS`: the release workflow publishes one file to both (§11.3),
+  and `release-pack.sh` refuses to pack anything but the public tree.
 - **Beta (from 2026-10-04):** prerelease builds `0.2.0-beta.N`, each a
   `release-pack` tarball released with its `SHA256SUMS` on the one GitHub
   repository, `ManduSec/mandu` (private until launch; decided 2026-10-04 not
   to keep a second, files-only repository). Each release carries a **release
-  copy** of `install.sh`: the publisher rewrites its `PACKAGE_DEFAULT` /
+  copy** of `install.sh`: `scripts/ci/release-assets.mjs` rewrites its `PACKAGE_DEFAULT` /
   `PACKAGE_DEFAULT_SHA256` lines to the release's versioned tarball URL and
   SHA-256. While the repository is private, an invited tester downloads the
   release's files (signed in, or `gh release download -R ManduSec/mandu -p
@@ -1553,20 +1656,18 @@ the snapshot before the release is published).
   `latest`. The M5 unlock (§8) is a strip rule of the public export: the
   source repository's `launcher/package.json` keeps `private: true`, and
   the public tree's has none, so npm accepts only a tarball packed from the
-  public tree. That tarball is packed by hand: the public tree of the
-  release commit, its own `scripts/build-native.sh` for linux-x64 and
-  linux-arm64 (Rust 1.75.0, with `RUSTFLAGS="--remap-path-prefix=<cargo
-  home>=/cargo --remap-path-prefix=<tree>=/mandu"` so no build path ships;
-  the script itself passes none),
-  `MANDU_NATIVE_BIN_DIRS`, the release-pack gates and `npm pack`; checked
-  (all six bins, no module the public tree lacks, `NOTICE`, no `private`,
-  the export's denylist and gitleaks over the unpacked package, an install
-  whose `mandu doctor` reports `posture: confined`); then `npm publish
-  <tgz> --access public --tag latest --ignore-scripts` from the
-  maintainer's own terminal (npm 11+ refuses a prerelease without `--tag`,
+  public tree. `0.2.0-beta.6` and `beta.7` were packed and published by
+  hand from the public tree; from 2026-10-21 the release workflow does both
+  (§11.3), with provenance (npm 11+ refuses a prerelease without `--tag`,
   and `latest` is what a plain `npm install -g @mandusec/mandu` resolves).
-  After publishing, `dist.shasum` on the registry must equal the checked
-  file's SHA-1. `repository` is set when the GitHub repository is public:
+  After publishing, `dist.shasum` on the registry must equal the
+  artifact's SHA-1. **The release gate** (from 2026-10-21) is the `npm-release`
+  VM suite on both Ubuntu targets, run on the candidate tarball before the
+  publish and on the registry after it (os-test-matrix.md §10.18). Each run
+  is a new user's first day: install, the basic checks, Claude Code and
+  Codex bare and through `mandu` in a fresh repository and in a dirty,
+  complex one (timed, with the repository left untouched), an upgrade from
+  the previous version, and an uninstall. `repository` is set when the GitHub repository is public:
   the npm page keeps a version's metadata, and a link to a private
   repository is a 404.
 - **What the npm page shows:** the package ships `launcher/README.md`, a
@@ -1580,8 +1681,15 @@ the snapshot before the release is published).
 ### 11.4a The public repository
 
 The public repository is a snapshot of the development repository: one
-commit per release, holding only the paths an allow-list names and checked
-for leaks before the commit is made.
+squashed commit per export (a `Mandu-Snapshot: <source commit>` trailer
+names what it is), holding only the paths an allow-list names and checked
+for leaks before the commit is made. A maintainer runs the export and
+reviews the commit before it is pushed; a push to `main` starts no GitHub
+job. Snapshots go out whenever the public docs or code should move, not only
+at a release; a release is a snapshot with a `v<version>` tag (§11.3). An
+outside pull request lands in the development repository first and is then
+merged on GitHub, so the next snapshot carries it rather than reverting it
+([`CONTRIBUTING.md`](../../../CONTRIBUTING.md)).
 
 ### 11.5 The update notice (2026-10-07)
 
@@ -1664,6 +1772,16 @@ future counts as stale, so that lasts at most a day, and `mandu doctor`,
 which always asks afresh, is not affected. The answer is advisory either
 way: it changes no protection, and a forged "newer release" can only print
 the fixed install line for a version tag on the real repository.
+
+**The dashboard reads the same cache** (2026-10-22, dashboard.md §4.25 *A
+newer release*): Settings › About Mandu says whether a newer release is out,
+and Home shows a notice for one with security fixes. It reads the file with
+the same rules (a mirror of this reader, kept equal by
+`tests/stack/update-notice-parity`) and never asks the network itself.
+**Residual:** a forged cache can make the page name a wrong "newer
+release", but only a semver version from the file and only the official
+package's install line for it (npm pinned to that version, or that
+release's `install.sh`); like the launch line, it changes no protection.
 
 The release list still comes from GitHub for every channel. Publish the npm
 package before the matching GitHub release so the advertised exact version is

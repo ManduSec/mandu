@@ -10,8 +10,10 @@
 > structured (`json` / `stream-json`) pipe output is §15, and Goose's ACP
 > stream to an editor §15.4. A TUI that leaves the wrap to the terminal
 > (Goose) gets its rows laid out by the terminal's character wrap instead of
-> Ink's word wrap (§17). A TAB in a reserved row reaches the terminal's own
-> tab stop, counted from the screen's column 0 (§19). The live gates
+> Ink's word wrap (§17). A TAB in a value reaches the stop the agent's TUI
+> puts it at: counted from the screen's column 0 (Codex, §19), or from the
+> text's own left edge (Claude Code, which expands its TABs itself, §19.7).
+> The live gates
 > (`echo-fidelity-rows`, `-wrap`, `-inline`, `-codespan`, `-resize`,
 > `-suffix`, `-long`) match vanilla Claude Code on both renderers at 80×24
 > and 160×40 (§7). §8 lists what is left; §9 records the decisions. §16
@@ -748,11 +750,12 @@ This matches Ink's `wrap-ansi` call (`hard: true, trim: false`):
    `\r\n`, `\r` or `\n`.
 2. Each line is cleaned as `frameSafeValue` cleans it:
    - CSI sequences and C0 bytes other than TAB are removed;
-   - a TAB becomes the spaces to the terminal's next tab stop: the next
-     multiple of 8 of the screen column, the line starting at the content
-     area's column (`indent`), or on line 1's head row `W − F` columns
-     further in (§19). Before 2026-10-18 the stops counted from the line's
-     own column 0.
+   - a TAB becomes the spaces to the TUI's next tab stop: the next
+     multiple of 8 of the column counted from the TUI's TAB origin, the
+     line starting at the content area's column (`indent`), or on line 1's
+     head row `W − F` columns further in (§19). `indent` is `cols − W` for a
+     TUI whose stops are the screen's (Codex) and 0 for one that counts
+     from its text (Claude Code, §19.7).
 3. Each line is wrapped by the `wrap-ansi` algorithm above. Row widths are
    display columns: wide glyphs (the filter's `WIDE_RE`) are 2, and
    combining and zero-width marks are 0.
@@ -890,7 +893,9 @@ with its `cols`. Then:
   `rule`.
 - **Since §19:** `symbolShape` also takes `indent`, the screen column the
   content area starts at (`cols − W`), an integer 0..10000 that requires
-  `width`; it moves only the TAB stops.
+  `width`; it moves only the TAB stops. Since §19.7 `setSessionRelay` /
+  `sessionRelay` carry the TUI's TAB origin (`tabs`), and under `content`
+  the proxy sends `indent` 0.
 - **`setSessionRelay`, `sessionRelay` and `symbolShape` are human-plane ops**
   (`HUMAN_PLANE_OPS`, arbiter-human-plane.md); the data socket's refusal
   names the reason for each. v1 left the relay ops on the data socket because
@@ -1903,8 +1908,9 @@ right edge), and `cleanLine(line, col0)` expands each TAB to the next
 multiple of 8 of `col0` plus the columns before it. The wrap then runs on
 the expanded line as before. An absent `indent` is 0.
 
-- **Claude Code and Codex:** `indent = cols − W`, which is 2, or 2 plus the
-  list indent in a list item (§11.4).
+- **Codex:** `indent = cols − W`, which is 2, or 2 plus the list indent in
+  a list item (§11.4). This rule was Claude Code's too until §19.7 found
+  that Claude Code counts from its text: there `indent` is 0.
 - **The `terminal` rule (Goose):** `W = cols`, so `indent = 0`; a mid-line
   head's line 1 starts at `W − F`, the prefix's own column (§17.4).
 
@@ -1915,14 +1921,15 @@ rows, so both sides lay out with the same `indent`. Neither the head nor
 the grammar changes.
 
 - **The proxy** fixes `cols` with the stream's mode, decides `W` and `F`
-  (`decideReserve`), and passes `indent = cols − W` to `symbolShape`
+  (`decideReserve`), and passes `indent = cols − W` (0 when the relay
+  reports `tabs: "content"`, §19.7) to `symbolShape`
   (`sse-reserve-expand.ts` in both proxies; `ReserveEligibility.shape`
   sends it when it is not 0 and keys its shape cache on it).
 - **The arbiter** validates `indent` with the other layout fields
   (`parseShapeLayout`) and counts `rows` and `last` with it.
 - **The filter** derives it from the head: the terminal's columns when it
   first saw the block (`HeadShape.cols`, §13) minus `W` (`blockIndent` in
-  `reserve-block.ts`). A resize keeps it: the rows start where they did
+  `reserve-block.ts`), or 0 under a `content` origin (§19.7). A resize keeps it: the rows start where they did
   (`paintLayout`). With the width unknown, or for a v1 head, it is 0; a v1
   row goes through the writers' frame-safe pass, which already counts from
   the row's known column (differential-interactive.md §19).
@@ -1974,3 +1981,84 @@ and it changes a count only for a value that holds a TAB.
   rendering of vanilla's bytes (each line two columns in, its raw TABs), and
   no cell reaches the agent or the model. The §3.8 alternate-screen case now
   paints from column 2 too.
+
+### 19.7 Claude Code counts from its text (2026-10-21)
+
+**What was seen.** The differential drill `fidelity-echo-tabs` (a
+`no-model` file of tab-separated lines echoed back, no word-gap mask:
+differential-interactive.md §19) failed against the real Claude Code TUI,
+2.1.295 (the CI pin) and 2.1.305, on both renderers at 80×24 and 160×40.
+Vanilla's raw output holds no TAB byte at all: Claude Code's renderer
+expands each TAB in the text it draws to the next multiple of 8 counted
+from the text's own column 0 (the reply at screen column 2), resetting at
+each line break, before it wraps the line. So `DIFFTAB_HOST\tport` puts
+`port` at 2 + 16 = 18 and `db1\t5432` puts `5432` at 2 + 8 = 10, where the
+reserved rows of §19.2 put them at 16 and 8. The same origin holds for a
+value inside a sentence (`The value is DIFFTAB_HOST\tport …`: `port` at
+2 + 32, the prefix counted) and in a list item (the item's text at column
+4, the stops from there). The 2026-10-07 capture on 2.1.292 (§19.1) showed
+the terminal's stops; no local copy of 2.1.292 is left to say whether that
+release passed the TAB through or the capture misread it. Codex 0.162,
+measured the same way, keeps its stops on the screen's grid, so §19.2's
+rule stays right for it.
+
+**The rule.** The TAB origin is a property of the agent's TUI:
+
+- `screen` (the default): the stops are the terminal's, counted from the
+  screen's column 0. Codex; Goose prints at column 0, where the two agree.
+- `content`: the TUI expands each TAB from the left edge of the text it is
+  in. Claude Code. A reserved block's layout then takes `indent` 0: line 1
+  on a head row counts from `W − F`, every other line from the content
+  area's column 0 (a list item's text included, as its `W` already
+  excludes the list indent). A value the filter splices into a row with no
+  block around it (the one-row splice of filter.ts, the reconciler's
+  repaint on the alternate screen) counts from `CONTENT_TAB_COL`, column 2,
+  Claude Code's reply indent.
+
+**Who knows it.** One source, as the wrap rule's (§17.3):
+
+- **The launcher** sets `MANDU_REPLY_TAB_ORIGIN=content` in the reply
+  filter's own environment for the `claude` target (`replyTabOriginEnv`),
+  in the serial form and in the hand-off. The filter removes it from its
+  child's environment (`childEnv`), and the SDK route does not force it.
+- **The filter** reads it (`tabOrigin`), reports `tabs: "content"` with
+  `reserve` in `setSessionRelay`, and stamps it on every head it records
+  (`ReserveValueCache`), so `blockIndent` returns 0; the writers read
+  `spliceTabOrigin` for a spliced value (`frameSafeValue`'s `origin`).
+- **The arbiter** stores `tabs` with the relay state and returns it from
+  `sessionRelay`; it refuses any value other than `screen` or `content`.
+  `symbolShape` is unchanged: it counts with the `indent` it is sent.
+- **Both proxies** read `tabs` with the relay and send `indent` 0 under
+  `content` (`cols − W` otherwise). Codex never reports it; the
+  openai-proxy honors it so a filter and its proxy never count apart.
+
+**Security.** No original moves anywhere new. `tabs` is one more field on a
+human-plane op the filter sends; the agent can neither set it (the
+launcher sets the filter's environment, the filter strips it from the
+child's) nor read it. It changes a count only for a value that holds a
+TAB, as `indent` did.
+
+**Residuals.** A value spliced into a row inside a list item, a table cell
+or a code block counts from column 2, not from that text's own left edge,
+which the filter does not know there (a reserved block knows it from `W`).
+A future Claude Code that hands its TABs back to the terminal would show as
+a red `fidelity-echo-tabs` again.
+
+**Tests.** Unit: `reserve-block.test.ts` (`tabOrigin`, the relay report,
+the capture's rows under `content` and under `screen`, a list item, a
+mid-line head, the cache's stamp), `filter.test.ts` (`frameSafeValue`'s
+origin; the eager splice under `content`), `screen-reconcile.test.ts` (an
+alternate-screen repaint under `content`), `human-plane-env.test.ts`
+(`childEnv`), `session-relay.test.ts` (`tabs` stored, refused, human plane
+only), both proxies' `sse-reserve-expand.test.ts` (indent 0 under
+`content`, at a list item and mid-line; the eligibility forwards `tabs`),
+the launcher's `reply-filter.test.ts` (`claude` only). Integration:
+`proxy-real-client-parity.test.ts` carries `tabs` over the production
+wiring. Stack e2e: `reply-row-reservation.test.ts` runs the TSV under
+`content` against Claude Code's own rendering (and keeps the `screen` case
+against the terminal's). The differential drill `fidelity-echo-tabs` gates
+the real Claude Code TUI per push (inline and fullscreen lanes, both
+sizes, and the real-config lane) and the real Codex TUI nightly. A live run
+on the subscription sign-in then matched vanilla on both renderers, and the
+launcher without the fix showed the divergence (differential-interactive.md
+§19.2).

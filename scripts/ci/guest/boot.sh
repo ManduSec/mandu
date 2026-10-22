@@ -20,7 +20,9 @@
 #      without a drill tree maps nothing; a slot per demo drill), each such
 #      TEST-NET address's :80 and :443 redirected to 127.0.0.<slot>
 #      (redirect_sink, nftables);
-#   4. run scripts/ci/pipeline.sh as `ci` (MANDU_CI_MODE run, selftest or
+#   4. delegate a cgroup to `ci` (delegate_cgroup: the shape a desktop
+#      session gives a user), then run scripts/ci/pipeline.sh as `ci` in
+#      it (MANDU_CI_MODE run, selftest or
 #      exec), then write /work/out as a tar straight onto the output disk
 #      (`tar -c -f /dev/disk/by-id/virtio-mandu-out`) and power off.
 #
@@ -246,10 +248,83 @@ else
   say "hosts: no drill tree with a catalog/guest-hosts in this checkout: no host mapped"
 fi
 
+# ── a cgroup delegated to ci (continuous-integration.md §3) ────────────────
+# The shape a desktop terminal or tmux gives a user (user@UID.service's
+# delegated subtree): the suites run in a cgroup `ci` owns, beside a sibling
+# it owns, under a parent it owns, so the guard's cgroup rule
+# (rootless-confinement-ubuntu-2404.md §12.2, "The cgroup") is exercised
+# rather than skipped. mandu-ci.service has Delegate=memory pids, so systemd leaves
+# its subtree alone:
+#   <unit>/boot      boot.sh itself (a cgroup with children holds no process
+#                    once controllers are on: the no-internal-process rule)
+#   <unit>/ci        delegated as the kernel documents it (cgroup-v2.rst
+#                    "Delegation"): the directory, cgroup.procs,
+#                    cgroup.threads and cgroup.subtree_control are ci's
+#   <unit>/ci/run    made by ci: the suites (in_ci_cgroup moves each command)
+#   <unit>/ci/spare  made by ci, empty: the sibling
+# memory and pids are switched on down to run/ where the kernel offers them
+# (no limit is set), never cpu (and the unit delegates only memory and pids,
+# so systemd keeps cpu off above it): a cgroup with cpu on is a task group of
+# its own, and the kernel applies autogroups (one fair share per session)
+# only in the root task group. With cpu on, every suite's processes shared
+# one per-task pool, a single-threaded TUI drill's agent got a slice beside
+# the cargo builds, and the first OpenClaw replay drill went from 43 s to
+# 120-220 s, past its 90 s composer wait (continuous-integration.md §3).
+# A step that fails leaves the run as before (the root-owned unit cgroup)
+# and says so; rust.kernel's strict skips then fail.
+CI_CGROUP=""
+# delegate_cgroup <unit cgroup dir> <user>: the layout above; CI_CGROUP the
+# run/ directory. Returns 1 (CI_CGROUP empty) when a step failed.
+delegate_cgroup() {
+  local unit="$1" user="$2" d c on=""
+  d="$unit/ci"
+  mkdir -p "$unit/boot" && echo $$ > "$unit/boot/cgroup.procs" || return 1
+  for c in memory pids; do
+    grep -qw "$c" "$unit/cgroup.controllers" 2>/dev/null && echo "+$c" > "$unit/cgroup.subtree_control" 2>/dev/null && on+=" +$c"
+  done
+  mkdir -p "$d" && chown "$user:$user" "$d" "$d/cgroup.procs" "$d/cgroup.threads" "$d/cgroup.subtree_control" || return 1
+  runuser -u "$user" -- mkdir -p "$d/run" "$d/spare" || return 1
+  [[ -z "$on" ]] || runuser -u "$user" -- sh -c 'echo "$1" > "$2"' _ "${on# }" "$d/cgroup.subtree_control" \
+    || say "cgroup: switching on${on} under $d failed; the suites run there without them"
+  CI_CGROUP="$d/run"
+}
+# in_ci_cgroup <command…>: run it in CI_CGROUP (a root write: the move's
+# common ancestor is the unit's cgroup), or where boot.sh is when there is none.
+in_ci_cgroup() {
+  if [[ -n "$CI_CGROUP" ]]; then
+    bash -c 'echo 0 > "$1/cgroup.procs" && shift && exec "$@"' _ "$CI_CGROUP" "$@"
+  else
+    "$@"
+  fi
+}
+# cpu_group_of <cgroup dir>: the cgroup whose cpu task group holds that
+# one's processes (the nearest at or above it with cpu on: a cpu.weight
+# file), or nothing in the root task group, where autogroups apply.
+cpu_group_of() {
+  local d="$1"
+  while [[ "$d" == /sys/fs/cgroup/?* ]]; do
+    [[ -e "$d/cpu.weight" ]] && { echo "$d"; return; }
+    d="${d%/*}"
+  done
+}
+unit_cg="/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)"
+if [[ "$unit_cg" == /sys/fs/cgroup/?* ]] && delegate_cgroup "$unit_cg" "$CI_USER"; then
+  say "cgroup: the suites run in $CI_CGROUP, delegated to $CI_USER ($(cat "$unit_cg/ci/cgroup.subtree_control" 2>/dev/null))"
+else
+  CI_CGROUP=""
+  say "cgroup: could not delegate a cgroup to $CI_USER under '$unit_cg'; the suites run in the unit's root-owned cgroup"
+fi
+cg_cpu="$(cpu_group_of "${CI_CGROUP:-$unit_cg}")"
+if [[ -z "$cg_cpu" ]]; then
+  say "cpu: the suites are in the root cpu task group: each session gets its fair share (autogroup $(cat /proc/sys/kernel/sched_autogroup_enabled 2>/dev/null))"
+else
+  say "cpu: WARNING: the suites share the cpu task group of $cg_cpu, where no autogroup applies: a single-threaded suite gets a per-task slice beside the builds (continuous-integration.md §3)"
+fi
+
 # ── shell mode ─────────────────────────────────────────────────────────────
 if [[ "$MODE" == shell ]]; then
   say "shell mode: a login shell as $CI_USER in $TREE on the serial console; exit it to power off"
-  setsid --ctty --wait runuser -l "$CI_USER" -c "cd $TREE && MANDU_CI_GUEST=1 MANDU_CI_OFFLINE=1 MANDU_CI_BWRAP=$BWRAP_CI exec bash -l" \
+  in_ci_cgroup setsid --ctty --wait runuser -l "$CI_USER" -c "cd $TREE && MANDU_CI_GUEST=1 MANDU_CI_OFFLINE=1 MANDU_CI_BWRAP=$BWRAP_CI exec bash -l" \
     </dev/ttyS0 >/dev/ttyS0 2>&1
   off
 fi
@@ -367,7 +442,7 @@ for k in $DEMO_KEYS; do
 done
 [[ ${#demo_env[@]} -gt 0 ]] && say "demo battery: ${demo_env[*]}"
 [[ -n "$SINK_NAT" ]] && demo_env+=("MANDU_DRILL_SINK_NAT=$SINK_NAT")
-runuser -u "$CI_USER" -- env -i \
+in_ci_cgroup runuser -u "$CI_USER" -- env -i \
   HOME=/home/$CI_USER USER=$CI_USER LOGNAME=$CI_USER SHELL=/bin/bash \
   PATH=/home/$CI_USER/.cargo/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TERM=dumb \
   MANDU_CI_GUEST=1 MANDU_CI_OFFLINE=1 CARGO_NET_OFFLINE=true MANDU_CI_BWRAP=$BWRAP_CI \

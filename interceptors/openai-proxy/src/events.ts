@@ -122,6 +122,20 @@ export interface EventModelMeta {
   id: string;
   inputTokens?: number;
   outputTokens?: number;
+  /** The provider's id for this response (the Responses API's `resp_…`, as
+   *  Codex's rollout keeps it in `token_usage_record.response_id`; Chat
+   *  Completions' `chatcmpl-…` as the agent was sent it, response-id.ts):
+   *  `mandu scan` joins on it to tell a past session under Mandu exactly
+   *  (confidentiality-plan-17 §3 item 6). Only on a tllm_call whose
+   *  response carried one. */
+  responseId?: string;
+}
+
+/** A provider's response id as an event keeps it: a short run of id
+ *  characters (`resp_…`, `chatcmpl-…`), else nothing. Nothing else from the
+ *  response is taken. Pure. Copied from the Anthropic proxy's. */
+export function responseIdOf(v: unknown): string | undefined {
+  return typeof v === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(v) ? v : undefined;
 }
 
 /**
@@ -330,6 +344,8 @@ export interface TllmCallArgs {
   /** Structural shape of the forwarded request (tools/max tokens/user turns) —
    *  the dashboard's side-call detection seam (dashboard.md §4.2c). */
   callShape?: TllmCallShape;
+  /** The response's id (`resp_…`, `chatcmpl-…`), when it carried a well-formed one. */
+  responseId?: string;
 }
 
 export function makeTllmCall(a: TllmCallArgs): ManduEvent {
@@ -339,7 +355,7 @@ export function makeTllmCall(a: TllmCallArgs): ManduEvent {
   return baseEvent(a.ctx, "tllm_call", {
     input: makeDualRepr(a.inputSymbolized, a.inputOriginal, a.inputSymbols),
     output: makeDualRepr(a.outputText, null, []),
-    model: { id: a.model },
+    model: { id: a.model, ...(responseIdOf(a.responseId) ? { responseId: a.responseId! } : {}) },
     invariant: inv,
     ...(a.callShape ? { callShape: a.callShape } : {}),
   });

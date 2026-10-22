@@ -127,6 +127,14 @@ test("the environment drops every inherited GIT_* and sets the hardened values; 
   assert.equal(env["xcrun_nocache"], "1", "macOS: the xcrun shim ignores its per-user cache");
   assert.equal(env["GIT_DIR"], "/mine/.git", "the caller's own GIT_DIR");
   assert.equal(env["LC_ALL"], "C");
+  // History as the objects record it (security fix 2026-10-21): no
+  // replace refs, an empty graft file, whatever the parent set.
+  const hostile = hardenedGitEnv({ GIT_NO_REPLACE_OBJECTS: "", GIT_GRAFT_FILE: "/repo/.git/info/grafts", GIT_REPLACE_REF_BASE: "refs/evil/" });
+  assert.equal(hostile["GIT_NO_REPLACE_OBJECTS"], "1");
+  assert.equal(hostile["GIT_GRAFT_FILE"], "/dev/null");
+  assert.equal("GIT_REPLACE_REF_BASE" in hostile, false);
+  assert.ok(HARDENED_GIT_GLOBAL_ARGS.join(" ").includes("-c core.useReplaceRefs=false"));
+  assert.ok(HARDENED_GIT_GLOBAL_ARGS.join(" ").includes("-c advice.graftFileDeprecated=false"));
 });
 
 test("gitCommand: git itself without a sandbox; bubblewrap with its flags, each writable dir bound once, then git", () => {

@@ -44,6 +44,18 @@ test("pins.env: every line is KEY=value in the charset ci_read_pins accepts, and
   assert.ok(maj > 0 || min >= 10, "ns-run.sh's overlay needs bubblewrap >= 0.10");
 });
 
+test("pins.env: the reftable tests' git (>= 2.45, by sha256), built by provision.sh off the PATH where launcher/test/lib/reftable-git.ts looks", () => {
+  assert.match(pins.GIT_REFTABLE_SHA256, /^[0-9a-f]{64}$/);
+  const [maj, min] = pins.GIT_REFTABLE_VERSION.split(".").map(Number);
+  assert.ok(maj > 2 || (maj === 2 && min >= 45), "a reftable repository needs git >= 2.45");
+  const p = read("scripts/ci/guest/provision.sh");
+  assert.match(p, /echo "\$GIT_REFTABLE_SHA256  \$d\/git\.tar\.xz" \| sha256sum -c -/, "checked by sha256");
+  assert.match(p, /prefix="\$LIB\/git"/, "under /usr/local/lib/mandu-ci, off the PATH");
+  assert.match(p, /"\$LIB\/git\/bin\/git" init -q --ref-format=reftable/, "the build fails unless it makes a reftable repository");
+  assert.match(p, /^\s+meson ninja-build libcap-dev cmake zlib1g-dev \\$/m, "zlib for the build");
+  assert.ok(read("launcher/test/lib/reftable-git.ts").includes('"/usr/local/lib/mandu-ci/git/bin"'), "the tests look where it is built");
+});
+
 test("pins.env: each CI guest (lib.sh CI_GUESTS) has its dated base-image pins, 26.04 the resolute release", () => {
   const lib = read("scripts/ci/lib.sh");
   const guests = /^CI_GUESTS="([^"]+)"$/m.exec(lib)[1].split(/\s+/);
@@ -217,6 +229,8 @@ NOT_AGENTS.add("GGSHIELD_SHA256");
 NOT_AGENTS.add("SBX_SHA256");
 // nono, a baseline too (the sandbox baselines' test above)
 NOT_AGENTS.add("NONO_SHA256");
+// the reftable tests' git, built from source (its own test above)
+NOT_AGENTS.add("GIT_REFTABLE_SHA256");
 const releaseBins = Object.keys(pins)
   .filter((k) => k.endsWith("_SHA256") && !NOT_AGENTS.has(k) && `${k.slice(0, -7)}_VERSION` in pins)
   .map((k) => k.slice(0, -7));

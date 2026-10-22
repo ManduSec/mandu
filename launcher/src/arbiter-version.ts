@@ -240,7 +240,9 @@ export function skewAction(i: SkewInput): SkewAction {
   // `mandu stop` would only bring the old code back (stack-supervisor.ts).
   // A service kept on purpose is left alone: this mandu then runs on a stack
   // of its own.
-  const stop = i.supervisor
+  // Unless only an adopted arbiter is old and the service runs this mandu's
+  // own code: then `mandu stop` is the fix (the service starts a current one).
+  const stop = i.supervisor && !adoptedByOurService(i.supervisor)
     ? `${disableCommand(i.supervisor)}; or, to keep that service, run this mandu on its own stack: ${ownStackCommand(i.base)} (${OWN_STACK_NOTE})`
     : `mandu stop --stack ${i.base}`;
   if (v.kind === "build") return buildSkewAction(i, v, pid, stop);
@@ -290,13 +292,55 @@ export function skewAction(i: SkewInput): SkewAction {
   };
 }
 
-/** The refusal for a stack this launch would restart, but a systemd service
- *  would start again as the old code. */
+/** The stack's arbiter is not the service's own (the service's dashboard
+ *  adopted one someone else started), and the service runs this mandu's
+ *  code: only the arbiter is old. */
+function adoptedByOurService(s: StackSupervisor): boolean {
+  return s.arbiterOutside === true && s.runsOurCode === true;
+}
+
+/** The refusal for a stack this launch would restart while a systemd
+ *  service keeps it (runtime-instances.md §4.1a), worded by which process is
+ *  old and who runs it:
+ *  - only an adopted arbiter is old, and the service runs this mandu's code:
+ *    replace that arbiter (`mandu stop --stack`, or Replace on the
+ *    dashboard), and the service starts a current one;
+ *  - an adopted arbiter, and the service runs other code: replace the
+ *    arbiter first; if the service brings an old one back, it is old too;
+ *  - the arbiter is the service's own: the service runs the old code, so
+ *    stop it for good, or run this mandu on its own stack. */
 function supervisedRefusal(s: StackSupervisor, base: string, what: string, other: string): SkewAction {
+  const svc = describeSupervisor(s);
+  const replace = `mandu stop --stack ${base}`;
+  if (s.arbiterOutside === true) {
+    const adopted =
+      `Only that arbiter process is old: it is not ${svc}'s own process. An earlier launch or another dashboard ` +
+      `started it, and the service's dashboard adopted it instead of starting its own.`;
+    if (s.runsOurCode === true) {
+      return {
+        kind: "refuse",
+        message:
+          `mandu: ${what}; refusing to launch against ${other}. ${adopted} The service runs this mandu's own code, so ` +
+          `replace the old arbiter and the service starts a current one: ${replace} (or press Replace on the arbiter ` +
+          `in the dashboard's Services panel), then run mandu again.`,
+      };
+    }
+    return {
+      kind: "refuse",
+      message:
+        `mandu: ${what}; refusing to launch against ${other}. ${adopted} The service runs ` +
+        (s.workingDirectory ? `code from ${s.workingDirectory}, ` : "") + `not this mandu's. First replace the old arbiter: ` +
+        `${replace}, then run mandu again. If the service then starts an old arbiter again, the service itself runs ` +
+        `an older Mandu: stop it for good with ${disableCommand(s)}` +
+        (s.fragmentPath ? ` (its unit file is ${s.fragmentPath})` : "") +
+        `, or run this mandu on its own stack: ${ownStackCommand(base)} (${OWN_STACK_NOTE})`,
+    };
+  }
+  const whose = s.arbiterOutside === false ? `That arbiter is ${svc}'s own process` : `They are run by ${svc}`;
   return {
     kind: "refuse",
     message:
-      `mandu: ${what}; refusing to launch against ${other}. They are run by ${describeSupervisor(s)}, ` +
+      `mandu: ${what}; refusing to launch against ${other}. ${whose}, ` +
       `which starts them again when they are stopped, so this mandu cannot replace them. If that service is an ` +
       `older Mandu you no longer use, stop it for good and run mandu again: ${disableCommand(s)}` +
       (s.fragmentPath ? ` (its unit file is ${s.fragmentPath})` : "") +

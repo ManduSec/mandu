@@ -222,6 +222,19 @@ export interface EventModel {
   id: string;
   inputTokens?: number;
   outputTokens?: number;
+  /** The provider's id for this response (`msg_…` from the Messages API,
+   *  `resp_…` from the Responses API), set by the model proxies on a
+   *  `tllm_call` whose response carried one. The agent's own transcript
+   *  keeps the same id, so `mandu scan` joins on it to tell a past session
+   *  under Mandu exactly (confidentiality-plan-17 §3 item 6). Not a secret;
+   *  nothing else from the response is recorded with it. */
+  responseId?: string;
+  /** The agent's own id of its session as the request carried it
+   *  (OpenCode's `X-Session-Id` / `x-opencode-session-id`, `ses_…`), set by
+   *  the anthropic-proxy on a `tllm_call`: OpenCode keeps no response id on
+   *  most wires but keeps this as the session's id, so `mandu scan` joins
+   *  on it (confidentiality-plan-17 §3 item 6). An opaque id; not a secret. */
+  agentSessionId?: string;
 }
 
 // ── e2e SECURITY / UTILITY / FIDELITY assertions (dashboard.md §4.13) ──────────
@@ -461,6 +474,24 @@ export interface PathRewriteDetail {
 }
 
 /**
+ * How long each named step of a launch took, on its `launch_posture` and
+ * `session_exit` events (runtime-instances.md §14.11). Mirrors the
+ * launcher's `LaunchTimings` (launcher/src/launch-timings.ts): `steps` in
+ * the order they started, a dotted name a part of the step before the dot;
+ * `totalMs` from the launcher's process start (or its main() for an
+ * in-process launch) to the event. Since 2026-10-22 a top-level step also
+ * carries its cost (`cpuMs`: the launcher's CPU time, `git`: the git calls
+ * it started, `sandboxes`: the sandboxes made for them), and a whole
+ * record its `cost`; an older launcher's record has neither.
+ */
+export interface LaunchTimingsDetail {
+  v: 1;
+  totalMs: number;
+  steps: Array<{ step: string; ms: number; cpuMs?: number; git?: number; sandboxes?: number }>;
+  cost?: { cpuMs?: number; git?: number; sandboxes?: number };
+}
+
+/**
  * Kind-specific detail on a `prompt_filter` event (confidentiality-plan-15 §8):
  * what the prompt filter did to ONE segment of a request's user-role text.
  * Offsets into the segment, categories, actions and symbols only: NEVER a
@@ -633,6 +664,12 @@ export interface ManduEvent {
   /** Present only on kind "prompt_filter" (confidentiality-plan-15 §8).
    *  Preserved verbatim by `coerceEvent` (spread). Never a value. */
   promptFilter?: PromptFilterDetail;
+  /** Present only on kinds "launch_posture" (the launch's steps before the
+   *  agent) and "session_exit" (the agent's run and the teardown steps):
+   *  how long each named step of the launch took (the launcher's
+   *  launch-timings.ts, runtime-instances.md §14.11). Display only, never a
+   *  decision. Preserved verbatim by `coerceEvent` (spread). */
+  timings?: LaunchTimingsDetail;
 
   /** The final per-view file trees at scenario end, present only on kind
    *  "workspace_final" (§4.12) — the seed's end-of-run twin, the Files tab's

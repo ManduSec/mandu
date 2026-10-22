@@ -144,6 +144,13 @@ export interface StorySecret {
    *  Absent for a file labelled after the session read it (*Labelled after
    *  the session*): the session holds no placeholder of it to show. */
   ref?: string;
+  /** The file the card stands for (a key in it, or the whole file), as the
+   *  page names it: `~/…` under home, else absolute (`secretFile`). The
+   *  page links it to Rules, which opens it in Add a rule's file browser
+   *  (dashboard.md §4.25b *A card opens its file in Rules*). Absent where
+   *  the page cannot name a file: a variable, a command's output, a path
+   *  that could not be placed. A path, never a value. */
+  file?: string;
 }
 
 /** What the AI got of one secret, the card's first line (`aiSaw`). */
@@ -301,6 +308,18 @@ function causeWhat(cause: MaskCause, home: string): StoryPart[] {
  *  names a read token's file when no origin was recorded for it; a recorded
  *  origin always wins. */
 export function secretWhat(f: SymbolLineage, home = "", cause: MaskCause | null = null, minted: string | null = null): StoryPart[] {
+  return secretNaming(f, home, cause, minted).what;
+}
+
+/** What a card's advice calls a secret the AI read as it was (`linesOf`):
+ *  `key`, a named key (a file's key, an environment variable), which the
+ *  person changes; `file`, anything else (a file, a step's output), whose
+ *  content the card does not know. */
+type SecretKind = "file" | "key";
+
+/** `secretWhat`'s words and the kind they name, decided in one branch, so
+ *  the advice never reads the words back (dashboard.md §4.25b). */
+function secretNaming(f: SymbolLineage, home: string, cause: MaskCause | null, minted: string | null): { what: StoryPart[]; kind: SecretKind } {
   const m = TWIN_RE.exec(f.root);
   const recorded = f.summary.originLabel ?? f.nodes.find((n) => n.symbol?.origin)?.symbol?.origin ?? null;
   const tool = m?.[2] ?? null;
@@ -311,15 +330,35 @@ export function secretWhat(f: SymbolLineage, home = "", cause: MaskCause | null 
   const origin = recorded ?? (read ? minted : null);
   if (tool === "Env" || origin?.startsWith("env:")) {
     const name = field ?? origin?.slice(4) ?? null;
-    return name ? [t("The environment variable "), c(name)] : [t("An environment variable")];
+    return { what: name ? [t("The environment variable "), c(name)] : [t("An environment variable")], kind: "key" };
   }
   if (read || (!tool && origin)) {
-    if (origin && field) return [c(field), t(" in "), c(tildePath(origin, home))];
-    if (origin) return [t("The file "), c(tildePath(origin, home))];
-    return field ? [c(field), t(" in a file")] : [t("A secret file")];
+    if (origin && field) return { what: [c(field), t(" in "), c(tildePath(origin, home))], kind: "key" };
+    if (origin) return { what: [t("The file "), c(tildePath(origin, home))], kind: "file" };
+    return field ? { what: [c(field), t(" in a file")], kind: "key" } : { what: [t("A secret file")], kind: "file" };
   }
-  if (tool) return [t("Output of a "), c(tool), ...(cause ? [t(" step"), ...causeWhat(cause, home)] : [t(" step that held a secret")])];
-  return [t("A secret item")];
+  if (tool) return { what: [t("Output of a "), c(tool), ...(cause ? [t(" step"), ...causeWhat(cause, home)] : [t(" step that held a secret")])], kind: "file" };
+  return { what: [t("A secret item")], kind: "file" };
+}
+
+/** The file a card names (`secretWhat`'s file branch), placed: absolute,
+ *  then `~/…` under `home`. A read token's origin (or the file of the read
+ *  that minted it) is placed as a Read's path is (later-labels.ts
+ *  `readPath`: relative under the session's folder `cwd`); a token with no
+ *  tool tag counts only an absolute or `~/` origin. Null where the card
+ *  names no file or the path cannot be placed: the link never guesses. */
+export function secretFile(f: SymbolLineage, home = "", minted: string | null = null, cwd: string | null = null): string | null {
+  const m = TWIN_RE.exec(f.root);
+  const recorded = f.summary.originLabel ?? f.nodes.find((n) => n.symbol?.origin)?.symbol?.origin ?? null;
+  const tool = m?.[2] ?? null;
+  const read = tool !== null && toolFamily(tool) === "read";
+  const origin = recorded ?? (read ? minted : null);
+  if (!origin || tool === "Env" || origin.startsWith("env:")) return null;
+  if (!read && (tool || !(origin.startsWith("/") || origin.startsWith("~/")))) return null;
+  // `~` means only the home folder: with none known, never the session's folder.
+  if (origin.startsWith("~") && !home) return null;
+  const placed = readPath(origin, cwd, home);
+  return placed ? tildePath(placed, home) : null;
 }
 
 /** A token's tool tag, with or without its level marker (symbol-format.ts
@@ -591,7 +630,7 @@ export function aiSaw(level: string, early: boolean, flagged: boolean, mode: Pro
 
 /** `steps`: the ids of the steps the page shows; a time one of them shows
  *  carries its id (absent: none does, as on Home). */
-function linesOf(level: string, requests: number, early: ReadBeforeLabel | null, x: Tally, flagged: boolean, mode: ProtectionMode | null, steps?: ReadonlySet<string>, dev = true): SecretLine[] {
+function linesOf(level: string, kind: SecretKind, requests: number, early: ReadBeforeLabel | null, x: Tally, flagged: boolean, mode: ProtectionMode | null, steps?: ReadonlySet<string>, dev = true): SecretLine[] {
   const lines: SecretLine[] = [];
   const inRequests = requests > 0 ? `, in ${plural(requests, "request", "requests")}` : "";
   // What the AI got.
@@ -611,6 +650,8 @@ function linesOf(level: string, requests: number, early: ReadBeforeLabel | null,
       at(early.maskedTs), t(` on it got a placeholder in its place${inRequests}.`),
     ] });
     if (requests > 0) lines.push({ tone: "warn", parts: [t("Anything the AI wrote from its real value went back to the AI as written with each later request: Mandu does not mask the AI's own words.")] });
+    // The value is out: say what to do, in the later label's words.
+    lines.push(changeIt(kind));
     if (level === "local-model") lines.push({ tone: "plain", parts: [t("Its level lets only your own model read it. An outside AI gets a placeholder.")] });
   } else if (saw === "own-model") {
     lines.push({ tone: "plain", parts: [t("Its level lets only your own model read it. An outside AI gets a placeholder.")] });
@@ -655,6 +696,15 @@ function linesOf(level: string, requests: number, early: ReadBeforeLabel | null,
   return lines;
 }
 
+/** What to do about a secret the AI read as it was (a read before its
+ *  label, and a file labelled after the session): change it. A named key
+ *  is the key to change; anything else may hold one. */
+function changeIt(kind: SecretKind): SecretLine {
+  return kind === "key"
+    ? { tone: "warn", parts: [t("Change this key: the AI saw its real value, and marking it a secret does not take that back.")] }
+    : { tone: "warn", parts: [t("If it holds a key or a password, change it: the AI saw it as it was.")] };
+}
+
 /** The lines of a file labelled after the session read it as it was
  *  (*Labelled after the session*): no placeholder of it was ever in this
  *  session, so nothing is said of sends, fills or blocks (the AI had the
@@ -666,7 +716,7 @@ function afterLines(level: string, after: NonNullable<SecretEntry["after"]>, saw
   if (saw === "off") return [{ tone: "warn", parts: [t("Protection was off, so Mandu did not mask it. The AI read it at "), read, t(". It was marked a secret at "), at(after.at), t(".")] }];
   const lines: SecretLine[] = [
     { tone: "warn", parts: [t("The AI read its real value at "), read, t(", before it was marked a secret at "), at(after.at), t(", so nothing in this session masked it.")] },
-    { tone: "warn", parts: [t("If it holds a key or a password, change it: the AI saw it as it was.")] },
+    changeIt("file"),
   ];
   if (level === "local-model") lines.push({ tone: "plain", parts: [t("Its level lets only your own model read it. An outside AI gets a placeholder.")] });
   return lines;
@@ -674,10 +724,14 @@ function afterLines(level: string, after: NonNullable<SecretEntry["after"]>, saw
 
 interface SecretEntry {
   what: StoryPart[];
+  /** How `what` names it (`secretNaming`): the advice's words. */
+  kind: SecretKind;
   level: string;
   flows: SymbolLineage[];
   /** Every token the entry's flows recorded. */
   members: Set<string>;
+  /** The file it stands for, placed (`secretFile`); null: none. */
+  file: string | null;
   early: ReadBeforeLabel | null;
   /** A file labelled after the session read it as it was, and never masked
    *  in it (later-labels.ts): the first such read and the label's time. Such
@@ -753,14 +807,16 @@ function secretEntries(believed: SessionViewModel | null, home: string, later?: 
   const flows = believed ? believed.lineage.flows.filter((f) => isSecretFlow(f) && !f.summary.modelAuthored) : [];
   const causes = believed ? maskCauses(believed) : new Map<string, MaskCause>();
   const minted = believed ? mintedPaths(believed, later?.cwd ?? null, home) : new Map<string, string>();
-  const groups = new Map<string, { what: StoryPart[]; level: string; flows: SymbolLineage[] }>();
+  const groups = new Map<string, { what: StoryPart[]; kind: SecretKind; level: string; flows: SymbolLineage[]; file: string | null }>();
   for (const f of flows) {
-    const what = secretWhat(f, home, causes.get(baseOf(f.root)) ?? null, minted.get(baseOf(f.root)) ?? null);
+    const made = minted.get(baseOf(f.root)) ?? null;
+    // The same words come from the same branch, so a merged entry has one kind.
+    const { what, kind } = secretNaming(f, home, causes.get(baseOf(f.root)) ?? null, made);
     const level = levelOf(f);
     const key = level + "\u0000" + JSON.stringify(what);
     const g = groups.get(key);
     if (g) g.flows.push(f);
-    else groups.set(key, { what, level, flows: [f] });
+    else groups.set(key, { what, kind, level, flows: [f], file: secretFile(f, home, made, later?.cwd ?? null) });
   }
   const entries: SecretEntry[] = [...groups.values()].map((g) => {
     const members = new Set<string>();
@@ -795,7 +851,7 @@ function withLaterLabels(entries: SecretEntry[], vm: SessionViewModel, home: str
       continue;
     }
     out.push({
-      what: [t("The file "), c(tildePath(l.path, home))], level: l.level, flows: [], members: new Set(), early: null,
+      what: [t("The file "), c(tildePath(l.path, home))], kind: "file", level: l.level, flows: [], members: new Set(), early: null, file: tildePath(l.path, home),
       after: { readTs: first.ts, readStep: first.stepId, at: l.at },
     });
   }
@@ -853,13 +909,14 @@ export function secretsStory(believed: SessionViewModel | null, events: readonly
   const secrets = entries.slice(0, cap).map((g): StorySecret => {
     const saw = aiSaw(g.level, g.early !== null || g.after !== undefined, anyFlag, mode);
     if (g.after) {
-      return { what: g.what, level: levelTerm(g.level), saw, ...(saw === "early" ? { since: g.after.at } : {}), lines: afterLines(g.level, g.after, saw, steps, dev) };
+      return { what: g.what, level: levelTerm(g.level), saw, ...(saw === "early" ? { since: g.after.at } : {}), lines: afterLines(g.level, g.after, saw, steps, dev), ...(g.file ? { file: g.file } : {}) };
     }
     // One flow keeps the lineage's own count; merged flows count each request once.
     const requests = g.flows.length === 1 ? g.flows[0]!.summary.contextTurns : requestsNaming(g.members, events);
     return {
       what: g.what, level: levelTerm(g.level), saw, ...(saw === "early" && g.early ? { since: g.early.maskedTs } : {}),
-      lines: linesOf(g.level, requests, g.early, tally(g.flows, g.members, events, steps), anyFlag, mode, steps, dev), ref: secretRef(believed?.sessionId ?? "", g.flows[0]!.root),
+      lines: linesOf(g.level, g.kind, requests, g.early, tally(g.flows, g.members, events, steps), anyFlag, mode, steps, dev), ref: secretRef(believed?.sessionId ?? "", g.flows[0]!.root),
+      ...(g.file ? { file: g.file } : {}),
     };
   });
   const counts = { masked: 0, early: 0 };

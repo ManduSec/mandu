@@ -30,8 +30,12 @@
       <a href="rules" data-page-link="rules">Rules</a>
       <a href="settings" data-page-link="settings">Settings</a>
       <a href="history" data-page-link="history">History</a>
+      <a href="scan" data-page-link="scan">Scan</a>
     </nav>
     <div id="top-status" class="top-status" aria-live="polite"></div>
+    <!-- A new question or rule change, said to a screen reader (dashboard.md
+         §4.25 *A new question is announced on the page*); not shown. -->
+    <div id="top-announce" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   </div>
 </header>
 <!-- View as public (dashboard.md §4.25ac): shown only while this browser
@@ -69,6 +73,58 @@
       <p id="exposure-sentence"></p>
       <ul id="exposure-causes" class="exposure-causes"></ul>
       <p id="exposure-fix" class="exposure-fix"></p>
+    </section>
+
+    <!-- A newer Mandu that fixes security problems in the version you run
+         (dashboard.md §4.25 *A newer release*): from /api/home's
+         `about.update`, only when it carries security fixes; a plain update
+         shows only in Settings › About Mandu. Amber, smaller than the card
+         above. -->
+    <section class="block exposure update-notice" id="home-update" hidden aria-labelledby="update-headline">
+      <h2 id="update-headline"></h2>
+      <p id="update-sentence"></p>
+      <p id="update-fix" class="exposure-fix"></p>
+    </section>
+
+    <!-- The dashboard account file changed while this dashboard ran
+         (dashboard.md §6.z): /api/home's `signIn.accountChangedAt`. Every
+         sign-in session ended then; this says so, and what to do if it was
+         not the person. -->
+    <section class="block exposure update-notice" id="home-account-changed" hidden role="alert" aria-labelledby="account-changed-headline">
+      <h2 id="account-changed-headline">Your dashboard account was changed</h2>
+      <p id="account-changed-sentence"></p>
+      <p class="exposure-fix">If you did not change it, something on this computer did: run <code class="code-whole">mandu dashboard --set-password</code> in your own terminal to set your own password again.</p>
+    </section>
+
+    <!-- The newest launch left the agent's programs able to read your
+         credential files (dashboard.md §4.23 *Product page*): /api/home
+         carries `secretsPosture` only while that launch is `gated`. Amber, a
+         known host condition, never an alert. -->
+    <section class="block exposure posture-card" id="home-posture" hidden aria-labelledby="posture-headline">
+      <h2 id="posture-headline"></h2>
+      <p id="posture-sentence"></p>
+      <p id="posture-note"></p>
+      <p id="posture-fix" class="exposure-fix"></p>
+    </section>
+
+    <!-- The last `mandu scan` (dashboard.md §4.25ai): what the agents
+         already sent to the AI before Mandu, or how to find out, under the
+         hero's "secrets masked before the AI saw them" (the first-run and
+         warning cards stay right under the hero). /api/home carries
+         `scan`; the card opens the Scan page. -->
+    <section class="block scan-card" id="home-scan" hidden aria-labelledby="home-scan-headline">
+      <div class="block-head">
+        <h2 id="home-scan-headline"></h2>
+        <a id="home-scan-open" href="scan" data-page-link="scan" hidden>See the whole scan →</a>
+      </div>
+      <p id="home-scan-when" class="note dim" hidden></p>
+      <p id="home-scan-sentence"></p>
+      <div id="home-scan-figure" class="scan-flows" hidden></div>
+      <ul id="home-scan-top" class="scan-top"></ul>
+      <p id="home-scan-safe" class="scan-safe" hidden></p>
+      <p id="home-scan-worth" class="note" hidden></p>
+      <p id="home-scan-suggested" class="note" hidden></p>
+      <p id="home-scan-again" class="note"></p>
     </section>
 
     <section class="block" id="home-waiting-block">
@@ -122,14 +178,23 @@
         <a id="agent-trace" data-dev-only class="btn link-btn" href="dev/" target="_blank" rel="noopener">Detailed trace</a>
       </div>
     </div>
+    <!-- This session could not do its job: its notice, written out
+         (dashboard.md §4.21 *On the product page*). -->
+    <div id="agent-notice" class="posture-line" role="note" hidden></div>
+    <!-- This session's launch left the agent's programs able to read your
+         credential files (dashboard.md §4.23 *Product page*). -->
+    <div id="agent-posture" class="posture-line" hidden></div>
     <p id="agent-values-note" class="values-note" role="note" hidden></p>
     <div id="agent-facts" class="tiles"></div>
     <!-- What the leak check found (dashboard.md §4.25ae): each place, when,
-         the step it opens; never the text the check found. -->
+         the step it opens; never the text the check found. Then what to do
+         now: change each key it names, report the fault. -->
     <section class="block finding" id="agent-finding-block" hidden>
       <h2 id="agent-finding-title">What the leak check found</h2>
       <p class="block-note" id="agent-finding-intro"></p>
       <ul id="agent-finding" class="finding-list"></ul>
+      <h3 id="agent-finding-todo-title" class="finding-todo-title" hidden>What to do now</h3>
+      <ul id="agent-finding-todo" class="finding-todo" hidden></ul>
     </section>
     <section class="block" id="agent-waiting-block" hidden>
       <h2>Needs your OK</h2>
@@ -156,6 +221,8 @@
           <button type="button" class="switch" id="agent-only" role="switch" aria-checked="false" aria-labelledby="agent-only-words"><span class="knob"></span></button>
           <label for="agent-only" id="agent-only-words">Only where Mandu stepped in</label>
         </div>
+        <!-- Latest turn (§4.25ad): to the newest turn, at the story's end. -->
+        <button type="button" class="linkish story-latest" id="agent-latest" hidden>Latest turn <span aria-hidden="true">↓</span></button>
       </div>
       <div id="agent-story" class="story"></div>
     </section>
@@ -169,13 +236,18 @@
       <a href="./" data-page-link="home" class="back">Back to home</a>
       <h1>History</h1>
       <p id="history-intro">Every session Mandu recorded, newest first. Each one opens what the AI saw and what really happened.</p>
+      <!-- The sessions from before Mandu are the last scan's (§4.25ai): the
+           top bar has no room for a sixth link on a phone (§4.25 *The page
+           links fit a small phone*), so the Scan page is linked here and
+           from Home's card. -->
+      <p class="note" id="history-scan">Sessions your agents ran without Mandu: <a href="scan" data-page-link="scan">what the last scan found</a>.</p>
     </div>
     <!-- Finding a session (§4.25ae): the agent or the prompt, ?q= in the
          address; GET /api/home/history?q=. Only the sessions where Mandu
          stepped in: its switch, &only=stepped-in in both. -->
     <form id="history-search" class="history-search" role="search">
       <label for="history-q">Find a session</label>
-      <input type="search" id="history-q" maxlength="200" placeholder="What you asked, or the agent" autocomplete="off" spellcheck="false">
+      <input type="search" id="history-q" maxlength="200" placeholder="What you asked, the agent or the folder" autocomplete="off" spellcheck="false">
       <div class="history-only">
         <button type="button" class="switch" id="history-only" role="switch" aria-checked="false" aria-labelledby="history-only-words"><span class="knob"></span></button>
         <label for="history-only" id="history-only-words">Only sessions where Mandu stepped in</label>
@@ -184,6 +256,33 @@
     </form>
     <section class="block">
       <div id="history-list" class="table"></div>
+    </section>
+  </section>
+
+  <!-- The Scan page (dashboard.md §4.25ai): the last `mandu scan`, whole,
+       from GET /api/scan. Each finding tells how the secret left this
+       computer, and opens to its examples. -->
+  <section data-page="scan" id="page-scan" hidden>
+    <div class="page-head">
+      <a href="./" data-page-link="home" class="back">Back to home</a>
+      <h1 id="scan-headline">What your agents already sent to the AI</h1>
+      <p id="scan-sentence"></p>
+      <p id="scan-read" class="note dim" hidden></p>
+      <ul id="scan-notes" class="scan-notes note" hidden></ul>
+    </div>
+    <!-- The figure (§4.25ai *The figure*): without Mandu, the real value
+         reaches the AI model; with it, only its mask does. home.js
+         scanFigure draws it from the server's `figure`. -->
+    <section class="block scan-figure" id="scan-figure" hidden></section>
+    <div id="scan-sections"></div>
+    <section class="block" id="scan-risk-block" hidden aria-labelledby="scan-risk-title">
+      <h2 id="scan-risk-title">Riskier sessions</h2>
+      <ul id="scan-risk" class="scan-risk"></ul>
+    </section>
+    <section class="block" id="scan-end">
+      <p id="scan-suggested" class="note" hidden></p>
+      <p id="scan-stop"></p>
+      <p id="scan-again" class="note"></p>
     </section>
   </section>
 
@@ -210,6 +309,14 @@
     </section>
     <section class="block">
       <h2>Answered earlier</h2>
+      <!-- Finding an answer (§4.25): the secret, the host, the program, the
+           agent or the answer, ?q= in the address; GET /api/home/answered?q=.
+           Hidden while there is no answer to find. -->
+      <form id="answered-search" class="history-search answered-search" role="search" hidden>
+        <label for="answered-q">Find an answer</label>
+        <input type="search" id="answered-q" maxlength="200" placeholder="A secret, a host or the agent" autocomplete="off" spellcheck="false">
+        <p id="answered-count" class="history-count" role="status" hidden></p>
+      </form>
       <div id="approvals-answered" class="table"></div>
     </section>
     <section class="block" id="approvals-rule-history-block" hidden>
@@ -303,11 +410,19 @@
           </div>
           <p id="files-note" class="files-note" role="status" hidden></p>
           <div id="files-self" class="files-self" hidden></div>
+          <!-- The heads over the browser's columns, as Your rules has its own
+               (dashboard.md §4.25p, *The browser names its menus*): hidden at
+               1000px and narrower, where each menu shows its caption, and
+               while the list has no row to stand over (home.js renderFiles). -->
+          <div class="files-heads browse-heads" id="files-list-heads" aria-hidden="true" hidden><span>File or folder</span><span>Which AI may read it</span><span>Where it may be sent</span></div>
           <div id="files-list" class="table files-list" role="list" aria-label="Files and folders"></div>
           <div id="files-selected" class="files-selected" role="region" aria-label="The ticked items"></div>
         </div>
       </section>
       <div id="rules-find-none" class="rules-find-none" role="status" hidden></div>
+      <!-- An answer Kept in Rules on Approvals opened, forgotten meanwhile
+           (dashboard.md §4.25 *A remembered answer opens where Rules keeps it*). -->
+      <p id="rules-answer-note" class="note rules-answer-note" role="status" hidden></p>
       <div class="rules-group" id="files-group">Files and folders <span class="muted">which AI may read each one, and where it may be sent</span></div>
       <div class="files-heads" id="files-heads" aria-hidden="true"><span>File or folder</span><span>Which AI may read it</span><span>Where it may be sent</span></div>
       <div id="files-tree" class="table files-tree" role="list" aria-label="Your rules on files and folders"></div>
@@ -344,7 +459,7 @@
         <h2 id="suggested-title">Keys Mandu found <span id="files-suggested-count" class="muted"></span></h2>
         <button type="button" class="btn small" id="suggest-open" aria-expanded="false" aria-controls="files-suggested-view">Review</button>
       </div>
-      <p class="note" id="suggested-line">Possible keys in your projects that no rule covers yet.</p>
+      <p class="note" id="suggested-line">Mandu looks for keys in your projects that no rule covers yet.</p>
       <div id="files-suggested-view" class="files-suggested-view" hidden>
         <form id="suggest-form" class="files-suggest-bar" autocomplete="off">
           <button type="submit" class="btn small primary" id="suggest-scan" aria-describedby="suggest-error">Scan for keys</button>
@@ -560,11 +675,15 @@
     </section>
     <section class="block card" id="settings-notify-block" aria-labelledby="settings-notify-title">
       <h2 id="settings-notify-title">Notifications</h2>
-      <div class="table"><div class="row service">
+      <div class="table"><div class="row service notify-row">
         <div class="name">This browser</div>
         <div class="sub" id="notify-state"></div>
-        <button type="button" class="btn small right" id="notify-enable" aria-describedby="notify-state" hidden>Turn on</button>
+        <div class="notify-actions">
+          <button type="button" class="btn small" id="notify-test" aria-label="Send a test notification" hidden>Send a test</button>
+          <button type="button" class="btn small" id="notify-enable" aria-describedby="notify-state" hidden>Turn on</button>
+        </div>
       </div></div>
+      <p id="notify-test-result" class="note notify-test-result" role="status" hidden></p>
     </section>
     <!-- Settings › Appearance (dashboard.md §4.25 Settings): light, dark or
          the system's, stored in this browser under the same key the
@@ -583,6 +702,32 @@
         </select>
       </div></div>
     </section>
+    <!-- Settings › About Mandu (dashboard.md §4.25 *About Mandu*): the
+         release the dashboard runs and where help lives, from /api/home's
+         `about` (home.js renderAbout). The links open in a new tab with
+         noopener noreferrer: the page's address can name a session. -->
+    <!-- Settings › Dashboard account (dashboard.md §6.z): Sign out, shown
+         only to a browser signed in on the sign-in page (/api/home's
+         `signIn.signOut`). A plain form POST: the server ends the session
+         and shows the sign-in page. -->
+    <section class="block card" id="settings-account-block" aria-labelledby="settings-account-title" hidden>
+      <h2 id="settings-account-title">Dashboard account</h2>
+      <p class="note">This browser is signed in to your Mandu dashboard account. To change its password, run <code class="code-whole">mandu dashboard --set-password</code> in your own terminal.</p>
+      <form method="POST" action="logout" id="settings-sign-out-form">
+        <button type="submit" class="btn small" id="settings-sign-out">Sign out</button>
+      </form>
+    </section>
+    <section class="block card" id="settings-about-block" aria-labelledby="settings-about-title">
+      <h2 id="settings-about-title">About Mandu</h2>
+      <div class="table"><div class="row service">
+        <div class="name">Version</div>
+        <div class="sub" id="settings-about-version">Checking…</div>
+      </div></div>
+      <p class="note">To check this computer's setup, run <code class="code-whole">mandu doctor</code> in a terminal.</p>
+      <p class="note" id="settings-about-check" hidden>Mandu checks for a newer release when you start an agent from a terminal.</p>
+      <p class="note" id="settings-about-links" hidden></p>
+      <p class="note" id="settings-about-report" hidden></p>
+    </section>
     <section class="block card" aria-labelledby="settings-dev-title" data-dev-only>
       <div class="block-head">
         <h2 id="settings-dev-title">Developer view</h2>
@@ -596,6 +741,15 @@
     </section>
   </section>
 </main>
+
+<!-- The scan figure's two glyphs (§4.25ai *The figure*), drawn once and
+     used by reference: the key, and the dumpling that is the mask and the
+     Mandu mark. Adapted from the figures of the engineering post "What
+     Mandu is for"; the key takes the theme's --key color. -->
+<svg class="scan-defs" width="0" height="0" aria-hidden="true" focusable="false">
+  <symbol id="scan-key" viewBox="0 0 32 32"><path fill="currentColor" fill-rule="evenodd" d="M10 8.5a7.5 7.5 0 1 1 0 15a7.5 7.5 0 1 1 0-15Zm0 4.6a2.9 2.9 0 1 0 0 5.8a2.9 2.9 0 1 0 0-5.8Z"/><path fill="currentColor" d="M16.6 14.1H29.6a1.9 1.9 0 0 1 0 3.8H16.6Z"/><path fill="currentColor" d="M21.6 17.4h3.3v5.2h-3.3Z M26.4 17.4h3.3v3.8h-3.3Z"/></symbol>
+  <symbol id="scan-mandu" viewBox="0 0 64 64"><path d="M6 46 C6 22 20 12 32 12 C44 12 58 22 58 46 C46 53 18 53 6 46 Z" fill="#f3e2c8" stroke="#b9611b" stroke-width="4"/><g fill="none" stroke="#b9611b" stroke-width="4" stroke-linecap="round"><path d="M20 21 C22 25 23 28 22 32"/><path d="M32 14 C32 19 32 23 31 28"/><path d="M44 21 C42 25 41 28 42 32"/></g></symbol>
+</svg>
 
 <script type="module" src="js/home.js"></script>
 </body>

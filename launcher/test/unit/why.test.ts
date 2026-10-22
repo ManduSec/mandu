@@ -85,6 +85,16 @@ test("renderWhyPath: an agent's login is raw only where that agent runs, a place
   assert.match(renderWhyPath({ ...store, path: "/h/.local/state/goose/logs/llm_request.0.jsonl", agentFile: { kind: "store", agent: "goose" } }, "/h"), /Goose's own data/);
   // A user's `public` label wins: nothing about agents is said.
   assert.ok(!/login|left raw/.test(renderWhyPath({ ...codex, level: "public", rule: "label:/h/.codex/auth.json" }, "/h")));
+  // secret-discovery.md §2.10: `.claude.json` and Codex's `config.toml` are
+  // also the agent's MCP config, whose servers' credentials are registered.
+  assert.match(claude, /MCP config Claude Code's MCP servers too: when one holds a credential, every launch registers this file/);
+  assert.match(claude, /a session that runs Claude Code leaves the file/);
+  assert.ok(!/MCP config/.test(out), "auth.json is no MCP config");
+  const toml = renderWhyPath({ ...store, path: "/h/.codex/config.toml", rule: "prefix:~/.codex", agentFile: { kind: "store", agent: "codex" } }, "/h");
+  assert.match(toml, /MCP config Codex's MCP servers too/);
+  assert.match(toml, /read it as it is \(but for its MCP servers', below\)/);
+  assert.ok(!/its values are not registered/.test(toml), "never that its values are not registered");
+  assert.match(s, /its values are not registered/, "another store file keeps the line");
 });
 
 // 2026-10-09: the line said "each value is a placeholder" of every file

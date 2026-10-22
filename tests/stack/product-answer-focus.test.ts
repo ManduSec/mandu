@@ -18,10 +18,12 @@
  *   A2  signed out, Block on a card is refused: the button, on again, has
  *       the focus back, described by "Sign in first: …"; the question still
  *       waits;
- *   A3  signed in, Block on the first card answers it: the card that took
- *       its place has the focus; Block on the last card: the one before it;
- *       Block on the one left: "Nothing is waiting for you."; never an
- *       answer button; the arbiter has the three answers;
+ *   A3  signed in, Block on the first card answers it: the line it leaves
+ *       where the card was has the focus (dashboard.md §4.25 *An answer
+ *       says what it did*, since 2026-10-22; before, the card that took its
+ *       place); Block on the last card: its line, after the one before it;
+ *       Block on the one left: its line, over "Nothing is waiting for
+ *       you."; never an answer button; the arbiter has the three answers;
  *   A4  nothing rejects unhandled; the oracle: neither `/api/home` nor any
  *       rendered page carries the key's value, and none carries a token;
  *       nothing was forwarded.
@@ -89,7 +91,7 @@ const cards = (doc: any) => [...doc.querySelectorAll("#approvals-waiting > .ask"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const block = (card: any) => [...card.querySelectorAll("button")].find((b: any) => b.textContent === "Block") as any;
 
-test("an answer keeps the keyboard focus in its list: the next question, the one before it, the list's line, or the refused button (real arbiter, net-proxy, dashboard, served page)", { timeout: 180_000 }, async () => {
+test("an answer keeps the keyboard focus in its list: the line it leaves where the card was, or the refused button (real arbiter, net-proxy, dashboard, served page)", { timeout: 180_000 }, async () => {
   const tmp = mkdtempSync(join(tmpdir(), "mandu-answer-focus-"));
   const home = join(tmp, "home");
   mkdirSync(join(home, "proj"), { recursive: true });
@@ -175,16 +177,22 @@ test("an answer keeps the keyboard focus in its list: the next question, the one
       // has gone, the focus is where it goes.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const cardOf = (id: string) => cards(doc).find((c: any) => c.dataset.id === id);
+      const line = () => doc.querySelector("#approvals-waiting > .answer-line");
       press(block(cardOf(first!)));
       await waitWhile(() => cardOf(first!) !== undefined);
-      assert.equal(doc.activeElement, cardOf(second!), "the card that took its place has the focus");
-      assert.equal(doc.activeElement.tagName, "DIV", "the card itself, never an answer button");
+      assert.equal(doc.activeElement, line(), "the line where the card was has the focus");
+      assert.equal(doc.activeElement.tagName, "DIV", "a line, never an answer button");
+      assert.match(doc.activeElement.textContent, /^Blocked: send your secret STRIPE_KEY to collector\d\.example\. Nothing was sent\. Change your answer$/);
+      assert.equal(doc.activeElement.nextElementSibling, cardOf(second!), "the next question right after it");
       press(block(cardOf(third!)));
       await waitWhile(() => cardOf(third!) !== undefined);
-      assert.equal(doc.activeElement, cardOf(second!), "the last answered: the one before it");
+      assert.equal(doc.activeElement, line(), "the last answered: its line");
+      assert.equal(doc.activeElement.previousElementSibling, cardOf(second!), "after the one before it");
       press(block(cardOf(second!)));
       await waitWhile(() => cards(doc).length > 0);
-      assert.equal(doc.activeElement.textContent, "Nothing is waiting for you.");
+      assert.equal(doc.activeElement, line());
+      assert.equal(doc.querySelectorAll("#approvals-waiting > .answer-line").length, 1, "one line: each answer replaces the last");
+      assert.equal(doc.activeElement.nextElementSibling.textContent, "Nothing is waiting for you.");
       assert.equal(doc.activeElement.parentElement.id, "approvals-waiting");
       rendered.push(["the Approvals page signed in", doc.documentElement.outerHTML]);
     }, { headers: signedIn });

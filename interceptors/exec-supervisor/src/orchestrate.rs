@@ -665,9 +665,20 @@ mod tests {
     //    Before 2026-10-17 the client had no deadline and plan_exec hung.
 
     const WEDGE_LIMIT: std::time::Duration = std::time::Duration::from_millis(200);
+    /// The deadline of the ops a test's mock ANSWERS, beside one it wedges:
+    /// with WEDGE_LIMIT for all, a starved mock thread let the answered
+    /// classifyExec time out, and the plan failed closed before it reached the
+    /// wedged op (CI, 2026-10-22: `asked_after("resolveExecArgv", 1)` read 0).
+    const ANSWER_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
     fn wedged_client(arbiter: &mandu_arbiter::mock::StallingArbiter) -> ArbiterClient {
         ArbiterClient::new(&arbiter.socket_path).with_io_timeout(Some(WEDGE_LIMIT))
+    }
+
+    /// A client that waits ANSWER_LIMIT for every op but `wedged`, which
+    /// gives up at WEDGE_LIMIT.
+    fn client_wedged_at(arbiter: &mandu_arbiter::mock::StallingArbiter, wedged: &str) -> ArbiterClient {
+        ArbiterClient::new(&arbiter.socket_path).with_io_timeout(Some(ANSWER_LIMIT)).with_op_deadline(wedged, WEDGE_LIMIT)
     }
 
     #[test]
@@ -695,15 +706,21 @@ mod tests {
             "execDecisionFor" => mandu_arbiter::mock::Stall::Answer(Ok(serde_json::json!({ "decision": null, "signature": "" }))),
             _ => mandu_arbiter::mock::Stall::Never,
         }));
-        let mut c = wedged_client(&arbiter);
+        let mut c = client_wedged_at(&arbiter, "resolveExecArgv");
+        let t0 = std::time::Instant::now();
         let plan = plan_exec(
             &mut c,
             &ExecRequest { argv: vec!["sh".into(), "-c".into(), "$MDU:Read[ab12].body".into()], needs_network: true, ..Default::default() },
         );
-        assert_eq!(arbiter.asked_after("resolveExecArgv", 1), 1);
+        assert!(t0.elapsed() < ANSWER_LIMIT, "plan_exec waited {:?}", t0.elapsed());
+        assert_eq!(plan.shell, ExecShell::HumanShell, "the classify was answered: {plan:?}");
         assert!(plan.arbiter_miss && plan.needs_approval(), "{plan:?}");
         assert_eq!(plan.argv[2], "$MDU:Read[ab12].body", "nothing desymbolized");
-        assert!(plan.approvals[0].reason.contains("timed out"), "{:?}", plan.approvals);
+        assert!(plan.approvals[0].reason.contains("resolveExecArgv timed out"), "the gate itself timed out: {:?}", plan.approvals);
+        assert!(plan.approvals[0].symbols.contains(&"$MDU:Read[ab12].body".to_string()), "{:?}", plan.approvals);
+        // Asked once, never retried (none only if the client starved past the
+        // gate's whole deadline before writing it: unsent, the same Timeout).
+        assert!(arbiter.asked_after("resolveExecArgv", 1) <= 1, "{:?}", arbiter.requests());
     }
 
     #[test]
@@ -714,7 +731,8 @@ mod tests {
             }))),
             _ => mandu_arbiter::mock::Stall::Never,
         }));
-        let mut c = wedged_client(&arbiter);
+        let mut c = client_wedged_at(&arbiter, "escalateExec");
+        let t0 = std::time::Instant::now();
         let plan = plan_exec(
             &mut c,
             &ExecRequest {
@@ -724,9 +742,11 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(arbiter.asked_after("escalateExec", 1), 1);
+        assert!(t0.elapsed() < ANSWER_LIMIT, "plan_exec waited {:?}", t0.elapsed());
         assert_eq!(plan.shell, ExecShell::AgentShell);
-        assert!(plan.escalation_pending);
+        assert!(plan.escalation_pending, "{plan:?}");
+        assert!(plan.reason.contains("escalateExec timed out"), "the escalation itself timed out: {}", plan.reason);
+        assert!(arbiter.asked_after("escalateExec", 1) <= 1, "asked once, never retried: {:?}", arbiter.requests());
     }
 
     #[test]

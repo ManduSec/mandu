@@ -516,3 +516,19 @@ test("§11.2 indent on Codex: symbolShape gets the content area's column (cols �
   assert.deepEqual(seen, [{ width: 72, first: 72, indent: 2 }]);
   assert.equal(layoutRows(cells, 72, 72).length, 1, "counted from the value's own column 0 it would not expand");
 });
+
+test("§19.7 TAB origin on the openai-proxy: a relay that reports `tabs: content` gets indent 0 (Codex never does: its stops are the screen's)", async () => {
+  const TABS = "$MDU:nomodel_Read[7ab5]";
+  const cells = Array.from({ length: 9 }, () => "abcdefg").join("\t");
+  const seen: Array<{ width: number; first: number; indent?: number }> = [];
+  const e = eligible({
+    sessionRelay: async () => ({ ...PTY, cols: 74, tabs: "content" }),
+    symbolShape: async (_t: string, o?: { width: number; first: number; indent?: number }) => {
+      if (o) seen.push(o);
+      return o ? { lines: 1, rows: layoutRows(cells, o.width, o.first, "ink", o.indent).length } : { lines: 1 };
+    },
+  });
+  assert.deepEqual(await e.layout(), { cols: 74, tabs: "content" });
+  assert.equal(await textOf(viaEligibility(e), `${TABS}\n`), `${TABS}\n`, "counted from the text it fits one row: nothing reserved");
+  assert.deepEqual(seen, [{ width: 72, first: 72 }], "indent 0 is sent without the key");
+});

@@ -245,8 +245,10 @@
  * COLUMN-AWARE TAB EXPANSION (eager mode, 2026-09-20; closes the §19
  * TAB-in-value residual where the column is known):
  *   The vanilla TUI prints a value's TAB raw and the terminal advances to the
- *   next tab stop (every 8 columns, the terminal default), so the tab's width
- *   depends on the COLUMN it lands on. A raw TAB must never be spliced (it
+ *   next tab stop (every 8 columns, the terminal default), or (Claude Code,
+ *   reply-row-reservation.md §19.7) expands it itself to the next multiple
+ *   of 8 counted from its text's left column (CONTENT_TAB_COL here), so the
+ *   tab's width depends on the COLUMN it lands on. A raw TAB must never be spliced (it
  *   is a cursor jump the TUI did not plan), so the tab is rendered as the
  *   spaces that reach the same stop. The column is NOT known where the value
  *   is rendered (resolveText works on bytes, before the column model runs);
@@ -483,14 +485,17 @@ export const TAB_STOP = 8;
  * the cursor to a tab stop the TUI didn't plan):
  *   - `startCol` given (the 0-based screen column the value's first glyph
  *     lands on): each tab becomes the spaces that reach the next TAB_STOP
- *     multiple, the column tracked glyph by glyph, which is what the vanilla
- *     terminal shows for the raw tab;
+ *     multiple counted from screen column `origin` (0: the terminal's own
+ *     stops; the TUI's text column for a TUI that expands its TABs itself,
+ *     reserve-block.ts TabOrigin), the column tracked glyph by glyph, which
+ *     is what the vanilla screen shows for the raw tab. A value that starts
+ *     left of `origin` counts from its own start;
  *   - `startCol` omitted (or not a finite non-negative number): each tab is
  *     ONE space, the documented fallback for a caller that does not know
  *     the column.
  * Total by construction: never throws, whatever the input.
  */
-export function frameSafeValue(v: string, startCol?: number): string {
+export function frameSafeValue(v: string, startCol?: number, origin: number = 0): string {
   const flat = v
     .replace(/[\r\n]+$/, "")
     .replace(/\r\n|\r|\n/g, " ⏎ ")
@@ -500,7 +505,8 @@ export function frameSafeValue(v: string, startCol?: number): string {
   if (typeof startCol !== "number" || !Number.isFinite(startCol) || startCol < 0) {
     return flat.replace(/\t/g, " ");
   }
-  let col = Math.floor(startCol);
+  const from = Number.isFinite(origin) && origin > 0 ? Math.floor(origin) : 0;
+  let col = Math.max(0, Math.floor(startCol) - from);
   let out = "";
   for (const ch of flat) {
     if (ch === "\t") {
@@ -1622,8 +1628,9 @@ export class ReplyStreamFilter {
     if (!this.opts.eager) return { bytes: value, cols: 0 };
     // `startCol` (0-based real column, from tabSpliceCol) is given only on the
     // column-aware re-render of a tab-carrying value; without it a tab is one
-    // space (COLUMN-AWARE TAB EXPANSION in the header).
-    const sv = frameSafeValue(value, startCol);
+    // space (COLUMN-AWARE TAB EXPANSION in the header). The stops count from
+    // the session's TAB origin (reply-row-reservation.md §19.7).
+    const sv = frameSafeValue(value, startCol, this.reserve.spliceTabOrigin);
     // DISPLAY columns (a wide glyph is 2, a combining mark 0), not code
     // points: a v2 row (reply-row-reservation.md §11.2) is laid out to fill
     // its row in display columns, and a wide row counted short would be

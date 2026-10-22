@@ -16,6 +16,11 @@ use crate::event::{self, ManduEvent};
 use crate::mock::{op_stall, Stall, StallingArbiter};
 
 const SHORT: Duration = Duration::from_millis(200);
+/// The deadline of a request the mock ANSWERS, beside one it wedges: under
+/// SHORT a mock thread starved on a loaded machine misses it, and the test
+/// meets a timeout it did not set up (exec-supervisor's wedged orchestrate
+/// tests, 2026-10-22). Long enough that only a wedged op ever reaches it.
+const LONG: Duration = Duration::from_secs(30);
 
 fn pong() -> Stall {
     Stall::Answer(Ok(json!({ "pong": true, "protocolVersion": 1 })))
@@ -97,12 +102,29 @@ fn a_report_waits_at_most_the_report_deadline() {
 #[test]
 fn a_timed_out_connection_is_never_reused() {
     let arbiter = StallingArbiter::start(op_stall(|op, _| if op == "isProcessTainted" { Stall::Never } else { pong() }));
-    let mut c = ArbiterClient::new(&arbiter.socket_path).with_io_timeout(Some(SHORT));
+    let mut c = ArbiterClient::new(&arbiter.socket_path).with_io_timeout(Some(LONG)).with_op_deadline("isProcessTainted", SHORT);
     assert_timeout(c.is_process_tainted("pid-1"), "isProcessTainted", SHORT);
     assert!(c.ping().expect("a fresh connection answers").pong);
-    let mut seen = arbiter.requests_after(2); // each connection's thread reads in its own time
-    seen.sort();
-    assert_eq!(seen, vec![(1, "isProcessTainted".to_string()), (2, "ping".to_string())]);
+    assert_ping_on_its_own_connection(&arbiter);
+}
+
+/// `ping` was read on a connection of its own, never on the one
+/// `isProcessTainted` timed out on. When the client's thread was starved
+/// past that op's whole deadline before writing it (a loaded machine), it
+/// gave up unsent ([`ArbiterError::Timeout`], fail closed: the client test
+/// `a_deadline_that_passed_before_the_write_sends_nothing`), and there is no
+/// timed-out connection to reuse.
+fn assert_ping_on_its_own_connection(arbiter: &StallingArbiter) {
+    let seen = arbiter.requests_after(2); // each connection's thread reads in its own time
+    let conns = |op: &str| seen.iter().filter(|(_, o)| o == op).map(|(n, _)| *n).collect::<Vec<_>>();
+    let (ping, tainted) = (conns("ping"), conns("isProcessTainted"));
+    assert_eq!(ping.len(), 1, "{seen:?}");
+    if tainted.is_empty() {
+        eprintln!("isProcessTainted gave up unsent (the client's thread starved past its deadline): {seen:?}");
+        return;
+    }
+    assert_eq!(tainted.len(), 1, "{seen:?}");
+    assert!(ping[0] > tainted[0], "ping went on a new connection: {seen:?}");
     assert_eq!(arbiter.connection_count(), 2);
 }
 
@@ -115,11 +137,11 @@ fn a_late_answer_is_never_read_as_the_next_requests() {
         "isProcessTainted" => Stall::AnswerAfter(SHORT + Duration::from_millis(100), Ok(json!({ "tainted": false }))),
         _ => pong(),
     }));
-    let mut c = ArbiterClient::new(&arbiter.socket_path).with_io_timeout(Some(SHORT));
+    let mut c = ArbiterClient::new(&arbiter.socket_path).with_io_timeout(Some(LONG)).with_op_deadline("isProcessTainted", SHORT);
     assert_timeout(c.is_process_tainted("pid-1"), "isProcessTainted", SHORT);
     let p = c.ping().expect("ping's own answer");
     assert!(p.pong);
-    assert_eq!(arbiter.requests().last(), Some(&(2, "ping".to_string())), "ping went on a new connection");
+    assert_ping_on_its_own_connection(&arbiter);
 }
 
 /// An answer that never completes (one byte at a time, never the newline) is
@@ -172,10 +194,33 @@ fn a_refusal_keeps_the_connection() {
         "isProcessTainted" => Stall::Answer(Err("no such process".into())),
         _ => pong(),
     }));
-    let mut c = ArbiterClient::new(&arbiter.socket_path).with_io_timeout(Some(SHORT));
+    let mut c = ArbiterClient::new(&arbiter.socket_path).with_io_timeout(Some(LONG));
     assert!(matches!(c.is_process_tainted("pid-1"), Err(ArbiterError::Arbiter(_))));
     assert!(c.ping().unwrap().pong);
     assert_eq!(arbiter.connection_count(), 1);
+}
+
+/// An op's own deadline (`with_op_deadline`, the mock feature's test seam)
+/// replaces the client's for that op alone: the wedged op gives up at it,
+/// and an answer slower than it still reaches another op under the client's.
+#[test]
+fn an_ops_own_deadline_bounds_that_op_alone() {
+    let arbiter = StallingArbiter::start(op_stall(|op, _| match op {
+        "ping" => Stall::Never,
+        _ => Stall::AnswerAfter(SHORT * 2, Ok(json!({ "tainted": false }))),
+    }));
+    let mut c = ArbiterClient::new(&arbiter.socket_path).with_io_timeout(Some(LONG)).with_op_deadline("ping", SHORT);
+    let t0 = Instant::now();
+    assert_timeout(c.ping(), "ping", SHORT);
+    let took = t0.elapsed();
+    assert!(took >= SHORT && took < LONG, "gave up after {took:?}");
+    assert!(!c.is_process_tainted("pid-1").expect("an answer slower than ping's deadline").tainted);
+    // A report's own deadline replaces REPORT_IO_TIMEOUT too, and a later
+    // setting of one op replaces its earlier one.
+    let c = c.with_op_deadline("ping", Duration::ZERO);
+    assert_eq!(c.timeout_for(crate::client::CallKind::Report, "ping"), Some(Duration::from_millis(1)));
+    assert_eq!(c.timeout_for(crate::client::CallKind::Report, "emit"), Some(REPORT_IO_TIMEOUT));
+    assert_eq!(c.timeout_for(crate::client::CallKind::Decision, "isProcessTainted"), Some(LONG));
 }
 
 /// `with_io_timeout(None)` waits as long as the arbiter takes (a caller's

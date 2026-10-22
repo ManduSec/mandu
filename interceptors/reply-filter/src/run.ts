@@ -87,6 +87,11 @@
  *                         `rule: "terminal"` and reserved rows are painted by
  *                         character wrap at the full width. Deleted from the
  *                         child's env.
+ *   MANDU_REPLY_TAB_ORIGIN=content  the agent's TUI expands a reply TAB
+ *                         itself, from its text's left column (the launcher
+ *                         sets it for Claude Code, reply-row-reservation.md
+ *                         §19.7): the relay reports `tabs: "content"` and TAB
+ *                         stops count from there. Deleted from the child's env.
  *
  * RELAY REPORT (docs/design/ui/reply-row-reservation.md §3.6): once the mode is
  * decided the wrapper tells the arbiter (`setSessionRelay`, keyed by
@@ -118,7 +123,7 @@ import { BsdRelayCompanion, realBsdRelayDeps } from "./bsd-relay.js";
 import { ScreenReconciler } from "./screen-reconcile.js";
 import { WatchedResolver } from "./resolve-health.js";
 import { HANDOFF_FLAG, applyHandoff, handoffArgv, handoffChannel, receiveHandoff } from "./handoff.js";
-import { RESERVE_CACHE_MAX, ReserveValueCache, sessionRelay, wrapRule } from "./reserve-block.js";
+import { RESERVE_CACHE_MAX, ReserveValueCache, sessionRelay, tabOrigin, wrapRule } from "./reserve-block.js";
 import {
   ArbiterClientAdapter, childEnv, humanSockFromEnv, HUMAN_SOCK_ENV,
   type RealArbiterClient, type ReplyArbiter, type SessionRelay,
@@ -675,7 +680,7 @@ async function main(): Promise<void> {
   // The session's reserve-block memory, shared by the stream splice and the
   // screen reconciler (reply-row-reservation.md §3.7), with the wrap rule the
   // agent's TUI lays its reply out by (§17: the launcher sets it for Goose).
-  const reserveCache = new ReserveValueCache(RESERVE_CACHE_MAX, wrapRule());
+  const reserveCache = new ReserveValueCache(RESERVE_CACHE_MAX, wrapRule(), tabOrigin());
   const filter = outputFormat === "json" || outputFormat === "stream-json"
     ? new StructuredReplyFilter(watched, outputFormat, {
       onResolve,

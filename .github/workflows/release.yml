@@ -1,0 +1,213 @@
+# Release: the one place a Mandu release is built and published
+# (docs/design/distribution/packaging.md §11.3, docs/design/testing/continuous-integration.md §12).
+#
+# A maintainer pushes an annotated tag v<version> on a snapshot commit of main;
+# the tag's message is the release notes. Then:
+#   check    the CI workflow (ci.yml) on that commit: the exported tree's own test
+#   pack     scripts/ci/release-pack.sh in this tree (the public one): the
+#            tarball with the six native bins, its SHA256SUMS, the release
+#            copy of install.sh and the notes (scripts/ci/release-assets.mjs),
+#            kept as the workflow artifact `release`
+#   publish  after check and pack, and only once a maintainer approves the
+#            `release` environment: the GitHub release (created, or its assets
+#            replaced) and `npm publish` of the SAME tarball by npm trusted
+#            publishing (OIDC, no stored token) with a provenance statement
+#            that names this repository, this workflow and this commit
+#
+# The approval is the one human gate before the irreversible step: download
+# the `release` artifact, check it, then approve. npm accepts a publish of
+# @mandusec/mandu only from this file in this repository, in the `release`
+# environment (the trusted publisher's settings on npmjs.com, which allow
+# `npm publish` and not `npm dist-tag`). The maintainer chose this one gate
+# over npm's stage-only setting, whose second, 2FA approval on npm would mean
+# a reviewer's GitHub account alone could not publish (packaging.md §11.3).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The engines floor and the workspace's rust-version, as ci.yml (pins.env).
+  NODE_VERSION: "22.13.0"
+  RUSTUP_TOOLCHAIN: "1.75.0"
+  # The publish job's node, and the pinned npm it installs (trusted
+  # publishing needs npm >= 11.5.1).
+  PUBLISH_NODE_VERSION: "24.21.0"
+  PUBLISH_NPM_VERSION: "11.21.1"
+
+jobs:
+  check:
+    name: release check (CI)
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  pack:
+    name: pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.assets.outputs.version }}
+      tag: ${{ steps.assets.outputs.tag }}
+      tarball: ${{ steps.assets.outputs.tarball }}
+      sha256: ${{ steps.assets.outputs.sha256 }}
+      sha1: ${{ steps.assets.outputs.sha1 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - id: snapshot
+        name: The tag is annotated and names a snapshot of main
+        # The notes live in the tag's message, and a release is cut only from a
+        # snapshot (its Mandu-Snapshot trailer is the source commit the
+        # package records). A tag elsewhere publishes nothing.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          set -euo pipefail
+          # On a private repository ci.yml's jobs skip (its quota gate), and a
+          # check whose every job skipped would pass: no release from there.
+          test "$REPO_PRIVATE" = false \
+            || { echo "::error::the repository is private: its CI check would skip, so it releases nothing"; exit 1; }
+          git log -1 --format=%B | grep -Eq '^Mandu-Snapshot: [0-9a-f]{40}$' \
+            || { echo "::error::$TAG is not on a snapshot commit (no Mandu-Snapshot trailer)"; exit 1; }
+          ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG")"
+          test "$(jq -r .object.type <<<"$ref")" = tag \
+            || { echo "::error::$TAG is a lightweight tag: tag with -a and write the release notes in its message"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$(jq -r .object.sha <<<"$ref")" --jq .message > "$RUNNER_TEMP/tag-message.txt"
+          git fetch -q --no-tags origin main
+          git merge-base --is-ancestor HEAD FETCH_HEAD \
+            || { echo "::error::$TAG names a commit that is not on main"; exit 1; }
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
+
+      - name: Install Rust ${{ env.RUSTUP_TOOLCHAIN }}, the aarch64 target, its cross linker and qemu-user
+        # build-native.sh links the aarch64 bins with aarch64-linux-gnu-gcc;
+        # release-pack.sh starts each under qemu-aarch64 (-L /usr/aarch64-linux-gnu).
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target aarch64-unknown-linux-gnu
+          rustup target list --installed | grep -qx aarch64-unknown-linux-gnu
+          rustc --version
+
+      - name: npm ci (the packages the bundle builds from)
+        run: |
+          set -euo pipefail
+          for p in arbiter dashboard fs-sync launcher \
+            interceptors/anthropic-proxy interceptors/openai-proxy interceptors/net-proxy interceptors/cdp-relay \
+            interceptors/inspect-mcp interceptors/policy-mcp interceptors/reply-filter interceptors/exec-wrap; do
+            echo "::group::npm ci: $p"
+            (cd "$p" && npm ci --no-audit --no-fund)
+            echo "::endgroup::"
+          done
+
+      - name: release-pack
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/target
+          TAG: ${{ github.ref_name }}
+        run: bash scripts/ci/release-pack.sh "$TAG"
+
+      - id: assets
+        name: The release install.sh, the notes, the outputs
+        run: |
+          set -euo pipefail
+          node scripts/ci/release-assets.mjs --dir release \
+            --notes-in "$RUNNER_TEMP/tag-message.txt" --notes-out release/NOTES.md >> "$GITHUB_OUTPUT"
+          test "$(grep '^tag=' "$GITHUB_OUTPUT" | tail -1)" = "tag=$GITHUB_REF_NAME"
+          cat release/SHA256SUMS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release
+          path: |
+            release/${{ steps.assets.outputs.tarball }}
+            release/SHA256SUMS
+            release/install.sh
+            release/NOTES.md
+            release/COMMIT
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    name: publish (GitHub release + npm)
+    needs: [check, pack]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # A maintainer's approval (the environment's required reviewers) starts
+    # this job; npm's trusted publisher accepts only this environment.
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.pack.outputs.tag }}
+      VERSION: ${{ needs.pack.outputs.version }}
+      TARBALL: ${{ needs.pack.outputs.tarball }}
+      SHA1: ${{ needs.pack.outputs.sha1 }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: release
+
+      - name: The bytes are the ones pack built
+        working-directory: release
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          test "$(sha1sum "$TARBALL" | cut -d' ' -f1)" = "$SHA1"
+
+      - name: GitHub release
+        # Created at the tag, or (a rerun) its assets and notes replaced.
+        working-directory: release
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "$TARBALL" SHA256SUMS install.sh
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "Mandu $VERSION" --notes-file NOTES.md
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --latest \
+              --title "Mandu $VERSION" --notes-file NOTES.md "$TARBALL" SHA256SUMS install.sh
+          fi
+
+      # No registry input: setup-node would write an .npmrc with a placeholder token, and
+      # trusted publishing needs none (npm exchanges the job's OIDC identity
+      # with the default registry, registry.npmjs.org).
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.PUBLISH_NODE_VERSION }}
+
+      - name: npm publish (trusted publishing, provenance)
+        # Lifecycle scripts off: nothing from the tarball runs here. `latest`
+        # is what a plain `npm install -g @mandusec/mandu` resolves, and npm
+        # refuses a prerelease without a --tag. A version already on npm with
+        # these bytes (a rerun) is left alone; with other bytes it is red.
+        working-directory: release
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts --no-audit --no-fund "npm@$PUBLISH_NPM_VERSION"
+          npm_v="$(npm --version)"
+          node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$npm_v" \
+            || { echo "::error::npm $npm_v cannot publish by trusted publishing (needs >= 11.5.1)"; exit 1; }
+          have="$(npm view "@mandusec/mandu@$VERSION" dist.shasum 2>/dev/null || true)"
+          if [ "$have" = "$SHA1" ]; then echo "@mandusec/mandu@$VERSION is already on npm with these bytes"; exit 0; fi
+          if [ -n "$have" ]; then echo "::error::@mandusec/mandu@$VERSION is on npm with other bytes ($have)"; exit 1; fi
+          npm publish "./$TARBALL" --access public --tag latest --provenance --ignore-scripts

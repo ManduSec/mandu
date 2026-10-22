@@ -19,7 +19,9 @@
  * heading; an unknown hash
  * opens the top and goes from the address; a link that opens a card from
  * another page (openAtCard) writes that card's address; a nav link to the
- * page opens it without one. Axes: none (display only).
+ * page opens it without one; Back to an address with a card returns to
+ * where you left the page, not to the card (since 2026-10-22, §4.25 *Back
+ * and Forward keep your place*). Axes: none (display only).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -47,6 +49,7 @@ const SETTINGS_LINKS = [
   ["Prompt filters", "prompt-filters", "settings-prompt-block"],
   ["Notifications", "notifications", "settings-notify-block"],
   ["Appearance", "appearance", "settings-appearance-block"],
+  ["About", "about", "settings-about-block"],
 ];
 
 const row = (doc: any, page: string) => doc.querySelector(`#page-${page} .page-head nav.section-links`);
@@ -75,6 +78,13 @@ test("under each title, a link per card, in the page's order: each names an exis
       assert.ok(card.querySelector("h2").textContent.startsWith(words), `${words}: the card's heading starts with the link's words`);
     }
   }
+});
+
+test("Settings' row reads Protection · Models · Sensitivity labels · Prompt filters · Notifications · Appearance · About", async () => {
+  const { doc } = load({ url: `${BASE}/settings`, routes: ROUTES });
+  await tick();
+  // The "·" between them is the stylesheet's.
+  assert.equal(links(doc, "settings").map((a) => a.textContent).join(" · "), "Protection · Models · Sensitivity labels · Prompt filters · Notifications · Appearance · About");
 });
 
 test("a click scrolls its card to the top, gives the card's heading the focus and puts its key in the address, replaced", async () => {
@@ -117,6 +127,7 @@ test("an address with a card's key lands on that card once the page has drawn, t
     [`${BASE}/rules#keys-found`, "suggested-block", "suggested-title"],
     [`${BASE}/settings#prompt-filters`, "settings-prompt-block", "settings-prompt-title"],
     [`${BASE}/settings#notifications`, "settings-notify-block", "settings-notify-title"],
+    [`${BASE}/settings#about`, "settings-about-block", "settings-about-title"],
   ]) {
     const scrolled: string[] = [];
     const { doc, window } = load({ url, routes: ROUTES, before: (w) => { w.HTMLElement.prototype.scrollIntoView = function (this: any) { scrolled.push(this.id); }; } });
@@ -168,6 +179,11 @@ test("a link that opens a card from another page writes that card's address; a n
   assert.equal(window.location.pathname + window.location.hash, "/mandu/rules#keys-found");
   assert.deepEqual(scrolled, ["suggested-block"]);
   assert.equal(doc.activeElement, doc.getElementById("suggested-title"));
+  // Where the card's landing left the page (jsdom has no layout); then a
+  // scroll down from it.
+  const to: number[] = [];
+  Object.defineProperty(window, "scrollY", { value: 2100, writable: true, configurable: true });
+  window.scrollTo = (_x: number, y: number) => { to.push(y); window.scrollY = y; };
   // The top bar's Settings link, then Rules: each page at its top, no hash.
   doc.querySelector('#nav a[data-page-link="settings"]').click();
   await tick();
@@ -176,11 +192,14 @@ test("a link that opens a card from another page writes that card's address; a n
   await tick();
   assert.equal(window.location.pathname + window.location.hash, "/mandu/rules");
   assert.deepEqual(scrolled, ["suggested-block"], "no scroll to a card");
-  // Back to the address with the card: there again.
+  // Back to the address with the card: where you left the page, not the
+  // card (§4.25 *Back and Forward keep your place*: the place wins).
+  const mark = to.length;
   window.history.go(-2);
   await new Promise((r) => setTimeout(r, 50));
   await tick();
-  assert.equal(window.location.pathname + window.location.hash, "/mandu/rules#keys-found");
-  assert.deepEqual(scrolled, ["suggested-block", "suggested-block"], "Back lands on the card again");
-  assert.equal(doc.activeElement, doc.getElementById("suggested-title"));
+  assert.equal(window.location.pathname + window.location.hash, "/mandu/rules#keys-found", "the address still names the card");
+  assert.deepEqual(scrolled, ["suggested-block"], "Back scrolls to no card");
+  assert.deepEqual(to.slice(mark), [2100], "the place you left");
+  assert.equal(doc.activeElement, doc.querySelector("#page-rules h1"), "the focus on the page's heading");
 });

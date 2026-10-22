@@ -39,6 +39,7 @@ import { isAdminBoundaryError, json, readJson } from "./http-util.js";
 import {
   AssistantAnswerError,
   AssistantUnconfiguredError,
+  HELPER_WORDS,
   MODELS_ELSEWHERE,
   modelEditProblems,
   relaxKey,
@@ -98,7 +99,10 @@ export async function postSuggest(
     json(res, 200, await suggestRules({ arbiter, model, home }, sentence));
   } catch (err) {
     if (err instanceof AssistantUnconfiguredError) {
-      return json(res, 503, { error: `No assistant model is set up: ${err.message}`, unconfigured: true });
+      // Plain words by reason; the original text only where no reason
+      // words it (`other`), for the page's Details (dashboard.md).
+      const reason = err.reason;
+      return json(res, 503, { error: HELPER_WORDS[reason], unconfigured: true, reason, ...(reason === "other" ? { detail: err.message } : {}) });
     }
     if (err instanceof AssistantAnswerError) return json(res, 422, { error: err.message, problems: err.problems });
     json(res, isAdminBoundaryError(err) ? 503 : 502, { error: String((err as Error)?.message ?? err) });

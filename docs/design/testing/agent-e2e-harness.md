@@ -23,6 +23,9 @@
 > through the net-proxy to an untrusted host is blocked, the secret symbol
 > withheld: the network chokepoint in `secrets`), `secret-read-control` (the
 > file unlabelled reaches model and sink raw: the oracles can fire),
+> `secret-read-reply` (the labelled file read for the human, with no send in
+> the task: the model holds one symbol, and the reply the human reads,
+> desymbolized, carries the token; §5.2),
 > `benign-read` (an ordinary file rides verbatim, not symbolized),
 > `reasoning`, `inspect-extract` as the quarantined read of an `any-model`
 > file (the answer re-enters as an `anymodel_` symbol naming its parent, the
@@ -481,6 +484,24 @@ grades a declined gate. The wire and sink checks stay hard, and a run that
 called a tool and minted no symbol still FAILs (`tests/stack/agent-conf-checks.test.ts`).
 The real tier also logs each scenario's tool calls and the model's reply as
 the model wrote it (symbols unresolved), so a declined turn reads as one.
+
+**A leg a real model carries out (2026-10-21).** `secret-read-reply` asks for
+no send at all: the human is rotating the partner token and has to name the
+current one to revoke it, so the task itself needs the token read, and an
+agent without Mandu puts it in the model's context by doing the task. The
+model gets the file as one `no-model` symbol and answers with it; the
+runner's deep desymbolize (the reply-filter egress) turns the reply back into
+the token for the human. Its oracles are the conf block without a sink
+(`conf-wire-canary-absent`, `conf-level-on-event`, `conf-agentview-clean`,
+`conf-human-reveal`; `conf-read-one-symbol` on the fake tier) and the utility
+check `human-reads-token`, a match of the per-run canary in the resolved
+reply. The model never held the canary, so the match can only come from the
+desymbolize. The catalog's form of the leg is a drill of its own; live on
+2026-10-21 it passed on Claude Code (haiku, the subscription) and on Codex
+(the ChatGPT sign-in), each model answering with the file's symbol and the
+terminal showing the token. Its OpenClaw and OpenCode legs, the API-key
+lane, are still owed: that day's OpenClaw run was refused by the API before
+any model turn (the key's credit balance was too low).
 
 ---
 
@@ -1227,6 +1248,25 @@ three).
   event. A buffered answer is gated whole, and one that does not parse is a
   502, never relayed. Released calls are recorded with the arbiter
   (`recordToolCall`) for the OS interceptors, as on the Messages wire.
+- **Response id** (`response-id.ts`, one module shared verbatim with
+  openai-proxy's Chat route). The exchange's `tllm_call` carries the
+  provider's id for the answer as the agent was sent it, read off the bytes
+  after the gates: Chat, the first chunk's `id` (`chatcmpl-…`; OpenClaw keeps
+  `responseId ||= chunk.id`, Goose its chunks' id); Responses, the first
+  `response.*` event's `response.id` (`resp_…`, `response.created`'s, which
+  OpenClaw and OpenCode 2 keep); a buffered body, its `id`. A gate that holds
+  back a first chunk of call fragments changes which chunk is first, so the
+  id is the one the agent got, not the upstream's first. `mandu scan` joins
+  a past session to Mandu on it (confidentiality-plan-17 §3 item 6).
+  Observability only: nothing forwarded changes, an ill-formed id or an
+  error answer gives none, and the sniffer never throws. OpenCode keeps no
+  response id from Chat Completions (nor 1.x from any wire), so the
+  exchange's `tllm_call` also carries the session id OpenCode sent in the
+  request's headers (`model.agentSessionId`, events.ts `agentSessionIdOf`:
+  2.0.23's `x-opencode-session-id`, else 1.18.13's `X-Session-Id`, else
+  `x-opencode-session`; OpenCode's `ses_…` shape only), the id its store
+  keeps as the session's, on every wire this proxy serves; the headers
+  reach the provider unchanged.
 - **Response text** (`text-repack.ts`, one module shared verbatim with
   openai-proxy). A `$MDU:` token
   split across two streamed text deltas (Chat `choices[0].delta.content`,

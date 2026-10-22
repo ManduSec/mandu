@@ -22,7 +22,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { AGENT, ASK, T, load, tick } from "./home-js-fixtures.js";
+import { AGENT, ASK, T, home, load, tick } from "./home-js-fixtures.js";
 
 const URL1 = "http://127.0.0.1:4500/mandu/agents/s1";
 const step = (id: string, outcome = "plain") => ({ kind: "action", id, ts: "2026-09-25T10:00:01.000Z", icon: "run", sentence: [T(`Ran ${id}`)], outcome, note: null, split: null });
@@ -198,4 +198,74 @@ test("G5: a poll redraw keeps where the tile is, its mark, the focus and the sto
   assert.equal(tileOf(doc, "blocked").querySelector(".at").textContent, "");
   tileOf(doc, "blocked").click();
   assert.equal(doc.activeElement.dataset.stepId, "b1");
+});
+
+// ── A Home count's link: `?go=` (§4.25 *The counts link where they point*) ──
+
+test("G6: /agents/<id>?go=blocked presses the blocked tile once the page is first drawn, then drops `go` from the address; a poll does not land again", async () => {
+  let page: unknown = PAGE;
+  const { doc } = load({ url: `${URL1}?go=blocked`, routes: { "GET home/agent?session=s1": () => page } });
+  await tick();
+  assert.equal(doc.defaultView.location.pathname + doc.defaultView.location.search, "/mandu/agents/s1", "used once: Back and a reload do not jump again");
+  assert.equal(doc.activeElement.dataset.stepId, "b1", "the first blocked step has the focus");
+  assert.deepEqual(shown(doc), ["b1"], "marked, as the tile's press marks it");
+  assert.equal(tileOf(doc, "blocked").querySelector(".at").textContent, "Showing 1 of 3", "the tile says where it is");
+  // The person moves on; the agent does more and the page is drawn again: no second landing.
+  tileOf(doc, "waiting").click();
+  const card = doc.activeElement;
+  page = { ...PAGE, story: [...STORY, turn("t:d", [step("d1")])] };
+  await poll(doc);
+  assert.equal(doc.activeElement.dataset.id, card.dataset.id, "the focus stays where the person put it");
+  assert.deepEqual(shown(doc), ["b1"]);
+
+  // `?go=sent` presses the sent tile.
+  const sent = load({ url: `${URL1}?go=sent`, routes: { "GET home/agent?session=s1": PAGE } });
+  await tick();
+  assert.equal(sent.doc.activeElement.dataset.stepId, "s1");
+});
+
+test("G7: ?go=blocked for a step in a turn before those drawn asks for every turn first, as a press does, and lands on it", async () => {
+  const older = turn("t:old", [step("b0", "blocked")], "blocked");
+  const capped = { ...PAGE, blocked: 4, earlier: 1, story: STORY };
+  const all = { ...PAGE, blocked: 4, earlier: 0, allTurns: true, story: [older, ...STORY] };
+  const { doc, calls } = load({ url: `${URL1}?go=blocked`, routes: { "GET home/agent?session=s1": capped, "GET home/agent?session=s1&turns=all": all } });
+  await tick(60);
+  assert.ok(calls.some((c) => c.url === "/mandu/api/home/agent?session=s1&turns=all"), "the Show them read");
+  assert.equal(doc.activeElement.dataset.stepId, "b0");
+  assert.deepEqual(shown(doc), ["b0"], "marked once: the reads that follow (Home's poll asks for every turn too) do not land again");
+});
+
+test("G8: ?go=secrets focuses Your secrets; ?go=nonsense, or a tile with nothing to go to, leaves the page as a plain link opens it", async () => {
+  const withSecrets = { ...PAGE, secrets: { mode: "secrets", flagged: false, more: 0, counts: { masked: 0, early: 0 }, secrets: [] } };
+  const secrets = load({ url: `${URL1}?go=secrets`, routes: { "GET home/agent?session=s1": withSecrets } });
+  await tick();
+  const block = secrets.doc.getElementById("agent-secrets-block");
+  assert.equal(block.hidden, false);
+  assert.equal(secrets.doc.activeElement, block.querySelector("h2"), "Your secrets' heading has the focus");
+  assert.equal(secrets.doc.defaultView.location.search, "");
+
+  for (const url of [`${URL1}?go=nonsense`, `${URL1}?go=blocked`]) {
+    const story = url.endsWith("nonsense") ? STORY : [turn("t:q", plain8("q"))];
+    const { doc } = load({ url, routes: { "GET home/agent?session=s1": { ...PAGE, blocked: url.endsWith("nonsense") ? 3 : 0, story } } });
+    await tick();
+    assert.equal(doc.activeElement.dataset?.stepId, undefined, `${url}: no step has the focus`);
+    assert.deepEqual(shown(doc), [], `${url}: nothing marked`);
+    assert.equal(doc.defaultView.location.search, "", `${url}: the address is the page's own`);
+  }
+});
+
+test("G9: Home's \"1 action blocked\", pressed, opens that session's page at the blocked step", async () => {
+  const w = { hours: 24, sessions: 1, counted: 1, masked: 0, secretsMasked: 0, secretsEarly: 0, untrusted: 0, blocked: 3, sent: 0, waiting: 0, only: { secretsMasked: null, secretsEarly: null, blocked: "s1", sent: null } };
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/", routes: { "GET home": home({ verdict: "secrets-only", headline: "Your secrets are guarded.", waiting: [], window: w }), "GET home/agent?session=s1": PAGE } });
+  await tick();
+  const a = [...doc.querySelectorAll("#hero-facts a")].find((x: El) => /actions blocked/.test(x.textContent)) as El;
+  a.click();
+  await tick(40);
+  assert.equal(doc.defaultView.location.pathname + doc.defaultView.location.search, "/mandu/agents/s1");
+  assert.equal(doc.activeElement.dataset.stepId, "b1");
+  assert.deepEqual(shown(doc), ["b1"]);
+  // The session again by a plain link: a new visit, no landing.
+  doc.defaultView.eval(`setPage('agent', true, 's1')`);
+  await tick();
+  assert.deepEqual(shown(doc), []);
 });

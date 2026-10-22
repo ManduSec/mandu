@@ -134,7 +134,7 @@ test("a command the product page names stays on one line, in History, Settings a
       const opts = { css: resolveCssVars(stylesAt(sheets, width)) };
       await servedProductPage(base, "/history", (doc) => !!doc.querySelector("#history-list .empty"), (doc) => {
         const empty = doc.querySelector("#history-list .empty");
-        assert.equal(empty.textContent, "No session has been recorded yet. Start one with mandu claude or mandu codex.");
+        assert.equal(empty.textContent, "No session has been recorded yet. Start your agent through Mandu, mandu claude or mandu codex, and it shows up here.");
         assert.deepEqual(keptWhole(empty, `History's empty state at ${width}`), ["mandu claude", "mandu codex"]);
       }, opts);
       await servedProductPage(base, "/", (doc) => !!doc.querySelector("#home-agents .empty"), (doc) => {
@@ -172,8 +172,10 @@ test("a command the product page names stays on one line, in History, Settings a
         assert.equal(line.textContent, "This dashboard was started without the service controls. Start it with mandu dashboard to manage the protection service here.");
         assert.deepEqual(keptWhole(line, `Settings at ${width}`), ["mandu dashboard"]);
         const kinds = doc.getElementById("settings-prompt-kinds");
-        assert.match(kinds.textContent, /^Sign in first: in your own terminal, run mandu dashboard and open the sign-in link it prints/);
-        assert.deepEqual(keptWhole(kinds.firstElementChild, `Settings' sign-in words at ${width}`), ["mandu dashboard"]);
+        assert.match(kinds.textContent, /^Sign in first: reload this page and sign in with your dashboard account/);
+        // `mandu dashboard --set-password` is longer than the narrowest column
+        // keeps whole (24): a plain code that may wrap at its spaces.
+        assert.deepEqual(keptWhole(kinds.firstElementChild, `Settings' sign-in words at ${width}`), []);
         noValue(doc.body.textContent, "the rendered Settings page");
       }, opts);
       await servedProductPage(base, "/", (doc) => !!doc.querySelector(`#home-agents .row.agent[data-session="${S}"]`), (doc) => {

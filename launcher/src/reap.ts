@@ -43,7 +43,8 @@ import { manduPath } from "./generated/mandu-paths.js";
 import { PS_ENV } from "./platform/proc-tree.js";
 import { closeDir, listDir, lstatIn, openDir, openDirIn, readJsonIn, removeIn, removePath, type DirHandle, type EntryKind } from "./safe-remove.js";
 import { reapDiscardedWriteNotice, staleScopeDiscardedWrites } from "./twin-writes.js";
-import { restorePendingTwinIndexes, twinIndexRecordDir } from "./twin-index-stat.js";
+import { restorePendingFromStores, twinIndexReadStores } from "./twin-index-stat.js";
+import { findAbandonedDaemons, procFactsOf, realAbandonedDeps, stillAbandoned, type AbandonedDeps, type ProcFacts } from "./abandoned-stacks.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -71,6 +72,8 @@ export interface DashManifestLite {
   /** Its sign-in socket in the human-plane directory (dashboard sign-in.ts;
    *  absent before 2026-10-05). */
   signInSock?: string;
+  /** How a person signs in (dashboard registry.ts; absent before 2026-10-22). */
+  signInMode?: string;
 }
 
 export interface ReapDeps {
@@ -90,6 +93,11 @@ export interface ReapDeps {
   /** When `pid` started (epoch ms, whole seconds), or null when it cannot be
    *  read. Absent = never readable: the identity check is then title-only. */
   startMsOf?(pid: number): number | null;
+  /** The processes `mandu reap` reads for abandoned daemons of OTHER stacks
+   *  (abandoned-stacks.ts). Absent = none are looked for (a test's deps). */
+  abandoned?: AbandonedDeps;
+  /** Re-read one process's facts right before stopping it (defaults to /proc). */
+  procFacts?(pid: number): ProcFacts | null;
 }
 
 /** Where a command line is read from — injectable for tests. */
@@ -230,6 +238,8 @@ export const realReapDeps: ReapDeps = {
   },
   sleep: (ms: number) => new Promise((r) => setTimeout(r, ms)),
   startMsOf: (pid: number): number | null => processStartMs(pid),
+  abandoned: realAbandonedDeps,
+  procFacts: procFactsOf,
 };
 
 export interface ReapAction {
@@ -784,15 +794,46 @@ export async function executeReapAction(action: ReapAction, base: string, deps: 
 /** `mandu reap [--dry-run]` — plan, print, (maybe) execute. */
 export async function runReap(rest: string[], env: Env, deps: ReapDeps = realReapDeps): Promise<number> {
   const dry = rest.includes("--dry-run") || rest.includes("-n");
+  const otherStacks = rest.includes("--other-stacks");
   const base = runtimeBase(env);
   const notes: string[] = [];
   const actions = await planReap(base, deps, notes);
+  // Daemons of other stacks whose code folder is gone and that nobody owns
+  // or uses (abandoned-stacks.ts, runtime-instances.md §10.5): listed by a
+  // dry run, stopped only when asked (`--other-stacks`), since they are not
+  // this stack's registry's to judge.
+  const abandoned = deps.abandoned ? findAbandonedDaemons(base, deps.abandoned) : [];
+  let abandonedFailed = 0;
+  for (const d of abandoned) {
+    const what = `pid ${d.pid} ${d.title} of the stack at ${d.stack}: its code folder ${d.cwd} is gone, nobody owns it and no mandu session uses it`;
+    if (dry) {
+      process.stdout.write(`  would stop (with --other-stacks) ${what}\n`);
+    } else if (otherStacks) {
+      if (!stillAbandoned(d, deps.procFacts ?? procFactsOf)) {
+        process.stdout.write(`  (skipped) ${what} — it changed since (its pid was reused, or its folder is back)\n`);
+        continue;
+      }
+      try {
+        deps.kill(d.pid, "SIGTERM");
+        process.stdout.write(`  stopped ${what}\n`);
+      } catch (e) {
+        abandonedFailed++;
+        process.stdout.write(`  (failed) stop ${what} — ${(e as Error).message}\n`);
+      }
+    }
+  }
+  if (abandoned.length > 0 && !dry && !otherStacks) {
+    process.stdout.write(
+      `  ${abandoned.length} daemon${abandoned.length === 1 ? "" : "s"} of other stacks ${abandoned.length === 1 ? "is" : "are"} abandoned ` +
+        "(their code folder is gone): `mandu reap --dry-run` lists them, `mandu reap --other-stacks` stops them\n",
+    );
+  }
   // A session that died with a protected file's twin stat in a git index
   // (twin-index-stat.ts, confidentiality.md §7.2a): put back, so git outside
   // stops showing the file modified. Only a record whose launcher is gone.
   if (!dry && process.platform === "linux") {
     const home = homedir();
-    for (const root of restorePendingTwinIndexes(twinIndexRecordDir(manduPath("object-walks", env, home)), manduPath("mandu-home", env, home))) {
+    for (const root of restorePendingFromStores(twinIndexReadStores(env, home))) {
       process.stdout.write(`  restored the index stat of a protected file in ${root} (a session that ended without it)\n`);
     }
   }
@@ -801,7 +842,7 @@ export async function runReap(rest: string[], env: Env, deps: ReapDeps = realRea
   for (const n of notes) process.stdout.write(`  refused: ${n}\n`);
   if (actions.length === 0) {
     process.stdout.write(`nothing to reap under ${base}\n`);
-    return 0;
+    return abandonedFailed === 0 ? 0 : 1;
   }
   let failed = 0;
   for (const a of actions) {
@@ -830,7 +871,7 @@ export async function runReap(rest: string[], env: Env, deps: ReapDeps = realRea
       ? `dry-run: ${actions.length} action(s) planned under ${base}\n`
       : `reaped ${actions.length - failed}/${actions.length} action(s) under ${base}\n`,
   );
-  return failed === 0 ? 0 : 1;
+  return failed === 0 && abandonedFailed === 0 ? 0 : 1;
 }
 
 /** The names in `dir` when it is a real directory (lstat: not a link);

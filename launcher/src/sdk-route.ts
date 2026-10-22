@@ -179,10 +179,11 @@ export function sdkRouteApplies(plan: Pick<LaunchPlan, "target" | "argv">): "run
  *  in the route. */
 const NOT_FORCED: ReadonlySet<string> = new Set([
   "PATH", "PYTHONPATH", "NODE_OPTIONS", SDK_ROUTE_ENV, "MANDU_LAUNCH_DISPLAY", "MANDU_LAUNCH_LOG", "MANDU_ARBITER_HUMAN_SOCK",
-  // The reply filter's own layout hint, which it removes from its child
+  // The reply filter's own layout hints, which it removes from its child
   // (reply-filter arbiter-client.ts childEnv): the PATH shims apply the route
-  // as received, so it is not named in it either.
+  // as received, so they are not named in it either.
   "MANDU_REPLY_WRAP_RULE",
+  "MANDU_REPLY_TAB_ORIGIN",
 ]);
 
 /**

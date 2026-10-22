@@ -14,8 +14,8 @@ import { type SecretsArbiter } from "./secrets-routes.js";
 import { type PostureArbiter } from "./arbiter-surfaces.js";
 import { type ConfigAuditArbiter } from "./config-axes-routes.js";
 import { type PolicyDocArbiter } from "./policy-doc-routes.js";
-import { type SignInTickets } from "../sign-in.js";
 import { type DashboardExtension } from "./extension.js";
+import { type AccountFile } from "../account.js";
 
 export interface DashboardServerOptions {
   source: EventSource;
@@ -27,8 +27,6 @@ export interface DashboardServerOptions {
    *  it (server-main loads it, extension-loader.ts). Default none: the
    *  product only. */
   extensions?: DashboardExtension[];
-  /** Basic-Auth password; empty/undefined disables auth. */
-  password?: string;
   /** Reverse-proxy URL prefix (e.g. "/mandu"), no trailing slash. */
   basePath?: string;
   /**
@@ -80,6 +78,16 @@ export interface DashboardServerOptions {
    */
   configEnv?: Record<string, string | undefined>;
   /**
+   * Is Mandu running at all (mandu-running.ts `manduNotRunning`)? Asked by
+   * Home when the live tenant's session list cannot be read, so a computer
+   * where nothing of Mandu's runs (the person only ran `mandu scan`) reads
+   * "Protection is off: no agent runs with Mandu." rather than "Not
+   * connected." (dashboard.md §4.25, the verdict ladder). server-main
+   * passes the probe over its arbiter socket, runtime base and event store.
+   * Absent: never asked, so an unreadable list is "Not connected.".
+   */
+  manduNotRunning?: () => { everRan: boolean } | null;
+  /**
    * Source-IP allowlist for NON-loopback clients (server-main resolves
    * DASHBOARD_ALLOW_HOSTS to this). Loopback is always allowed; any other
    * client address must appear here or the request is answered 403 — so a
@@ -96,26 +104,22 @@ export interface DashboardServerOptions {
    */
   allowedHosts?: string[];
   /**
-   * ADMIN SESSION for mutating routes without DASHBOARD_PASSWORD
-   * (policy-surface.md §2.6). Every POST/DELETE needs a browser
-   * session, established by a one-time sign-in link (`signInTickets`, the
-   * default way) or by opening `<basePath>/login?token=<adminToken>` once
-   * — the link server-main prints when its stderr is a terminal. The token lives in
-   * this process and the browser cookie only (never on disk), so a same-uid
-   * agent process cannot read it the way it could read a file or /proc
-   * environ. A read that can carry a value needs it too (server/read-gate.ts,
-   * dashboard.md §6). Defaults to a random per-boot token;
-   * tests pass a fixed one and send {@link DashboardServer.adminCookie}.
-   * With a password set, the password session IS the admin session.
+   * TEST SEAM: the admin token (policy-surface.md §2.6). Its cookie
+   * ({@link DashboardServer.adminCookie}, also set by
+   * `<basePath>/login?token=<adminToken>`) is an admin session. A person
+   * signs in with the dashboard account (`account`); the token is for
+   * tests: a server built without an account takes the cookie, and one
+   * with an account only when `pinnedAdminToken` says the token was pinned.
+   * Defaults to a random per-boot token nobody is told.
    */
   adminToken?: string;
   /**
-   * The one-time sign-in tickets (sign-in.ts; policy-surface.md §2.6
-   * "Signing in"): minted over the human-plane sign-in socket, redeemed by
-   * `GET <basePath>/login?ticket=…`. TEST SEAM (a clock, a fixed ticket);
-   * production leaves it unset and the server keeps its own.
+   * TEST SEAM: the admin token was pinned (server-main: DASHBOARD_ADMIN_TOKEN,
+   * which the suites set). Its cookie and its `/login?token=` then pass the
+   * sign-in gate. Off by default; a deployment never sets it (the token is
+   * in the dashboard's environment, which a same-uid process can read).
    */
-  signInTickets?: SignInTickets;
+  pinnedAdminToken?: boolean;
   /**
    * Trust an authenticating reverse proxy: a NON-loopback client that already
    * passed the source-IP allowlist (the OAuth front) counts as an admin session
@@ -124,17 +128,35 @@ export interface DashboardServerOptions {
    */
   trustFront?: boolean;
   /**
-   * HTTP Basic auth (RFC 7617) for a front that speaks only HTTP, such as a
-   * tunnel (dashboard.md §6.z). When set, EVERY request past the source-IP gate must carry a valid
-   * `Authorization: Basic` header or is answered 401 with a challenge (no
-   * login page, no app detail). Valid credentials ARE the admin session
-   * (the browser resends them on every same-origin fetch/EventSource), so the
-   * dashboard is fully usable through the tunnel without the cookie. A
-   * same-host process the agent runs cannot present them: they live in this
-   * process (and the operator's browser), never on disk. server-main sets it
-   * from DASHBOARD_BASIC_AUTH="user:password".
+   * A username and password held in memory (dashboard.md §6.z): the sign-in
+   * gate's credentials while no dashboard account file exists. EVERY
+   * request past the Host check needs a sign-in session (the sign-in page,
+   * `POST <base>/login`) or the pair as an `Authorization: Basic` header;
+   * anything else gets the sign-in page or a 401, never a
+   * `WWW-Authenticate` challenge. Either IS the admin session. server-main
+   * sets it from DASHBOARD_BASIC_AUTH="user:password" only when the pair
+   * could not be moved into the account file (a home that cannot hold it);
+   * tests set it directly.
    */
   basicAuth?: { user: string; password: string };
+  /**
+   * The Mandu dashboard account (account.ts; dashboard.md §6.z): the
+   * path table's `dashboard-account` file, holding a username and a scrypt
+   * hash. With it set, EVERY request past the Host check needs a
+   * sign-in session (the sign-in page, `POST <base>/login`) or the account's
+   * credentials in an `Authorization: Basic` header; anything else gets the
+   * sign-in page (a browser navigation) or a 401, with no `WWW-Authenticate`
+   * (no native prompt). A file that is there but cannot be used (wrong
+   * owner or mode, a link, not a record) signs nobody in. Read per request,
+   * so `mandu dashboard --set-password` applies at once. No file yet: FAIL
+   * CLOSED, the page says "no account yet" and how to make one, and nothing
+   * else is served. The account wins over `basicAuth` (which then only
+   * stands in while no file exists). server-main always passes it; a test
+   * that passes none gets a server with no sign-in gate.
+   */
+  account?: AccountFile;
+  /** TEST SEAM: the clock of the sign-in sessions and the throttle. */
+  signInClock?: () => number;
   /**
    * TEST SEAM: the folder `~` means on the product pages: the Rules page's
    * file browser (dashboard.md §4.25m), the paths in an agent page's Your

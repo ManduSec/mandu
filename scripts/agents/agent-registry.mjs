@@ -24,6 +24,9 @@
 // and imports nothing outside its package: on-disk-layout.md §5's rule for
 // mandu-paths).
 //
+// A second table, SCAN_ONLY_AGENTS, names the agents only the past-sessions
+// scan knows (Mandu does not run them; supported-agents.md §5.7).
+//
 // Data only: no imports, no I/O (the drill catalog, which is data, imports it).
 
 // ── the table ─────────────────────────────────────────────────────────────────
@@ -96,6 +99,31 @@ export function agentOfLine(id) {
 export const isAgent = (s) => AGENTS.includes(s);
 export const isLine = (s) => LINES.includes(s);
 
+// ── the agents only the past-sessions scan knows ─────────────────────────────
+
+/**
+ * Agents people run without Mandu, which Mandu does not run (no launch, no
+ * suite, no pin), whose local session stores `mandu scan` reads or counts
+ * (docs/design/confidentiality/confidentiality-plan-17-past-sessions-scan.md
+ * §4, phase 3). Not lines. Each row:
+ *   id    the scan's id for it (its answer's `sessions` and `agents`);
+ *   name  the product name, as the report writes it;
+ *   read  true: the scan reads its sessions; false: it only counts them, as
+ *         its store's format is not one a reader can rely on (plan 17 §4).
+ * When Mandu comes to run one, its row moves to AGENT_LINES.
+ */
+export const SCAN_ONLY_AGENTS = Object.freeze([
+  Object.freeze({ id: "gemini", name: "Gemini CLI", read: true }),
+  Object.freeze({ id: "copilot", name: "Copilot CLI", read: true }),
+  Object.freeze({ id: "cursor", name: "Cursor", read: false }),
+]);
+/** The scan-only agents' ids, in table order. */
+export const SCAN_ONLY_IDS = Object.freeze(SCAN_ONLY_AGENTS.map((a) => a.id));
+/** Each scan-only agent's product name. */
+export const SCAN_ONLY_NAMES = Object.freeze(Object.fromEntries(SCAN_ONLY_AGENTS.map((a) => [a.id, a.name])));
+/** The scan-only agents whose sessions the scan reads (the others it counts). */
+export const SCAN_READ_IDS = Object.freeze(SCAN_ONLY_AGENTS.filter((a) => a.read).map((a) => a.id));
+
 /** What is wrong with the table, as messages (none: sound). */
 export function tableProblems(lines = AGENT_LINES) {
   const out = [];
@@ -114,6 +142,13 @@ export function tableProblems(lines = AGENT_LINES) {
     if (typeof l.cache !== "boolean") out.push(`${l.id}: cache is true or false`);
     if (!/^[A-Z0-9_]+_VERSION$/.test(l.pin ?? "")) out.push(`${l.id}: pin ${l.pin}`);
     if (l.npm !== undefined && !/^(?:@[a-z0-9-]+\/)?[a-z0-9][a-z0-9._-]*$/.test(l.npm)) out.push(`${l.id}: npm ${l.npm}`);
+  }
+  for (const a of SCAN_ONLY_AGENTS) {
+    if (!/^[a-z][a-z0-9]*$/.test(a.id)) out.push(`${a.id}: an id is lower-case letters and digits`);
+    if (ids.has(a.id)) out.push(`${a.id}: a scan-only agent is no line (and is listed once)`);
+    ids.add(a.id);
+    if (!a.name) out.push(`${a.id}: no name`);
+    if (typeof a.read !== "boolean") out.push(`${a.id}: read is true or false`);
   }
   return out;
 }

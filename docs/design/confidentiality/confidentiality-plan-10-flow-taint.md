@@ -1026,6 +1026,10 @@ applies its mirrored Landlock domain, and reopens the guard's descriptor
 (nothing is resolved again). A tracee with another uid is refused. Proved
 by `a_pseudo_file_is_opened_with_the_tracees_namespaces_and_rights` and a
 real launch (`ps`, `df`, `unshare -r`, `git`, `node`, `python3` work).
+Before such a descriptor is handed over, a write-capable one on cgroup2 is
+judged (`cgroup_guard`, 2026-10-21): refused when it is a file of the
+guard's own cgroup or one above it, or a task list a move could take the
+guard through (rootless-confinement-ubuntu-2404.md §12.2, "The cgroup").
 
 **Landlock** (`landlock_mirror.rs`). An open the guard performs would
 escape the tracee's own Landlock domain. The guard traps

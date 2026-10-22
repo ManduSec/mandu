@@ -73,8 +73,11 @@ test("every animation of either page stops, or holds still, under reduce motion"
     for (const sel of [".banner.violation", ".s-status-running", ".dot-starting", ".drawer-panel", ".ruleref-flash", "#protection-panel.jump-flash", "tr.jump-flash td", ".sys-entry.flash", ".pr-row.flash > .pr-cell", ".pr-row.flash > .pr-ai"]) {
       assert.ok(sels.includes(sel), `the sweep finds ${sel}`);
     }
-    assert.deepEqual(ANIMATED.filter((a) => a.infinite).map((a) => a.sel).sort(), [".banner.violation", ".dot-starting", ".s-status-running"]);
+    assert.deepEqual(ANIMATED.filter((a) => a.infinite && a.sheet === "dev/dashboard.css").map((a) => a.sel).sort(), [".banner.violation", ".dot-starting", ".s-status-running"]);
   }
+  // The product's never-ending motion is the scan figure's (§4.25ai): its
+  // lanes' dots and the key and mask riding them, each stopped below.
+  assert.deepEqual(ANIMATED.filter((a) => a.infinite && a.sheet === "app.css").map((a) => a.sel).sort(), [".sf-lane", ".sf-ride", ".sf-ride-v"]);
   for (const a of ANIMATED) {
     const blocks = reduceDecls(a.sheet, a.sel);
     const stops = blocks.some((b) => declValue(b, "animation") === "none" || declValue(b, "animation-name") === "none");

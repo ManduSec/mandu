@@ -1,0 +1,4 @@
+{"working_dir":"/home/user/project","description":"<text>","schedule_id":null,"message_count":3,"total_tokens":100,"input_tokens":60,"output_tokens":40,"accumulated_total_tokens":100,"extension_data":{}}
+{"id":"id-1","role":"user","created":1735689600,"content":[{"type":"text","text":"<text>"}]}
+{"id":"msg_01FixtureGooseLegacy000001","role":"assistant","created":1735689601,"content":[{"type":"text","text":"<text>"},{"type":"toolRequest","id":"id-3","toolCall":{"status":"success","value":{"name":"developer__shell","arguments":{"command":"<text>"}}}}]}
+{"id":"id-4","role":"user","created":1735689602,"content":[{"type":"toolResponse","id":"id-3","toolResult":{"status":"success","value":[{"type":"text","text":"<text>","annotations":{"audience":["assistant"]}},{"type":"text","text":"<text>","annotations":{"audience":["user"]}}]}}]}

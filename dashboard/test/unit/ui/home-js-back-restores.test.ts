@@ -21,7 +21,14 @@
  *   B4  the back link says "Back to History", "Back to Approvals" or "Back to
  *       home" for where the page was opened from, and is Back (the page keeps
  *       its place) only when that page is the entry before it in this tab;
- *       opened fresh, it is a link Home.
+ *       opened fresh, it is a link Home;
+ *   B5  Back to Approvals opened at a question keeps your place;
+ *   B6  Rules and Settings (since 2026-10-22): Back returns to how far down
+ *       you were once the page's reads have drawn (a page shorter until
+ *       then held it above), a scroll made meanwhile stays, a top-bar link
+ *       starts at the top; a place wins over the card the address names
+ *       (`/rules#your-rules`); Rules left with text in Find a rule comes
+ *       back at its top, Find empty.
  *
  * Drives home.js in jsdom over the shared fetch stub (home-js-fixtures.ts).
  * jsdom has no layout: the place is read as the page's scrollTo calls. Axes:
@@ -31,7 +38,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { home, load, tick } from "./home-js-fixtures.js";
+import { home, load, rulesPage, tick } from "./home-js-fixtures.js";
 import { waitWhile } from "../page-wait.js";
 
 const BASE = "http://127.0.0.1:4500/mandu";
@@ -246,4 +253,124 @@ test("B5: Back to Approvals opened at a question keeps your place, and its marke
   assert.match(window.location.pathname, /^\/mandu\/approvals\//);
   assert.equal(doc.activeElement, card(), "the marked card has the focus again");
   assert.deepEqual(to.slice(mark), [700], "the place you left, never the top");
+});
+
+/** A page as tall as `max` says (the page shorter until its read draws, as
+ *  a browser clamps it): scrollTo moves scrollY no further, and each call is
+ *  recorded. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function clamped(window: any) {
+  const to: number[] = [];
+  const page = { max: 10_000 };
+  Object.defineProperty(window, "scrollY", { value: 0, writable: true, configurable: true });
+  window.scrollTo = (_x: number, y: number) => { to.push(y); window.scrollY = Math.min(y, page.max); };
+  return { to, page };
+}
+/** The cards scrolled into view (landAtCard), by id. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function cardScrolls(window: any) {
+  const ids: string[] = [];
+  window.HTMLElement.prototype.scrollIntoView = function (this: { id: string }) { ids.push(this.id); };
+  return ids;
+}
+/** A read the test answers (`answer`) once `held` is set; else at once. */
+function heldRead(body: unknown) {
+  const out: ((v: unknown) => void)[] = [];
+  const read = { held: false, out, answer: () => { for (const r of out.splice(0)) r(body); } };
+  return { read, route: () => (read.held ? new Promise((r) => out.push(r)) : body) };
+}
+const PANEL = { panel: { available: true, verdictsKnown: true, queue: [], yourRules: [] } };
+const SUMMARY = { summary: null };
+
+for (const [page, route, body] of [["rules", "GET policy/panel", PANEL], ["settings", "GET control/summary", SUMMARY]] as const) {
+  const name = page === "rules" ? "Rules" : "Settings";
+  test(`B6 ${name}: Back returns to where you were once its reads have drawn, and the focus is on its heading`, async () => {
+    const { read, route: answer } = heldRead(body);
+    const { doc, window } = load({ url: `${BASE}/${page}`, homeVm: home(), routes: { [route]: answer } });
+    const { to, page: tall } = clamped(window);
+    await tick();
+    window.scrollTo(0, 900);
+    await press(doc.querySelector('#nav [data-page-link="approvals"]'));
+    assert.equal(to.at(-1), 0, "Approvals starts at its top");
+    // Back: the read is out, and the page holds only 400 px of scroll.
+    read.held = true;
+    tall.max = 400;
+    const mark = to.length;
+    await traverse(window, "back");
+    assert.equal(window.location.pathname, `/mandu/${page}`);
+    assert.equal(window.scrollY, 400, "held above until the read draws");
+    assert.equal(doc.activeElement, doc.querySelector(`#page-${page} h1`), "the focus on the page's heading");
+    tall.max = 10_000;
+    read.answer();
+    await tick();
+    assert.equal(window.scrollY, 900, "back where you were once it has drawn");
+    assert.ok(!to.slice(mark).includes(0), "never sent to the top on the way");
+    assert.equal(doc.activeElement, doc.querySelector(`#page-${page} h1`), "the focus stays on the heading");
+  });
+
+  test(`B6 ${name}: a scroll made before its read draws stays, and a top-bar link starts at the top`, async () => {
+    const { read, route: answer } = heldRead(body);
+    const { doc, window } = load({ url: `${BASE}/${page}`, homeVm: home(), routes: { [route]: answer } });
+    const { to, page: tall } = clamped(window);
+    await tick();
+    window.scrollTo(0, 900);
+    await press(doc.querySelector('#nav [data-page-link="history"]'));
+    read.held = true;
+    tall.max = 400;
+    await traverse(window, "back");
+    assert.equal(window.scrollY, 400);
+    tall.max = 10_000;
+    window.scrollTo(0, 250); // the person scrolls while the read is out
+    read.answer();
+    await tick();
+    assert.equal(window.scrollY, 250, "your scroll stays");
+
+    // A link starts fresh: away, then the top-bar link back.
+    window.scrollTo(0, 700);
+    read.held = false;
+    await press(doc.querySelector('#nav [data-page-link="home"]'));
+    await press(doc.querySelector(`#nav [data-page-link="${page}"]`));
+    await tick();
+    assert.equal(window.location.pathname, `/mandu/${page}`);
+    assert.equal(to.at(-1), 0, "a link opens it at its top");
+    assert.equal(window.scrollY, 0);
+  });
+}
+
+for (const [page, key, card] of [["rules", "your-rules", "rules-block"], ["settings", "notifications", "settings-notify-block"]] as const) {
+  test(`B6 ${page}: Back to /${page}#${key} keeps your place, not its card`, async () => {
+    const { doc, window } = load({ url: `${BASE}/${page}#${key}`, homeVm: home() });
+    const cards = cardScrolls(window);
+    const { to } = clamped(window);
+    await tick();
+    await tick();
+    assert.deepEqual(cards, [card], "a typed address opens at its card");
+    window.scrollTo(0, 1500);
+    await press(doc.querySelector('#nav [data-page-link="approvals"]'));
+    const mark = to.length;
+    await traverse(window, "back");
+    await tick();
+    assert.equal(window.location.hash, `#${key}`, "the address still names the card");
+    assert.deepEqual(cards, [card], "Back scrolls to no card");
+    assert.deepEqual(to.slice(mark), [1500], "the place you left");
+    assert.equal(doc.activeElement, doc.querySelector(`#page-${page} h1`), "the focus on the page's heading, not the card's");
+  });
+}
+
+test("B6 Rules: left with text in Find a rule, Back opens it at its top with Find empty", async () => {
+  const { doc, window } = rulesPage();
+  const { to } = clamped(window);
+  await tick();
+  window.scrollTo(0, 1200);
+  const find = doc.getElementById("rules-find");
+  find.value = "example";
+  find.dispatchEvent(new window.Event("input"));
+  window.scrollTo(0, 300);
+  await press(doc.querySelector('#nav [data-page-link="approvals"]'));
+  const mark = to.length;
+  await traverse(window, "back");
+  await tick();
+  assert.equal(window.location.pathname, "/mandu/rules");
+  assert.equal(doc.getElementById("rules-find").value, "", "Find is never kept");
+  assert.deepEqual(to.slice(mark), [0], "the top: a place in the narrowed list is not one in the whole");
 });

@@ -132,6 +132,9 @@ interface StackOpts {
   outerTty?: { cols: number; rows: number };
   /** The fake agent's rendering (fixture RR_RENDER; default line by line). */
   render?: "tail-alt" | "md-spans" | "indent2";
+  /** The filter's MANDU_REPLY_TAB_ORIGIN (reply-row-reservation.md §19.7;
+   *  the launcher sets `content` for Claude Code). Absent: unset. */
+  tabOrigin?: "content";
 }
 
 interface StackRun {
@@ -241,8 +244,10 @@ async function runStack(o: StackOpts): Promise<StackRun> {
     RR_OUT_DIR: out,
     RR_TURNS: String(o.turns),
     ...(o.render ? { RR_RENDER: o.render } : {}),
+    ...(o.tabOrigin ? { MANDU_REPLY_TAB_ORIGIN: o.tabOrigin } : {}),
   };
   delete env["MANDU_ARBITER_CLIENT_MODULE"];
+  if (!o.tabOrigin) delete env["MANDU_REPLY_TAB_ORIGIN"];
   delete env["MANDU_REPLY_RESERVE"];
   delete env["MANDU_REPLY_RESERVE_MAX"];
   delete env["MANDU_LAUNCH_DISPLAY"]; // the banner prints (assertBlockAlone looks for it above the block)
@@ -670,13 +675,46 @@ test(
 const TSV = "name\tport\towner\nweb\t8080\tRRTABCANARY\ndb\t5432\tbob\n";
 
 test(
-  "§11.2, PTY relay at 80 columns: a TAB in a reserved row reaches the terminal's own stop, as vanilla's at the reply's column 2",
+  "§19.7, PTY relay at 80 columns, TAB origin `content` (Claude Code): a reserved row's TAB reaches the stop the TUI counts from its text",
   { skip: NO_PTY },
   async () => {
-    // The fake agent lays its reply out two columns in, as Claude Code does.
-    // Vanilla leaves each TAB to the terminal: `port` lands at column 8 and
-    // the third cell at 16. Before 2026-10-18 the rows counted the stops
-    // from the value's own column 0, two columns right of that.
+    // Claude Code 2.1.295 and later expand each TAB of the reply themselves,
+    // to the next multiple of 8 counted from the text's own column 0, and
+    // print the result two columns in (differential-interactive.md §19:
+    // `port` at 2 + 8 = 10 on the live screen, not the terminal's 8). The
+    // filter reports `tabs: content`, the proxy sends the arbiter indent 0,
+    // and the rows count and paint from there.
+    const r = await runStack({ pty: true, turns: 2, secret: TSV, outerTty: { cols: 80, rows: 24 }, render: "indent2",
+      tabOrigin: "content", reply: (t) => `Here is the table:\n\n${t}\n\nDONE` });
+    assert.equal(r.code, 0, `stderr: ${r.stderr}`);
+    const T = r.token;
+    assert.ok(r.text[0]!.includes(`${T}/1:3:78:78`), `a v2 block went to the agent: ${r.text[0]}`);
+    for (const [where, bytes] of [["agent world", r.raw[0]! + r.text[0]!], ["model-bound requests", r.upstream.join("")]] as const) {
+      assert.ok(!bytes.includes("RRTABCANARY") && !bytes.includes("8080"), `${where}: a cell of the original leaked`);
+    }
+    assert.doesNotMatch(r.upstream[1]!, MARKER_RE, "no row and no head suffix reach the model");
+    const rows = ttyRows(await renderScreen(r.human));
+    const at = rows.indexOf("  Here is the table:");
+    assert.ok(at >= 0, `screen:\n${rows.join("\n")}`);
+    // The reference is Claude Code's own rendering: each line's TABs
+    // expanded from its own start, the line printed two columns in.
+    const claude = TSV.replace(/\n$/, "").split("\n").map((l) => `  ${expandTabs(l)}`);
+    assert.deepEqual(claude, ["  name    port    owner", "  web     8080    RRTABCANARY", "  db      5432    bob"], "precondition: Claude Code's stops");
+    assert.deepEqual(rows.slice(at + 2, at + 5), claude, `screen:\n${rows.join("\n")}`);
+    assert.equal(rows[at + 2]!.indexOf("port"), 10);
+    assert.equal(rows[at + 6], "  DONE");
+    assert.ok(!r.human.includes("\t"), "no raw TAB reaches the terminal");
+  },
+);
+
+test(
+  "§11.2, PTY relay at 80 columns, TAB origin `screen`: a TAB in a reserved row reaches the terminal's own stop, as vanilla's at the reply's column 2",
+  { skip: NO_PTY },
+  async () => {
+    // The fake agent lays its reply out two columns in and leaves each TAB to
+    // the terminal (a TUI whose stops are the screen's, as Codex's are:
+    // §19.7): `port` lands at column 8 and the third cell at 16. With no
+    // TAB origin set the filter counts from the screen's column 0.
     const r = await runStack({ pty: true, turns: 2, secret: TSV, outerTty: { cols: 80, rows: 24 }, render: "indent2",
       reply: (t) => `Here is the table:\n\n${t}\n\nDONE` });
     assert.equal(r.code, 0, `stderr: ${r.stderr}`);

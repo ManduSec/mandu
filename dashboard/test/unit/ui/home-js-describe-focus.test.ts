@@ -122,7 +122,7 @@ test("Suggest rules: the focus waits on the card's heading while the helper work
 
 test("refused, or nothing came back: Suggest rules, on again, has the focus, described by what came back; suggestions later drop the description", async () => {
   for (const [answer, words] of [
-    [{ status: 503, body: { error: "No helper model is set up for this dashboard.", unconfigured: true } }, /^No helper model is set up for this dashboard\.\s*Open Settings$/],
+    [{ status: 503, body: { error: "Mandu's helper uses Claude Code or Codex on this computer, or an Anthropic API key, and found neither. Sign in to Claude Code (claude), then press Suggest rules again.", unconfigured: true, reason: "no-channel" } }, /^Mandu's helper uses Claude Code or Codex .* and found neither\. Sign in to Claude Code \(claude\), then press Suggest rules again\.$/],
     [{ status: 422, body: { error: "The suggestion was not a valid rule change.", problems: ["edits[0]: path: must be a non-empty string"] } }, /not a valid rule change.*must be a non-empty string.*Try saying it another way\.$/],
     [{ ...SUGGESTION, rows: [] }, /^No rule changes came back\. Try saying it another way\.$/],
   ] as const) {

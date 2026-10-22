@@ -16,6 +16,10 @@
  *     `expected` stay as the arbiter has them; the route takes the server's
  *     home (`fileBrowserHome`, else the account's);
  *   - no channel ⇒ 503 `unconfigured` BEFORE the arbiter or any model is used;
+ *     its `reason` (no-channel / not-installed / api-key-missing / cli-missing
+ *     / other) picks plain words with no internal term or module path; the
+ *     original text rides along only for `other`; a drift guard reads
+ *     inspect-mcp's ullm-config.ts so a reworded refusal cannot fall to `other`;
  *   - Apply: refused (409) when the re-preview loosens more than was shown,
  *     applied directly for a tightening, and approved by the same click for
  *     a loosening; the arbiter's skew-guard re-file is denied and answered
@@ -27,14 +31,21 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { homedir } from "node:os";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { DashboardServer, type PolicyDocArbiter } from "../../src/server.js";
 import {
   AssistantAnswerError,
   AssistantUnconfiguredError,
+  HELPER_MESSAGE_STARTS,
+  HELPER_WORDS,
   MODELS_ELSEWHERE,
   assistantSystemPrompt,
+  helperReason,
+  productionAssistantModel,
   modelEditProblems,
   assistantUserMessage,
   parseAssistantAnswer,
@@ -43,6 +54,7 @@ import {
   tryLine,
   tryProbe,
   type AssistantModel,
+  type AssistantUnavailableReason,
   type PreviewResult,
 } from "../../src/policy-assistant.js";
 import { ADMIN_OPTS, ADMIN_COOKIE } from "./admin-session.js";
@@ -291,6 +303,99 @@ test("routes: both POSTs need CSRF + the admin session; suggest answers 200 / 42
     assert.equal(((await r.json()) as { unconfigured?: boolean }).unconfigured, true);
   } finally {
     await none.close();
+  }
+});
+
+// ── when the helper cannot run (dashboard.md, *Describe what you want*) ───
+
+/** The three refusals of inspect-mcp's selectUllmConfig, as it words them
+ *  (ullm-config.ts; read from the source by the drift guard below). */
+const NO_CHANNEL = "no ANTHROPIC_API_KEY and no claude/codex CLI on PATH — the quarantined U-LLM cannot run (fail closed). Log in to Claude Code (so `claude` is on PATH) or set ANTHROPIC_API_KEY.";
+const API_MISSING = "MANDU_ULLM_MODE=api but ANTHROPIC_API_KEY is not set — cannot make the quarantined U-LLM call (fail closed).";
+const CLI_MISSING = "MANDU_ULLM_MODE=cli but the 'codex' CLI is not on PATH — cannot run the quarantined U-LLM subprocess (fail closed).";
+/** Words the product page keeps out (the inspector's vocabulary, and the
+ *  internals the old message carried). */
+const NOT_PRODUCT = /U-LLM|quarantin|fail(?:s|ed)? closed|\bPATH\b|MANDU_ULLM|\.js\b|\.ts\b|\/home\/|interceptors|inspect-mcp|\barbiter\b|Cannot find module/i;
+
+test("helperReason: each refusal of the channel selector maps to its reason; anything else is other", () => {
+  assert.equal(helperReason(NO_CHANNEL), "no-channel");
+  assert.equal(helperReason(API_MISSING), "api-key-missing");
+  assert.equal(helperReason(CLI_MISSING), "cli-missing");
+  assert.equal(helperReason("declared model endpoint 'x' has a tls setting this helper cannot read (fail closed)"), "other");
+  assert.equal(helperReason(""), "other");
+  assert.equal(new AssistantUnconfiguredError(NO_CHANNEL).reason, "no-channel", "by default, from the message");
+  assert.equal(new AssistantUnconfiguredError(NO_CHANNEL, "not-installed").reason, "not-installed", "set where it is thrown");
+  assert.equal(new AssistantUnconfiguredError("no channel").unconfigured, true);
+});
+
+test("the helper's words: one per reason, plain, no internal term or module path, and what to do", () => {
+  const reasons: AssistantUnavailableReason[] = ["no-channel", "not-installed", "api-key-missing", "cli-missing", "other"];
+  assert.deepEqual(Object.keys(HELPER_WORDS).sort(), [...reasons].sort());
+  for (const r of reasons) assert.doesNotMatch(HELPER_WORDS[r], NOT_PRODUCT, r);
+  assert.match(HELPER_WORDS["no-channel"], /found neither\. Sign in to Claude Code \(claude\), then press Suggest rules again\.$/);
+  assert.doesNotMatch(HELPER_WORDS["no-channel"], /not installed/, "the service's PATH may not be the person's: it only says what it found");
+  assert.match(HELPER_WORDS["not-installed"], /Run mandu doctor/);
+  assert.match(HELPER_WORDS["api-key-missing"], /Set ANTHROPIC_API_KEY/);
+  assert.equal(HELPER_WORDS.other, "Mandu's helper cannot run right now.");
+});
+
+test("drift guard: every refusal selectUllmConfig throws starts as the classifier expects", () => {
+  const src = readFileSync(fileURLToPath(new URL("../../../interceptors/inspect-mcp/src/ullm-config.ts", import.meta.url)), "utf8");
+  const from = src.indexOf("export function selectUllmConfig(");
+  assert.ok(from >= 0, "selectUllmConfig is in ullm-config.ts");
+  // Its own body, to the closing brace at the start of a line. A helper it
+  // calls (binaryPathOf's MANDU_ULLM_BINARY_PATH refusal) is `other`, Details.
+  const end = src.indexOf("\n}\n", from);
+  assert.ok(end > from);
+  const body = src.slice(from, end);
+  const starts = [...body.matchAll(/throw new Error\(\s*(["'`])((?:(?!\1)[^\\]|\\.)*)/g)].map((m) => m[2]!);
+  assert.equal(starts.length, 3, `the three refusals: ${JSON.stringify(starts)}`);
+  const reasons = starts.map((m) => helperReason(m));
+  assert.deepEqual([...reasons].sort(), ["api-key-missing", "cli-missing", "no-channel"], `each refusal keeps its reason: ${JSON.stringify(starts)}`);
+  assert.deepEqual(HELPER_MESSAGE_STARTS.map(([, r]) => r).sort(), ["api-key-missing", "cli-missing", "no-channel"]);
+});
+
+test("productionAssistantModel: a helper module that does not load is not-installed; a selector refusal keeps its reason", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-helper-reason-"));
+  try {
+    const missing = productionAssistantModel({ MANDU_ULLM_MODULE: pathToFileURL(join(dir, "nope.mjs")).href });
+    await assert.rejects(missing(), (e: unknown) => e instanceof AssistantUnconfiguredError && e.reason === "not-installed");
+    const mod = join(dir, "ullm.mjs");
+    writeFileSync(mod, "export function selectUllmConfig(env) { throw new Error(env.REFUSAL); }\nexport function isOnPath() { return false; }\nexport function buildUllmClient() { throw new Error('unreached'); }\n");
+    for (const [refusal, reason] of [[NO_CHANNEL, "no-channel"], [API_MISSING, "api-key-missing"], [CLI_MISSING, "cli-missing"], ["something else", "other"]] as const) {
+      const f = productionAssistantModel({ MANDU_ULLM_MODULE: pathToFileURL(mod).href, REFUSAL: refusal });
+      await assert.rejects(f(), (e: unknown) => e instanceof AssistantUnconfiguredError && e.reason === reason && e.message === refusal, reason);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the suggest route: 503 unconfigured with the reason and its plain words; the original text only for other", async () => {
+  const cases: Array<[AssistantUnconfiguredError, AssistantUnavailableReason]> = [
+    [new AssistantUnconfiguredError(NO_CHANNEL), "no-channel"],
+    [new AssistantUnconfiguredError("the quarantined model channel is not installed (Cannot find module '/home/a/interceptors/inspect-mcp/src/ullm-config.js')", "not-installed"), "not-installed"],
+    [new AssistantUnconfiguredError(API_MISSING), "api-key-missing"],
+    [new AssistantUnconfiguredError(CLI_MISSING), "cli-missing"],
+    [new AssistantUnconfiguredError("declared model endpoint 'x' cannot be read (fail closed)"), "other"],
+  ];
+  for (const [err, reason] of cases) {
+    const { arbiter, calls } = fakeArbiter();
+    const srv = await start(arbiter, async () => { throw err; });
+    try {
+      const r = await post(srv.base, "/api/policy/assistant", { sentence: "lock .env" });
+      assert.equal(r.status, 503, reason);
+      const body = (await r.json()) as { error: string; unconfigured?: boolean; reason?: string; detail?: string };
+      assert.equal(body.unconfigured, true, reason);
+      assert.equal(body.reason, reason);
+      assert.equal(body.error, HELPER_WORDS[reason]);
+      assert.doesNotMatch(body.error, NOT_PRODUCT, reason);
+      if (reason === "other") assert.equal(body.detail, err.message, "the original text, for Details");
+      else assert.equal("detail" in body, false, `${reason}: no internal text, no module path`);
+      assert.deepEqual(calls, [], "nothing is read without a channel");
+    } finally {
+      await srv.close();
+    }
   }
 });
 

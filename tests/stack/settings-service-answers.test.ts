@@ -55,7 +55,7 @@ stateAxes("secrets");
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ADMIN_TOKEN = `settings-service-admin-${process.pid}`;
 const SESSION_SECRET = `settings-service-secret-${process.pid}`;
-const SIGN_IN = "Sign in first: in your own terminal, run mandu dashboard and open the sign-in link it prints (each link works once), or sign in with the dashboard's password if it has one.";
+const SIGN_IN = "Sign in first: reload this page and sign in with your dashboard account (if there isn't one yet, run mandu dashboard --set-password in your own terminal).";
 const text = (el: any): string => String(el?.textContent ?? "").replace(/\s+/g, " ").trim();
 const row = (doc: any): any => doc.getElementById("settings-service-main");
 const line = (doc: any): any => doc.querySelector("#settings-service-main .ask-error");
@@ -106,7 +106,7 @@ test("Settings › Protection service over the real admin gate and supervisor: s
       row(doc).querySelector("button").click();
       await waitWhile(() => line(doc) === null, 20_000);
       assert.equal(text(line(doc)), SIGN_IN, "the click is answered on the row");
-      assert.equal(line(doc).querySelector("code")?.textContent, "mandu dashboard", "the command reads as code");
+      assert.equal(line(doc).querySelector("code")?.textContent, "mandu dashboard --set-password", "the command reads as code");
       assert.doesNotMatch(text(doc.getElementById("settings-services")), /admin session|DASHBOARD_PASSWORD|arbiter/i, "never the server's developer text");
       assert.equal(text(row(doc).querySelector(".service-state")), "Stopped", "the row still reads stopped");
       read.push(doc.documentElement.outerHTML);

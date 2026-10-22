@@ -6,10 +6,11 @@
  */
 
 import type { SessionFlowStats } from "./lineage.js";
-import type { AgentPreview, HomeAnswered, HomeAsk } from "./home.js";
+import type { AgentPreview, HomeAnswered, HomeAsk, HomeTextPart, SecretsPostureNote } from "./home.js";
 import type { PromptNote } from "./prompt-notes.js";
 import type { SecretsStory } from "./secret-story.js";
 import type { BrowserStory } from "./browser-story.js";
+import type { LaunchTimeVM } from "./launch-time.js";
 
 export type StoryOutcome =
   | "unmasked" // untrusted content reached the AI without a mask (a violation)
@@ -39,8 +40,10 @@ export interface StoryPart {
    *  never got the real value. Absent: no such read recorded. */
   early?: string;
   /** A "text" part that names the Approvals row Mandu filed (the event's
-   *  `policy.approvalId`, dual-lanes `askIdOf`): the page draws its text
-   *  ("Approvals") as a link to that row. An id, never a value. */
+   *  `policy.approvalId`, dual-lanes `askIdOf`), or the rule change a call
+   *  to Mandu's rule tool made or asked for (`pc-…`, `pp-…`,
+   *  mandu-tool-words.ts): the page draws its text ("Approvals") as a link
+   *  to that row. An id, never a value. */
   ask?: string;
   /** A "time" part on a Your secrets card: the id of the step on this page
    *  that shows that moment (a turn step's `id`, its `data-step-id`); the
@@ -56,6 +59,15 @@ export interface StoryPart {
    *  names*). Only in a build with the developer view: without it, no part
    *  names the trace (§4.25ad). */
   trace?: "trace" | "secrets";
+  /** A "text" part the page draws as a link that opens in a new tab: only
+   *  a fixed address the server itself names (`ISSUES_URL`, the leak
+   *  check's *Report a problem*), never one read from an event. */
+  href?: string;
+  /** A "text" part the page draws as a link to that card of Rules
+   *  (`/rules#built-in`, Built-in protections): a sent step to a company's
+   *  own API names where the companies are listed (dashboard.md §4.25b). A
+   *  card key, never an address or markup. */
+  rules?: "built-in";
 }
 
 /** The original behind a masked step, revealed by a click. */
@@ -171,6 +183,10 @@ export interface LeakFinding {
   items: LeakFindingItem[];
   /** Places past FINDING_CAP. */
   more: number;
+  /** What to do now, one line each (`findingTodo`): change each secret the
+   *  lines name, the same for a line that names none, and report it.
+   *  Secret names only, never a value. */
+  todo: StoryPart[][];
 }
 
 export interface StoryTurn {
@@ -224,10 +240,22 @@ export interface AgentPageVM {
    *  `agentPreview`); null for a supported agent. */
   preview: AgentPreview | null;
   /** The warning by the agent's name, as on its Home row (home.ts
-   *  `agentNotice`): its version is outside the range Mandu was tested
-   *  with, or it advertised tools Mandu does not know where the level masks
-   *  their output. null otherwise. */
+   *  `agentNotice`): the session could not do its job or some of its
+   *  commands could not run (dashboard.md §4.21 *On the product page*), its
+   *  version is outside the range Mandu was tested with, or it advertised
+   *  tools Mandu does not know where the level masks their output. null
+   *  otherwise. */
   notice: string | null;
+  /** The same words as parts, each command as code; null with no notice. */
+  noticeParts: HomeTextPart[] | null;
+  /** The session could not do its job (its health `broken`): the page also
+   *  writes the notice out under its header, not only behind the mark. */
+  noticeShown: boolean;
+  /** The session's launch left the agent's programs able to read the
+   *  credential files (its posture `gated`, dashboard.md §4.23 *Product
+   *  page*): a line under the header with the fix. null for `confined`,
+   *  `read-blocked`, or a session no launcher recorded. */
+  secretsPosture: SecretsPostureNote | null;
   title: string | null;
   cwd: string | null;
   startedAt: string | null;
@@ -256,6 +284,9 @@ export interface AgentPageVM {
    *  conversation is bound to a declared model (dashboard.md §4.25l); null
    *  for the agent's default vendor, an unbound session, or no answer. */
   mainModel: { words: string; local: boolean } | null;
+  /** "Mandu took 1.7 s to start this session: …" (dashboard.md §4.25ag),
+   *  from the launcher's step timings; null when the launch recorded none. */
+  launchTime: LaunchTimeVM | null;
   /** Plan 15 §13.7: notes for messages no turn shows (a message Mandu
    *  blocked never reached the AI), oldest first; the page places each in
    *  the story by its time. */

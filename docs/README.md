@@ -9,6 +9,7 @@ Pick the path that matches what you want to do.
 | [Getting started](getting-started.md) | You are new. Install, check your machine, see a secret masked, run your agent, use the dashboard. About ten minutes. |
 | [Your first session](first-session.md) | Mandu is installed and you want a guided tour: four requests to your agent (Claude Code, Codex, OpenClaw or OpenCode), and what each one shows on your screen and on the dashboard. About fifteen minutes. |
 | [User guide](usage.md) | You want a command, a flag, a setting, the `policy.yaml` format, or help with an error. |
+| [GitHub Actions](github-action.md) | You run Claude Code or Codex in a workflow and want the job's secrets kept from the model, with a summary of what was kept and what was blocked. |
 | [What Mandu guarantees](guarantees.md) | You need to know exactly what is protected in each mode, what is not, and how to check it on your machine. |
 | [How Mandu works](how-it-works.md) | You want to understand what happens behind the scenes, or you are reviewing Mandu before a rollout. |
 | [Supported agents](design/agents/supported-agents.md) | You want the tested agent versions and what happens outside them. |

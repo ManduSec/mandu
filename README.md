@@ -17,6 +17,10 @@ get the real values.
 Works with Claude Code, Codex, OpenCode, OpenClaw and Goose, with no plugin
 and no changes to the agent. Website: [mandusecurity.com](https://mandusecurity.com/).
 
+[![Claude Code under Mandu fixes a payment bug. The AI never saw the database password in the log, and the Stripe key reached only api.stripe.com.](docs/assets/readme/demo-debug.jpg)](https://mandusecurity.com/#demo)
+
+▶ [Watch the demos](https://mandusecurity.com/#demo): debug, deploy and paperwork, on all five agents.
+
 ## Get started
 
 Mandu uses your agent's own login, Claude Pro and Max included, and needs no
@@ -24,11 +28,11 @@ API key of its own. No account, no Mandu server and no telemetry: everything
 Mandu stores stays in `~/.mandu`.
 
 ```sh
+npx @mandusec/mandu scan         # first: which of your secrets your agents already sent to the AI
 npm install -g @mandusec/mandu   # needs Node 22.13 or newer
 mandu doctor                     # check this computer: Node, git, your agent, your secrets
 mandu claude                     # your agent, protected (or: mandu codex)
 mandu dashboard                  # what was protected, and what waits for your OK
-alias claude="mandu claude"      # make it the default
 ```
 
 No Node, or another way to install: [Getting started](docs/getting-started.md#1-install).
@@ -59,10 +63,16 @@ hosts you allow, like `api.stripe.com`. Only secrets change.
 Coding agents read your files as they work: `.env`, SSH keys, cloud logins,
 and your documents too. Once a key or a document is read, it rides along in
 every request to the AI company. And whatever the agent holds can go to any
-server a command names.
+server a command names. The usual fixes each stop somewhere ([ten products
+compared](https://mandusecurity.com/engineering/why-mandu/), [eight measured](#evidence)):
 
-The obvious fix, blocking the agent from reading `.env`, keeps the key home,
-and the agent can't use it either.
+- **Fence the agent** (a sandbox, deny rules): what it reads still goes to
+  the AI provider, and a denied `.env` is denied to your programs too.
+- **Swap the credential** (a stand-in key): API keys over HTTP only; files
+  and output the agent reads still reach the AI provider.
+- **Filter the content**: blocked data can't be used; what programs send isn't checked.
+- **Rebuild the agent or move the model**: the network side stays open.
+- **Mandu** acts on the path to the AI, around the tools and on the network.
 
 ## How it works
 

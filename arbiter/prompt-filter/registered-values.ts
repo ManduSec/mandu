@@ -499,8 +499,18 @@ export function scanEgressFingerprintIndexed(
   index: RegisteredValueIndex,
   row: (symbol: string) => SecretFingerprint | null,
   destination: string,
+  /** A matched text the asking session sends as its own (secret-discovery.md
+   *  §2.10: a value of an MCP config its agent reads, at a host it may go
+   *  to), for the row whose piece matched (`symbol`): such an occurrence
+   *  counts for that row no more (a tool result's row that once carried
+   *  it). Absent: every occurrence counts. */
+  exemptText?: (text: string, symbol: string) => boolean,
 ): FingerprintHit[] {
-  const matched = surfaces.map((s) => (s.text ? new Set(index.hits(s.text).map((h) => h.symbol)) : new Set<string>()));
+  const matched = surfaces.map((s) => {
+    if (!s.text) return new Set<string>();
+    if (exemptText === undefined) return new Set(index.hits(s.text).map((h) => h.symbol));
+    return new Set(index.occurrences(s.text).filter((o) => !exemptText(o.text, o.symbol)).map((o) => o.symbol));
+  });
   const names = new Set<string>();
   for (const m of matched) for (const n of m) names.add(n);
   if (names.size === 0) return [];

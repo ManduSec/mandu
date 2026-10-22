@@ -59,12 +59,20 @@ test("§4.25aa: Programs first: each program's files under what it may do, Any o
   assert.deepEqual(tabs(doc).map((b) => b.textContent), ["Programs", "Hosts", "AI"]);
   assert.equal(selected(doc), "Programs");
   assert.deepEqual(names(doc), ["deploy", "psql", "ssh", "Any other program"]);
-  assert.deepEqual(listsOf(rowNamed(doc, "deploy")), [
-    "Opens the real file: ~/proj/.env (your word)",
+  // Only what differs from Any other program, and a line for the rest (§4.25aa *Only what differs*).
+  assert.deepEqual(listsOf(rowNamed(doc, "deploy")), ["Opens the real file: ~/proj/.env (your word)"]);
+  const rest = rowNamed(doc, "deploy").querySelector(".by-who-groups > .by-who-rest");
+  assert.equal(rest?.textContent, "The rest (3): as any other program, below.");
+  assert.equal(rest.previousElementSibling.className, "by-who-group", "under its lists");
+  assert.ok(rest.classList.contains("by-who-none"), "the row's muted note style");
+  assert.equal(rest.querySelector("button, a"), null, "the rest line is not a link");
+  assert.deepEqual(listsOf(rowNamed(doc, "Any other program")), [
     "Gets a masked copy: ~/.ssh and everything inside; ~/contracts and everything inside; ~/notes and everything inside",
-  ]);
+    "Refused: ~/proj/.env",
+  ], "the closing row is unchanged");
+  assert.equal(rowNamed(doc, "Any other program").querySelector(".by-who-rest"), null);
   assert.equal(listsOf(rowNamed(doc, "ssh"))[0], "Opens the real file: ~/.ssh and everything inside (checked by Mandu)");
-  assert.deepEqual(listsOf(rowNamed(doc, "psql")).slice(-1), ["Never gets the real file: it prints or runs what it reads: ~/proj/.env"]);
+  assert.deepEqual(listsOf(rowNamed(doc, "psql")), ["Never gets the real file: it prints or runs what it reads: ~/proj/.env"]);
   assert.equal(rowNamed(doc, "deploy").querySelector(".by-who-name code").textContent, "deploy", "a program's name is code");
   const any = rowNamed(doc, "Any other program");
   assert.ok(any.classList.contains("any"));
@@ -73,6 +81,22 @@ test("§4.25aa: Programs first: each program's files under what it may do, Any o
   assert.match(doc.getElementById("by-who-note").textContent, /^Opening a file does not let a program send it/);
   // Each list's mark has the colour of what it allows.
   assert.equal(rowNamed(doc, "deploy").querySelector(".by-who-group .dot").className, "dot ok");
+});
+
+test("§4.25aa Only what differs: a program that gets everything as any other program shows that line, never Nothing under your rules", async () => {
+  const same = toByWhoVM(byWhoRules([
+    { path: "/home/u/.aws", level: "no-model", bindings: [], recursive: true, readers: ["aws"], others: "twin" },
+  ], []), null, { home: "/home/u" });
+  const { doc } = page({ byWho: same });
+  await tick();
+  const aws = rowNamed(doc, "aws");
+  assert.equal(aws.querySelectorAll(".by-who-group").length, 0);
+  assert.equal(aws.querySelector(".by-who-groups").textContent, "Everything: as any other program, below.");
+  assert.doesNotMatch(card(doc).textContent, /Nothing under your rules/);
+  // A row with neither lists nor a rest line (an older server) still says so.
+  const { doc: older } = page({ byWho: { ...same, programs: { ...same.programs, rows: same.programs.rows.map((r) => ({ ...r, rest: undefined })) } } });
+  await tick();
+  assert.equal(rowNamed(older, "aws").querySelector(".by-who-groups").textContent, "Nothing under your rules.");
 });
 
 test("§4.25aa: read only: the only controls in the list are the files that open their rows, and nothing is written when a tab is chosen or a file pressed", async () => {
@@ -191,10 +215,10 @@ test("§4.25aa: a rule inside a folded folder is unfolded first; a folder not ab
 test("§4.25aa: a file whose rule has no row in Your rules is plain code, with no button; with Your rules unread every file is", async () => {
   const { doc } = withRules();
   await tick();
-  const li = fileIn(doc, "deploy", "Gets a masked copy", "~/contracts");
+  const li = fileIn(doc, "Any other program", "Gets a masked copy", "~/contracts");
   assert.equal(li.querySelector("button"), null, "no row for ~/contracts: nothing points to it");
   assert.equal(li.querySelector("code").parentElement, li);
-  assert.ok(fileIn(doc, "deploy", "Gets a masked copy", "~/notes").querySelector("button"), "its neighbour has a row");
+  assert.ok(fileIn(doc, "Any other program", "Gets a masked copy", "~/notes").querySelector("button"), "its neighbour has a row");
   const unread = page({ byWho: VM });
   await tick();
   // RULES_PANEL holds only a pattern none of VM's files is.
@@ -267,6 +291,8 @@ test("§4.25aa: the styles: a 12px floor, and at phone width the lists go under 
   const css = stripComments(readFileSync(join(PUB, "app.css"), "utf8"));
   const rules = flattenCss(css).filter((r) => r.selectors.some((s) => /by-who/.test(s)));
   assert.ok(rules.length > 0);
+  assert.ok(rules.some((r) => r.selectors.includes(".by-who-none") && declValue(r.block, "font-size") === "13px"), "the rest line is .by-who-none's 13px");
+  assert.ok(rules.some((r) => r.selectors.includes(".by-who-rest")), "the rest line's own rule is under the floor's sweep");
   for (const r of rules) {
     const size = declValue(r.block, "font-size");
     if (size) assert.ok(Number.parseFloat(size) >= 12, `${r.selectors.join(", ")}: ${size}`);

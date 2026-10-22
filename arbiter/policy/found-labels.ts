@@ -23,7 +23,9 @@
  * `.npmrc`, `.pypirc`, `.pgpass`, …), of at most CONTENT_PROBE_MAX_BYTES, in
  * the workspace, or directly in a tool's dot-directory in HOME (and HOME's
  * own `.pg_service.conf`); never in a test, fixture, example or
- * documentation tree, never an agent's or editor's own config) and asks
+ * documentation tree, never an agent's or editor's own config: an MCP
+ * config is read by its own route since 2026-10-21, `mcpConfigCandidate`
+ * and `mcpConfigCredential`, §2.10) and asks
  * `credentialInDataFile`: does the extractor that builds the file's twin find
  * a span that is a credential beyond reasonable doubt? Either
  *
@@ -107,6 +109,7 @@ import { CONTENT_RULE } from "./secret-catalog.js";
 import { authName, fieldLastName, passwordKind, shortCredentialValue } from "./credential-names.js";
 import { detectSecretShapes, looksLikeSecretValue } from "./secret-detectors.js";
 import { extractSecretSpans, type SecretSpan } from "./secret-extract.js";
+import { mcpConfigKind, mcpServerEntries, type McpConfigKind } from "./mcp-config.js";
 
 export { CONTENT_RULE };
 
@@ -169,8 +172,9 @@ const NOT_CONFIG_DIRS: ReadonlySet<string> = new Set([
 
 /** Directories an agent or an editor keeps its OWN configuration in, whose
  *  reader is the agent's runtime (it reads the twin: a placeholder in its
- *  MCP server's environment breaks that server, the maintainer decision of
- *  secret-discovery.md §2.5 on MCP configs). */
+ *  MCP server's environment breaks that server). Their MCP configs are read
+ *  by a route of their own (`mcpConfigCandidate`, secret-discovery.md
+ *  §2.10), whose launch posture leaves the agent's own readable to it. */
 const AGENT_CONFIG_DIRS: ReadonlySet<string> = new Set([
   ...AGENTS.map((a) => `.${a}`), ".cursor", ".vscode", ".idea", ".zed", ".continue", ".windsurf",
 ]);
@@ -312,6 +316,75 @@ export function credentialInDataFile(path: string, text: string): string | null 
   for (const s of x.spans) {
     if (spanIsCredential(s)) return s.key;
     for (const p of s.parts ?? []) if (spanIsCredential(p)) return p.key;
+  }
+  return null;
+}
+
+// ── Pure: MCP and editor configs (secret-discovery.md §2.10) ────────────────
+
+/** An MCP config's size cap: Claude Code's `.claude.json` is its whole
+ *  state file (every project's settings), larger than a config a person
+ *  writes by hand. Past it the file is not read (the walk names it). */
+export const MCP_CONFIG_PROBE_MAX_BYTES = 2 * 1024 * 1024;
+
+/** The MCP config kinds a WORKSPACE walk reads where it meets them: a
+ *  project's own (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`). The
+ *  per-user files are read at their places in HOME (`mcpHomeConfigPaths`,
+ *  the walk's MCP pass), wherever a prune would have kept them out. */
+const WORKSPACE_MCP_KINDS: ReadonlySet<McpConfigKind> = new Set<McpConfigKind>(["claude-project", "cursor", "vscode"]);
+
+/**
+ * Does the walk read this file as an MCP config (`rel`: its segments below
+ * the walk root)? In a workspace, a project's MCP config anywhere but in a
+ * test, fixture, example or documentation tree; in HOME, one of the
+ * per-user files at its place (`~/.cursor/mcp.json`, the Claude Desktop and
+ * Windsurf configs, VS Code's user file). Never `.claude.json` or Codex's
+ * `config.toml` here: they are an agent's login or store, which the walk
+ * judges per launch (its MCP pass). Pure.
+ */
+export function mcpConfigCandidate(rel: readonly string[], tier: ProbeTier): boolean {
+  if (rel.length === 0) return false;
+  const kind = mcpConfigKind(rel.join("/"));
+  if (kind === null || kind === "claude" || kind === "codex") return false;
+  if (tier === "workspace") {
+    if (!WORKSPACE_MCP_KINDS.has(kind)) return false;
+    return !rel.slice(0, -1).some((d) => NOT_CONFIG_DIRS.has(d.toLowerCase()));
+  }
+  return kind !== "claude-project";
+}
+
+/** A value's words that could be a token: split at blanks, quotes, braces,
+ *  `:`, `,`, `=` and a backslash (a JSON header set inside an `env` value,
+ *  `{"Authorization": "Bearer ntn_…"}`). */
+function tokenWords(v: string): string[] {
+  return v.split(/[\s"'{}:,=\\]+/).filter((w) => w.length > 0);
+}
+
+/**
+ * Is `text`, the content of the MCP config at `path`, one the catalog
+ * labels (secret-discovery.md §2.10)? The field of the first server value
+ * that decides it (`<server>.<field>`, for the audit, never a value), or
+ * null. Decided on the twin's own spans (secret-extract.ts: the key rules,
+ * the list rules, the credential belt and `mcpEntrySpans`) that lie inside
+ * a server entry: one is a credential when the content tier would take it
+ * (`spanIsCredential`), when it is a vendor format, or when one of its
+ * words reads as a token (`looksLikeSecretValue`: `Bearer <token>`, an API
+ * key under a name that says nothing, a header set in a variable). A
+ * reference the client expands (`${GITHUB_TOKEN}`) never is, so a config
+ * that only names its variables stays public and every program reads it as
+ * written. Pure.
+ */
+export function mcpConfigCredential(path: string, text: string): string | null {
+  const entries = mcpServerEntries(path, text);
+  if (entries === null || entries.length === 0) return null;
+  const x = extractSecretSpans(path, text);
+  if (x.shape === null || x.spans.length === 0) return null;
+  for (const s of x.spans) {
+    for (const p of [s, ...(s.parts ?? [])]) {
+      const e = entries.find((en) => p.start >= en.start && p.end <= en.end);
+      if (e === undefined || /\$\{[^}]*\}/.test(p.value)) continue;
+      if (spanIsCredential(p) || vendorCredential(p.value) || tokenWords(p.value).some((w) => looksLikeSecretValue(w) && !referenceValue(w))) return `${e.name}.${p.key}`;
+    }
   }
   return null;
 }

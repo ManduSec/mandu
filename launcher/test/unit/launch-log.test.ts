@@ -14,6 +14,7 @@ import {
   LAUNCH_LOG_KEEP, launchLogDir, launchLogName, listLaunchLogs, openLaunchLog, parseLaunchLogName,
   printable, prunableLaunchLogs, runLog,
 } from "../../src/launch-log.js";
+import { timingsLogLine } from "../../src/launch-timings.js";
 import { manduPath } from "../../src/generated/mandu-paths.js";
 import { PATH_DESCRIPTIONS } from "../../src/paths-command.js";
 
@@ -164,5 +165,40 @@ test("mandu log: the latest launch's log; a session by id or prefix; --path; --l
     assert.match(r.err.join(""), /unknown option --follow\nusage: mandu log/);
     r = io();
     assert.equal(runLog(["a", "b"], t.env, r.sink), 2);
+  } finally { t.done(); }
+});
+
+test("mandu log --timings: the last launches' step times side by side with their median; a session's alone; logs without timings passed over", () => {
+  const t = tmpHome();
+  try {
+    let r = io();
+    const plain = openLaunchLog({ env: t.env, home: t.home, sessionId: "old-0", now: new Date("2026-10-18T00:00:00Z"), header: "an older launch" })!;
+    plain.close();
+    assert.equal(runLog(["--timings"], t.env, r.sink), 1, "no log has timings yet");
+    assert.match(r.err.join(""), /no kept launch log has its timings yet/);
+    const timed = (id: string, at: string, total: number, history: number): void => {
+      const l = openLaunchLog({ env: t.env, home: t.home, sessionId: id, now: new Date(at), header: `launch ${id}` })!;
+      // The one written before the agent, then the whole launch's at its end: the last wins.
+      l.write(timingsLogLine({ v: 1, totalMs: 1, steps: [{ step: "plan", ms: 1 }] }));
+      l.write(timingsLogLine({ v: 1, totalMs: total, steps: [{ step: "plan", ms: 5 }, { step: "secrets", ms: history + 10 }, { step: "secrets.history", ms: history }] }));
+      l.close();
+    };
+    timed("alpha-1", "2026-10-18T00:01:00Z", 1500, 200);
+    timed("beta-2", "2026-10-18T00:02:00Z", 2100, 600);
+    timed("gamma-3", "2026-10-18T00:03:00Z", 1700, 300);
+    r = io();
+    assert.equal(runLog(["--timings"], t.env, r.sink), 0);
+    const rows = r.out.join("").trimEnd().split("\n");
+    assert.match(rows[0]!, /^step \(ms\) +median( +\d\d-\d\d \d\d:\d\d){3}$/, "a median, then three launches newest first");
+    assert.match(rows[1]!, /^total +1700 +1700 +2100 +1500$/);
+    assert.match(rows.find((l) => l.trimStart().startsWith("history"))!, /^ {2}history +300 +300 +600 +200$/);
+    r = io();
+    assert.equal(runLog(["beta", "--timings"], t.env, r.sink), 0, "a session by prefix: that launch alone");
+    const one = r.out.join("").split("\n");
+    assert.ok(!one[0]!.includes("median"));
+    assert.match(one[1]!, /^total +2100$/);
+    r = io();
+    assert.equal(runLog(["old-0", "--timings"], t.env, r.sink), 1);
+    assert.match(r.err.join(""), /no kept launch log for session old-0 has its timings/);
   } finally { t.done(); }
 });

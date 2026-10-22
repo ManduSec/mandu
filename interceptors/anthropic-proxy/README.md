@@ -76,7 +76,21 @@ trace. Per exchange it emits:
   `tool_use` names parsed from the response, and
   `invariant.violatedInvariant` computed from the §9 oracle predicate
   (`survivingUntrusted`): did any un-symbolized untrusted span survive in the
-  forwarded prompt?
+  forwarded prompt? `model.responseId` is the provider's id for the response,
+  the one the agent keeps in its own transcript (`mandu scan` joins on it,
+  confidentiality-plan-17 §3 item 6): on the Messages wire `message_start`'s
+  `message.id` or the body's `id` (`msg_…`); on a routed OpenAI-family wire
+  the id the agent was sent, read after the gates (`src/response-id.ts`): the
+  first Chat chunk's `id` (`chatcmpl-…`), `response.created`'s `response.id`
+  (`resp_…`), or the body's `id`. Read off the relayed bytes, it changes
+  nothing that is forwarded; only a well-formed id (`[A-Za-z0-9_-]{8,128}`)
+  is kept. `model.agentSessionId` is the agent's own session id the request
+  carried, read off its headers (`agentSessionIdOf`: OpenCode 2.x's
+  `x-opencode-session-id`, else 1.x's `X-Session-Id`, else
+  `x-opencode-session`), kept only in OpenCode's shape (`ses_` and id
+  characters): OpenCode keeps no response id on most wires but keeps this
+  as the session's id, so the scan joins on it. The headers go upstream
+  unchanged.
 - **`tool_result`** (per result) — `output` `DualRepr` with `original` = the raw
   content and `symbolized` = the symbol token (when untrusted; `differs` true);
   `symbols` populated; `policy.trust`.
@@ -119,6 +133,7 @@ client unchanged.
 | `src/rewrite-request.ts` | The security-critical request transform: correlation map, classify+symbolize per `tool_result`, handling-prompt injection. Throws `RewriteRefusal` (→ fail-closed) on arbiter error. |
 | `src/sse-parser.ts` | Hand-rolled SSE parser reconstructing `tool_use` (name + accumulated input JSON) from the streamed response; plus `extractToolUsesFromJson` for the non-streaming path. Observe-only. |
 | `src/events.ts` | Local `ManduEvent` builder (mirrors `dashboard/src/event-model.ts`; no dashboard dep) + the reusable §9 oracle predicate `survivingUntrusted`. Constructs `tllm_call` / `tool_result` / `symbolize` / `tool_use` events the proxy emits best-effort. |
+| `src/response-id.ts` | The provider's id of the response the agent was sent on the routed OpenAI-family wires, read off the relayed bytes after the gates, for `tllm_call`'s `model.responseId` (`mandu scan`'s join, confidentiality-plan-17 §3 item 6). Observability only; one module copied verbatim to both proxies. |
 | `src/arbiter-client.ts` | The narrow `Arbiter` interface the proxy depends on (incl. `emit(event)→{seq}` + a local `getSymbolPattern`), plus `ArbiterClientAdapter` bridging the real `arbiter/ipc/client.ts`. Decouples the proxy from the arbiter so tests use a mock. |
 | `src/messages-types.ts` | The subset of the Anthropic Messages API the proxy parses (permissive, passthrough-preserving). |
 | `src/server-main.ts` | Deployment entry point: wires the real arbiter client adapter + listens. The only file that imports the sibling arbiter package. |
@@ -128,6 +143,7 @@ client unchanged.
 | `test/unit/sse-parser.test.ts` | `tool_use` reconstruction incl. chunk-split deltas, multi-block, truncation, non-streaming. |
 | `test/unit/proxy.test.ts` | Full HTTP path over a loopback socket: forwarded-body symbolization, streaming passthrough + record, non-streaming record, fail-closed 502/400, bodyless-GET relay. |
 | `test/unit/events.test.ts` | Observability emission: `tllm_call` (`violatedInvariant:false`, symbol in input repr, raw in `original`), `symbolize`/`tool_result` dual-repr, `tool_use` from SSE/JSON, sessionId/turn derivation, and the proof that a THROWING emit does not fail the request or weaken the invariant (best-effort, off the security path). |
+| `test/unit/response-id.test.ts` | The id sniffer: the first Chat chunk's id, `response.created`'s, a body's; however the stream is cut; none for an ill-formed or missing id; never throws (shared verbatim with the other proxy). |
 | `test/component/invariant-oracle.test.ts` | The plan §9 oracle: a stored-IPI fixture's payload never appears un-symbolized in the forwarded upstream body. |
 | `src/route.ts` · `test/unit/route.test.ts` · `test/component/route-fail-closed.test.ts` | Which requests may go upstream: refused wires send nothing (a counting upstream sees zero requests); count_tokens arrives only symbolized. |
 | `src/cloud-model.ts` · `test/unit/cloud-model.test.ts` · `test/component/cloud-model-local-upstream.test.ts` | A cloud-backed model name at a declared local upstream (`MANDU_UPSTREAM_LOCAL=1`) is refused with a 400 and sends nothing (plan 11 §8 item 3). |

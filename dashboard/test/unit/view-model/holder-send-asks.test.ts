@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 
 import { toPolicyPanelViewModel, verdictFamily } from "../../../src/view-model/policy-panel.js";
 import type { HolderSourceWire, PolicySnapshot, VerdictEntry } from "../../../src/policy-model.js";
-import { describeAsk, holderLeftWords, holderSendOf, holderSourceWords } from "../../../src/view-model/ask-words.js";
+import { describeAsk, holderLeftWords, holderSendOf, holderSourceWords, noAlwaysParts } from "../../../src/view-model/ask-words.js";
 import { buildHomeViewModel, type HomeInput } from "../../../src/view-model/home.js";
 
 const BARE: PolicySnapshot = { specId: "claude-code", origins: [], tools: {}, fallbackTrust: "UNTRUSTED", mcpPrefix: "mcp__" };
@@ -124,4 +124,27 @@ test("an answered row reads as the session's answer for those files; no files ar
     effect: q.plain.effect,
   });
   assert.equal(text(describeAsk({ where: "network", subject: row().symbol, target: H, reason: "" }, "Claude Code").sentence), `Claude Code's program wants to send data from ${CSV} and ${ENV} to ${H}`);
+});
+
+test("why a file takes no Always: Change it under Rules and Mark it under Rules are a link to that file's rule, by its path; other reasons name no place", () => {
+  const reasons = ["folder-rule", "page-rule", "not-secret", "pattern-name", "unknown-origin", "session-value", "per-value", undefined] as const;
+  const words = holderSourceWords(reasons.map((noAlways, i) => ({
+    path: `/home/u/f${i}`, level: "no-model", bindings: [], blocks: true, always: false, ...(noAlways ? { noAlways } : {}),
+  })), H, "/home/u");
+  const linked = words.map((w) => [w.noAlwaysParts?.filter((x) => x.kind === "link") ?? null]);
+  assert.deepEqual(linked, [
+    [[{ kind: "link", text: "Change it under Rules", to: "rule", path: "/home/u/f0" }]],
+    [[{ kind: "link", text: "Change it under Rules", to: "rule", path: "/home/u/f1" }]],
+    // No rule of its own: the page opens Your rules; the part still names the file.
+    [[{ kind: "link", text: "Mark it under Rules", to: "rule", path: "/home/u/f2" }]],
+    [[{ kind: "link", text: "Change it under Rules", to: "rule", path: "/home/u/f3" }]],
+    [null], [null], [null],
+    [[{ kind: "link", text: "Change it under Rules", to: "rule", path: "/home/u/f7" }]],
+  ]);
+  for (const w of words) {
+    if (w.noAlwaysParts) assert.equal(w.noAlwaysParts.map((x) => x.text).join(""), w.noAlways, "the plain words are unchanged");
+    assert.ok(w.noAlways!.length > 0);
+  }
+  assert.match(words[0]!.noAlways!, /covers a whole folder.*Change it under Rules\.$/);
+  assert.equal(noAlwaysParts("Add the host to the values in your rules file.", "/x"), null);
 });

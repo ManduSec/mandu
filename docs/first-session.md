@@ -31,20 +31,19 @@ in this kind. You will teach it in step 3.
 
 ## Open the dashboard
 
-When you start your agent (the section for it says how), Mandu prints the
-dashboard's address before the agent takes the screen, as a sign-in link in
-its launch line:
+First make your dashboard account, one username and password, in your own
+terminal (not inside the agent): `mandu dashboard --set-password`. When you
+start your agent (the section for it says how), Mandu prints the
+dashboard's address before the agent takes the screen, in its launch line:
 
 ```text
-mandu: secrets mode · 19 credential files masked · dashboard http://127.0.0.1:41234/login?ticket=… (the link signs this browser in, once) · 1 notice: `mandu log`
+mandu: secrets mode · 19 credential files masked · dashboard http://127.0.0.1:41234/ (sign in with your Mandu dashboard account) · 1 notice: `mandu log`
 ```
 
-Open that link in your browser and keep the dashboard beside your
-terminal; it shows each request a moment after the agent makes it. Each
-link works once. If you need a new one, run `mandu dashboard` in your own
-terminal (not inside the agent). Without signing in you can look around and
-see what the AI saw, but no real value ("Sign in to see real values"), and
-the *Allow* and *Block* buttons answer "Sign in first".
+Open it in your browser, sign in, and keep the dashboard beside your
+terminal; it shows each request a moment after the agent makes it. Without
+an account the dashboard shows nothing but how to make one, and the launch
+line says "no account yet; set one: mandu dashboard --set-password".
 
 ## Claude Code
 
@@ -61,7 +60,7 @@ mandu claude
 Before Claude Code takes the screen, Mandu prints one line:
 
 ```
-mandu: secrets mode · 19 credential files masked · dashboard http://127.0.0.1:41234/login?ticket=… (the link signs this browser in, once) · 1 notice: `mandu log`
+mandu: secrets mode · 19 credential files masked · dashboard http://127.0.0.1:41234/ (sign in with your Mandu dashboard account) · 1 notice: `mandu log`
 ```
 
 It says your credential files are masked, gives the dashboard's sign-in
@@ -205,6 +204,11 @@ you it cannot show the lines, or that it never saw them. Then exit Claude
 Code (`/exit`), start `mandu claude` again and ask once more: the AI now
 gets the file with the token's value as a placeholder, and you still see
 the real lines.
+
+Each time Claude Code exits, Mandu's last line in your terminal sums up what
+it kept from the AI in that session, with the same counts Home shows, such
+as ``mandu: in this session: 1 secret masked before the AI saw it (STRIPE_KEY
+in ~/mandu-try/.env) · … · details: `mandu dashboard` ``.
 
 If you exit first and apply the rule then, the first session's page still
 says so: its read of the file says the AI got it as it was and when the
@@ -362,9 +366,8 @@ mandu openclaw
 OpenClaw works in the folder you started it in, not in its own workspace
 folder (`mandu --verbose openclaw` prints a line that says so). Mandu prints
 the same lines as for Claude Code, but OpenClaw clears the terminal when it
-starts, the dashboard's sign-in link with it: open the link before OpenClaw
-takes the screen, or run `mandu dashboard` in another terminal for a new
-one.
+starts, the dashboard's address with it: open it before OpenClaw takes the
+screen, or run `mandu dashboard` in another terminal to see it again.
 
 Then give it the same requests as in the [Claude Code](#claude-code)
 section, with these differences:
@@ -415,7 +418,7 @@ Mandu prints the same line as for Claude Code, with one more notice:
 OpenCode support is a preview (`mandu log` shows it):
 
 ```text
-mandu: secrets mode · 19 credential files masked · dashboard http://127.0.0.1:41234/login?ticket=… (the link signs this browser in, once) · 2 notices: `mandu log`
+mandu: secrets mode · 19 credential files masked · dashboard http://127.0.0.1:41234/ (sign in with your Mandu dashboard account) · 2 notices: `mandu log`
 ```
 
 OpenCode then opens without asking whether you trust the folder.

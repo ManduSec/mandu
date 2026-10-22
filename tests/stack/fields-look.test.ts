@@ -30,7 +30,12 @@
  *       height of the buttons beside it, in both themes;
  *   F4  the oracle: no page or answer read here carries the file's value
  *       or a minted token; policy.yaml is as it was, and the change still
- *       waits.
+ *       waits;
+ *   F5  on a phone (390 px) the ALLOW box is 16 px, so iOS does not zoom
+ *       the page as it takes the focus; typing "allow", as a phone
+ *       keyboard or a lower-case hand gives it, turns Allow on, and Enter
+ *       in the box presses it: the arbiter records the change approved
+ *       (dashboard.md §4.25 *The typed ALLOW takes any case*).
  *
  * Axes: secrets (stated).
  */
@@ -149,10 +154,10 @@ test("the product page over the real arbiter: every text box and menu has the pa
     assert.ok(!asked.applied && "proposalId" in asked, `a wide change waits for the person: ${JSON.stringify(asked)}`);
     const proposalId = asked.proposalId;
     const sheets = `${await read("/mandu.css", signedIn)}\n${await read("/app.css", signedIn)}`;
-    const styled = (doc: Doc, theme: "light" | "dark") => {
+    const styled = (doc: Doc, theme: "light" | "dark", width = 1280) => {
       const sheet = [...doc.head.querySelectorAll("style")].at(-1);
       assert.ok(sheet, "the served styles are applied");
-      sheet.textContent = perSelector(resolveCssVars(stylesAt(sheets, 1280), theme));
+      sheet.textContent = perSelector(resolveCssVars(stylesAt(sheets, width), theme));
     };
 
     // ── F1, F2: Rules ──
@@ -204,6 +209,33 @@ test("the product page over the real arbiter: every text box and menu has the pa
     const pending = JSON.parse(await read("/api/policy/proposals?status=pending", CSRF_ADMIN)) as { proposals: Array<{ id: string; overBroad: boolean }> };
     assert.deepEqual(pending.proposals.map((p) => [p.id, p.overBroad]), [[proposalId, true]], "the wide change still waits");
     assert.equal(readFileSync(policyPath, "utf8"), policy, "nothing was saved");
+
+    // ── F5: the ALLOW box on a phone, any case, and Enter ──
+    await servedProductPage(base, "/approvals", (doc: Doc) => !!doc.querySelector("#approvals-proposals .proposal-confirm"), async (doc: Doc) => {
+      const win = doc.defaultView;
+      const card = () => doc.querySelector(`#approvals-proposals [data-id="${proposalId}"]`);
+      const box = card().querySelector(".proposal-confirm");
+      const allow = card().querySelector(".proposal-allow");
+      styled(doc, "light", 390);
+      assert.equal(win.getComputedStyle(box).fontSize, "16px", "390 px: the box is 16 px, so iOS does not zoom");
+      styled(doc, "light", 1280);
+      assert.notEqual(win.getComputedStyle(box).fontSize, "16px", "1280 px: the phone size only on a phone");
+      assert.equal(box.getAttribute("autocapitalize"), "characters", "a phone keyboard gives capitals");
+      box.focus();
+      box.value = "Allo";
+      box.dispatchEvent(new win.Event("input"));
+      assert.equal(allow.disabled, true, "a word that is not ALLOW keeps Allow off");
+      assert.equal(card().querySelector(".confirm-hint").hidden, false, "and the line under the foot says why");
+      box.value = "allow";
+      box.dispatchEvent(new win.Event("input"));
+      assert.equal(allow.disabled, false, "\"allow\" turns Allow on");
+      box.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      await waitWhile(() => !!card());
+      assert.equal(card(), null, "Enter pressed Allow: the answered card leaves the page");
+      noValue(doc.body.textContent, "the rendered Approvals page after Enter");
+    }, { headers: signedIn, css: "" });
+    const all = JSON.parse(await read("/api/policy/proposals", CSRF_ADMIN)) as { proposals: Array<{ id: string; status: string }> };
+    assert.equal(all.proposals.find((p) => p.id === proposalId)?.status, "approved", "the arbiter records the wide change approved");
   } finally {
     await dashboard.close();
     wired.close();

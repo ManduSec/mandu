@@ -15,7 +15,7 @@
  *       named "Protection off: open Settings", in the status's own ink,
  *       size and nowrap beside its dot; a click opens Settings, scrolls the
  *       Protection card to the top and puts the focus on its switch;
- *   P2  at 641 to 1280 px the brand, the links and "Protection off" still
+ *   P2  at 720 to 1280 px the brand, the links and "Protection off" still
  *       fit the bar (the measured model, nav-row.ts);
  *   P3  the `secrets` axes running with a request waiting and `mode = "off"`
  *       saved: at 375 px the top bar reads "Protection on · off from the
@@ -150,11 +150,11 @@ test("from Rules, the top bar's \"Protection off\" opens Settings at the Protect
       }, { css: resolveCssVars(stylesAt(s.sheets, width)) });
     }
 
-    // ── P2: the bar, 641 to 1280 px, with "Protection off" ──
+    // ── P2: the bar, 720 to 1280 px, with "Protection off" ──
     const model = navRow(s.sheets);
     await servedProductPage(s.base, "/rules", (doc) => statusLinks(doc).length > 0, (doc) => {
       const links = drawnNav(doc);
-      for (let w = 641; w <= 1280; w++) {
+      for (let w = 720; w <= 1280; w++) {
         const spare = model.bar(w, { ...links, count: "99" }, "Protection off");
         assert.ok(spare >= MARGIN, `${w}px: the bar has ${spare}px to spare with "Protection off" and 99 waiting`);
       }

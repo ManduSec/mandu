@@ -366,11 +366,18 @@ test("plan 14 §11.2.1 the rebuild notice: SealSession calls onRecheck once, wit
   assert.equal(await s.verifyBytes("history-walk", "a2", Buffer.from("y")), false);
   assert.deepEqual(causes, ["unprotected-ended"], "once");
   assert.deepEqual(s.rejected.map((r) => r.reason), ["unsealed", "unsealed"], "the report is unchanged");
+  // A store's first scan (store-scan.ts) says the same one line, its cause.
+  const scanCauses: unknown[] = [];
+  const s2 = new SealSession(seals);
+  s2.onRecheck = (c) => { scanCauses.push(c); };
+  s2.noteStoreScan();
+  s2.noteStoreScan();
+  assert.deepEqual(scanCauses, ["store-scan"], "once, its cause");
 
   // The words: plain (no epoch, seal or pack), singular and plural, and the
   // display prints the line AT ONCE in both modes (noteShow), never under
   // the banner after the wait it explains.
-  for (const cause of ["unprotected-ended", "unclean-stop", "first-start", undefined] as const) {
+  for (const cause of ["unprotected-ended", "unclean-stop", "first-start", "walk-changed", "store-scan", undefined] as const) {
     for (const n of [0, 1, 3]) {
       const line = historyRecheckNotice(cause, n);
       assert.ok(isHistoryRecheckNotice(line), line);

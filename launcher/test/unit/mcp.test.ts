@@ -45,6 +45,18 @@ test("cli mode: binary hint, base URL = real endpoint, NO api key", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("cli U-LLM: the entry names the CLI's path past the session's claude shim (MANDU_ULLM_BINARY_PATH); none without one, none in api mode", () => {
+  const dir = tmpDir("mcp-");
+  const entry = (ullm: LaunchPlan["ullm"]) =>
+    JSON.parse(readFileSync(writeMcpConfig(plan({ ullm }), Layout.dev("/repo"), dir), "utf8")).mcpServers["mandu-inspect"];
+  const pinned = entry({ mode: "cli", baseUrl: "https://api.anthropic.com", binary: "claude", binaryPath: "/opt/claude/bin/claude" });
+  assert.equal(pinned.env.MANDU_ULLM_BINARY, "claude");
+  assert.equal(pinned.env.MANDU_ULLM_BINARY_PATH, "/opt/claude/bin/claude");
+  assert.equal(entry({ mode: "cli", baseUrl: "https://api.anthropic.com", binary: "claude" }).env.MANDU_ULLM_BINARY_PATH, undefined);
+  assert.equal(entry({ mode: "api", baseUrl: "https://api.anthropic.com", apiKey: "sk-q", binaryPath: "/opt/claude/bin/claude" }).env.MANDU_ULLM_BINARY_PATH, undefined);
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("codex U-LLM: the entry names the agent's CODEX_HOME (Codex hands a stdio server no CODEX_HOME); a claude U-LLM never gets one", () => {
   const dir = tmpDir("mcp-");
   const codex = JSON.parse(readFileSync(writeMcpConfig(plan({

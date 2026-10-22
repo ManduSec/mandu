@@ -48,6 +48,17 @@ export interface AskWords {
   /** A held message under a locked administrator's `ask` row (plan 15 §12,
    *  2026-10-04): why the answers cover this message only. Absent otherwise. */
   onlyThisMessage?: string;
+  /** What is left to do once you allow it, for the line an answer leaves
+   *  where its card was (dashboard.md §4.25 *An answer says what it
+   *  did*): "Tell Claude Code to try again." where `ifAllowed` says
+   *  TELL_AGENT, "The program goes on now." for a held program that goes on
+   *  at once. Absent for the others: the page says nothing more. Its own
+   *  field, so the page never reads it out of `ifAllowed`. */
+  afterAllow?: string;
+  /** The sentence from its verb on ("send your secret `STRIPE_KEY` to
+   *  `api.stripe.com`"), for that line ("Allowed once: …"); the whole
+   *  sentence when it does not start with "<agent> wants to ". */
+  whatParts: HomeTextPart[];
 }
 
 /** What the person does after answering a stopped action (dashboard.md
@@ -71,11 +82,18 @@ function c(text: string): HomeTextPart {
 
 /** A cell's words as written: plain text, or parts that name things as code. */
 type Cell = string | HomeTextPart[];
-/** An ask as the families build it: `AskWords` with each cell a `Cell`. */
-type AskCells = Omit<AskWords, "why" | "aiNow" | "ifAllowed" | "whyParts" | "aiNowParts" | "ifAllowedParts"> & {
+/** What is left to do once you allow an ask (`AskWords.afterAllow`): tell
+ *  the agent to try again (its `ifAllowed` says TELL_AGENT), or
+ *  nothing, as the held program goes on at once. */
+type After = "try-again" | "goes-on";
+/** An ask as the families build it: `AskWords` with each cell a `Cell`,
+ *  and what is left after an Allow as a kind (`after`), worded with the
+ *  agent's name by describeAsk. */
+type AskCells = Omit<AskWords, "why" | "aiNow" | "ifAllowed" | "whyParts" | "aiNowParts" | "ifAllowedParts" | "afterAllow" | "whatParts"> & {
   why: Cell;
   aiNow: Cell;
   ifAllowed: Cell;
+  after?: After;
 };
 
 /** A cell's sentence as parts: `` w`${c(file)} is a secret file.` ``. A part
@@ -112,13 +130,17 @@ function cellOf(x: Cell): { text: string; parts: HomeTextPart[] } {
 }
 
 /** The families' words as the card sends them: each cell's text (the
- *  string the developer view reads) and its parts. */
-function withParts(a: AskCells): AskWords {
+ *  string the developer view reads) and its parts; what is left after an
+ *  Allow in words (`afterAllow`), and the sentence from its verb on. */
+function withParts(cells: AskCells, who: string): AskWords {
+  const { after, ...a } = cells;
   const why = cellOf(a.why);
   const aiNow = cellOf(a.aiNow);
   const ifAllowed = cellOf(a.ifAllowed);
   return {
     ...a,
+    ...(after !== undefined ? { afterAllow: afterWords(after, who) } : {}),
+    whatParts: whatOf(a.sentence, who),
     why: why.text,
     aiNow: aiNow.text,
     ifAllowed: ifAllowed.text,
@@ -127,6 +149,32 @@ function withParts(a: AskCells): AskWords {
     ifAllowedParts: ifAllowed.parts,
   };
 }
+/** `AskWords.afterAllow` in words: the agent named as the sentence names
+ *  it ("the agent" when not known, mid-sentence). */
+function afterWords(after: After, who: string): string {
+  if (after === "goes-on") return "The program goes on now.";
+  return `Tell ${who === "The agent" ? "the agent" : who} to try again.`;
+}
+
+/** `AskWords.whatParts`: the sentence without its "<who> wants to ", so
+ *  "Allowed once: send your secret …" reads on; a sentence whose subject is
+ *  more than the agent ("Claude Code's program `cat` wants to …", "… ran a
+ *  command that wants to …") stays whole. Parts are copied. */
+function whatOf(sentence: readonly HomeTextPart[], who: string): HomeTextPart[] {
+  const lead = `${who} wants to `;
+  const first = sentence[0];
+  if (first === undefined || first.kind !== "text" || !first.text.startsWith(lead)) return sentence.map((p) => ({ ...p }));
+  const rest = first.text.slice(lead.length);
+  return [...(rest !== "" ? [t(rest)] : []), ...sentence.slice(1).map((p) => ({ ...p }))];
+}
+
+/** What a held program does once allowed (`heldWords`): goes on at once
+ *  while it waits; after, only when the agent tries again. Not known: no
+ *  claim either way. */
+function heldAfter(held: boolean | undefined): After | undefined {
+  return held === true ? "goes-on" : held === false ? "try-again" : undefined;
+}
+
 /** The last path segment of a file path, for the sentence; the full path is
  *  kept out of the one-liner (the page shows it on demand). */
 function basename(p: string): string {
@@ -175,6 +223,11 @@ function programWords(rest: string, home = ""): string {
  *  you answer"). */
 function possessive(who: string): string {
   return who.endsWith("s") ? `${who}'` : `${who}'s`;
+}
+
+/** `after` when there is one: spread into a family's cells. */
+function afterOf(after: After | undefined): { after?: After } {
+  return after !== undefined ? { after } : {};
 }
 
 /** What Allow does to a held open or change (`open:`, `trust:`, `write:`).
@@ -329,6 +382,26 @@ export interface HolderSourceWords {
   always?: string;
   /** Why a file in the way takes no *Always* here, in words. */
   noAlways?: string;
+  /** `noAlways` as parts where it ends "Change it under Rules." or "Mark it
+   *  under Rules.": those words a link part to this file's rule on Rules
+   *  (`path`, the file the card names; dashboard.md §4.34). */
+  noAlwaysParts?: RulePlacePart[];
+}
+
+/** A part of a sentence that names Rules for one file: the page links it to
+ *  that file's rule (home.js `placeLink`), or to Your rules when the file has
+ *  no rule of its own. It names the file, never an address or a value. */
+export type RulePlacePart = HomeTextPart | { kind: "link"; text: string; to: "rule"; path: string };
+
+/** The words of `noAlwaysWords` that send the person to Rules. */
+const UNDER_RULES = /(?:Change|Mark) it under Rules(?=\.$)/;
+
+/** `words` as parts, its closing "Change it under Rules" a link to the rule
+ *  of `path`; null when the words send nowhere. Joined, the same words. */
+export function noAlwaysParts(words: string, path: string): RulePlacePart[] | null {
+  const m = UNDER_RULES.exec(words);
+  if (!m) return null;
+  return [t(words.slice(0, m.index)), { kind: "link", text: m[0], to: "rule", path }, t(words.slice(m.index + m[0].length))];
 }
 
 /** Why a file in the way takes no *Always* (holder-send-ask.ts
@@ -344,6 +417,11 @@ function noAlwaysWords(reason: string | undefined): string {
     case "per-value": return "Each value in it has its own hosts, and the whole file may go only where every value may. Add the host to the values in your rules file.";
     default: return "Mandu cannot add a place to its rule from here. Change it under Rules.";
   }
+}
+
+function noAlwaysOf(words: string, path: string): Pick<HolderSourceWords, "noAlways" | "noAlwaysParts"> {
+  const parts = noAlwaysParts(words, path);
+  return { noAlways: words, ...(parts ? { noAlwaysParts: parts } : {}) };
 }
 
 /** The files of a holder's send question as the card lists them, with one
@@ -362,7 +440,7 @@ export function holderSourceWords(sources: QueueRowVM["holderSources"], target: 
       mayGoParts: mayGo.parts,
       blocks: s.blocks,
       ...(s.blocks && s.always ? { always: `Always: add ${target} to ${basename(s.path)}` } : {}),
-      ...(s.blocks && !s.always ? { noAlways: noAlwaysWords(s.noAlways) } : {}),
+      ...(s.blocks && !s.always ? noAlwaysOf(noAlwaysWords(s.noAlways), s.path) : {}),
     };
   });
 }
@@ -412,6 +490,7 @@ function holderAsk(
       : w`A program that read ${many ? "these files" : "this file"} may send only where ${these} may go, and ${at} is not such a place.`,
     aiNow: w`The AI's program has not sent anything: Mandu refused its connection to ${at}.`,
     ifAllowed: w`Allow once lets the program's next connection to ${at} go, with what it read.${held.session !== null ? " Allow this session lets it go for the rest of this session." : ""} Always adds ${at} to where one file may be sent; once every file may go there, the program sends without asking. ${TELL_AGENT}`,
+    after: "try-again",
   };
 }
 
@@ -515,7 +594,7 @@ export function describeAsk(
   who: string,
   home = "",
 ): AskWords {
-  return withParts(askCells(v, who, home));
+  return withParts(askCells(v, who, home), who);
 }
 
 /** describeAsk's families, each cell as written (`Cell`). */
@@ -571,6 +650,7 @@ function askCells(
       // The gate refused the request (the proxies answer 403): nothing was
       // sent, and only a new try goes with the value (§4.34 "After you answer").
       ifAllowed: w`The AI's next request goes to ${place} with ${real} filled in. Mandu refused this one, so nothing was sent. ${TELL_AGENT}`,
+      after: "try-again",
     };
   }
   if (subject.startsWith("prompt:")) {
@@ -586,8 +666,10 @@ function askCells(
       // The proxy holds the request until a deadline from the row's first
       // sighting (30 s by default), then sends the default; an answer given
       // later applies to the next request, which carries the message again
-      // (prompt-filter/holds.ts). The page does not see the deadline, so
-      // the words hold either way.
+      // (prompt-filter/holds.ts). These words do not see the deadline, so
+      // they hold either way; the page reads it from the holds route and
+      // adds a line that counts it down (dashboard.md §4.34 "A held
+      // message's deadline").
       aiNow: "The AI has not seen the message as you wrote it. Its request waits for your answer for a short while, then goes with that part masked.",
       ifAllowed: "The AI reads your message as you wrote it (Send as written), with that part masked (Send masked), or not at all (Cancel the message). An answer given after the request went applies from the AI's next request, which carries your message again.",
       ...(v.onceOnly === true ? { onlyThisMessage: ONLY_THIS_MESSAGE } : {}),
@@ -608,6 +690,7 @@ function askCells(
       why: w`${c(file)} is a secret file, and Mandu keeps secret files from the AI. If you want ${c(program)} to read it, click Allow once or Always allow.`,
       aiNow: early ? fileReadFirstNow(program) : w`The AI has not seen the real file, and its program ${c(program)} has not read it.`,
       ifAllowed: w`${heldWords(v.held, program, "reads the real file", "could not read the file")} What it prints still reaches the AI masked.`,
+      ...afterOf(heldAfter(v.held)),
     };
   }
   if (v.where === "file" && subject.startsWith("trust:")) {
@@ -623,6 +706,7 @@ function askCells(
       why: w`Mandu does not know whether ${c(program)} keeps what it reads out of what it prints. If you allow it, the AI's other programs may be able to read the file through it. Allow it only if you know ${c(program)} does not show or pass on what it reads.`,
       aiNow: early ? fileReadFirstNow(program) : w`The AI has not seen the real file, and its program ${c(program)} has not read it.`,
       ifAllowed: w`${heldWords(v.held, program, "reads the real file", "could not read the file")} What it prints still reaches the AI masked, but other programs that read its output may see the real contents.`,
+      ...afterOf(heldAfter(v.held)),
     };
   }
   if (v.where === "file" && subject.startsWith("write:")) {
@@ -647,6 +731,7 @@ function askCells(
       ifAllowed: thisRun && v.held === false
         ? w`The AI's program ${c(program)} stopped waiting and its change was refused. Your answer covers that run only, so a new try asks again.`
         : w`${heldWords(v.held, program, "changes the file", "could not change the file")} What it wrote runs the next time the file is used.`,
+      ...afterOf(thisRun && v.held === false ? undefined : heldAfter(v.held)),
     };
   }
   if (v.where === "file" && /^fs:[^:]+:upload$/.test(subject)) {
@@ -660,6 +745,7 @@ function askCells(
       why: "The file is a secret file, or holds one of your secrets. The AI's tool would send it as it is, so Mandu asks first.",
       aiNow: "The AI's tool has not sent the file. It got an error instead.",
       ifAllowed: `The AI's tool sends the file as it is when it tries again. ${TELL_AGENT}`,
+      after: "try-again",
     };
   }
   if (v.where === "file") {
@@ -683,6 +769,7 @@ function askCells(
           : `Mandu asks before the AI can ${verb} this file.`,
       aiNow: `The AI has not ${write ? "changed" : "opened"} the file. Its tool got an error instead.`,
       ifAllowed: `The AI's tool can ${verb} the file when it tries again. ${TELL_AGENT}`,
+      after: "try-again",
     };
   }
   if (v.where === "exec" && subject.startsWith("exec-program:")) {
@@ -696,6 +783,7 @@ function askCells(
       why: "Code from the internet can do anything the site that served it wants, so Mandu stopped it before it ran.",
       aiNow: "The AI's command was stopped before it ran.",
       ifAllowed: `When the AI runs the command again, the downloaded code runs on this computer. ${TELL_AGENT}`,
+      after: "try-again",
     };
   }
   if (v.where === "exec" && subject.startsWith("exec-escalate:")) {
@@ -712,6 +800,7 @@ function askCells(
       ifAllowed: (net
         ? "When the AI runs the command again, it gets the network."
         : "When the AI runs the command again, it runs on your real files.") + ` ${TELL_AGENT}`,
+      after: "try-again",
     };
   }
   if (v.where === "exec") {
@@ -721,6 +810,7 @@ function askCells(
       why: "The command uses masked text, and Mandu does not put the real text into a command without your OK.",
       aiNow: early ? readFirstNow(secretItem) : "The AI has only the masked text. It has never read the real one.",
       ifAllowed: `When the AI runs the command again, it runs with the real text filled in. ${TELL_AGENT}`,
+      after: "try-again",
     };
   }
   if (v.where === "model context") {
@@ -738,6 +828,7 @@ function askCells(
         : "Mandu masked this before the AI read it.",
       aiNow: early ? readFirstNow(secretItem) : "The AI has only the masked version.",
       ifAllowed: `When the AI asks again, it reads the real text. ${TELL_AGENT}`,
+      after: "try-again",
     };
   }
   return {

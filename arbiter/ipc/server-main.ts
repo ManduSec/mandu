@@ -55,6 +55,7 @@ import { prepLimitsFromEnv, preparedCopiesOff } from "../policy/prepared-copies.
 import { manduPath } from "../src/generated/mandu-paths.js";
 import { homedir } from "node:os";
 import { armLifeline } from "./lifeline.js";
+import { armTestOwnerWatch } from "./test-owner.js";
 import { arbiterBuild } from "./build-identity.js";
 import {
   createInstanceDir,
@@ -209,6 +210,10 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  // A daemon a test started dies with that test's process (test-owner.ts,
+  // runtime-instances.md §8a); no production start has an owner here.
+  const testOwner = armTestOwnerWatch((owner) => void shutdown(`test owner pid ${owner} gone`));
+  if (testOwner) console.error(`[arbiter] test owner pid ${testOwner.owner}: this instance exits when that process does`);
 
   const paths = createInstanceDir(base, id);
   instanceDir = paths.dir;

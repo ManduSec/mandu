@@ -126,7 +126,7 @@ import { policyAgentEditSchema } from "../policy/policy-edit-schema.js";
 import { GLOB_KEY_PREFIX, compilePolicy, connectAllowSpecs, getCurrentPolicy, matchUserRules, modelLocation, modelTokenBindings, originHostOf, relaxationsOf, swapCurrentPolicy } from "../policy/compiled-policy.js";
 import { canonicalJson, diffItems, evaluateEdits, pathIdentity } from "../policy/policy-edit.js";
 import { recordWireGrant, symbolMapGeneration, type SymbolEntry } from "../symbol-table/symbol-table.js";
-import type { DesymStage, PathLevelsEntry, PathLevelsOpResult, SessionUpstreamResult, TestFlowOpRequest, TestFlowPathLabel, TestFlowResult, WhyPathOpResult, WhyHostOpResult, WhyPendingChange, CallTaintResultWire, AgentReceiptTaintResultWire, McpServerTaintResultWire, DecideProtectedWriteResultWire, DecideSecretOpenResultWire, ScanSecretValuesResultWire, FilterPromptResultWire, DocumentTextResultWire, PromptHoldsResultWire, PromptFiltersResultWire, PromptFilterPacksResultWire, PromptExceptionsResultWire, PromptPackEditOpRequest, PromptPackEditResultWire, TaintedProcessBindingsResultWire, HolderSourceBindingResultWire, SessionExecRootResultWire, GuardAttachResultWire, SessionSecretTaintResultWire, SecretTaintedProcessesResultWire, LabelWrittenPathTaintedResultWire, DerivedLabelsSinceResultWire, LabelRootsSinceResultWire, LabelledLevelResultWire, GuardCatalogWire, SessionPathLabelResultWire, ClearSessionPathLabelsResultWire, FollowDerivedLabelResultWire, GuardSettingsResult, SuggestPolicyResult, GitHistoryLocksResult, RegisterRepositoryResult, CacheSealsResult, SealCacheEntriesResult, BeginLaunchResult, EndLaunchResult, HumanPlaneStatusResult, ReaderProgramOpResult } from "./protocol.js";
+import type { DesymStage, PathLevelsEntry, PathLevelsOpResult, SessionUpstreamResult, TestFlowOpRequest, TestFlowPathLabel, TestFlowResult, WhyPathOpResult, WhyHostOpResult, WhyPendingChange, CallTaintResultWire, AgentReceiptTaintResultWire, McpServerTaintResultWire, DecideProtectedWriteResultWire, DecideSecretOpenResultWire, ScanSecretValuesResultWire, FilterPromptResultWire, DocumentTextResultWire, PromptHoldsResultWire, PromptFiltersResultWire, PromptFilterPacksResultWire, PromptExceptionsResultWire, PromptPackEditOpRequest, PromptPackEditResultWire, TaintedProcessBindingsResultWire, HolderSourceBindingResultWire, SessionExecRootResultWire, GuardAttachResultWire, SessionSecretTaintResultWire, SecretTaintedProcessesResultWire, LabelWrittenPathTaintedResultWire, DerivedLabelsSinceResultWire, LabelRootsSinceResultWire, LabelledLevelResultWire, GuardCatalogWire, SessionPathLabelResultWire, ClearSessionPathLabelsResultWire, FollowDerivedLabelResultWire, GuardSettingsResult, SuggestPolicyResult, GitHistoryLocksResult, RegisterRepositoryResult, CacheSealsResult, SealCacheEntriesResult, BeginLaunchResult, EndLaunchResult, HumanPlaneStatusResult, ReaderProgramOpResult, SuggestFromScanResultWire } from "./protocol.js";
 import { EGRESS_REFUSAL_KINDS, PATH_LEVELS_MAX, STRIPPED_PLACEHOLDERS_MAX } from "./protocol.js";
 import { RelayNoticeQueue, parseRelayNotice } from "./relay-notices.js";
 
@@ -229,7 +229,7 @@ import {
   composeSessionApproval, heldRefusalKind, heldSessionOf, isSessionApprovalSubject, isSessionHeldReason,
   approvalDestination, parseSessionApprovalSubject, sessionApprovalSubject, sessionExecTarget, sessionHeldNetReason, sessionNetTarget,
 } from "../policy/session-approvals.js";
-import { DEFAULT_PIECE_LIMITS, MIN_LINE_FINGERPRINT_LEN, type PieceLimits, type SecretFingerprint } from "../policy/egress-fingerprint.js";
+import { DEFAULT_PIECE_LIMITS, MIN_FINGERPRINT_LEN, MIN_LINE_FINGERPRINT_LEN, type PieceLimits, type SecretFingerprint } from "../policy/egress-fingerprint.js";
 import { RegisteredValueIndex, indexableRow, raisedRowKeptLines, scanEgressFingerprintIndexed, type ValueHow } from "../prompt-filter/registered-values.js";
 import { scanFileForValues } from "../policy/upload-scan.js";
 import { RESIDUE_MIN_LEN, ResidueScanner, VALUE_ONLY_MAX_CHARS, planValueOnly, residueCheckText, type ValueOnlySpan } from "../policy/value-only-release.js";
@@ -284,7 +284,7 @@ const ONCE_REQUEST_WINDOW_MS = 360_000;
 /** How many of a request's placeholders (`requestSymbols`) the file-card
  *  test reads at most: past it, a placeholder may keep its own card. */
 const REQUEST_SYMBOLS_MAX = 512;
-import { agentFileOf, agentLoginConfidentiality, CATALOG_GATE_SKIP_DIRS, catalogGateRoots, gateVerdict, MAX_LABEL_FILES, originUnder, SKIP_DIRS, parseSessionLogins, pickLoginEnv, pickPackageCacheEnv, sessionLoginPaths, type SecretDiscoveryReport } from "../policy/secret-discovery.js";
+import { agentFileOf, isAgentAuthPath, agentLoginConfidentiality, CATALOG_GATE_SKIP_DIRS, catalogGateRoots, gateVerdict, MAX_LABEL_FILES, originUnder, SKIP_DIRS, parseSessionLogins, pickLoginEnv, pickPackageCacheEnv, sessionLoginPaths, type SecretDiscoveryReport } from "../policy/secret-discovery.js";
 import { DiscoveryWorker, runDiscoveryJob, type DiscoveryJob } from "../policy/secret-discovery-thread.js";
 import { historyLimitsFromEnv, scanSecretHistory, DEFAULT_HISTORY_LIMITS, type HistoryScanOptions, type SecretHistoryScan } from "../policy/secret-history-scan.js";
 import { scanSecretWorkspace, workspaceLimitsFromEnv, WorkspaceScanCache, type LabelCacheEntry, type SecretWorkspaceScan, type WorkspaceScanOptions } from "../policy/secret-workspace-scan.js";
@@ -294,13 +294,19 @@ import type { RegistryLimits, RepoWalkLimits } from "../policy/known-repos.js";
 import { defaultHistoryCacheDir, fileHistoryScanCache, type HistoryScanCache } from "../policy/secret-history-cache.js";
 import { CacheSealStore, sealGate, type CacheSealRejection, type LiveLaunch } from "../policy/cache-seals.js";
 import { PreparedCopies, type PrepGit, type PrepLimits } from "../policy/prepared-copies.js";
-import { envSecretNameMatches, secretFileShape } from "../policy/secret-extract.js";
+import { envSecretNameMatches, envSecretSpan, extractSecretSpans, secretFileShape } from "../policy/secret-extract.js";
+import { knownSecretsOf, SCAN_MAX_FILES, transcriptKnownFiles } from "../policy/transcript-known.js";
+import { isTranscriptStorePath, manduWindowsFrom, scanAgentTranscripts, transcriptSources, type KnownSecret, type TranscriptScanLimits, type TranscriptSource } from "../policy/transcript-scan.js";
+import { codexDirOf, projectProviderReader, providerSettingsOf } from "../policy/transcript-providers.js";
+import { parseScanFileClaims, readRegularFile as readTranscriptClaimFile, verifyScanFile } from "../policy/transcript-suggestions.js";
+import type { PastSessionsFile } from "../policy/policy-suggestions.js";
 import { AuthGrantStore, isGrantOrigin, parseAuthGrants } from "../secret-registry/auth-grants.js";
 import { WireReleaseStore, parseDirectHosts } from "../secret-registry/wire-release-sessions.js";
 import { documentBlockText } from "../policy/document-blocks.js";
 import { documentNameRows, envRowVariable, isOwnTextRow, isRegisteredFileRow, ownTextTwinFor, registerSecret, registeredDocumentText, registeredDocumentTwin, twinMatchOf, fileRegisteredAsIs, listSecretRegistry, registerEnvSecret, registeredFileSymbols, registeredFilePaths, registeredFileTwin, structuredTwinFor, structuredTwinWithSecretsFor, structuredTwinOfField, wholeFileTwinFor, wholeFileTwinOfBase, wireServableTwin, wireReleaseScheme, type RegisteredTwin } from "../secret-registry/registry.js";
 import { WhyPreview } from "./why-preview.js";
-import { declaredBindingsReader, issuerSourceOf, releaseRestsOnWireGrant, syncCurrentBindings, syncEnvBindings, syncRegisteredBindings } from "../secret-registry/current-bindings.js";
+import { declaredBindingsReader, issuerSourceOf, ownWireHost, releaseRestsOnWireGrant, syncCurrentBindings, syncEnvBindings, syncRegisteredBindings } from "../secret-registry/current-bindings.js";
+import { mcpConfigKind } from "../policy/mcp-config.js";
 import { issuerOfHost, issuerRelease, type Issuer } from "../policy/issuer-bindings.js";
 import { siblingDeclaredBindings, valueSourceLevel, valueSourceView, type ValueSourceOptions } from "../secret-registry/value-sources.js";
 import {
@@ -690,6 +696,18 @@ export const ADMIN_ONLY_OPS: ReadonlySet<string> = new Set([
   "resolvePromptHold",
   "letPromptFindingThrough",
 ]);
+
+/** `scanAgentTranscripts`' caps from the arbiter's environment
+ *  (`MANDU_TRANSCRIPT_SCAN_TIMEOUT_S`, `MANDU_TRANSCRIPT_SCAN_MAX_MB`);
+ *  anything else keeps the defaults. Pure. */
+export function transcriptLimitsFromEnv(env: Record<string, string | undefined>): Partial<TranscriptScanLimits> {
+  const out: Partial<TranscriptScanLimits> = {};
+  const s = Number(env["MANDU_TRANSCRIPT_SCAN_TIMEOUT_S"]);
+  if (Number.isFinite(s) && s > 0) out.deadlineMs = s * 1000;
+  const mb = Number(env["MANDU_TRANSCRIPT_SCAN_MAX_MB"]);
+  if (Number.isFinite(mb) && mb > 0) out.maxBytes = mb * 1024 * 1024;
+  return out;
+}
 
 export function adminOnlyError(op: string): string {
   return `admin-only: '${op}' enacts a human decision and is accepted only on the admin channel (the inherited fd held by the supervisor), never on the data socket`;
@@ -1097,6 +1115,9 @@ export function earlierScanAt(finished: ReadonlyMap<string, number>, roots: read
   return oldest;
 }
 
+/** `keptMcpValues` when the session keeps no MCP config. */
+const EMPTY_KEPT_VALUES: ReadonlyMap<string, string | null> = new Map();
+
 /** `discoverSecrets` with the confidentiality axis OFF: nothing to twin. */
 const EMPTY_DISCOVERY: SecretDiscoveryReport = {
   files: [], skipped: [], counts: {} as SecretDiscoveryReport["counts"], limits: { maxDepth: 0, maxFiles: 0 }, truncated: false, depthAreas: [],
@@ -1195,6 +1216,10 @@ export class ArbiterServer {
   /** `sessionLoginExemptions`' answers by the session's wire value (a few
    *  sessions at a time; each asks with the same value on every scan). */
   private readonly sessionLoginMemo = new Map<string, readonly string[]>();
+  /** `keptRowWireHost`'s answers by symbol name. */
+  private readonly keptWireHostMemo = new Map<string, string | null>();
+  /** `keptMcpValues`' last answer. */
+  private keptMcpValuesMemo: { key: string; values: ReadonlyMap<string, string | null> } | null = null;
   /** Plan 10 §11.18: the bound on one value's pieces (`pieceLimits`). */
   private readonly pieceLimits: PieceLimits;
   /** Plan 10 §11.18: the labelled files a guard-reported raw read could not
@@ -1501,6 +1526,8 @@ export class ArbiterServer {
   private readonly historyScanOpts: HistoryScanOptions;
   private readonly historyScanCache: HistoryScanCache | undefined;
   private historyScanRunning = false;
+  /** `scanAgentTranscripts`: one scan at a time (plan 17). */
+  private transcriptScanRunning = false;
   /** The workspace scan (plan 14 §13): its seams, and what it read, in
    *  memory only (never on disk; at most WORKSPACE_CACHE_MAX files). It runs
    *  under `historyScanRunning` too: one scan job at a time. */
@@ -3759,12 +3786,64 @@ export class ArbiterServer {
   }
 
   /**
+   * A kept row's exemption in its own session's tripwire scan
+   * (secret-discovery.md §2.10): null when it is exempt everywhere (a
+   * login's token, an MCP stdio server's variable), or the one host it is
+   * exempt at (an MCP config's HTTP server credential: the host of that
+   * entry's own `url`, `ownWireHost`, read from the row's own registration).
+   * Memoized by symbol name (a row's value and its base row never change).
+   */
+  private keptRowWireHost(name: string, entry: SymbolEntry): string | null {
+    let host = this.keptWireHostMemo.get(name);
+    if (host === undefined) {
+      host = mcpConfigKind(entry.origin ?? "") === null ? null : ownWireHost(this.symbolMap, name, entry, this.labelLookup);
+      if (this.keptWireHostMemo.size >= 1024) this.keptWireHostMemo.clear();
+      this.keptWireHostMemo.set(name, host);
+    }
+    return host;
+  }
+
+  /**
+   * The values of the kept MCP configs' own field rows (secret-discovery.md
+   * §2.10), each with the one host it is exempt at (`keptRowWireHost`) or
+   * null (everywhere): what a session's agent and its servers send as their
+   * own. Values under the fingerprint floor are left out (they never
+   * fingerprint). Memoized by the kept paths and the symbol table's
+   * generation.
+   */
+  private keptMcpValues(kept: readonly string[]): ReadonlyMap<string, string | null> {
+    const configs = kept.filter((p) => mcpConfigKind(p) !== null);
+    if (configs.length === 0) return EMPTY_KEPT_VALUES;
+    const key = `${symbolMapGeneration(this.symbolMap)}\u0001${this.symbolMap.symbols.size}\u0001${configs.join("\u0000")}`;
+    const memo = this.keptMcpValuesMemo;
+    if (memo !== null && memo.key === key) return memo.values;
+    const values = new Map<string, string | null>();
+    for (const [name, e] of this.symbolMap.symbols) {
+      if (e.obsoleted_at !== null || e.field === null || !isRegisteredFileRow(e) || !originUnder(e.origin ?? "", configs)) continue;
+      if (!isSecret(parseConfidentialityLevel(e.confidentiality)) || e.value.length < MIN_FINGERPRINT_LEN) continue;
+      const host = this.keptRowWireHost(name, e);
+      // An Authorization value's credential after its scheme word (`Bearer
+      // <token>`) is the same credential: a tool result's row may hold it
+      // as a bare token.
+      const scheme = /^(?:bearer|basic|token)\s+(\S+)$/i.exec(e.value);
+      for (const v of scheme !== null && scheme[1]!.length >= MIN_FINGERPRINT_LEN ? [e.value, scheme[1]!] : [e.value]) {
+        // Two rows of one value: exempt only as far as both are.
+        const prev = values.get(v);
+        values.set(v, prev === undefined ? host : prev === null ? host : host === null ? prev : prev === host ? host : "\u0000none");
+      }
+    }
+    this.keptMcpValuesMemo = { key, values };
+    return values;
+  }
+
+  /**
    * The login files a session leaves raw (secret-discovery.md §1.10), from
    * its net-proxy's `sessionLogins`: every spelling `sessionLoginPaths`
    * gives, and the real path of each (a row registered from a guard report
    * carries the real path). Empty for a malformed or absent value: nothing
    * is exempt, so the tripwire fires as before (the strict direction).
    * Memoized by the wire value; a real path is read when first asked.
+   * Since 2026-10-21 also the kept agents' MCP configs (§2.10).
    */
   private sessionLoginExemptions(raw: unknown): readonly string[] {
     const s = parseSessionLogins(raw);
@@ -4594,6 +4673,7 @@ export class ArbiterServer {
     this.syncSymbolBindings();
     if (req.op === "discoverSecrets") return this.dispatchDiscoverSecrets(req, ctx);
     if (req.op === "scanSecretHistory") return this.scanSecretHistoryOp(req);
+    if (req.op === "scanAgentTranscripts") return this.scanAgentTranscriptsOp(req);
     if (req.op === "suggestPolicy") return this.suggestPolicyOp(req);
     if (req.op === "modelSuggestPreview") return this.modelSuggestPreviewOp(req);
     if (req.op === "modelSuggest") return this.modelSuggestOp(req);
@@ -4771,6 +4851,139 @@ export class ArbiterServer {
     } finally {
       this.historyScanRunning = false;
     }
+  }
+
+  /**
+   * `scanAgentTranscripts` (confidentiality-plan-17-past-sessions-scan.md):
+   * the agents' own transcripts under `home`, scanned for secrets that
+   * already reached a model. The ARBITER reads the transcripts and the
+   * credential files; the answer carries no value, length or hash. The
+   * values it looks for by exact match come from this arbiter's own
+   * discovery of `home` (the agents' login files too) and its own
+   * environment, never from the caller. Read-only: it records no found
+   * label and writes nothing. One scan at a time. Never rejects.
+   */
+  async scanAgentTranscriptsOp(req: Extract<ArbiterRequest, { op: "scanAgentTranscripts" }>): Promise<ArbiterResponse<unknown>> {
+    const home = typeof req.home === "string" && req.home.startsWith("/") ? req.home : homedir();
+    if (req.eventsDir !== undefined && (typeof req.eventsDir !== "string" || !req.eventsDir.startsWith("/"))) {
+      return { id: req.id, ok: false, error: "scanAgentTranscripts: eventsDir must be an absolute path" };
+    }
+    if (req.since !== undefined && (typeof req.since !== "number" || !Number.isFinite(req.since))) {
+      return { id: req.id, ok: false, error: "scanAgentTranscripts: since must be a time in ms" };
+    }
+    if (!this.confidentiality) {
+      return { id: req.id, ok: true, result: { axis: false, ...(await scanAgentTranscripts({ home, sources: [] })) } };
+    }
+    if (this.transcriptScanRunning) {
+      return { id: req.id, ok: false, error: "scanAgentTranscripts: a scan is already running; try again when it ends" };
+    }
+    this.transcriptScanRunning = true;
+    try {
+      // The agents' directory variables (CLAUDE_CONFIG_DIR, XDG_DATA_HOME,
+      // OPENCLAW_STATE_DIR, …) belong to this process's HOME: for another
+      // home (a test's fixture home) the stores are at its defaults.
+      const own = home === process.env["HOME"];
+      const sources = transcriptSources(home, own ? process.env : {});
+      const known = await this.transcriptScanKnown(home, sources);
+      const run = await scanAgentTranscripts({
+        home,
+        sources,
+        known,
+        ...(req.eventsDir !== undefined ? { manduWindows: manduWindowsFrom(req.eventsDir) } : {}),
+        ...(req.since !== undefined ? { since: req.since } : {}),
+        limits: transcriptLimitsFromEnv(process.env),
+        // Where the agents' requests went, from their own settings
+        // (transcript-providers.ts): read-only, kinds only. The managed
+        // settings and this process's variables are this HOME's alone.
+        providers: providerSettingsOf({ home, env: own ? process.env : {}, system: own }),
+        projectProviders: projectProviderReader({ codexDir: codexDirOf(home, own ? process.env : {}) }),
+      });
+      return { id: req.id, ok: true, result: { ...run, axis: true } };
+    } catch (err) {
+      return { id: req.id, ok: false, error: `scanAgentTranscripts: ${(err as Error).message}` };
+    } finally {
+      this.transcriptScanRunning = false;
+    }
+  }
+
+  /** The values `scanAgentTranscripts` looks for by exact match
+   *  (transcript-known.ts): each credential file discovery finds under
+   *  `home`, every agent's login files and every catalog credential store
+   *  there read by their own places (the walk's caps never drop one), the
+   *  person's systemd user units, each split into its values, and the
+   *  secret-named variables of this process's environment. A transcript
+   *  the scan reads is never one of those files (discovery walks
+   *  OpenClaw's store like any other folder): its values are what is
+   *  looked at, not where a secret lives. The scanner keeps only the
+   *  credential-like ones (`knownIsCredential`). */
+  private async transcriptScanKnown(home: string, sources: readonly TranscriptSource[]): Promise<KnownSecret[]> {
+    const job = this.discoveryJob({ op: "discoverSecrets", id: 0, roots: [home], home } as Extract<ArbiterRequest, { op: "discoverSecrets" }>);
+    // The walk's file cap is a launch's (its argv): the scan binds nothing.
+    const report = job ? await this.discoveryWorker.run({ ...job, opts: { ...job.opts, maxFiles: SCAN_MAX_FILES } }) : EMPTY_DISCOVERY;
+    const own = home === process.env["HOME"];
+    const isTranscript = (p: string): boolean => isTranscriptStorePath(p, sources);
+    const xdg = own ? process.env["XDG_CONFIG_HOME"] : undefined;
+    const files = transcriptKnownFiles({
+      home,
+      discovered: [...report.files.map((f) => f.path), ...report.skipped.filter((c) => c.reason === "agent-login").map((c) => c.path)],
+      isSecretPath: (p) => isSecret(pathConfidentiality(p, home, this.labelLookup).level),
+      isTranscript,
+      loginEnv: own ? process.env : {},
+      ...(xdg !== undefined && xdg.startsWith("/") ? { configHome: xdg } : {}),
+    });
+    const known = knownSecretsOf(files, { home, isTranscript });
+    for (const [name, value] of Object.entries(process.env)) {
+      const sp = value === undefined ? null : envSecretSpan(name, value);
+      if (sp !== null) known.push({ value: sp.value, path: "your environment", name });
+    }
+    return known;
+  }
+
+  /**
+   * `suggestFromScan` (plan 17 §3 item 13): the files `mandu scan`'s "your
+   * secrets" came from, each checked here (transcript-suggestions.ts
+   * `verifyScanFile`: a regular file under `home`, not an agent's own, not
+   * Mandu's, and a credential under a named key in it by this arbiter's own
+   * reading), then the past-sessions generator and the suggestions' filing
+   * path. Paths, names and counts in; paths, names and counts out. The log
+   * line holds counts only.
+   */
+  suggestFromScanOp(req: Extract<ArbiterRequest, { op: "suggestFromScan" }>): ArbiterResponse<unknown> {
+    const home = typeof req.home === "string" && req.home.startsWith("/") ? req.home.replace(/\/+$/, "") : null;
+    if (home === null || home === "") return { id: req.id, ok: false, error: "suggestFromScan: home must be an absolute path" };
+    const claims = parseScanFileClaims(req.files);
+    if ("error" in claims) return { id: req.id, ok: false, error: `suggestFromScan: ${claims.error}` };
+    const empty: SuggestFromScanResultWire = { axis: false, filed: [], covered: 0, alreadyPending: 0, dismissed: 0, overCap: 0, refused: [], suggestions: [] };
+    if (!this.confidentiality) return { id: req.id, ok: true, result: empty };
+    const manduHomes = [...new Set([manduPath("mandu-home", process.env, home), join(home, ".mandu")])];
+    const under = (p: string, dir: string): boolean => p === dir || p.startsWith(`${dir}/`);
+    const files: PastSessionsFile[] = [];
+    const refused: SuggestFromScanResultWire["refused"] = [];
+    for (const c of claims) {
+      const v = verifyScanFile(c, {
+        home,
+        read: (p) => readTranscriptClaimFile(p),
+        agentOwn: (p) => agentFileOf(p, home, process.env) !== null || isAgentAuthPath(p, home),
+        manduState: (p) => manduHomes.some((d) => under(p, d)),
+        isWorkTree: (d) => existsSync(join(d, ".git")),
+      });
+      if (v.ok) files.push(v.file);
+      else refused.push({ path: c.path, why: v.why });
+    }
+    const r = this.policySuggestions.fileFromPastSessions(files, {
+      home,
+      isCovered: (p) => {
+        const m = pathConfidentiality(p, home, this.labelLookup);
+        return m.rule !== null && isSecret(m.level);
+      },
+    });
+    this.log(`suggestFromScan: ${claims.length} file(s) named, ${files.length} verified, ${r.filed.length} filed, ${r.covered} covered, ${refused.length} refused`);
+    const result: SuggestFromScanResultWire = {
+      axis: true, filed: r.filed, covered: r.covered,
+      alreadyPending: r.counts.alreadyPending, dismissed: r.counts.dismissed, overCap: r.counts.overCap,
+      refused, suggestions: r.suggestions,
+    };
+    return { id: req.id, ok: true, result };
   }
 
   /** One history scan with the arbiter's catalog and labels as the path
@@ -5960,6 +6173,8 @@ export class ArbiterServer {
         return { id: req.id, ok: false, error: `${req.op} is asynchronous: call it over the socket` };
       case "policySuggestions":
         return { id: req.id, ok: true, result: this.policySuggestions.list(req.status) };
+      case "suggestFromScan":
+        return this.suggestFromScanOp(req);
       case "applySuggestion":
       case "dismissSuggestion": {
         // The data plane applies as itself: it never names a human.
@@ -8896,13 +9111,39 @@ export class ArbiterServer {
           if (!entry || entry.obsoleted_at != null) return null;
           const level = parseConfidentialityLevel(entry.confidentiality);
           if (!isSecret(level)) return null;
-          if (kept.length > 0 && isRegisteredFileRow(entry) && originUnder(entry.origin ?? "", kept)) return null;
+          // An MCP config's HTTP server credential (secret-discovery.md
+          // §2.10): the session's agent sends it raw, to the host of the
+          // entry's own URL only, so in that session it is exempt there and
+          // nowhere else (the narrower exemption; any other kept row, as
+          // before, everywhere).
+          const keptHost = kept.length > 0 && isRegisteredFileRow(entry) && originUnder(entry.origin ?? "", kept) ? this.keptRowWireHost(name, entry) : undefined;
+          if (keptHost === null) return null;
           // Bound where any labelled source of the value binds it, as the
           // egress gate releases it (value-sources.ts).
           const view = this.releaseView(entry);
-          return { symbol: name, value: entry.value, level: parseConfidentialityLevel(view.confidentiality), bindings: view.bindings ?? [] };
+          const bindings = view.bindings ?? [];
+          return { symbol: name, value: entry.value, level: parseConfidentialityLevel(view.confidentiality), bindings: keptHost === undefined ? bindings : [...bindings, keptHost] };
         };
-        const hits = scanEgressFingerprintIndexed(req.surfaces ?? [], this.syncedValueIndex(), fingerprintOf, req.destination ?? "");
+        // §2.10: a value of the session's agent's own MCP config is that
+        // agent's (or its server's) own traffic wherever it shows up in the
+        // index, also as a piece of a tool result's row (a masked Read of
+        // the config the model made, which outlives the session): exempt
+        // where its row is, never a longer text around it.
+        const ownMcp = this.keptMcpValues(kept);
+        const dest = req.destination ?? "";
+        const exemptText = ownMcp.size === 0 ? undefined : (text: string, symbol: string): boolean => {
+          if (!ownMcp.has(text)) return false;
+          const host = ownMcp.get(text)!;
+          if (host !== null && (dest === "" || !destinationMatchesBindings(dest, [host]))) return false;
+          // Never for another source the user's setup registered with the
+          // same value (another file's row, a masked variable): that row
+          // keeps its own rule. A kept row's own answer is fingerprintOf's.
+          const e = this.symbolMap.symbols.get(symbol);
+          if (e === undefined) return false;
+          if (envRowVariable(e) !== null) return false;
+          return !isRegisteredFileRow(e) || originUnder(e.origin ?? "", kept);
+        };
+        const hits = scanEgressFingerprintIndexed(req.surfaces ?? [], this.syncedValueIndex(), fingerprintOf, dest, exemptText);
         return {
           id: req.id, ok: true,
           result: { tripped: hits.length > 0, hits },
@@ -9075,6 +9316,10 @@ export class ArbiterServer {
         const job = this.discoveryJob(req);
         return { id: req.id, ok: true, result: job ? this.recordFound(runDiscoveryJob(job)) : EMPTY_DISCOVERY };
       }
+      case "scanAgentTranscripts":
+        // Asynchronous (it reads files): the socket path answers it
+        // (handleLine → scanAgentTranscriptsOp).
+        return { id: req.id, ok: false, error: "scanAgentTranscripts is asynchronous: call it over the socket, or await scanAgentTranscriptsOp" };
       case "scanSecretHistory":
         // Asynchronous (git child processes): the socket path answers it
         // (handleLine → scanSecretHistoryOp); an in-process caller awaits

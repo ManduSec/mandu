@@ -26,12 +26,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
-  AGENTS, AGENT_LINES, AGENT_NAMES, API_KEY_AGENTS, CACHED_LINES, LINES, NPM_AGENTS, PIN_KEYS, agentOfLine, tableProblems,
+  AGENTS, AGENT_LINES, AGENT_NAMES, API_KEY_AGENTS, CACHED_LINES, LINES, NPM_AGENTS, PIN_KEYS, SCAN_ONLY_AGENTS, SCAN_ONLY_IDS, SCAN_ONLY_NAMES,
+  SCAN_READ_IDS, agentOfLine, tableProblems,
 } from "../../scripts/agents/agent-registry.mjs";
 import { TESTED_AGENT_GENERATIONS, TESTED_AGENT_VERSIONS } from "../../launcher/src/agent-versions.js";
-import { AGENTS as LAUNCHER_AGENTS, LINES as LAUNCHER_LINES } from "../../launcher/src/generated/agents.js";
+import { AGENTS as LAUNCHER_AGENTS, LINES as LAUNCHER_LINES, SCAN_ONLY_AGENTS as LAUNCHER_SCAN_ONLY, SCAN_ONLY_NAMES as LAUNCHER_SCAN_NAMES } from "../../launcher/src/generated/agents.js";
 import { TARGETS } from "../../launcher/src/types.js";
-import { AGENTS as ARBITER_AGENTS } from "../../arbiter/src/generated/agents.js";
+import { AGENTS as ARBITER_AGENTS, SCAN_ONLY_AGENTS as ARBITER_SCAN_ONLY, SCAN_READ_AGENTS as ARBITER_SCAN_READ } from "../../arbiter/src/generated/agents.js";
+import { SCAN_ONLY_AGENTS as DASHBOARD_SCAN_ONLY, SCAN_ONLY_NAMES as DASHBOARD_SCAN_NAMES } from "../../dashboard/src/generated/agents.js";
 import { AGENT_STORES, KNOWN_TARGETS } from "../../arbiter/policy/secret-discovery.js";
 import { AGENT_KINDS } from "../../dashboard/src/event-source/registry.js";
 import { findAgentLists, idsNamed, sliceFrom, sourceFiles, type FoundList } from "../lib/agent-lists.js";
@@ -69,6 +71,20 @@ test("the typed copies match the table (run `node scripts/agents/agent-copies.mj
   assert.deepEqual([...LAUNCHER_AGENTS], [...AGENTS], "the launcher's copy");
   assert.deepEqual([...LAUNCHER_LINES], [...LINES], "the launcher's copy of the lines");
   assert.deepEqual([...ARBITER_AGENTS], [...AGENTS], "the arbiter's copy");
+});
+
+test("the scan-only agents (plan 17 §4 phase 3): no line, no target, one table, its copies fresh", () => {
+  assert.ok(SCAN_ONLY_IDS.length > 0);
+  for (const id of SCAN_ONLY_IDS) assert.ok(!(LINES as readonly string[]).includes(id), `${id} is a scan-only agent, not a line`);
+  assert.deepEqual([...SCAN_READ_IDS], SCAN_ONLY_AGENTS.filter((a) => a.read).map((a) => a.id));
+  for (const a of SCAN_ONLY_AGENTS) assert.equal(SCAN_ONLY_NAMES[a.id], a.name);
+  assert.deepEqual([...ARBITER_SCAN_ONLY], [...SCAN_ONLY_IDS], "the arbiter's copy");
+  assert.deepEqual([...ARBITER_SCAN_READ], [...SCAN_READ_IDS], "the arbiter's copy of those it reads");
+  assert.deepEqual([...LAUNCHER_SCAN_ONLY], [...SCAN_ONLY_IDS], "the launcher's copy");
+  assert.deepEqual([...DASHBOARD_SCAN_ONLY], [...SCAN_ONLY_IDS], "the dashboard's copy");
+  assert.deepEqual({ ...LAUNCHER_SCAN_NAMES }, { ...SCAN_ONLY_NAMES });
+  assert.deepEqual({ ...DASHBOARD_SCAN_NAMES }, { ...SCAN_ONLY_NAMES });
+  for (const id of SCAN_ONLY_IDS) assert.ok(!(TARGETS as readonly string[]).includes(id), `${id} is no launch target`);
 });
 
 test("the launcher's targets and the arbiter's known targets are the registry's agents and `shell`; the raw stores a named subset", () => {
@@ -141,8 +157,11 @@ test("the public tree holds no hand-copied agent list: each is the registry or a
   for (const pkg of ["launcher/src/", "arbiter/policy/"]) assert.ok(files.some((f) => f.startsWith(pkg)), `the walk reads ${pkg}`);
   const seen = new Set<string>();
   const copies: string[] = [];
+  // The scan-only agents count too: a list of the agents the scan reads is
+  // the registry's two tables, never a copy.
+  const vocabulary = [...LINES, ...SCAN_ONLY_IDS];
   for (const f of files) {
-    for (const l of findAgentLists(readFileSync(join(REPO, f), "utf8"), LINES, { file: f })) {
+    for (const l of findAgentLists(readFileSync(join(REPO, f), "utf8"), vocabulary, { file: f })) {
       const ok = ALLOWED.find((a) => a.file === f && a.form === l.form);
       if (ok) { seen.add(`${f}:${l.form}`); continue; }
       copies.push(`${f}:${l.line}: ${l.form} of ${l.ids.join(", ")}`);

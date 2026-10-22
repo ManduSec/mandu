@@ -62,6 +62,9 @@
 //!   - `diag`      — where the guard's own non-fatal messages go: the
 //!                   launch's log under its default display, never over the
 //!                   agent's terminal (packaging.md §5).
+//!   - `cgroup_guard` — the guard's own cgroup kept out of the agent's
+//!                   reach: which write-capable cgroup2 opens are refused
+//!                   (rootless-confinement-ubuntu-2404.md §12.2).
 //!
 //! KERNEL-GATED (`--features kernel`, needs root + `nft`):
 //!   - `kernel`    — the nftables TPROXY redirection of the cgroup's non-model
@@ -109,6 +112,7 @@ pub mod held_ask;
 pub mod guard_trace;
 pub mod safe_write;
 pub mod diag;
+pub mod cgroup_guard;
 
 #[cfg(feature = "kernel")]
 pub mod kernel;
@@ -144,6 +148,10 @@ pub mod landlock_mirror;
 pub mod context_helper;
 #[cfg(all(feature = "kernel", target_os = "linux"))]
 pub mod clean_host_kernel;
+/// The facts of a write-capable cgroup2 open, read from its descriptor; the
+/// pure half is `cgroup_guard`.
+#[cfg(all(feature = "kernel", target_os = "linux"))]
+pub mod cgroup_guard_kernel;
 
 pub use guard::{
     decode_sockaddr, parse_rule, parse_rules, AllowRule, ConnTarget, Decision, Endpoint,

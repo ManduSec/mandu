@@ -17,6 +17,14 @@
  *   - where storage fails (private mode) the choice holds for the tab;
  *   - `default`, `denied` and a browser that cannot notify are as before.
  *
+ * Since 2026-10-22 (§4.25 *Send a test*) the row also has *Send a test*
+ * while they are on: one notification in fixed words and a line under the
+ * row saying what happened. Chrome on Android grants the permission but its
+ * `Notification` constructor throws (only a service worker may show one);
+ * until then `showAlarm` swallowed that and the row read "On." for
+ * notifications that could never appear. A throw, from the test or a real
+ * alarm, now makes the row say so for the tab.
+ *
  * Drives the PRODUCT page script (public/js/home.js) in jsdom over the
  * shared fetch stub and Notification stub (home-js-fixtures.ts). Axes: none
  * (display only). Mandu-new test.
@@ -29,7 +37,7 @@ import { ASK, home, load, tick } from "./home-js-fixtures.js";
 
 const SETTINGS_URL = "http://127.0.0.1:4500/mandu/settings";
 const OFF_KEY = "mandu.home.notifyOff";
-const ON_WORDS = "On. You get a notification when an agent needs your OK, when protection fails, and when the protection service stops under a running agent.";
+const ON_WORDS = "On. You get a notification when an agent needs your OK, when protection fails, when the protection service stops under a running agent, and when another agent can reach Mandu's controls.";
 const OFF_WORDS = "Off in this browser. The tab title still counts what waits.";
 /** A browser that already primed and saw egr-1. */
 const PRIMED = { "mandu.home.notifyPrimed": "1", "mandu.home.seenAsks": JSON.stringify(["egr-1"]) };
@@ -160,4 +168,102 @@ test("another tab's Turn off: this tab's row says so on the storage event", asyn
   window.dispatchEvent(new window.StorageEvent("storage", { key: OFF_KEY, newValue: "1" }));
   assert.equal(doc.getElementById("notify-enable").textContent, "Turn on");
   assert.equal(doc.getElementById("notify-state").textContent, OFF_WORDS);
+});
+
+const TEST = { title: "Mandu: notifications work", body: "This is how Mandu tells you when an agent needs your OK.", tag: "mandu-test" };
+const SENT = "Sent. If nothing appeared, your computer may be set to Do Not Disturb or Focus, or may silence this browser in its notification settings.";
+const ADVICE = "Use a desktop browser, or keep this tab open: the tab title still counts what waits.";
+const CANNOT = "This browser cannot show Mandu's notifications from this page. " + ADVICE;
+const BROKEN_ON = "On, but this browser cannot show them from this page. " + ADVICE;
+/** Chrome on Android: the permission is granted, the constructor throws. */
+function throwing(w: any): void {
+  function N() { throw new w.TypeError("Failed to construct 'Notification': Illegal constructor. Use ServiceWorkerRegistration.showNotification() instead."); }
+  (N as any).permission = "granted";
+  (N as any).requestPermission = () => Promise.resolve("granted");
+  w.Notification = N;
+}
+
+test("granted and on: Send a test shows one notification in fixed words, says Sent., keeps the focus, and its click focuses the tab", async () => {
+  const { doc, window, notes } = load({ url: SETTINGS_URL, storage: PRIMED });
+  await tick();
+  const test = doc.getElementById("notify-test");
+  const result = doc.getElementById("notify-test-result");
+  assert.equal(test.hidden, false, "on: a test button");
+  assert.equal(test.textContent, "Send a test");
+  assert.equal(test.getAttribute("aria-label"), "Send a test notification", "named for its row");
+  assert.equal(result.hidden, true, "nothing said before a press");
+  assert.equal(result.getAttribute("role"), "status");
+  test.focus();
+  test.click();
+  assert.equal(notes.length, 1, "one notification");
+  assert.deepEqual({ title: notes[0]!.title, body: notes[0]!.body, tag: notes[0]!.tag }, TEST);
+  assert.equal(result.hidden, false);
+  assert.equal(result.textContent, SENT);
+  assert.equal(doc.activeElement, test, "the button keeps the focus");
+  assert.equal(doc.getElementById("notify-test"), test, "nothing drawn again");
+  assert.equal(doc.getElementById("notify-state").textContent, ON_WORDS, "the On line is unchanged");
+  let focused = 0;
+  window.focus = () => { focused++; };
+  notes[0]!.note.onclick();
+  assert.equal(focused, 1, "a click on it focuses the tab");
+  assert.equal(window.location.pathname, "/mandu/settings", "and opens nothing else");
+  // Turn off: the test button and its line go; Turn on: the button is back, the line is not.
+  doc.getElementById("notify-enable").click();
+  assert.equal(test.hidden, true, "off: no test button");
+  assert.equal(result.hidden, true, "and no stale line");
+  doc.getElementById("notify-enable").click();
+  assert.equal(test.hidden, false);
+  assert.equal(result.hidden, true);
+});
+
+test("no Send a test while off, denied, default or where the browser cannot notify", async () => {
+  const cases: [string, Parameters<typeof load>[0]][] = [
+    ["off", { url: SETTINGS_URL, storage: { ...PRIMED, [OFF_KEY]: "1" } }],
+    ["denied", { url: SETTINGS_URL, permission: "denied", storage: PRIMED }],
+    ["default", { url: SETTINGS_URL, permission: "default", storage: PRIMED }],
+    ["unsupported", { url: SETTINGS_URL, storage: PRIMED, before: (w) => { delete w.Notification; } }],
+  ];
+  for (const [what, opts] of cases) {
+    const { doc, err } = load(opts);
+    assert.equal(err, null, what);
+    await tick();
+    assert.equal(doc.getElementById("notify-test").hidden, true, `${what}: no test button`);
+    assert.equal(doc.getElementById("notify-test-result").hidden, true, `${what}: no result line`);
+  }
+});
+
+test("a Notification constructor that throws: Send a test says this browser cannot show them, and the On line says so too", async () => {
+  const { doc, err } = load({ url: SETTINGS_URL, storage: PRIMED, before: throwing });
+  assert.equal(err, null);
+  await tick();
+  const state = doc.getElementById("notify-state");
+  assert.equal(state.textContent, ON_WORDS, "nothing known before a notification was tried");
+  const test = doc.getElementById("notify-test");
+  test.focus();
+  test.click();
+  const result = doc.getElementById("notify-test-result");
+  assert.equal(result.hidden, false);
+  assert.equal(result.textContent, CANNOT);
+  assert.equal(state.textContent, BROKEN_ON);
+  assert.equal(doc.activeElement, test, "the button keeps the focus");
+  assert.equal(doc.getElementById("notify-offer").hidden, true, "the Home offer stays hidden");
+  assert.equal(doc.getElementById("notify-enable").textContent, "Turn off", "still on: Turn off is still there");
+});
+
+test("a real alarm whose constructor throws (a new ask) changes the On line for the tab, and a later load starts fresh", async () => {
+  const page = load({ url: SETTINGS_URL, storage: PRIMED, before: throwing });
+  assert.equal(page.err, null);
+  await tick();
+  const state = page.doc.getElementById("notify-state");
+  assert.equal(state.textContent, ON_WORDS);
+  page.setHome(home({ waiting: [ASK, ASK2] }));
+  await poll(page.doc);
+  assert.deepEqual(seen(page.window).sort(), ["egr-1", "egr-2"], "the ask was tried");
+  assert.equal(state.textContent, BROKEN_ON);
+  assert.equal(page.doc.getElementById("notify-test-result").hidden, true, "no test was sent");
+  assert.equal(page.doc.getElementById("notify-test").hidden, false, "a test can still be tried");
+  // Remembered for the tab only: a fresh load with a working browser reads On.
+  const fresh = load({ url: SETTINGS_URL, storage: PRIMED });
+  await tick();
+  assert.equal(fresh.doc.getElementById("notify-state").textContent, ON_WORDS);
 });

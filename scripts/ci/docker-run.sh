@@ -78,14 +78,13 @@
 #                       Only needed by third-party-SDK clients that CANNOT use the
 #                       subscription: eval --mode real-api, eval/agentdojo real
 #                       (agent-sign-in.md §1 F4/F6/F7).
-#   --with-npm-token    forward $NPM_TOKEN into the container. ONLY the manual
-#                       release-publish job (packaging.md §11.3); every other job
-#                       provably has no publish credential.
 #   --out <dir>         bind-mount a HOST dir (created if absent) at /repo/release,
 #                       read-write. The image bakes the source in — nothing a job
 #                       writes survives the container — so this is how release-pack
-#                       hands its tarball to GitLab as a job artifact, and how
-#                       release-publish reads it back. Nothing else is mounted.
+#                       hands its tarball out of the container. Nothing else
+#                       is mounted. No publish credential ever enters a
+#                       container: releases publish from the public
+#                       repository's release workflow (packaging.md §11.3).
 #
 # --dry-run prints the docker argv it WOULD run (one arg per line) and exits 0;
 # scripts/test/docker-run.test.sh asserts the profile→flags and secret-isolation
@@ -104,7 +103,6 @@ WITH_CODEX_AUTH=0
 WITH_SECRETS=0
 KERNEL_TESTS=0
 PUBLISH_EVENTS=0
-WITH_NPM_TOKEN=0
 OUT_DIR=""
 DO_BUILD=1
 DRY_RUN=0
@@ -126,7 +124,6 @@ while [[ $# -gt 0 ]]; do
     # --kernel-tier: the flag's name until 2026-10-02 (tiers became kinds)
     --kernel-tests|--kernel-tier) KERNEL_TESTS=1; shift ;;
     --publish-events)   PUBLISH_EVENTS=1;   shift ;;
-    --with-npm-token)   WITH_NPM_TOKEN=1;   shift ;;
     --out)              OUT_DIR="$2";       shift 2 ;;
     --no-build)         DO_BUILD=0;         shift ;;
     --dry-run)          DRY_RUN=1; DO_BUILD=0; shift ;;
@@ -317,16 +314,6 @@ for v in MANDU_CI_REQUIRE_USERNS MANDU_TEST_DASHBOARD MANDU_E2E_ONLY \
          MANDU_BATCH_ID CI CI_COMMIT_SHA CI_JOB_ID CI_PIPELINE_ID TZ; do
   if [[ -n "${!v:-}" ]]; then ARGS+=(-e "$v=${!v}"); fi
 done
-
-# The publish credential: opt-in, one job (release-publish). Refuse to run
-# with the flag and no token rather than let `npm publish` fail later.
-if [[ $WITH_NPM_TOKEN -eq 1 ]]; then
-  if [[ -z "${NPM_TOKEN:-}" ]]; then
-    echo "docker-run: --with-npm-token but NPM_TOKEN is empty (a masked, protected project variable)" >&2
-    exit 1
-  fi
-  ARGS+=(-e "NPM_TOKEN=$NPM_TOKEN")
-fi
 
 # The release output dir (see header): the one host path a job may write.
 if [[ -n "$OUT_DIR" ]]; then

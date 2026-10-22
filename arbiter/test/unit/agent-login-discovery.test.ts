@@ -134,7 +134,12 @@ test("under each target, the launch's own logins stay raw (agent-login) and ever
         const owner = OWNER[key];
         const f = byPath.get(p[key]!);
         if (kept.includes(owner)) {
-          assert.equal(f, undefined, `${JSON.stringify(opts)}: ${key} is the launch's own login, never twinned`);
+          // Since 2026-10-21 (secret-discovery.md §2.10) a kept
+          // `.claude.json` holding an MCP server's token is listed as the
+          // agent's own MCP config: registered, left readable (never
+          // twinned, launcher `agentConfig`).
+          if (key === "claudeJson" && f !== undefined) assert.equal(f.agentConfig, "claude", `${JSON.stringify(opts)}: ${key} is Claude Code's own MCP config, left readable`);
+          else assert.equal(f, undefined, `${JSON.stringify(opts)}: ${key} is the launch's own login, never twinned`);
           // a login directory is one record (~/.openai, ~/.anthropic)
           assert.ok(keptRecords.some((k) => p[key]!.startsWith(k)), `${JSON.stringify(opts)}: ${key} is in the ledger as agent-login`);
         } else {
@@ -192,7 +197,11 @@ test("a policy.yaml label decides for a login the launch does not keep, never fo
 
     const asClaude = discoverSecretsReport([home], home, lookup, { target: "claude" });
     assert.ok(!asClaude.files.some((f) => f.path === p.codexAuth), "a `public` label declassifies another agent's login: not twinned");
-    assert.ok(!asClaude.files.some((f) => f.path === p.claudeJson), "Claude Code's own login stays raw under mandu claude");
+    // §2.10: listed as Claude Code's own MCP config (its servers' token is
+    // registered), with the human's level, and left readable to it.
+    const own = asClaude.files.find((f) => f.path === p.claudeJson);
+    assert.equal(own?.agentConfig, "claude", "Claude Code's own login stays readable to it under mandu claude");
+    assert.equal(own?.level, "any-model", "the human's label decides its level");
   } finally {
     cleanup();
   }
@@ -350,12 +359,16 @@ test("agentLoginConfidentiality: a human label decides, then a catalog secret, e
 test("a session's kept logins: its login files only (the walk's keying, or every agent's under the opt-out), malformed exempts nothing", () => {
   const H = "/home/u";
   const s = (o: unknown): string[] => { const p = parseSessionLogins(o); return p === null ? [] : sessionLoginPaths(p).sort(); };
-  assert.deepEqual(s({ home: H, target: "codex", ullmBinary: "codex" }), [`${H}/.codex/auth.json`, `${H}/.openai`]);
-  assert.deepEqual(s({ home: H, target: "codex", loginEnv: { CODEX_HOME: "/srv/cx", OPENAI_API_KEY: "sk-x" } }), [`${H}/.codex/auth.json`, `${H}/.openai`, "/srv/cx/auth.json"]);
+  // Codex's config.toml since 2026-10-21 (§2.10): its MCP servers' values.
+  assert.deepEqual(s({ home: H, target: "codex", ullmBinary: "codex" }), [`${H}/.codex/auth.json`, `${H}/.codex/config.toml`, `${H}/.openai`]);
+  assert.deepEqual(s({ home: H, target: "codex", loginEnv: { CODEX_HOME: "/srv/cx", OPENAI_API_KEY: "sk-x" } }), [`${H}/.codex/auth.json`, `${H}/.codex/config.toml`, `${H}/.openai`, "/srv/cx/auth.json", "/srv/cx/config.toml"]);
   assert.deepEqual(s({ home: H, target: "claude" }), [`${H}/.anthropic`, `${H}/.claude.json`, `${H}/.claude/.credentials.json`]);
-  assert.deepEqual(s({ home: H, target: "openclaw" }), [`${H}/.anthropic`, `${H}/.claude.json`, `${H}/.claude/.credentials.json`, `${H}/.codex/auth.json`, `${H}/.openai`]);
+  assert.deepEqual(s({ home: H, target: "openclaw" }), [`${H}/.anthropic`, `${H}/.claude.json`, `${H}/.claude/.credentials.json`, `${H}/.codex/auth.json`, `${H}/.codex/config.toml`, `${H}/.openai`]);
   assert.deepEqual(s({ home: H, target: "goose" }), [], "a goose session without the helper keeps none of these");
-  assert.equal(s({ home: H, target: "claude", otherLoginsRaw: true }).length, 6, "the opt-out: every agent's login");
+  assert.equal(s({ home: H, target: "claude", otherLoginsRaw: true }).length, 7, "the opt-out: every agent's login");
+  // A project's MCP configs (§2.10): only a kind a kept agent reads.
+  assert.deepEqual(s({ home: H, target: "claude", mcpConfigs: ["/w/p/.mcp.json", "/w/p/.vscode/mcp.json", "relative/.mcp.json", "/w/p/.env"] }), [`${H}/.anthropic`, `${H}/.claude.json`, `${H}/.claude/.credentials.json`, "/w/p/.mcp.json"]);
+  assert.deepEqual(s({ home: H, target: "codex", mcpConfigs: ["/w/p/.mcp.json"] }), [`${H}/.codex/auth.json`, `${H}/.codex/config.toml`, `${H}/.openai`], "a codex session does not read a .mcp.json");
   assert.deepEqual(s({ target: "codex" }), [], "no home: nothing exempt");
   assert.deepEqual(s({ home: "relative", target: "codex" }), []);
   assert.deepEqual(s("codex"), []);

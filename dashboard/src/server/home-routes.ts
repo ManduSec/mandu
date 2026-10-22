@@ -26,6 +26,7 @@
 import { type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { json } from "./http-util.js";
+import { type ManduNotRunning } from "../mandu-running.js";
 import { type EventSource } from "../event-source.js";
 import { type SessionRef } from "../event-source/contract.js";
 import { type VerdictEntry } from "../policy-model.js";
@@ -40,12 +41,18 @@ import { loadPolicyPanel, loadPolicySnapshot, type ReadFirstLookup } from "./api
 import { type ApprovalsArbiter } from "./approval-routes.js";
 import { promptLocks, type PromptFiltersArbiter } from "./prompt-filter-routes.js";
 import { type PolicyProposalArbiter } from "./policy-proposal-routes.js";
+import { type PolicyDocArbiter } from "./policy-doc-routes.js";
+import { type IssuerReading } from "../view-model/issuer-words.js";
 import { ANSWERED_PAGE, answeredOutcome, answeredPage, buildHistoryViewModel, buildHomeViewModel, historyMatches, historyPage, historyPageWhere, historyWords, homeAgentRow, HISTORY_ONLY_STEPPED_IN, HISTORY_PAGE, HISTORY_QUERY_MAX, HISTORY_SCAN_BUDGET, isAgentSession, rowContext, steppedIn, type HistoryVM, type HomeSessionFacts, type HomeVM } from "../view-model/home.js";
 import { toPolicyPanelViewModel } from "../view-model/policy-panel.js";
 import { redactEvents } from "../view-model/redact.js";
 import { readFirstByBase, readFirstByFile, symbolBase } from "../view-model/lineage.js";
 import { plainReads, type LabelTime } from "../view-model/later-labels.js";
 import { LabelTimes, type LabelTimesArbiter } from "./label-times.js";
+import { sessionKept } from "../view-model/session-kept.js";
+import { releaseVersion } from "../release-version.js";
+import { type UpdateCache, type UpdateChannel } from "../update-notice.js";
+import { homeScanCard, type LastScanWire } from "../view-model/last-scan.js";
 
 /** The window the home counts cover. A day is what "today" means to a person
  *  glancing at the page; the copy names the hours so it is never a guess. */
@@ -116,14 +123,32 @@ export class HomeFacts {
       if (labelSig(await times.of(hit.paths)) === hit.sig) return hit.facts;
     }
     const events = await this.source.readEvents(s.id);
-    const vm = toSessionViewModel(s.id, events);
+    return this.derive(s.id, key, events, times);
+  }
+
+  /** Facts for the session `id`, read now and cached as `of` caches them
+   *  (the launcher's end-of-session line, dashboard.md §4.25ah, asks for a
+   *  session that just ended, before any listing has moved): null when the
+   *  record holds no event of it. */
+  async ofId(id: string, times?: LabelTimes): Promise<HomeSessionFacts | null> {
+    const events = await this.source.readEvents(id);
+    if (!events.length) return null;
+    const key = `${events.length}|${events[events.length - 1]!.ts ?? ""}`;
+    const hit = this.cache.get(id);
+    if (hit && hit.key === key && (!times || labelSig(await times.of(hit.paths)) === hit.sig)) return hit.facts;
+    return this.derive(id, key, events, times);
+  }
+
+  private async derive(id: string, key: string, events: ManduEvent[], times?: LabelTimes): Promise<HomeSessionFacts> {
+    const vm = toSessionViewModel(id, events);
     // Counted over the story the session's page tells, so its row and its
     // page agree (no values: an outcome never depends on one).
-    const { blocked, sent } = storyCounts(buildStory(vm));
+    const turns = buildStory(vm);
+    const { blocked, sent } = storyCounts(turns);
     // Its secrets as its page's tiles count them, by each Your secrets
     // card's first line, from the same believed events, with the labels
     // made after it read their files (dashboard.md §4.25b).
-    const { believed, believedVm } = believedView(s.id, events, vm);
+    const { believed, believedVm } = believedView(id, events, vm);
     const cwd = sessionCwd(events);
     const paths = [...new Set(plainReads(vm, cwd, this.home).map((r) => r.path))];
     const labels = await (times ?? this.labelTimes()).of(paths);
@@ -138,9 +163,10 @@ export class HomeFacts {
       const had = readFirstFiles.get(l.path);
       if (had === undefined || ts < had) readFirstFiles.set(l.path, ts);
     }
+    const story = pageSecrets(vm, believed, believedVm, this.home, undefined, laterInput);
     const facts: HomeSessionFacts = {
       stats: vm.lineage.stats,
-      secrets: pageSecrets(vm, believed, believedVm, this.home, undefined, laterInput).counts,
+      secrets: story.counts,
       untrusted: untrustedMasked(vm.lineage.stats, vm.paired.mode),
       blocked,
       sent,
@@ -155,8 +181,11 @@ export class HomeFacts {
       // The same by the file each came from, so a waiting card about a
       // program reading that file never says the AI has not seen it.
       readFirstFiles,
+      // The same counts with the names behind them, for the line the
+      // launcher prints when the session ends (dashboard.md §4.25ah).
+      kept: sessionKept(story, turns, { blocked, sent }),
     };
-    this.cache.set(s.id, { key, facts, paths, sig: labelSig(labels) });
+    this.cache.set(id, { key, facts, paths, sig: labelSig(labels) });
     return facts;
   }
 
@@ -220,6 +249,10 @@ export interface HomeDeps {
    *  `policyProposals`, as Approvals lists them), so the hero counts what
    *  the Approvals badge counts. Absent, or a read that fails: none. */
   proposals?: Pick<PolicyProposalArbiter, "policyProposals">;
+  /** Where Home reads policy.yaml's `issuer_bindings` as in force (the
+   *  arbiter's `policyDocument`), for Rules › Built-in protections. Display
+   *  only. Absent, or a read that fails: the item says it does not know. */
+  policy?: Pick<PolicyDocArbiter, "policyDocument">;
   /** The test runs whose sessions are not the person's own (the
    *  developer view's; none in a product-only build). */
   testRuns: SidebarTestRun[];
@@ -234,11 +267,42 @@ export interface HomeDeps {
    *  dashboard.md §4.25ac): the product's words may point to the detailed
    *  trace. False: none does (§4.25ad). Absent = true. */
   dev?: boolean;
+  /** The last `mandu scan` the launcher kept (last-scan.ts
+   *  through scan-routes.ts `LastScanCache`; dashboard.md §4.25ai): null,
+   *  none was kept. Absent:
+   *  Home has no scan card (a test seam). */
+  lastScan?: () => LastScanWire | null;
+  /** The launcher's update-check cache (update-notice.ts
+   *  UpdateCacheReader: null, absent or refused) and the channel this
+   *  package updates through, for About Mandu's *A newer release*
+   *  (dashboard.md §4.25). A file read, never a network request. Absent:
+   *  not read (a test seam), and the row says nothing of updates. */
+  updateCheck?: { cache: () => UpdateCache | null; channel: () => UpdateChannel };
+  /** Is Mandu running at all (mandu-running.ts `manduNotRunning`)? Asked
+   *  only when the session list could not be read: not running, Home says
+   *  protection is off (§4.25, *Protection is off when nothing runs*);
+   *  null, or absent (the test tenant, a test seam), the read's failure
+   *  stands and the page says "Not connected.". */
+  notRunning?: () => ManduNotRunning | null;
+  /** The viewer's sign-in to the dashboard account (server.ts, dashboard.md
+   *  §6.z), copied to the page as `signIn`. Absent: none (a test seam). */
+  signIn?: HomeVM["signIn"];
 }
 
 export async function buildHome(deps: HomeDeps): Promise<HomeVM> {
   const nowMs = (deps.now ?? Date.now)();
-  const all = await deps.source.listSessions();
+  let all: SessionRef[];
+  let notRunning: ManduNotRunning | null = null;
+  try {
+    all = await deps.source.listSessions();
+  } catch (err) {
+    // No arbiter answered. Nothing of Mandu's running is not a fault: the
+    // page says protection is off, with no session (none can be read, and
+    // no agent runs under Mandu). Anything else is the fault it was.
+    notRunning = deps.notRunning?.() ?? null;
+    if (notRunning === null) throw err;
+    all = [];
+  }
   const sections = buildSidebarSections(all, deps.testRuns, nowMs, undefined, deps.watchRuns);
   // Newest first, as the sidebar lists them; status is stamped by the section
   // builder. The System logs group (the admin log, the net-guard fallback) is
@@ -268,13 +332,15 @@ export async function buildHome(deps: HomeDeps): Promise<HomeVM> {
   }
   // Asked beside the panel; it never rejects (pendingProposals).
   const proposalsRead = pendingProposals(deps.proposals);
+  const issuerRead = issuerBindingsRead(deps.policy);
   // The waiting cards' words read the asking sessions' records too, so one
   // about an item the AI read before it was masked says so (§4.34).
   const panel = await loadPolicyPanel(deps.source, deps.approvals, readFirstLookup(deps.facts, async () => all), deps.home ?? homedir());
   // readAxesState never throws: an unreadable config reads as the defaults.
   const configuredMode = readAxesState(deps.env).effectiveMode;
   const proposalsWaiting = await proposalsRead;
-  return buildHomeViewModel({
+  const issuerBindings = await issuerRead;
+  const vm = buildHomeViewModel({
     sessions: live,
     agentOf: new Map(all.map((s) => [s.id, s])),
     facts,
@@ -286,7 +352,33 @@ export async function buildHome(deps: HomeDeps): Promise<HomeVM> {
     home: deps.home ?? homedir(),
     dev: deps.dev !== false,
     proposalsWaiting,
+    version: releaseVersion(),
+    // The launcher's last update check (a stat per poll, a read only when
+    // the file changed): read, never asked of the network.
+    update: deps.updateCheck ? { cache: deps.updateCheck.cache(), channel: deps.updateCheck.channel() } : undefined,
+    issuerBindings,
+    notRunning,
   });
+  // The last `mandu scan` (§4.25ai): a stat per request, read again only
+  // when the file changed (scan-routes.ts LastScanCache; never a value), so
+  // a scan run meanwhile shows on the poll.
+  if (deps.lastScan) vm.scan = homeScanCard(deps.lastScan());
+  if (deps.signIn) vm.signIn = deps.signIn;
+  return vm;
+}
+
+/** policy.yaml's `issuer_bindings` as in force (dashboard.md §4.25z): the
+ *  raw value, which the view model reads as the arbiter compiles it. No
+ *  reader, or a read that fails: not read, never a guess. It never rejects. */
+async function issuerBindingsRead(arbiter: HomeDeps["policy"]): Promise<IssuerReading> {
+  if (!arbiter) return { read: false };
+  try {
+    const doc = (await arbiter.policyDocument())?.inForce;
+    if (doc !== undefined && doc !== null && (typeof doc !== "object" || Array.isArray(doc))) return { read: false };
+    return { read: true, raw: (doc as Record<string, unknown> | null | undefined)?.["issuer_bindings"] };
+  } catch {
+    return { read: false };
+  }
 }
 
 /** How many rule changes wait for the person (dashboard.md §4.25, the
@@ -339,7 +431,7 @@ export async function apiHome(deps: HomeDeps, res: ServerResponse): Promise<void
  *  raised that still wait (the queue `/api/home` reads). Metadata only:
  *  names, times, counts, the session's prompt label (as `/api/sessions`
  *  serves). `q`: a search (§4.25ae *Finding a session*), matched on each
- *  row's agent and served label before the page is cut, so `total`, `next`
+ *  row's agent, served label and folder before the page is cut, so `total`, `next`
  *  and Show more count the matches. `only`: the switch (§4.25ae *Only the
  *  sessions where Mandu stepped in*), the rows `steppedIn` keeps, looked
  *  through as they are counted, at most HISTORY_SCAN_BUDGET a read; with
@@ -350,7 +442,8 @@ export async function buildHistoryFor(deps: HomeDeps, after: string | null, limi
   const sections = buildSidebarSections(all, deps.testRuns, nowMs, undefined, deps.watchRuns);
   const live = sections.live.flatMap((b) => b.sessions).filter(isAgentSession);
   const words = historyWords(q);
-  const found = words.length ? historyMatches(live, q) : live;
+  // Matched as the rows draw it: the folder `~`-shortened with this home.
+  const found = words.length ? historyMatches(live, q, deps.home ?? homedir()) : live;
   // The asks still waiting, by the session that raised each, as Home's rows
   // count them (§4.25ae *History says what waits for you*): the queue Home
   // reads, without the words its cards need. No snapshot: none waits.
@@ -395,19 +488,20 @@ export async function apiHomeHistory(deps: HomeDeps, url: string, res: ServerRes
   json(res, 200, await buildHistoryFor(deps, after, Number.isFinite(limit) ? limit : HISTORY_PAGE, words, only));
 }
 
-// ── GET /api/home/answered?after=<id>&limit=<n> — Answered earlier, on ────────
+// ── GET /api/home/answered?after=<id>&limit=<n>&q=<words> — Answered earlier ──
 
 /** Approvals › Answered earlier past its first page (dashboard.md §4.25
  *  *Past the newest 20*): `limit` answers after the one `after`, built as
  *  `/api/home` builds its `answered` (the same panel read, the same asking
  *  sessions and `~`, answeredPage), so a row carries nothing `/api/home`
- *  does not carry for the newest 20. null: the queue is not known (the
- *  service unreachable, or its verdicts unread). */
-export async function buildAnsweredFor(deps: HomeDeps, after: string | null, limit: number): Promise<{ page: ReturnType<typeof answeredPage> | null; unreachable: boolean }> {
+ *  does not carry for the newest 20. `q`: a search (§4.25 *Finding an
+ *  answer*), matched on each row's words before the page is cut. null: the
+ *  queue is not known (the service unreachable, or its verdicts unread). */
+export async function buildAnsweredFor(deps: HomeDeps, after: string | null, limit: number, q = ""): Promise<{ page: ReturnType<typeof answeredPage> | null; unreachable: boolean }> {
   const all = await deps.source.listSessions();
   const panel = await loadPolicyPanel(deps.source, deps.approvals, readFirstLookup(deps.facts, async () => all), deps.home ?? homedir());
   if (!panel.available || !panel.verdictsKnown) return { page: null, unreachable: !panel.available };
-  return { page: answeredPage(panel.queue, new Map(all.map((s) => [s.id, s])), deps.home ?? homedir(), after, limit), unreachable: false };
+  return { page: answeredPage(panel.queue, new Map(all.map((s) => [s.id, s])), deps.home ?? homedir(), after, limit, q), unreachable: false };
 }
 
 export async function apiHomeAnswered(deps: HomeDeps, url: string, res: ServerResponse): Promise<void> {
@@ -415,7 +509,9 @@ export async function apiHomeAnswered(deps: HomeDeps, url: string, res: ServerRe
   const after = q.get("after") || null;
   const raw = q.get("limit");
   const limit = raw === null || raw === "" ? ANSWERED_PAGE : Number(raw);
-  const { page, unreachable } = await buildAnsweredFor(deps, after, Number.isFinite(limit) ? limit : ANSWERED_PAGE);
+  // `q`: a search (§4.25 *Finding an answer*), cut as History's is.
+  const words = (q.get("q") ?? "").slice(0, HISTORY_QUERY_MAX);
+  const { page, unreachable } = await buildAnsweredFor(deps, after, Number.isFinite(limit) ? limit : ANSWERED_PAGE, words);
   // Unknown: the page says why beside Show more, never "no more answers".
   if (!page) return json(res, 503, { error: "the approval queue could not be read", unreachable });
   json(res, 200, page);
@@ -533,6 +629,10 @@ export async function buildAgentPageFor(deps: HomeDeps, sessionId: string, ask?:
     // The agent's warning is worded for the level running now, as its Home
     // row's: untrusted content is masked only at `injection` and `full`.
     masking: home.protection.level === "injection" || home.protection.level === "full",
+    // A send to a company's own API says why it did not ask (§4.25b), while
+    // the level running now lists the companies under Rules › Built-in
+    // protections (builtInProtections: `secrets`, `full`). Display only.
+    ...(home.protection.level === "secrets" || home.protection.level === "full" ? { issuerBindings: await issuerBindingsRead(deps.policy) } : {}),
     ...(show ? { show } : {}),
     dev: deps.dev !== false,
   });

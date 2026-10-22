@@ -121,7 +121,7 @@ pub struct MountRow {
 }
 
 /// `mountinfo`'s octal escapes (`\040` for a space, `\011`, `\012`, `\134`).
-fn unescape(s: &str) -> String {
+pub(crate) fn unescape(s: &str) -> String {
     let b = s.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(b.len());
     let mut i = 0;

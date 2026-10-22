@@ -16,8 +16,9 @@
  *       dashboard lists, with every header it can forge (the CSRF header,
  *       Sec-Fetch-Site, a made-up cookie): no answer carries the value, and
  *       a page that rebound its own name to 127.0.0.1 is refused (421);
- *   G2  the human signs in with a one-time link from the human-plane
- *       socket: the same session's events carry the value;
+ *   G2  with the human's admin session (a test seam: this server is built
+ *       without the account's sign-in gate, so the read gate under it is
+ *       what is tested): the same session's events carry the value;
  *   G3  "Show the real value" on the product page (POST /api/home/reveal):
  *       the same-host process is refused (403, with the CSRF header it can
  *       forge); the signed-in human gets that one secret's value from the
@@ -36,7 +37,6 @@ import { ArbiterClient } from "../../arbiter/ipc/client.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import { serveSignInChannel, signInDepsFor, signInSockPath } from "../../dashboard/src/sign-in.js";
-import { requestSignInLink } from "../../launcher/src/dashboard-sign-in.js";
 import { allSamples } from "../../dashboard/test/unit/read-route-samples.js";
 import { secretRef } from "../../dashboard/src/view-model/secret-ref.js";
 import { stateAxes } from "../lib/axes.js";
@@ -106,7 +106,7 @@ test("a same-host process gets no secret value from any dashboard read; the sign
   const dashboard = new DashboardServer({ source, log: () => {} });
   const port = await dashboard.listen(0);
   const base = `http://127.0.0.1:${port}`;
-  const signIn = await serveSignInChannel(signInSockPath(tmp), signInDepsFor(dashboard, source, join(tmp, "human")));
+  const signIn = await serveSignInChannel(signInSockPath(tmp), signInDepsFor(dashboard));
   try {
     // A registered secret, and a session whose events carry its value where
     // the proxies put it.
@@ -144,12 +144,11 @@ test("a same-host process gets no secret value from any dashboard read; the sign
     ]);
     assert.equal(rebound.stdout.trim(), "421");
 
-    // G2: the human's one-time link earns the session; the same read carries the value.
-    const got = await requestSignInLink({ host: "127.0.0.1", port, signInSock: signIn.path }, tmp);
-    assert.equal(got.kind, "link", JSON.stringify(got));
-    const opened = await fetch((got as { url: string }).url, { redirect: "manual" });
-    const cookie = (opened.headers.get("set-cookie") ?? "").split(";")[0]!;
-    assert.match(cookie, /^mandu_session=[0-9a-f]{64}$/);
+    // G2: the human's admin session; the same read carries the value.
+    // The human's admin session: a TEST SEAM (this server is built without
+    // the account's sign-in gate, so the layer under it is what is tested;
+    // dashboard-account-sign-in.test.ts signs in through the page).
+    const cookie = dashboard.adminCookie();
     const signedIn = await (await fetch(`${base}/api/events?session=${SESSION}`, { headers: { Cookie: cookie, "X-Mandu-Control": "1" } })).text();
     assert.ok(signedIn.includes(CANARY), "signed in, the human sees the real value");
     assert.match(signedIn, /"valuesShown":true/);

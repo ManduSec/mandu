@@ -75,4 +75,11 @@ BREW="packaging/homebrew/mandu.rb"
 sed -i "s/mandusec-mandu-[0-9][^\"]*\.tgz/mandusec-mandu-$VERSION.tgz/" "$BREW"
 echo "$BREW: url -> mandusec-mandu-$VERSION.tgz"
 
+# The GitHub Action installs this version of @mandusec/mandu by default
+# (packaging/github-action/action.yml, the `mandu-version` input's default;
+# docs/design/distribution/github-action.md §8).
+ACTION="packaging/github-action/action.yml"
+sed -i "/^  mandu-version:/,/^  [a-z]/s/^    default: .*/    default: $VERSION/" "$ACTION"
+echo "$ACTION: mandu-version default -> $VERSION"
+
 echo "done: version $VERSION everywhere. Now: update CHANGELOG.md, commit, then \`git tag v$VERSION\`."

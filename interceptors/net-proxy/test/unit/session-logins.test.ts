@@ -23,3 +23,11 @@ test("parseSessionLogins keeps the known fields; absent or malformed is null (no
     assert.ok(typeof r.error === "string" && r.error.length > 0, `${bad}: a reason`);
   }
 });
+
+test("parseSessionLogins carries the project MCP configs the session's agent reads (secret-discovery.md §2.10): absolute paths, bounded", () => {
+  const r = parseSessionLogins(JSON.stringify({ home: "/h", target: "claude", mcpConfigs: ["/w/p/.mcp.json", "relative/.mcp.json", 7, "/w/q/.mcp.json"] }));
+  assert.deepEqual(r.logins, { home: "/h", target: "claude", mcpConfigs: ["/w/p/.mcp.json", "/w/q/.mcp.json"] });
+  assert.equal(parseSessionLogins(JSON.stringify({ home: "/h", mcpConfigs: "/w/p/.mcp.json" })).logins?.mcpConfigs, undefined, "not a list: none");
+  const many = Array.from({ length: 40 }, (_, i) => `/w${i}/.mcp.json`);
+  assert.equal(parseSessionLogins(JSON.stringify({ home: "/h", mcpConfigs: many })).logins?.mcpConfigs?.length, 16, "bounded as the arbiter bounds it");
+});

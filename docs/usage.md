@@ -361,6 +361,14 @@ Details: [`design/agents/devtools-relay.md`](design/agents/devtools-relay.md).
 alias claude="mandu claude"          # add to ~/.bashrc / ~/.zshrc
 ```
 
+**In GitHub Actions.** The Mandu action runs `claude -p` or `codex exec`
+under Mandu in a workflow: the job's secrets reach the model only as
+placeholders, a secret goes only to the hosts you bind it to (`bindings:
+DEPLOY_TOKEN: deploy.example.com`), every send that would need your OK is
+blocked at once (nobody answers in CI), the log keeps placeholders, and the
+job summary lists what was masked and what was blocked or sent. See
+[Run your agent in GitHub Actions](github-action.md).
+
 ---
 
 ## Protection modes: what Mandu enforces
@@ -406,7 +414,7 @@ really runs under, what it masks, where the dashboard is, and how many
 notices (pieces of advice) it kept for `mandu log`:
 
 ```
-mandu: secrets mode · 14 credential files, 3 env vars masked · dashboard http://127.0.0.1:4500/login?ticket=… (the link signs this browser in, once) · 1 notice: `mandu log`
+mandu: secrets mode · 14 credential files, 3 env vars masked · dashboard http://127.0.0.1:4500/ (sign in with your Mandu dashboard account) · 1 notice: `mandu log`
 ```
 
 A problem that weakens protection is never only counted: each one prints a
@@ -415,6 +423,23 @@ short `mandu: WARNING: …` line under it, ending ``(more: `mandu log`)``.
 it came up; `--verbose` prints all of that on the terminal instead, with the
 mode line (`mandu: mode secrets (14 credential files masked, 3 env vars
 masked)`) and the dashboard line.
+
+When the agent exits, the session's last line says what Mandu kept from the
+AI in it, with the same counts as the dashboard's Home page:
+
+```
+mandu: in this session: 2 secrets masked before the AI saw them (DB_PASSWORD in ~/proj/.env and the file ~/.aws/credentials) · 1 send with a real value filled in (api.stripe.com) · details: `mandu dashboard`
+```
+
+It names each secret by its name and file and each send by its host, never
+a value. A session that touched no secret ends with `mandu: no secret came
+up in this session, so Mandu had nothing to mask`; one in `off` mode says
+protection was off and that Mandu masked nothing. The line goes to stderr
+after the agent (and its screen) is gone, so it never mixes into what the
+agent prints, such as `claude -p --output-format json`. It needs a running
+dashboard (the one `mandu` starts with its services); without one, or if it
+does not answer within a few seconds, there is no line. `--no-session-summary`
+(or `MANDU_SESSION_SUMMARY=0`) turns it off.
 
 The first launch after a session without protection (`--mode off`,
 `--no-net-guard`) has ended takes a few seconds longer in a large
@@ -517,6 +542,28 @@ not be protected by Mandu anyway. To keep it working, set
 `MANDU_OTHER_AGENT_LOGINS=raw` (config `other-agent-logins = "raw"`): those
 files stay readable, that agent can use them with its own services in the
 session, and their values are still masked in what reaches the AI.
+
+**MCP and editor config files.** An MCP config whose servers hold a
+credential (a token in a server's `env`, a bearer in its `headers`, a
+database URL's password in its `args`) is protected with no label of
+yours: `.mcp.json`, `~/.claude.json`, Codex's `~/.codex/config.toml`,
+`~/.cursor/mcp.json` and `.cursor/mcp.json`, `.vscode/mcp.json` and VS
+Code's user `mcp.json`, Claude Desktop's and Windsurf's configs. The AI
+sees each value as a placeholder however it reads the file. The config of
+the agent you launch stays readable to it, so your MCP servers start and
+log in as without Mandu: Claude Code's `~/.claude.json` and the project's
+`.mcp.json` under `mandu claude`, Codex's `config.toml` under `mandu codex`
+(the launch says so in one line per file). The other programs the agent
+runs read the project's `.mcp.json` as a placeholder copy (where the guard
+runs), and every other MCP config always. An HTTP server's `Authorization`
+credential goes only to the host its own entry's `url` names; from the
+placeholder copy of an editor's config in your home, the egress proxy puts
+it back there. A config that only names variables (`"GITHUB_TOKEN":
+"${GITHUB_TOKEN}"`) is left as it is. `mandu why <file>` names the rule.
+What this does not cover, such as a stdio server that runs commands with
+its token in its environment: guarantees.md §3, "MCP servers hold their
+tokens".
+
 `mandu doctor --secrets --target <agent>` shows what a launch of that agent
 masks, and `mandu why ~/.codex/auth.json` says where a login stays raw.
 Each agent's own data (`~/.claude`, `~/.codex`, …) stays as it is in every
@@ -1760,6 +1807,7 @@ to the frozen `injection` and `full` modes.
 mandu mode          # the protection mode: running and saved (mandu mode <name> saves one)
 mandu doctor        # what Mandu needs, whether it is running, and what it enforces on this machine
 mandu doctor --secrets   # dry run: which files and variables a launch would mask, what it would leave raw, keys left in git history, and whether it would start (add --json)
+mandu scan          # which of your secrets your agents already sent to the AI, from their transcripts on this computer and how (--show <n> for one in full, --open for the dashboard's Scan page, --share, --json)
 mandu policy suggest     # keys in this project (its git history and its files) your policy misses: review the rule for each and apply it
 mandu policy classifier-pack   # print the pack that turns on Mandu's own prompt classifier (a model of yours checks what you type)
 mandu why ~/.pgpass      # why one file is (or isn't) a secret, who may read it, where it may go
@@ -1768,7 +1816,7 @@ mandu why api.example.com             # which secrets may go to a host, and whet
 mandu why '$MDU:localmodel_prompt_filter[1a2b]'   # where a placeholder came from (quote it): a part of your prompt the filter hid, and how to let it through
 mandu revert        # list what the agent wrote here; mandu revert --to N undoes the later writes (asks first; frozen injection/full modes only)
 mandu dashboard     # open the dashboard: protection status, what needs your OK, rules; History opens each session: what the AI saw, what really happened
-mandu log           # what the last launch said in full: each notice, each warning, each protection layer (--list; a session id)
+mandu log           # what the last launch said in full: each notice, each warning, each protection layer (--list; a session id; --timings: how long each step took)
 mandu status        # is Mandu running, the dashboard URL, leftovers from ended sessions (--verbose: every service)
 mandu version       # which mandu this is (where, version, commit), other mandu installs and old services in its way, each with its fix (--json)
 mandu stop          # stop the background services (add --all to include launchers; --stack <runtime dir> for one stack only)
@@ -1789,6 +1837,15 @@ file's path, so `tail -f "$(mandu log --path)"` follows a running session.
 The logs are in `launch-logs/` in Mandu's state folder (`mandu paths`),
 readable by you alone, and hold nothing the terminal would not have shown
 with `--verbose`.
+
+A launch that feels slow? `mandu log --timings` shows how long each step
+of the last five launches took (starting the services, setting up the
+placeholder copies, the agent's own run, the clean-up after it), side by
+side with their median, so you can see which step grew, and what the
+whole launch cost Mandu: its own CPU time, the git commands it ran and
+the sandboxes it made for them. Add a session id for one launch. A
+`--verbose` launch prints the same breakdown when it ends, with each
+step's CPU time and git commands beside it.
 
 `mandu doctor --secrets` is the one to run before you trust a machine: it
 walks your home and workspace exactly as a launch does, starts no agent,
@@ -1818,6 +1875,264 @@ scan reads at most 256 MiB of file versions in 60 seconds and says what it
 skipped (`MANDU_HISTORY_SCAN_MAX_MB`, `MANDU_HISTORY_SCAN_BLOB_MAX_KB`,
 `MANDU_HISTORY_SCAN_TIMEOUT_S` change the caps); `--no-history` skips it.
 It changes nothing.
+
+`mandu scan` looks back instead: which of your secrets your agents have
+already sent to the AI. Your agents keep every session's messages on your
+computer: Claude Code in `~/.claude/projects`, Codex in `~/.codex/sessions`,
+OpenCode in `~/.local/share/opencode/opencode.db`, Goose in
+`~/.local/share/goose/sessions` (and its log of the last requests in
+`~/.local/state/goose/logs`), OpenClaw in `~/.openclaw/agents` (each where
+the agent's own variables put it: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+`XDG_DATA_HOME`, `XDG_STATE_HOME`, `GOOSE_PATH_ROOT`,
+`OPENCLAW_STATE_DIR`). It also reads two agents Mandu does not run yet:
+Gemini CLI in `~/.gemini/tmp/<project>/chats` (under `GEMINI_CLI_HOME`)
+and Copilot CLI in `~/.copilot/session-state` (under `COPILOT_HOME`). For
+Cursor it only counts the chats (its editor's and its `cursor-agent`
+CLI's) and says so, `N Cursor chats not read`: Cursor keeps them in a
+format that is not documented and has changed often, so no reader could
+be trusted with them. For an agent Mandu does not run, the report says
+so rather than what Mandu would have done, and names the agents it runs
+(`mandu claude`, `mandu codex`, …). The scan reads the parts of them that
+went to the model (what a tool read or printed, what you typed or pasted,
+what the AI wrote, never an agent's own local copy of a tool's output)
+and reports, with no value shown:
+
+- **your secrets**: a value from a credential file Mandu finds on this
+  computer, or from a secret-named variable in your environment, found in a
+  session, with the file it lives in, how it got there (the agent read the
+  file, a command printed it, it was in your message) and when. These are
+  the ones to change where they were issued;
+- **values that look like keys** (`sk-…`, `ghp_…`, `AKIA…`) but are in no
+  file now: an old key, someone else's, or a test value. The report counts
+  them in one line by prefix (`sk-… ×190 · ghp_… ×24 · …`); `--all` lists
+  each. One that reads as made up (a word like `test` or `fake` between
+  dashes, `sk-proj-test-…`; one character eight times in a row; a
+  straight run like `abcdefgh` or `1234567890`; a vendor's documented
+  example key) is listed apart as looking like a test value and not
+  counted as leaked: each such rule is one a real key's random body
+  practically never meets, and your own secrets are never marked;
+- values only named like a secret (`DB_PASSWORD=…`) and a password in a
+  URL, which is where a project's own test values show up: a count, and
+  `--all` lists them;
+- **what the agents sent on**: under each of your secrets, one line
+  names where a command or a tool sent it, per way (`also sent over HTTP
+  to …`, `over ssh to …`, `with git to …`, `by a script to …`, `to an
+  MCP server's tool …`; `through its variable` when the AI saw only
+  `$STRIPE_KEY`, `tried` for a host where every send failed or was
+  refused). `--all` lists every send: each secret a `curl`, `wget`,
+  HTTPie or `xh` command, or a web fetch, sent to a host outside this
+  computer; an `ssh`, `scp`, `sftp` or `rsync` command sent to its host
+  (in the command, or in a here-document or a command piped into it); a
+  `git push`, `clone`, `fetch`, `pull` or `remote add` with the
+  credential in its URL (`https://x-access-token:…@github.com/…`) or in an
+  `http.extraheader`; a `python3 -c`, `node -e` or `python3 - <<EOF`
+  script that calls an HTTP library with a URL written into it; and an
+  MCP tool's input (the tool is where it went: Mandu cannot see where the
+  server sent it on). Each as its value or through a variable that holds
+  it (`$STRIPE_KEY`, `os.environ['STRIPE_KEY']`). Hosts the scan cannot
+  tie to the key's own service come first, marked worth a look (a key
+  with no recognisable format sent to its own company's API lands here
+  too), then the MCP tools, then the keys sent to their own service (a
+  Stripe key to `api.stripe.com`). A script run from a file, or a file
+  copied whole over ssh, is not read: the record holds only the command. Under each host are the
+  URLs it went to there (up to five), with the path shown and any
+  password in the URL and every query value masked
+  (`https://hooks.vendor.dev/in?k=$STRIPE_KEY&src=…`; a variable is
+  shown, as it holds no value). Each says whether the
+  command ran, failed, was refused or was stopped by Mandu. What a program
+  sent by itself (a CLI's own login) is not in the agents' records, so it
+  is not here;
+- **riskier sessions**: how many ran with the agent's permission prompts
+  off (Claude Code's `bypassPermissions`, Codex with approvals `never` and
+  no sandbox, Goose's `auto` mode, its default, an OpenCode session whose
+  own rules allow every tool, Copilot CLI in its allow-all mode; OpenClaw
+  and Gemini CLI do not record it), and in how many
+  of those one of your secrets leaked to the AI,
+  and how many printed your whole environment to the AI (`env`,
+  `printenv`, `export -p`, not a lookup like `env | grep PATH`).
+
+The report is short. On a home with two secrets a session leaked:
+
+```
+mandu scan · 2 sessions · Claude Code, Codex · 1 Oct – 2 Oct
+Nothing was sent anywhere; no secret value is shown.
+
+✗ 2 of your secrets leaked to the AI
+
+  1  DB_PASSWORD   ~/shop/.env
+     1 session, 1 Oct · a command printed it, the AI wrote it
+  2  STRIPE_KEY   ~/shop/.env
+     1 session, 1 Oct · the agent read the file
+     also sent over HTTP to api.stripe.com · tried hooks.vendor.dev (through its variable)
+
+  → Rotate these 2 now, where they were issued.
+
+! 3 more key-shaped values leaked (not in your files now: old
+  keys, someone else's, or test values)
+  ghp_… ×1 · sk-proj-… ×1 · xoxb-… ×1
+
+! Risky sessions
+  1 ran with permission prompts off (in 1, one of your secrets leaked)
+  1 printed your whole environment to the AI
+
+1 session ran while Mandu ran (by time): there the AI may have seen a placeholder; 1 finding above was seen only there.
+
+✓ With Mandu, these 3 secrets stay safe: the AI sees only a $MDU:… placeholder, and your agent still does its work.
+  Protect your agents:  mandu claude  (or mandu codex)
+  One in full:          mandu scan --show 1   Everything: mandu scan --all
+  Dashboard:            run mandu dashboard and open Scan
+```
+
+Each of your secrets is one entry: its name and file, how many sessions
+and when, the ways it got there (you pasted it, a command printed it, the
+agent read the file, the AI wrote it, the agent attached it, a tool
+returned it; the three most common), and when one command is all it
+took, that command, masked and cut to its first 40 characters or so,
+at the end of an argument (a long path keeps its start and its file
+name: `cat ~/.config/some-cli/…/credential.json`). On
+a terminal the report is in colour (red for what leaked, yellow for the
+warnings); piped, or with `NO_COLOR` set, it is plain, and
+`FORCE_COLOR=1` turns colour on anyway. `--json` and `--share` never
+have colour. The terminal report and `--show` say *leaked to the AI*;
+`--share`, `--json`, the kept report, `mandu doctor` and the dashboard
+say *reached the AI*.
+
+`mandu scan --all` prints the long report. There each finding is
+numbered and told step by step, from the record: where
+the secret lived, what the agent did (the command it ran, the file it
+read, or the page it fetched: "The agent fetched:  https://…") with the
+date, the project and the agent, that the output with the secret in it
+left your computer in the agent's next request to its model provider,
+what came next (the AI wrote it out again, a command sent it on), and,
+for your own secrets, what Mandu would have done:
+
+```
+  1. accessToken in ~/.config/some-cli/credential.json
+     19 Oct · ~/project/app · Claude Code
+       The agent ran:  cat ~/.config/some-cli/credential.json
+       The output, with the secret in it, went to the AI: it left this computer in Claude Code's next request to Anthropic.
+     With Mandu, the AI would have seen a placeholder ($MDU:…) where the secret is in that output; the command itself would still have run.
+```
+
+The provider is the one the session's record names, else the one the
+agent's own settings point it at: Claude Code with Bedrock, Vertex or
+Foundry turned on, or an `ANTHROPIC_BASE_URL` elsewhere, in its
+`settings.json` or your environment, or Codex with another
+`model_provider` or an `openai_base_url` in its `config.toml`, is told as
+"the model provider" rather than Anthropic or OpenAI. For Codex that
+includes a project's own `.codex/config.toml` (from the repository's root
+down to the session's folder) when your `~/.codex/config.toml` trusts the
+project, as Codex reads it; today's Codex ignores the provider settings
+there, an older one may not have, so the scan counts them only to say
+"the model provider", never to say OpenAI. The scan reads those settings only to
+tell which; none of them is shown.
+
+A command, or a fetched URL, is shown with every value it holds masked:
+your secrets by name (`PGPASSWORD=‹DB_PASSWORD› psql …`), keys by their
+prefix (`sk_live_…`), and anything named like a secret, a password or a
+key in a URL (`?key=…`) or a long random-looking run as `…`. Only its first line is shown (a
+here-document's body never is), cut at 240 characters. In the long
+report the values that look like keys get the same story for the first
+three, then a row each with up to three examples: the project and the
+command are usually what tell a test fixture from a real key. The
+numbers are the same in both reports: your secrets first, as the short
+report lists them, then the values that look like keys, then the rest.
+`mandu scan --show 3` prints finding 3 in full: every way it got there
+with up to ten examples, the number of projects, the dates, and where a
+command sent it, by host with the URLs (it scans
+again, so a session written in between can move the numbers).
+
+A value that is in a credential file but is not a credential (a version, a
+checksum) is not reported. A session that ran while Mandu ran the same
+agent is counted in one closing line: there the record on disk can show a
+value the AI saw as a placeholder. A finding seen only in sessions Mandu
+served (known by the id of each answer) is not counted as leaked;
+`--all` lists those. It reads at most 16 GiB in 5 minutes, newest sessions first,
+and says what it left unread (`--since 30d` or `--since 2026-09-01` reads
+less; `MANDU_TRANSCRIPT_SCAN_TIMEOUT_S`, `MANDU_TRANSCRIPT_SCAN_MAX_MB`
+change the caps). It changes no transcript, writes no rule and connects to
+nothing outside this computer: an agent's database is opened read-only
+in a way that never holds the agent up, so the scan can run while the
+agent does (on Node 22.13 or 22.14 a stopped agent's database is counted
+as unreadable instead, since that Node cannot open it without touching
+it; Node 22.15 or later reads it). `--share` prints a sentence with the counts
+alone, to post if you like; `--json` gives the raw report.
+
+It keeps its last report, the same names, files, masks, hosts and counts it
+printed and never a value, in `~/.mandu/state/last-scan.json` (`0600`), so
+you can come back to it:
+
+- the dashboard's **Home** shows a card under its counts: how many of your
+  secrets left this computer in your agents' requests before Mandu, the
+  first few by name and file, the sends worth a look, and `mandu scan` to
+  run it again (with no scan yet, how to run one);
+- the dashboard's **Scan** page (*Scan* in the top bar, `/scan`, also
+  linked from that card and from History) shows the whole report. Each finding tells how the secret left:
+  where it lives, what the agent ran or read (the command with every
+  secret in it shown masked), when, in which project and with which agent,
+  that it went to the AI in the agent's request to its provider, what
+  happened next (the AI wrote it out again, a command sent it on to a
+  host), and what Mandu would have done instead; whether a session ran
+  with Mandu is a small note under it. **Details and examples** opens the
+  examples, the dates and the projects. The long list of values that only
+  look like keys starts folded, with a box to find one;
+- `mandu doctor` prints one line from it, such as `Last scan (19 Oct): 2 of
+  your secrets reached the AI in sessions without Mandu (mandu scan to check again)`.
+
+The report's last line says where to see it (the `Dashboard:` row of the
+short report; `--all` and `--show` end with a sentence). With your
+dashboard running, it is the address of its Scan page (`This report is in
+your dashboard too: http://127.0.0.1:40123/scan`, followed by `(sign in
+with your Mandu dashboard account)`, or `(no account yet; set one: mandu
+dashboard --set-password)` when it has none yet); with none, the
+command that opens it (`This report is kept for your dashboard: run mandu
+dashboard and open Scan.`, or `npx @mandusec/mandu dashboard` when you
+ran the scan through npx). The scan
+starts no dashboard itself unless you ask with `--open`. `mandu dashboard` opens even if you have
+never run an agent with Mandu: it starts the dashboard alone, not Mandu's
+protection, and its Home then says **Protection is off: no agent runs with
+Mandu.**, with the command that starts it (`mandu claude` or `mandu codex`).
+The dashboard picks up Mandu as soon as you start an agent with it.
+
+`mandu scan --open` (with `--all` or `--show <n>` too) goes one step
+further: after the report it opens the dashboard's Scan page in your
+browser, starting the dashboard first, as `mandu dashboard` would, when
+none of yours is running (it then keeps running after the scan, as it does
+after `mandu dashboard`). It says what it did on one line:
+
+```text
+Opened the dashboard's Scan page: http://127.0.0.1:40123/scan
+Started the dashboard and opened its Scan page: http://127.0.0.1:40123/scan
+```
+
+with the same `(sign in …)` note as the report's last line when the
+dashboard asks for a sign-in: the browser is given the page's plain
+address, never a password or a sign-in link, so it shows the dashboard's
+sign-in page first. The browser is the one `BROWSER` names when you set it
+(a command; `%s` in it is replaced by the address, else the address is
+added at the end), else `open` on macOS, `wslview` (or Windows' `start`)
+under WSL, and `xdg-open` on Linux with a display. With no browser to open,
+as in an SSH session or on a machine with no screen, it tries none and
+prints the address instead:
+
+```text
+The dashboard's Scan page: http://127.0.0.1:40123/scan
+No browser here: open this URL on your computer
+Over SSH, forward its port first: ssh -L 40123:127.0.0.1:40123 <this machine>
+```
+
+(the last line only over SSH; `<this machine>` stands for the name you
+reach the machine by). A browser that will not start leaves the address
+printed the same way. None of this changes the scan's exit status. `--open`
+does not go with `--json` or `--share`, which are outputs for a program and
+for pasting.
+
+When Mandu is running as you scan, each file of yours whose key reached
+the AI and that no rule protects yet becomes a suggestion under Rules ›
+Files and folders › Suggested ("Suggested by mandu scan"), and the report
+says so. Mandu reads the file itself first and suggests it only when it
+finds a credential there under the key the scan named; it never suggests
+an agent's own login file. Nothing changes until you save it.
 
 While secret protection is on, the arbiter also keeps a list of the git
 repositories on your machine that a lock may concern: the ones you launch
@@ -2007,6 +2322,7 @@ Common flags:
 | `--no-landlock-net` | turn OFF the whole-agent TCP port confine (on by default, needs kernel ≥ 6.7) |
 | `--landlock-net-strict` | strictest network: also block direct 443 (TLS) and 22 (ssh) — expect `git push` over ssh and direct fetchers to need exceptions |
 | `--no-reply-filter` | leave placeholders unresolved in what you see |
+| `--no-session-summary` | don't print the line that says what Mandu kept from the AI when the session ends. Env: `MANDU_SESSION_SUMMARY=0` |
 | `--no-codex-shell-network` | Linux `mandu codex`: keep the network of Codex's own command sandbox off, as Codex has it by default (see "Codex's command sandbox" under [Run your agent](#run-your-agent)). Env: `MANDU_CODEX_SHELL_NETWORK=0`; config: `codex-shell-network = false` |
 | `--no-fs-sync` | run in your real folder instead of a dual-view copy |
 | `--browser` | start a Chrome for a browser agent, behind Mandu and with its traffic through Mandu's egress check; see "Run a browser agent" under [Run your agent](#run-your-agent). Env: `MANDU_BROWSER=1` (`MANDU_BROWSER_BIN` picks the Chrome, `MANDU_BROWSER_HEADLESS=1` hides its window) |
@@ -2111,35 +2427,52 @@ something that is not your Mandu dashboard already holds it, the command
 says so instead of pointing you there. A dashboard you run yourself
 (`npm run serve` in `dashboard/`, a systemd unit) still defaults to 4500.
 
-**Signing in.** Without signing in, the dashboard shows what the AI saw: your
-sessions, what was masked and blocked, and the requests waiting for you, with
-each secret as its placeholder. Real values, the files as they are on your
-disk, the service logs and the run output need you to sign in, and so do
-Allow once, Always allow, Block, rule changes and a few private views. Where
-a real value would be, a signed-out page says "Sign in to see real values".
-This matters because the programs your agent runs are on the same computer:
-they can reach the dashboard's port, and without your sign-in they get only
-what the AI already had. Signed in, a secret on an agent's page (a step
-that read it, its card under *Your secrets*) has a **Show the real value**
-button: one click shows that one value, only to you, and "Hide it again"
-takes it off the page. Each launch prints a sign-in link on its
-dashboard line, before the agent starts; `mandu dashboard` prints one too
-(`sign in (this link works once): …`). Open it and the browser stays signed in
-until the dashboard restarts. A link works once, and for 12 hours at most; an
-old one opens the dashboard for a browser that is already signed in and
-otherwise says to get a new one.
+**Signing in.** The dashboard shows the real values Mandu kept from the AI,
+so every page of it asks you to sign in first, with your **dashboard
+account**: one username and password, the same wherever the dashboard runs.
+Until you make one, the dashboard shows nothing but a page that says how
+(`mandu dashboard --set-password`), and the launch line says "no account
+yet; set one: mandu dashboard --set-password". This matters because the
+programs your agent runs are on the same computer: they can reach the
+dashboard's port, and without your sign-in they get nothing from it.
+Signed in, a secret on an agent's page (a step that read it, its card under
+*Your secrets*) has a **Show the real value** button: one click shows that
+one value, only to you, and "Hide it again" takes it off the page.
 
-The link comes from a channel your agent cannot reach: the same private
-directory that keeps the real values away from it. Inside the agent's sandbox,
-`mandu dashboard` prints the address but no link ("no sign-in link: … run
-`mandu dashboard` in your own terminal"), so a prompt injection cannot approve
-its own request. Mandu also hands out no link while an agent runs without that
-wall (`--mode off`, or no file guard): the launch line and `mandu dashboard`
-name that agent; quit it, or set a password. Links are printed only to a
-terminal, never to a log; a launch whose output is redirected prints the plain
-address (set `MANDU_PRINT_SIGNIN_LINK=1` if that output goes only to you). A
-dashboard with `DASHBOARD_PASSWORD` or `DASHBOARD_BASIC_AUTH` uses those
-instead and hands out no links.
+**Your dashboard account.** One username and password for every page of
+the dashboard, the same wherever it runs (on this computer, or reached
+through a tunnel or a reverse proxy). Make it, or change its password, in
+your own terminal:
+
+```sh
+mandu dashboard --set-password
+```
+
+It asks for a username and for the password twice, without showing what you
+type. `mandu dashboard` and `mandu setup` offer to make one when there is
+none yet, too. Mandu keeps
+only a scrambled form of the password (a salted scrypt hash) in
+`~/.mandu/state/dashboard-account.json`, readable by you alone; the
+password itself is written nowhere. A running dashboard uses the new
+account at once and signs every browser out.
+
+Opening the dashboard then shows a page with **Username** and **Password**. Type them there, not in
+the address bar: the address never needs to hold them. You stay signed in
+in that browser for up to 7 days (12 hours if you leave it unused), or
+until the dashboard restarts; **Settings › Dashboard account › Sign out**
+ends it. After five wrong tries within a minute, the page asks you to wait
+30 seconds (longer if it goes on) before it checks again. A script can send
+the same username and password as HTTP Basic credentials (`curl -u you
+http://127.0.0.1:4500/api/home` asks for the password).
+
+Programs your agent runs under Mandu can neither read nor change the account
+file. A program of yours that runs outside Mandu could, as it could any of
+your files: if the dashboard sees the file change while it runs, it signs
+everyone out and Home says so. If that was not you, run `mandu dashboard
+--set-password` again. A dashboard started with `DASHBOARD_BASIC_AUTH`
+moves that username and password into the account the first time and says
+so; you can then remove the line. `DASHBOARD_PASSWORD` and the one-time
+sign-in links of earlier releases are gone: the account replaces both.
 
 The dashboard answers only to its own address: `127.0.0.1`, `localhost` or
 `[::1]` at its port. A request that names any other host is refused (421), so
@@ -2148,16 +2481,17 @@ computer. Behind a reverse proxy or a tunnel that forwards its public name,
 list that name in `DASHBOARD_SERVER_NAMES` (comma-separated; `name:port` for
 one port only).
 
-To reach it from another machine, say all three things explicitly:
+To reach it from another machine, make your dashboard account first
+(`mandu dashboard --set-password`), then say these explicitly:
 
 ```sh
 DASHBOARD_HOST=0.0.0.0                     # the wide bind
 DASHBOARD_ALLOW_HOSTS=proxy.example.org     # who may connect (comma-separated hosts or IPs; everyone else gets 403)
-DASHBOARD_BASIC_AUTH=you:a-long-password    # or DASHBOARD_PASSWORD=…, or DASHBOARD_TRUST_FRONT=1 behind a reverse proxy that authenticates
 DASHBOARD_SERVER_NAMES=dash.example.org     # the name browsers use for it, when that is not this machine's address
 ```
 
-A non-loopback bind with none of the authenticators refuses to start. Put
+A non-loopback bind with no account
+refuses to start. Put
 these in the environment of whatever starts the dashboard (a systemd user
 unit's `EnvironmentFile`, mode 600, is the usual place).
 
@@ -2166,7 +2500,9 @@ unit's `EnvironmentFile`, mode 600, is the usual place).
 ## Troubleshooting
 
 - **Which mandu is this?** (an install that does not behave like the version
-  you installed, or a bug report) — run `mandu version`. It prints the file
+  you installed, or a bug report) — run `mandu version`. (The dashboard's
+  Settings › About Mandu shows the version alone, with links to this guide
+  and the issue tracker.) It prints the file
   your shell ran and the file it resolves to, how Mandu is installed (the
   npm package, or a source checkout), its version and its commits (the
   source repository's and the public repository's), and then what could make
@@ -2801,7 +3137,9 @@ users, it tightens them and says so once.
 | `~/.mandu/state/workspaces/` | `0700` | Mandu's copies of the projects you ran it in |
 | `~/.mandu/state/object-walks/` | `0700` | notes from checking your git history for protected files |
 | `~/.mandu/state/paired-approvals/` | `0700` | one-time approvals for evaluation runs (developers) |
+| `~/.mandu/state/dashboard-account.json` | `0600` | your dashboard account: its username and a scrambled form (a scrypt hash) of its password, never the password (`mandu dashboard --set-password`) |
 | `~/.mandu/state/launch-logs/` | `0700` | what each launch said: its notices, warnings, protection layers and helper messages, one `0600` file per launch, the last 20 kept (`mandu log` shows the latest) |
+| `~/.mandu/state/last-scan.json` | `0600` | the last `mandu scan`: which of your secrets reached the AI, by name and file, with hosts, dates and counts, never a value (the dashboard's Home and Scan page, `mandu doctor`) |
 | `~/.mandu/events/` | `0700` | the session history the dashboard shows, kept 90 days; it includes the real values behind placeholders (`events/test/`: Mandu's own tests) |
 | `~/.mandu/runs/` | `0700` | test and evaluation results (developers): `test-runs.json` and `test-runs/` (the dashboard's test runs and their results), `drills/` (the maintainers' drill records), `ci/`, `matrix/`, `eval/` |
 | `~/.mandu/dev/docker-e2e-home/` | `0700` | logins for Mandu's container tests (developers) |

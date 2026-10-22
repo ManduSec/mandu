@@ -57,6 +57,7 @@ import { ChatTextRepacker, ResponsesTextRepacker } from "./text-repack.js";
 import { ChatWireError, chatProviderRefusal, chatShadow, type ChatShadow } from "./chat-wire.js";
 import { segmentAgentFor } from "./prompt-filter.js";
 import { ChatArgsRewriter, gateChatJson, type ChatRewriterOptions } from "./chat-sse.js";
+import { ResponseIdSniffer, responseIdOfBody } from "./response-id.js";
 import { ResponsesArgsRewriter, composeArgsTransform, transformOutputItems, type ArgsTransform, type CallContext, type RewriterOptions } from "./sse-rewrite.js";
 import { ExecGateNotices, gateFunctionCallArguments } from "./exec-gate.js";
 import { ExecGateHistory } from "./exec-history.js";
@@ -703,13 +704,17 @@ export class OpenAiProxy {
 
   /** Emit an exchange's `tllm_call` once, with the model's answer (or the
    *  reason there is none). */
-  private emitTllmCall(p: PendingTllmCall, outputText: string): void {
+  private emitTllmCall(p: PendingTllmCall, outputText: string, responseId?: string): void {
     if (p.emitted) return;
     p.emitted = true;
     this.safeEmit(
       makeTllmCall({
         ctx: p.ctx,
         model: p.model,
+        // The response's id, which Codex's rollout keeps too: the join key
+        // of `mandu scan` (plan 17 §3 item 6). Read off the relayed bytes by
+        // the passive sniffer; it changes nothing that is forwarded.
+        ...(responseId !== undefined ? { responseId } : {}),
         inputSymbolized: p.inputSymbolized,
         inputOriginal: null,
         inputSymbols: p.inputSymbols,
@@ -1080,10 +1085,14 @@ export class OpenAiProxy {
         upstream.body.on("error", () => resolve());
       });
       let buf = Buffer.concat(chunks);
+      let responseId: string | undefined;
       try {
         const v: unknown = JSON.parse(buf.toString("utf8"));
         if (v === null || typeof v !== "object" || Array.isArray(v)) throw new Error("not a JSON object");
         if (await gateChatJson(v as Record<string, unknown>, transform, opts)) buf = Buffer.from(JSON.stringify(v), "utf8");
+        // The answer's id as the agent gets it (the gate keeps `id`), for
+        // `mandu scan`'s join (plan 17 §3 item 6, response-id.ts).
+        responseId = responseIdOfBody(v);
       } catch (err) {
         // A 2xx answer carries the model's calls: it goes out only as read.
         this.log(`FAIL-CLOSED: the model's Chat Completions answer could not be read (${(err as Error).message})`);
@@ -1091,7 +1100,7 @@ export class OpenAiProxy {
         this.refuse(res, 502, `mandu: the model provider's answer could not be read (${(err as Error).message}); it was not relayed`);
         return;
       }
-      this.emitTllmCall(pending, answer());
+      this.emitTllmCall(pending, answer(), responseId);
       res.writeHead(upstream.status, this.responseHeaders(upstream.headers, { dropContentLength: true }));
       res.end(buf);
       return;
@@ -1100,6 +1109,9 @@ export class OpenAiProxy {
     res.writeHead(upstream.status, this.responseHeaders(upstream.headers, { dropContentLength: true }));
     const rewriter = new ChatArgsRewriter(transform, opts);
     const repacker = new ChatTextRepacker();
+    // The response id, read off what the agent is sent, after the gate: the
+    // id the agent keeps (response-id.ts). It never throws.
+    const ids = new ResponseIdSniffer("chat");
     const src = upstream.body;
     src.setEncoding("utf8");
     let broken = false;
@@ -1109,6 +1121,7 @@ export class OpenAiProxy {
       if (broken) return;
       try {
         const out = await fn();
+        ids.feed(out);
         if (out !== "") res.write(out);
       } catch (err) {
         broken = true;
@@ -1121,7 +1134,7 @@ export class OpenAiProxy {
       src.on("data", (chunk: string) => enqueue(() => step(async () => repacker.feed(await rewriter.feed(chunk)))));
       const finish = (): void => enqueue(async () => {
         await step(async () => repacker.feed(await rewriter.end()) + repacker.end());
-        this.emitTllmCall(pending, answer());
+        this.emitTllmCall(pending, answer(), ids.value());
         res.end();
         resolve();
       });
@@ -1428,7 +1441,10 @@ export class OpenAiProxy {
     // body as relayed (never changes a byte), emitted when the body ends.
     const sniffer = pending ? new ResponseSniffer(isSse ? "sse" : "json") : null;
     const answered = (): void => {
-      if (pending && sniffer) this.emitTllmCall(pending, OpenAiProxy.answerText(upstream.status, sniffer.finish()));
+      if (pending && sniffer) {
+        const sniffed = sniffer.finish();
+        this.emitTllmCall(pending, OpenAiProxy.answerText(upstream.status, sniffed), sniffed.responseId);
+      }
     };
 
     if (canRewrite && !isSse && isJson) {

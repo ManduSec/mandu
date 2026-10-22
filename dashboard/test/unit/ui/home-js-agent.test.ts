@@ -13,7 +13,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { M, T, AGENT, CLOCK, home, load, tick, rulesPage, openRule } from "./home-js-fixtures.js";
+import { waitWhile } from "../page-wait.js";
+import { M, T, AGENT, CLOCK, home, load, tick, rulesPage, openRule, list, WS_LIST, RULES_PANEL, rowFor } from "./home-js-fixtures.js";
 
 test("Details opens the agent page in place: one card per turn, split halves, reveal on click, secrets never", async () => {
   const { doc, calls, window } = load();
@@ -852,13 +853,13 @@ test("signed out (valuesShown false): the page says where the values went, and e
   await tick();
   const note = doc.getElementById("agent-values-note");
   assert.equal(note.hidden, false);
-  assert.equal(note.textContent, "Sign in to see real values: in your own terminal, run mandu dashboard and open the sign-in link it prints.");
+  assert.equal(note.textContent, "Sign in to see real values: reload this page and sign in with your dashboard account.");
   // The command as code, as every command the page names (§4.25 "Refusals").
-  assert.deepEqual([...note.querySelectorAll("code")].map((c: any) => c.textContent), ["mandu dashboard"]);
+  assert.deepEqual([...note.querySelectorAll("code")].map((c: any) => c.textContent), []);
   const masked = [...doc.querySelectorAll("#agent-story .step.split")].find((x: any) => x.querySelector(".tag").textContent === "Masked") as any;
   assert.equal(masked.querySelector("button.reveal"), null, "nothing to reveal signed out");
   assert.match(masked.querySelector(".hidden-note").textContent, /Sign in to see real values/);
-  assert.deepEqual([...masked.querySelectorAll(".hidden-note code")].map((c: any) => c.textContent), ["mandu dashboard"]);
+  assert.deepEqual([...masked.querySelectorAll(".hidden-note code")].map((c: any) => c.textContent), []);
   assert.doesNotMatch(doc.getElementById("page-agent").textContent, /"mandu dashboard"|`mandu dashboard`/);
   for (const c of calls.filter((x) => x.method === "GET" && x.url.includes("/api/"))) {
     assert.equal((c.headers as Record<string, string>)["X-Mandu-Control"], "1", c.url);
@@ -1191,4 +1192,199 @@ test("an agent page left open when the protection service stops says so at the n
   assert.equal(doc.getElementById("agent-story-block").hidden, false);
   assert.equal(doc.querySelectorAll("#agent-story .turn").length, 2);
   assert.equal(doc.querySelectorAll("#agent-waiting .ask .ask-actions button").length, 3);
+});
+
+// ── A card opens its file in Rules (§4.25b) ──────────────────────────────────
+
+const FILE_CARDS = { mode: "secrets", flagged: false, more: 0, counts: { masked: 3, early: 0 }, secrets: [
+  { what: [{ kind: "code", text: "API_KEY" }, T(" in "), { kind: "code", text: "~/ws/README.md" }], level: "No AI", saw: "masked", file: "~/ws/README.md", ref: "0123456789abcdef01234567", lines: [] },
+  { what: [T("The environment variable "), { kind: "code", text: "GITHUB_TOKEN" }], level: "No AI", saw: "masked", ref: "0123456789abcdef01234568", lines: [] },
+  { what: [T("Output of a "), { kind: "code", text: "Bash" }, T(" step that held a secret")], level: "No AI", saw: "masked", file: "", lines: [] },
+] };
+const FILE_ROUTES = { "GET home/agent?session=s1": { ...AGENT, secrets: FILE_CARDS }, "GET policy/panel": RULES_PANEL, [list("~/ws")]: WS_LIST };
+
+test("Your secrets: a card that names a file links it to Rules, named by its file; no other card does (§4.25b)", async () => {
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: FILE_ROUTES });
+  await tick();
+  const cards = [...doc.querySelectorAll("#agent-secrets .secret-card")] as any[];
+  assert.equal(cards.length, 3);
+  const link = cards[0].querySelector("a.secret-rule-link");
+  assert.ok(link, "the file's card links to Rules");
+  assert.equal(link.textContent, "Change it in Rules");
+  assert.equal(link.getAttribute("aria-label"), "Change the rule for ~/ws/README.md in Rules");
+  assert.equal(link.getAttribute("href"), "/mandu/rules?file=~/ws/README.md");
+  assert.equal(link.dataset.pageLink, "rules");
+  assert.ok(cards[0].querySelector("button.secret-reveal").compareDocumentPosition(link) & 4, "under Show the real value");
+  assert.equal(cards[1].querySelector("a.secret-rule-link"), null, "a variable names no file");
+  assert.equal(cards[2].querySelector("a.secret-rule-link"), null, "nor a command's output");
+});
+
+test("Change it in Rules opens Rules with the file's row opened in Add a rule, the focus on its ⋯, the address /rules; Back returns (§4.25b)", async () => {
+  const { doc, window, calls } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: FILE_ROUTES });
+  await tick();
+  const link = doc.querySelector("#agent-secrets a.secret-rule-link") as any;
+  link.focus();
+  link.click();
+  await tick(30);
+  assert.equal(doc.getElementById("page-rules").hidden, false);
+  assert.equal(window.location.pathname + window.location.search, "/mandu/rules", "the address drops ?file= once used");
+  assert.ok(calls.some((c) => c.url === "/mandu/api/files/list?path=" + encodeURIComponent("~/ws")), "the file's folder is read");
+  assert.equal(doc.getElementById("lock-form").hidden, false, "Add a rule's browser is open");
+  const row = rowFor(doc, /^README/);
+  assert.equal(row.classList.contains("open"), true, "with the file's row opened");
+  assert.equal(doc.activeElement, row.querySelector(".file-more"), "the focus on its ⋯");
+  assert.equal(calls.filter((c) => c.method !== "GET").length, 0, "nothing is changed");
+  // Back is the session page; Forward is Rules, the browser not opened again.
+  window.history.back();
+  await waitWhile(() => window.location.pathname === "/mandu/rules");
+  await tick(30);
+  assert.equal(window.location.pathname, "/mandu/agents/s1");
+  assert.equal(doc.getElementById("page-agent").hidden, false);
+  const reads = calls.filter((c) => c.url.includes("files/list")).length;
+  window.history.forward();
+  await waitWhile(() => window.location.pathname !== "/mandu/rules");
+  await tick(30);
+  assert.equal(doc.getElementById("page-rules").hidden, false);
+  assert.equal(window.location.search, "");
+  assert.equal(calls.filter((c) => c.url.includes("files/list")).length, reads, "Forward does not open the file again");
+});
+
+test("an address /rules?file= (a new tab, a bookmark) opens the same, and replaces itself with /rules; a file not listed gets the path box (§4.25b)", async () => {
+  const { doc, window } = load({ url: "http://127.0.0.1:4500/mandu/rules?file=~/ws/README.md", routes: FILE_ROUTES });
+  await tick(30);
+  assert.equal(window.location.pathname + window.location.search, "/mandu/rules");
+  assert.equal(window.history.length, 1, "replaced, not pushed");
+  const row = rowFor(doc, /^README/);
+  assert.equal(row.classList.contains("open"), true);
+  assert.equal(doc.activeElement, row.querySelector(".file-more"));
+  // A file no longer there: its folder, and the focus on the path box.
+  const gone = load({ url: "http://127.0.0.1:4500/mandu/rules?file=~/ws/gone.env", routes: FILE_ROUTES });
+  await tick(30);
+  assert.equal(gone.doc.getElementById("lock-form").hidden, false);
+  assert.equal(gone.doc.querySelector("#files-list .row.file.open"), null);
+  assert.equal(gone.doc.activeElement, gone.doc.getElementById("lock-path"));
+  assert.equal(gone.window.location.search, "");
+});
+
+test("a focus the person moved before the folder was read stays where they put it (§4.25b)", async () => {
+  let release = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/rules?file=~/ws/README.md", routes: FILE_ROUTES, before: (w: any) => {
+    const f = w.fetch;
+    w.fetch = (url: string, init?: unknown) => (url.includes("policy/panel") ? held.then(() => f(url, init)) : f(url, init));
+  } });
+  await tick();
+  const find = doc.getElementById("rule-find") ?? doc.querySelector("#page-rules input");
+  find.focus();
+  release();
+  await tick(30);
+  assert.equal(rowFor(doc, /^README/).classList.contains("open"), true, "the file is still opened");
+  assert.equal(doc.activeElement, find, "the focus stays");
+});
+
+test("a broken session's page writes its notice out under the header, the command as code, as well as behind the mark; a notice not marked shown stays behind the mark (dashboard.md §4.21 On the product page)", async () => {
+  const notice = "Your terminal showed masked values instead of your real ones: Mandu's reply filter was not working in this session. The AI's side was not affected. Start the agent again; if it happens again, run mandu doctor. <b>x</b>";
+  const noticeParts = [
+    { kind: "text", text: "Your terminal showed masked values instead of your real ones: Mandu's reply filter was not working in this session. The AI's side was not affected. Start the agent again; if it happens again, run " },
+    { kind: "code", text: "mandu doctor" },
+    { kind: "text", text: ". <b>x</b>" },
+  ];
+  const { doc, err } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, notice, noticeParts, noticeShown: true } } });
+  assert.equal(err, null);
+  await tick();
+  const line = doc.getElementById("agent-notice");
+  assert.equal(line.hidden, false);
+  assert.deepEqual([...line.querySelectorAll("p")].map((p: any) => p.textContent), ["This session did not work as it should.", notice]);
+  assert.deepEqual([...line.querySelectorAll("code")].map((c: any) => c.textContent), ["mandu doctor"]);
+  assert.equal(line.querySelector("b"), null, "server words stay text");
+  assert.ok(doc.querySelector("#page-agent .page-head").compareDocumentPosition(line) & 4, "under the header");
+  assert.ok(line.compareDocumentPosition(doc.getElementById("agent-facts")) & 4, "above the tiles");
+  const mark = doc.querySelector("#agent-name .notice-btn");
+  assert.ok(mark, "the mark by the name stays");
+  assert.equal(doc.getElementById(mark.getAttribute("aria-controls")).textContent, notice);
+  // A degraded session's notice (noticeShown false), none, or an older
+  // server's page (no flag): behind the mark only.
+  for (const vm of [{ ...AGENT, notice: "2 of the commands the agent ran could not start.", noticeShown: false }, { ...AGENT, notice: null, noticeShown: false }, { ...AGENT, notice: "x" }]) {
+    const { doc: plain } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": vm } });
+    await tick();
+    assert.equal(plain.getElementById("agent-notice").hidden, true);
+    assert.equal(plain.getElementById("agent-notice").textContent, "");
+  }
+});
+
+test("a gated session's page says under its header that its programs could read your credential files, the sentence and the fix as code; a confined one says nothing (§4.23)", async () => {
+  const secretsPosture = {
+    gap: "apparmor-userns",
+    headline: "Programs this agent ran could read your credential files.",
+    sentence: "The AI sees placeholders and a secret is sent out only where a rule or your OK allows, but programs the AI runs can still read your credential files. <b>x</b>",
+    note: null,
+    fix: "mandu setup",
+    fixParts: [{ kind: "text", text: "Run " }, { kind: "code", text: "mandu setup" }, { kind: "text", text: " in a terminal once, then start your agent again." }],
+  };
+  const { doc, err } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, secretsPosture } } });
+  assert.equal(err, null);
+  await tick();
+  const line = doc.getElementById("agent-posture");
+  assert.equal(line.hidden, false);
+  const ps = [...line.querySelectorAll("p")].filter((p: any) => !p.hidden).map((p: any) => p.textContent);
+  assert.deepEqual(ps, [secretsPosture.headline, secretsPosture.sentence, "Run mandu setup in a terminal once, then start your agent again."]);
+  assert.equal(line.querySelector("b"), null, "server words stay text");
+  assert.deepEqual([...line.querySelectorAll("code")].map((c: any) => c.textContent), ["mandu setup"]);
+  assert.ok(doc.querySelector("#page-agent .page-head").compareDocumentPosition(line) & 4, "under the header");
+  assert.ok(line.compareDocumentPosition(doc.getElementById("agent-facts")) & 4, "above the tiles");
+  for (const vm of [{ ...AGENT, secretsPosture: null }, AGENT]) {
+    const { doc: plain } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": vm } });
+    await tick();
+    assert.equal(plain.getElementById("agent-posture").hidden, true);
+    assert.equal(plain.getElementById("agent-posture").textContent, "");
+  }
+});
+
+// ── A send to its company's own API says why it did not ask (§4.25b) ──────────
+
+const ISSUER_NOTE = [
+  T("The real value left this machine, to a destination allowed to receive it. "), { kind: "code", text: "api.github.com" },
+  T(" is GitHub's own API: a key GitHub issued may go there without asking you. "), { kind: "text", text: "Built-in protections", rules: "built-in" },
+  T(" in Rules lists these, and says how to have them ask."),
+];
+const ISSUER_SENT = {
+  kind: "action", id: "os-gh", ts: "2026-09-25T10:00:03.500Z", icon: "web", outcome: "sent",
+  sentence: [T("Sent a request to "), { kind: "code", text: "api.github.com" }, T(" with your secret "), { kind: "code", text: "GITHUB_TOKEN" }, T(" filled in")],
+  note: ISSUER_NOTE.map((p) => p.text).join(""), noteParts: ISSUER_NOTE, split: null,
+};
+const ISSUER_ROUTES = {
+  "GET home/agent?session=s1": { ...AGENT, story: [{ ...AGENT.story[0]!, steps: [...AGENT.story[0]!.steps, ISSUER_SENT] }, AGENT.story[1]] },
+  "GET policy/panel": RULES_PANEL,
+};
+
+test("a send to its company's own API: the note says why it did not ask, and Built-in protections opens Rules at that card (§4.25b)", async () => {
+  const { doc, window } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: ISSUER_ROUTES });
+  await tick();
+  const step = doc.querySelector('#agent-story .step[data-step-id="os-gh"]') as any;
+  assert.ok(step, "the sent step is drawn");
+  const note = step.querySelector(".note");
+  assert.equal(note.textContent, ISSUER_SENT.note, "the note's words, the sentence after the note");
+  assert.equal(note.querySelector("code").textContent, "api.github.com");
+  const links = [...note.querySelectorAll("a")] as any[];
+  assert.equal(links.length, 1);
+  const link = links[0];
+  assert.equal(link.textContent, "Built-in protections");
+  assert.equal(link.getAttribute("href"), "/mandu/rules#built-in");
+  assert.equal(link.target, "", "in place, not a new tab");
+  link.click();
+  await tick(30);
+  assert.equal(doc.getElementById("page-rules").hidden, false, "Rules opens");
+  assert.equal(window.location.pathname + window.location.hash, "/mandu/rules#built-in", "at Built-in protections");
+  const head = doc.querySelector("#builtin-block h2");
+  assert.equal(doc.activeElement, head, "the card's heading has the focus");
+});
+
+test("a part named for any other card, or none, is plain text: the page draws only the Built-in protections link", async () => {
+  const other = { ...ISSUER_SENT, id: "os-x", noteParts: [T("See "), { kind: "text", text: "Your rules", rules: "your-rules" }, T(".")], note: "See Your rules." };
+  const routes = { ...ISSUER_ROUTES, "GET home/agent?session=s1": { ...AGENT, story: [{ ...AGENT.story[0]!, steps: [other] }] } };
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes });
+  await tick();
+  const note = doc.querySelector('#agent-story .step[data-step-id="os-x"] .note') as any;
+  assert.equal(note.textContent, "See Your rules.");
+  assert.equal(note.querySelector("a"), null);
 });

@@ -64,6 +64,7 @@ import { locateBareSecretTokens } from "./egress-fingerprint.js";
 import { passwordKind } from "./credential-names.js";
 import { DOCUMENT_TWIN_EXTRACT, documentLineLabel, documentNameField } from "./personal-documents.js";
 import { isIP } from "node:net";
+import { codexTomlReading, mcpConfigKind, mcpServerEntries, mcpUrlHost, type McpServerEntry } from "./mcp-config.js";
 
 export interface SecretSpan {
   /** Field name for the symbol (`KEY`, `default.aws_secret_access_key`,
@@ -565,14 +566,129 @@ function extractIni(content: string): SecretExtraction {
  *  in place without breaking the file, so either one makes the whole file
  *  the twin (the fail-safe direction), as does an array that never closes
  *  or one nested deeper than `MAX_LIST_DEPTH`. */
-function extractToml(content: string): SecretExtraction {
+function extractToml(content: string, extra: (keyed: readonly SecretSpan[]) => SecretSpan[] = () => [], original: string = content): SecretExtraction {
   if (/"""|'''/.test(content)) return NONE;
   if (/^\s*[A-Za-z0-9_.-]+\s*=\s*\{/m.test(content)) return NONE;
   const keyed = extractIni(content).spans;
-  if (keyed.length === 0) return { shape: "toml", spans: [] }; // whole-file twin, as before
+  const more = extra(keyed);
+  if (keyed.length === 0 && more.length === 0) return { shape: "toml", spans: [] }; // whole-file twin, as before
   const lists = tomlLists(content);
   if (lists === null) return NONE; // an array that never closes, or nested past MAX_LIST_DEPTH
-  return finishMerged("toml", [...keyed, ...lists.flatMap((l) => listItemSpans(content, l))], content);
+  return finishMerged("toml", [...keyed, ...more, ...lists.flatMap((l) => listItemSpans(content, l))], original);
+}
+
+/** Codex's `config.toml` (secret-discovery.md §2.10): the generic TOML
+ *  reading, with the values of each `[mcp_servers.<name>]` entry
+ *  (`mcpEntrySpans`) and the one-line inline tables Codex's own docs use
+ *  for them (`env = { K = "v" }`), read in full by mcp-config.ts and
+ *  blanked for the generic reader (which twins any file with an inline
+ *  table whole). An inline table that reader cannot read, or one outside a
+ *  server's table, still makes the whole-file twin. */
+function extractCodexToml(content: string): SecretExtraction {
+  const reading = codexTomlReading(content);
+  if (reading === null) return NONE;
+  let blanked = content;
+  for (const r of reading.inline) blanked = blanked.slice(0, r.start) + " ".repeat(r.end - r.start) + blanked.slice(r.end);
+  return extractToml(blanked, (keyed) => mcpEntrySpans(reading.entries, keyed, "toml"), content);
+}
+
+/** Header names whose value is no credential: content negotiation, the
+ *  client's name, a protocol or API version. Every other header an MCP
+ *  entry sets is masked (it is set by hand to authenticate). */
+const BENIGN_HEADER_RE = /^(?:content-type|accept(?:-[a-z-]+)?|user-agent|origin|referer|cache-control|connection|mcp-protocol-version|[a-z0-9-]*-version)$/i;
+
+/** A value the client expands before use (`${GITHUB_TOKEN}`, VS Code's
+ *  `${input:token}` and `${env:X}`): the reference, not the secret. */
+const MCP_REFERENCE_RE = /\$\{[^}]*\}/;
+
+/** An MCP config's spans less every one whose whole value is a reference
+ *  the client expands (`"GITHUB_TOKEN": "${GITHUB_TOKEN}"`, which the key
+ *  rule takes for a secret-named key): a placeholder there would replace
+ *  the reference the server's value comes from with one that names
+ *  nothing, and the variable itself is masked where it is set (the
+ *  launch's environment masking). A span that merged others is kept. */
+function withoutMcpReferences(x: SecretExtraction): SecretExtraction {
+  if (x.shape === null || !x.spans.some((s) => s.parts === undefined && /^\$\{[^}]*\}$/.test(s.value))) return x;
+  return { ...x, spans: x.spans.filter((s) => s.parts !== undefined || !/^\$\{[^}]*\}$/.test(s.value)) };
+}
+
+/**
+ * The secret values of MCP server entries (secret-discovery.md §2.10) the
+ * key rules missed (`keyed`, the shape's own spans: a value under a
+ * secret-looking name, a URL's password), on the file's own text:
+ *
+ *   - `env`: a value under a secret-looking name, under a name that holds a
+ *     header set (`OPENAPI_MCP_HEADERS`, Notion's server), or one that reads
+ *     as a credential (`looksLikeSecretValue`) under any name: a server's
+ *     environment is where its token goes, whatever the variable is called;
+ *   - `headers` / `http_headers`: every value but a benign header's
+ *     (`BENIGN_HEADER_RE`): a header a person writes into an MCP config is
+ *     there to authenticate;
+ *   - `bearer_token` (Codex): the value.
+ *
+ * Never a reference the client expands (`${…}`), an empty value, or a URL
+ * (its password is the key rules', its query the credential belt's). Field
+ * names: the variable's or header's name (`json-keys`, as the key rules
+ * name them), `mcp_servers.<server>.<table>.<name>` (`toml`, as the INI
+ * reading does). A value a `keyed` span already covers is left to it. Pure.
+ */
+function mcpEntrySpans(entries: readonly McpServerEntry[], keyed: readonly SecretSpan[], shape: "json-keys" | "toml"): SecretSpan[] {
+  const covered = (a: number, b: number): boolean => keyed.some((s) => s.start < b && a < s.end);
+  const out: SecretSpan[] = [];
+  for (const e of entries) {
+    for (const v of e.values) {
+      if (v.raw === "" || MCP_REFERENCE_RE.test(v.raw) || covered(v.start, v.end)) continue;
+      let secret = false;
+      if (v.role === "env") {
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v.raw)) continue;
+        secret = isSecretKey(v.name) || /HEADERS?$/i.test(v.name) || looksLikeSecretValue(v.raw);
+      } else if (v.role === "header") {
+        secret = !BENIGN_HEADER_RE.test(v.name);
+      } else if (v.role === "bearer") {
+        secret = true;
+      }
+      if (!secret) continue;
+      const table = v.role === "env" ? "env" : v.role === "header" ? "http_headers" : "";
+      const key = shape === "toml" ? (table === "" ? `mcp_servers.${e.name}.${v.name}` : `mcp_servers.${e.name}.${table}.${v.name}`) : v.name;
+      out.push({ key, start: v.start, end: v.end, value: v.raw });
+    }
+  }
+  return out;
+}
+
+/**
+ * The wire marks of an MCP config's twin (secret-discovery.md §2.10, plan 10
+ * §11.13.1): the credential an HTTP server entry sends in its Authorization
+ * header (JSON `headers.Authorization`, Codex `bearer_token` and
+ * `http_headers.Authorization`) to the host of the entry's own `url`. A
+ * span is marked only when it is exactly that value (a span the belt or a
+ * list rule merged with another is never put back); the registration
+ * binds it to that host for the launch HOME's own config only
+ * (registry.ts `isHomeWireFile`). Runs last, on the returned spans. Pure.
+ */
+function withMcpWire(path: string, content: string, x: SecretExtraction): SecretExtraction {
+  if (x.shape === null || x.spans.length === 0) return x;
+  const entries = mcpServerEntries(path, content);
+  if (entries === null) return x;
+  const marks = new Map<string, NonNullable<SecretSpan["wire"]>>();
+  for (const e of entries) {
+    if (e.transport !== "http" || e.url === null) continue;
+    const host = mcpUrlHost(e.url);
+    if (host === null) continue;
+    for (const v of e.values) {
+      const auth = (v.role === "header" && v.name.toLowerCase() === "authorization") || v.role === "bearer";
+      if (auth) marks.set(`${v.start}:${v.end}`, { host: host.host, scheme: "bearer", httpsOnly: host.https });
+    }
+  }
+  if (marks.size === 0) return x;
+  let any = false;
+  const spans = x.spans.map((s) => {
+    const w = marks.get(`${s.start}:${s.end}`);
+    if (w === undefined || s.parts !== undefined || s.encoded !== undefined || content.slice(s.start, s.end) !== s.value) return s;
+    any = true;
+    return { ...s, wire: w };
+  });
+  return any ? { ...x, spans } : x;
 }
 
 /** XML (`~/.m2/settings.xml`, `NuGet.Config`): the text of an element whose
@@ -848,7 +964,7 @@ function yamlKeySpans(content: string): SecretSpan[] {
  *  string walk finds every pair of valid JSON, so the two together find
  *  everything the old regex did (a property test checks it on generated
  *  documents). Both are linear in the text. */
-function extractJsonKeys(content: string): SecretExtraction {
+function extractJsonKeys(content: string, extra: (keyed: readonly SecretSpan[]) => SecretSpan[] = () => []): SecretExtraction {
   const spans: SecretSpan[] = [];
   const found = new Set<string>();
   const pair = (key: string, value: string, vAt: number): void => {
@@ -862,6 +978,8 @@ function extractJsonKeys(content: string): SecretExtraction {
   let m: RegExpExecArray | null;
   while ((m = re.exec(content)) !== null) pair(m[1]!, m[2]!, m.index + m[0].length - m[2]!.length - 1);
   for (const p of jsonStringPairs(content)) pair(p.key, p.value, p.at);
+  // An MCP config's server values (secret-discovery.md §2.10).
+  for (const s of extra(spans)) spans.push(s);
   if (spans.length === 0) return { shape: "json-keys", spans: [] }; // whole-file twin, as before
   // In text order, so a repeated key is numbered as before (`token__2`).
   spans.sort((a, b) => a.start - b.start);
@@ -3495,7 +3613,8 @@ export function extractSecretSpans(
     return opts.extract === DOCUMENT_TWIN_EXTRACT ? withDocumentNames(x, content) : x;
   }
   const shape = secretFileShape(path);
-  return withCredentialBelt(withSettledParts(extractShape(path, content), content), content, shape === null ? null : COMMENT_GRAMMARS[shape] ?? null);
+  const x = withCredentialBelt(withSettledParts(extractShape(path, content), content), content, shape === null ? null : COMMENT_GRAMMARS[shape] ?? null);
+  return mcpConfigKind(path) === null ? x : withMcpWire(path, content, x);
 }
 
 /** A personal document's twin (DOCUMENT_TWIN_EXTRACT) with each span that
@@ -3830,6 +3949,14 @@ function withCredentialBelt(x: SecretExtraction, content: string, grammar: Comme
 
 /** `extractSecretSpans` by the path's shape, before `withSettledParts`. */
 function extractShape(path: string, content: string): SecretExtraction {
+  // MCP and editor configs (secret-discovery.md §2.10): the shape's reading
+  // plus each server entry's values.
+  const mcp = mcpConfigKind(path);
+  if (mcp === "codex") return withoutMcpReferences(extractCodexToml(content));
+  if (mcp !== null && secretFileShape(path) === "json-keys") {
+    const entries = mcpServerEntries(path, content) ?? [];
+    return withoutMcpReferences(extractJsonKeys(content, (keyed) => mcpEntrySpans(entries, keyed, "json-keys")));
+  }
   switch (secretFileShape(path)) {
     case "dotenv": return extractDotenv(content, path.slice(path.lastIndexOf("/") + 1) === ".envrc");
     case "ini": return extractIni(content);

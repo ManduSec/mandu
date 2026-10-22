@@ -110,8 +110,8 @@ test("any other refusal names its cause as the line under Changes to save does; 
   assert.equal(note.textContent, down.text, "the opened row says the same");
   assert.equal(note.querySelector("a")?.textContent, "Start it under Settings", "with the link");
   const out = await said({ status: 403, body: { error: ADMIN_SESSION_REQUIRED } });
-  assert.match(out.text, /^Which files it matches could not be worked out\. Sign in first: in your own terminal, run mandu dashboard/);
-  assert.equal(out.row.querySelector(".file-from code")?.textContent, "mandu dashboard", "the command as code");
+  assert.match(out.text, /^Which files it matches could not be worked out\. Sign in first: reload this page and sign in with your dashboard account/);
+  assert.equal(out.row.querySelector(".file-from code")?.textContent, "mandu dashboard --set-password", "the command as code");
   assert.equal((await said({ status: 500, body: null })).text, "Which files it matches could not be worked out.", "no cause: the hedge");
   assert.equal((await said(() => { throw new Error("offline"); })).text,
     "Which files it matches could not be worked out. The dashboard could not reach its own server. Refresh in a moment.", "no answer at all");

@@ -284,15 +284,15 @@ argv bogus --dry-run -- true
 argv core --dry-run
 [[ $RC -ne 0 ]] && pass "missing command is an error" || fail "missing command should exit non-zero"
 
-# ── 3. the release flags (packaging.md §11.3): a publish credential is opt-in, one
-#      host path is writable, and neither exists unless asked for ──────────────
+# ── 3. the release flags (packaging.md §11.3): no publish credential ever enters
+#      a container, and one host path is writable only when asked for ─────────
 
 DECOY_NPM="npm_decoy_0000000000000000000000000000000000"
 ARGV="$(NPM_TOKEN="$DECOY_NPM" bash "$SCRIPT" core --dry-run -- true 2>/dev/null)"
 if ! grep -q "$DECOY_NPM" <<<"$ARGV" && ! grep -q 'NPM_TOKEN' <<<"$ARGV"; then
-  pass "core container carries NO npm token without --with-npm-token"
+  pass "core container carries NO npm token, even with NPM_TOKEN set on the host"
 else
-  fail "SECURITY: NPM_TOKEN reached the container argv without --with-npm-token"
+  fail "SECURITY: NPM_TOKEN reached the container argv"
 fi
 if ! grep -q '/repo/release' <<<"$ARGV"; then
   pass "no host path is mounted at /repo/release without --out"
@@ -300,16 +300,12 @@ else
   fail "a release mount appeared without --out"
 fi
 
-ARGV="$(NPM_TOKEN="$DECOY_NPM" bash "$SCRIPT" core --with-npm-token --dry-run -- true 2>/dev/null)"
-if grep -q -- "-e" <<<"$ARGV" && grep -q "NPM_TOKEN=$DECOY_NPM" <<<"$ARGV"; then
-  pass "--with-npm-token forwards NPM_TOKEN"
+ARGV="$(NPM_TOKEN="$DECOY_NPM" bash "$SCRIPT" core --with-npm-token --dry-run -- true 2>/dev/null)"; RC=$?
+if [[ $RC -ne 0 ]] && ! grep -q "$DECOY_NPM" <<<"$ARGV"; then
+  pass "--with-npm-token is gone: an unknown flag, and no token forwarded"
 else
-  fail "--with-npm-token did not forward NPM_TOKEN"
+  fail "SECURITY: --with-npm-token was accepted or forwarded a token"
 fi
-
-ARGV="$(NPM_TOKEN="" bash "$SCRIPT" core --with-npm-token --dry-run -- true 2>/dev/null)"; RC=$?
-[[ $RC -ne 0 ]] && pass "--with-npm-token with an empty NPM_TOKEN is an error (never a silent unauthenticated publish)" \
-  || fail "--with-npm-token with an empty token should exit non-zero"
 
 ARGV="$(bash "$SCRIPT" core --out /tmp/mandu-rel-test-out --dry-run -- true 2>/dev/null)"
 if grep -q -- '-v' <<<"$ARGV" && grep -qE '/tmp/mandu-rel-test-out:/repo/release' <<<"$ARGV"; then

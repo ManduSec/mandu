@@ -68,6 +68,7 @@ import { isSecret, parseConfidentialityLevel } from "../symbol-table/confidentia
 import { confidentialityForOrigin, pathConfidentiality, type LabelLookup, type SecretCatalogMatch } from "../policy/secret-catalog.js";
 import { oneValueBindings, valueBindings, valueKeyMatches } from "../policy/value-bindings.js";
 import { extractSecretSpans, secretFileShape } from "../policy/secret-extract.js";
+import { mcpConfigKind } from "../policy/mcp-config.js";
 import { envRowVariable, isRegisteredFileRow } from "./registry.js";
 import { sourceLabel } from "../symbol-table/source-label.js";
 
@@ -122,12 +123,13 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
   return b.every((x) => s.has(x));
 }
 
-/** The wire host a field row's own span names (plan 10 §11.13.1), re-read
+/** The wire host a field row's own span names (plan 10 §11.13.1; an MCP
+ *  config's HTTP server credential, secret-discovery.md §2.10), re-read
  *  from its base row's text; null for any other row. */
-function ownWireHost(symbolMap: SymbolMap, name: string, row: SymbolEntry, label: LabelLookup | undefined): string | null {
+export function ownWireHost(symbolMap: SymbolMap, name: string, row: SymbolEntry, label: LabelLookup | undefined): string | null {
   if (row.field === null || typeof row.origin !== "string") return null;
   const shape = secretFileShape(row.origin);
-  if (shape !== "npmrc" && shape !== "pip-conf") return null;
+  if (shape !== "npmrc" && shape !== "pip-conf" && mcpConfigKind(row.origin) === null) return null;
   const dot = name.indexOf(".");
   if (dot < 0) return null;
   const base = symbolMap.symbols.get(name.slice(0, dot));

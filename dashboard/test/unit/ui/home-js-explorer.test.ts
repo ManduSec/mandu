@@ -202,6 +202,50 @@ test("explorer: Add a rule left open is kept in this browser; a typed path is li
   assert.ok(c.calls.some((x) => x.url === "/mandu/api/files/list?path=~%2Fws%2Fconfig"), "the typed folder is listed");
 });
 
+test("§4.25p the browser names its menus: heads over Add a rule's list; a greyed second menu with no rule says to choose who may read it first, until a level is picked; an inherited one keeps its words", async () => {
+  const FIRST = "Choose who may read it first. Then you can choose where it may be sent.";
+  const { doc } = load({ url: FILES_URL, routes: FILES_ROUTES });
+  await tick();
+  const heads = doc.getElementById("files-list-heads") as any;
+  assert.equal(heads.hidden, true, "no heads before there is a list to stand over");
+  doc.getElementById("rules-add").click();
+  await tick();
+  assert.ok(doc.getElementById("lock-form").contains(heads), "the heads are Add a rule's own");
+  assert.equal(heads.hidden, false);
+  assert.equal(heads.getAttribute("aria-hidden"), "true", "each menu has its own name");
+  assert.equal(heads.textContent, "File or folderWhich AI may read itWhere it may be sent");
+  assert.equal(heads.nextElementSibling, doc.getElementById("files-list"), "right over the list");
+  assert.equal(doc.getElementById("files-self").nextElementSibling, heads, "after the This folder: line");
+  const send = () => rowFor(doc, /^README\.md/).querySelector("select.send-select") as any;
+  assert.equal(send().disabled, true, "no rule: the first menu starts one");
+  assert.equal(send().options[send().selectedIndex].textContent, "No rule");
+  assert.equal(send().title, FIRST, "a pointer learns why it is greyed");
+  assert.equal(send().getAttribute("aria-label"), `Where ~/ws/README.md may be sent. ${FIRST}`, "a screen reader hears it after the menu's name");
+  choose(rowFor(doc, /^README\.md/), "no-model");
+  assert.equal(waiting(rowFor(doc, /^README\.md/)), true, "a waiting change");
+  assert.equal(send().disabled, false, "a level picked turns the menu on");
+  assert.equal(send().title, "");
+  assert.equal(send().getAttribute("aria-label"), "Where ~/ws/README.md may be sent", "the sentence is gone");
+  // An inherited label keeps inheritedSend's words.
+  (rowFor(doc, /^config/).querySelector(".file-open") as any).click();
+  await tick();
+  const db = rowFor(doc, /^db\.yaml/).querySelector("select.send-select") as any;
+  assert.equal(db.disabled, true);
+  assert.equal(db.title, "Where ~/ws/config/db.yaml may be sent: needs your OK. From your rule on ~/ws/config. Change it there.");
+  assert.equal(db.getAttribute("aria-label"), db.title);
+  assert.ok(!db.title.includes(FIRST));
+  assert.equal(doc.getElementById("files-list-heads").hidden, false);
+});
+
+test("§4.25p the browser's heads stand over rows only: an empty folder has none", async () => {
+  const { doc } = load({ url: FILES_URL, routes: { ...FILES_ROUTES, [list("/home/u/ws")]: { ...WS_LIST, entries: [], total: 0 } } });
+  await tick();
+  doc.getElementById("rules-add").click();
+  await tick();
+  assert.match(doc.getElementById("files-list").textContent, /This folder is empty\./);
+  assert.equal(doc.getElementById("files-list-heads").hidden, true);
+});
+
 // ── dashboard.md §4.25f: Files and folders as a tree ─────────────────────────
 
 // A file rule row as policy-panel.ts serves it, with its `level` (§4.25n).

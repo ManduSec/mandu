@@ -158,6 +158,7 @@ unrestricted twin is a one-line `SYSCTLS` conf.
 | `fresh-install` | the PACKED `@mandusec/mandu` tarball installed by an empty-HOME user, then doctor / launch / `mandu setup` with a real guest `sudo`; over two boots (§2.1): a reboot of the set-up host, then the Node 18 negative, the NodeSource (system-wide, `sudo npm install -g`) variant and the uninstall hygiene | none (installs Node as the user, via nvm) | §10; uses the host-prep hook below; the checkout is unmounted before the product runs |
 | `fresh-agents` | the PACKED tarball installed as the README says, then Claude Code, Codex, OpenCode and OpenClaw from npm, each run through the installed `mandu` against a scripted loopback model (default mode: a credential file; `full`: a poisoned file) and, with `FRESH_AGENTS_LIVE=1`, live Claude Code and Codex | none (nvm, as the user) | §10.14; `FRESH_AGENTS_VERSIONS=tested` (default, the launcher's tested maxima) or `latest` |
 | `release-upgrade` | on `ubuntu-2404` only and by hand (not in its `SUITES`: about 30 minutes), over three boots (§2.1): bring 24.04 up to date; install the PACKED tarball as fresh-install does, run `mandu setup` (or plant the old grants, `RELEASE_UPGRADE_FROM=legacy`) and prove it confined; run a real `do-release-upgrade` to 26.04; then check doctor, a confined launch and Ubuntu's own rules before and after `mandu setup` | none (nvm, as the user) | §10.15; `RELEASE_UPGRADE_PATH=auto` (default: the regular LTS path when Ubuntu offers it, else `-d`) \| `regular` \| `development` \| `proposed` |
+| `npm-release` | the release gate for the npm package, by hand (not in any `SUITES`): `@mandusec/mandu` from the npm REGISTRY (or the candidate tarball before publish) installed as a new user does; the basic checks; Claude Code and Codex bare, then through `mandu` in a fresh `git init` repository and, timed against bare, in a dirty, complex one; an upgrade from the previous published version; uninstall | none (nvm, as the user) | §10.18; `NPM_RELEASE_PACKAGE`, `NPM_RELEASE_LIVE=1` for the real models |
 | `wrapper` | launcher package `npm test` — fake-agent parity e2e + fail-closed arbiter-refuse | node | live on `host` + `ubuntu-2604` (`portable-wrapper.md` §6); installs the sibling packages the launcher's bundle and golden-path e2e reach into |
 
 **Host-prep hook.** A suite may ship `suites/<suite>.host.sh`. The qemu
@@ -202,8 +203,8 @@ and NodeSource downloads retry too. Unit test:
   the manifest entry `matrix.smoke`, and runs on every push.
 - **The `install` kind** runs `run-matrix.sh --require ubuntu-2404 --require
   ubuntu-2604` on every `v*` tag, after the per-push run, directly on a KVM
-  host (the matrix boots its own guests), and `release-pack` needs it green
-  (continuous-integration.md §7). There is no scheduled matrix run;
+  host (the matrix boots its own guests), and the release needs it green
+  (packaging.md §11.3). There is no scheduled matrix run;
   `release-upgrade` and `scripts/kernel-vm.sh` stay by hand.
 - **`kernel-vm.sh` stays as it is.** When a `ubuntu-2204` target is added,
   `kernel-vm.sh` becomes a thin shim over `run.sh ubuntu-2204 kernel` (a
@@ -1218,3 +1219,142 @@ pid are never signalled), `scripts/test/guest-registry.test.sh` (the entry,
 `guest_release`), and the stub-qemu harness tests (`ci-vm-run.test.sh`,
 `matrix-provision.test.sh`) assert each boot was registered while it ran and
 left the registry after.
+
+### 10.18 The npm release gate: the `npm-release` suite
+
+`fresh-install` and `fresh-agents` test a tarball packed from the checkout.
+What a user gets is the package on the npm registry, and nothing checked it
+end to end after it was packed for a release or after it was published
+(2026-10-21: beta.6 and beta.7 had a scratch install, `mandu doctor` and
+`mandu demo` on the dev host only). `npm-release` is that check. It runs by
+hand on both Ubuntu targets, twice per release: on the candidate tarball
+before `npm publish`, and on the registry after it (the release runbook's
+npm steps).
+
+```sh
+# after publish (the default: @mandusec/mandu@latest, resolved once on the host)
+NPM_RELEASE_LIVE=1 scripts/matrix/run.sh ubuntu-2404 npm-release
+NPM_RELEASE_LIVE=1 scripts/matrix/run.sh ubuntu-2604 npm-release
+# before publish: the candidate tarball
+NPM_RELEASE_PACKAGE=<dir>/mandusec-mandu-<v>.tgz NPM_RELEASE_LIVE=1 scripts/matrix/run.sh ubuntu-2404 npm-release
+```
+
+A run takes about 6 minutes once the image and its provisioned layer are
+cached (2026-10-21, on the dev host; the first download adds about 2).
+
+**Host prep** (`npm-release.host.sh`) packs nothing. It resolves the spec to
+one exact version (`npm view`), so both targets test the same bytes, and
+records the registry's sha1 for it. It picks the version an existing user
+upgrades from (the published one before it; for an unpublished candidate,
+`latest`; never a `0.0.0-*` stage build). It copies the fresh-agents legs
+(`fake-model.mjs`, `agent-leg.sh`, `env-twin-check.mjs`) and its own
+`npm-release/timing-leg.sh`. With `NPM_RELEASE_LIVE=1` it puts credentials
+in `ephemeral/`, which the executor deletes when the guest stops. Claude gets
+the Anthropic API key from the Mandu secrets file (default,
+`NPM_RELEASE_CLAUDE_MODEL=haiku`), or the access-token-only subscription
+copy with `NPM_RELEASE_CLAUDE_AUTH=subscription`. Codex gets the OpenAI key,
+or else an access-token-only copy of the host's `codex login`
+(`lib/reduce-codex-auth.mjs`: the refresh token is dropped and
+`last_refresh` is set to now, so the guest can never rotate the host's
+sign-in). With no credential, the live legs are NOTEs that say SKIP.
+
+**The guest** (`npm-release.sh`, one boot) installs Node 22 with nvm, as the
+README says, then:
+
+1. `npm install -g @mandusec/mandu@<v>` (timed). `mandu --version` is `<v>`,
+   the three native x64 bins are present, the developer view is absent, and
+   the registry gives the guest the sha1 the host saw.
+2. The basic checks: `--help`, `mandu version` (nothing in its way),
+   `doctor` (the target's `posture:` with no sudo, never `cargo build`),
+   `demo` (a `$MDU:` placeholder), `mode` (`secrets`), `paths`, `status`.
+3. Claude Code and Codex from npm (`latest`, what a new user gets;
+   `NPM_RELEASE_AGENT_VERSIONS=tested` for the launcher's tested max). doctor
+   says when one is newer than this release has tested (a NOTE). For Codex,
+   it follows doctor's fix (`apt install bubblewrap`, `mandu setup`, then
+   posture `confined` and a green Codex sandbox row). Then `doctor --live`.
+4. Each agent WITHOUT mandu: a scripted-model run (the positive control: the
+   canary does reach the model) and, live, "reply OK".
+5. A fresh `git init` repository with a `.env`: `agent-leg.sh` per agent
+   (the §10.14 oracles), then live `cat .env` through `mandu claude` and
+   `mandu codex`, checked on what the model was given
+   (`env-twin-check.mjs`). The repository must be untouched afterwards.
+6. A dirty, complex repository: a full clone of the public Mandu repository
+   (`NPM_RELEASE_BIG_REPO` for another), `npm ci` in three packages, 400
+   commits of history (a published snapshot has one), one of which added a
+   key that a later one deleted, then tracked edits, staged edits edited again, deletions, renames, a stash,
+   600 untracked files, a 40-level directory, a 200 MB binary, a nested git
+   repository, `.env` files, symlink loops, a FIFO and a mode-000 directory.
+   Then the timings (below), `doctor --secrets` (it finds the `.env`),
+   `policy suggest --dry-run` (which reads the git history; a FAIL past 600
+   s, and a NOTE when it does not name the deleted key) and the live "reply OK" pairs. **The repository must be untouched**:
+   HEAD, branches, stash, `git status`, both diffs and the local config are
+   compared, and no work-tree file may be newer than the marker.
+7. An upgrade: user `bob` installs the previous version and runs a
+   scripted leg, then installs `<v>` over it with the old services still up.
+   The new version must answer `--version`, pass the leg and report the
+   target's posture.
+   7b. (Registry runs only.) Users with no Node take the README's other
+   route, `curl … install.sh | sh` from the public repository, and the
+   latest GitHub release's own `install.sh`. Both must install `<v>`, and
+   the release installer's pinned SHA-256 must be that of the npm tarball:
+   one artifact across channels (packaging.md §11).
+8. Hygiene: nothing to reap, no process of the user after `mandu stop`, a
+   clean `npm uninstall -g`. Mandu's state left in the HOME is listed as a
+   NOTE.
+
+**The timings.** `timing-leg.sh` runs one agent turn against the scripted
+model (a read of `~/.aws/credentials`), bare (the agent pointed at the fake
+directly) or through `mandu` (`MANDU_UPSTREAM`). It records the wall time
+and the time from the launch to the first request the model got. The fake
+answers at once, so the difference between bare and mandu is Mandu's own
+cost, with no network or model latency in it. Per agent: bare ×3, then
+mandu cold (after `mandu stop`) and warm ×3 in the dirty repository, and the
+same in the fresh one. The live pairs show the same against the real API.
+Every timing goes to `timings.tsv`, and `report.md` puts the medians in a
+table: bare, cold, warm, and the warm overhead per agent and repository.
+The run record keeps both files (`lib/record.sh`).
+
+Tests: `scripts/test/npm-release-host.test.mjs` (the host prep against a
+stubbed registry: one exact version, a range's highest, the upgrade-from
+choice, a candidate tarball, the agent versions, no credential without the
+live legs, the keys and the reduced Codex login with them) and
+`scripts/test/reduce-codex-auth.test.mjs`.
+
+#### 10.18.1 First runs, 2026-10-21 (`0.2.0-beta.7` from the registry)
+
+On both targets: the install, the basic checks, both agents bare and through
+`mandu` in both repositories (the canary reached the model through `mandu`
+in no leg, and reached it bare in every Claude Code leg, the positive
+control), the live `cat .env` released as the twin for Claude Code and
+Codex, both repositories untouched, the upgrade from `0.2.0-beta.6`, both
+`curl | sh` routes installing `0.2.0-beta.7` with the GitHub tarball equal
+to npm's, and the uninstall. What the runs taught the suite:
+
+- `mandu demo` renders the model's side as `‹hidden›`, not as a `$MDU:`
+  token; the check reads the rendered line.
+- A session that ends non-zero keeps its scope dir on purpose (the
+  launcher's scope-dir cleanup), and after `mandu stop` the arbiter has
+  removed its instance dir, so `current` dangles until `mandu reap`. Both
+  are NOTEs, then `mandu reap` must leave nothing.
+- The Anthropic API key on the dev host had no credit ("Credit balance is
+  too low"); the live Claude legs used `NPM_RELEASE_CLAUDE_AUTH=subscription`.
+- Bare Codex on a stock Ubuntu cannot run its own `cat` (its bundled
+  bubblewrap and the AppArmor userns rule, §10.14 step 2b), so its bare legs
+  are NOTEs, not the positive control.
+- doctor said Claude Code 2.1.305 and Codex 0.163.0 (npm's `latest` that
+  day) were newer than the release's tested range.
+
+Scripted-model launch, medians (warm = services already up):
+
+| | 24.04 bare | mandu cold | mandu warm | 26.04 bare | mandu cold | mandu warm |
+|---|---|---|---|---|---|---|
+| Claude Code, dirty repo | 1.4 s | 5.0 s | 2.1 s | 1.3 s | 3.7 s | 2.2 s |
+| Claude Code, fresh repo | 1.1 s | 2.8 s | 1.9 s | 1.3 s | 2.6 s | 1.7 s |
+| Codex, dirty repo | 1.4 s | 2.1 s | 1.7 s | 1.7 s | 2.6 s | 2.0 s |
+| Codex, fresh repo | 1.5 s | 2.2 s | 1.6 s | 1.8 s | 2.5 s | 1.7 s |
+
+The dirty repository: 3144 tracked files, 405 commits, 10 275 files (3819
+of them in `node_modules`), 402 MB plus a 29 MB `.git`, 715 `git status`
+lines, a stash. Mandu adds about 0.2 to 0.9 s to a warm launch, and up to
+3.6 s to a cold one, most of it in the dirty repository's first launch;
+`policy suggest` over that history took 3.5 to 4.1 s.

@@ -16,8 +16,11 @@
  * index.html and home.js in jsdom, signed in) draws:
  *
  *   R1  the listing: the card carries A's session, signed in and signed out;
- *   R2  Approvals: the card's "See what the agent was doing" is addressed
- *       to `/agents/<A>`; a click opens A's page, whose *Needs your OK*
+ *   R2  Approvals: the card names the agent and folder that asked, "Claude
+ *       Code wants to change a rule" and "· from Claude Code in ~/proj"
+ *       (each session's turn names its folder, as Claude Code's system
+ *       prompt does; B works in ~/blog); its "See what the agent was
+ *       doing" is addressed to `/agents/<A>`; a click opens A's page, whose *Needs your OK*
  *       says "No question is waiting for you." and links "1 rule change
  *       this agent asked for is in Approvals", with no Allow of its own;
  *   R3  the link opens Approvals; Not now: the server records it, and A's
@@ -68,7 +71,9 @@ const agentLink = (doc: Doc) => doc.querySelector("#agent-waiting a.more");
 test("the agent page of the agent that asked links its rule change, and the change's card links that agent (real arbiter, anthropic-proxy, dashboard); no secret anywhere", { timeout: 180_000 }, async () => {
   const tmp = mkdtempSync(join(tmpdir(), "mandu-agent-rule-change-"));
   const repo = join(tmp, "home", "proj");
+  const blog = join(tmp, "home", "blog");
   mkdirSync(repo, { recursive: true });
+  mkdirSync(blog, { recursive: true });
   const env = join(repo, ".env");
   writeFileSync(env, `DB_PASSWORD=${ENV_VALUE}\n`);
   const policyPath = join(tmp, "policy.yaml");
@@ -98,6 +103,7 @@ test("the agent page of the agent that asked links its rule change, and the chan
     source: new ArbiterEventSource({ socketPath, humanSocketPath: humanPath }),
     approvalsArbiter: wired.arbiter, policyDocArbiter: wired.policyDoc,
     configEnv: { MANDU_HOME: join(tmp, "mhome"), MANDU_POLICY_FILE: policyPath },
+    fileBrowserHome: join(tmp, "home"),
     log: () => {}, ...ADMIN_OPTS,
   });
   const base = `http://127.0.0.1:${await dashboard.listen(0)}`;
@@ -115,7 +121,11 @@ test("the agent page of the agent that asked links its rule change, and the chan
     const r = await pageFetch(`http://127.0.0.1:${proxyPort}/v1/messages`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-mandu-session-id": session, "user-agent": "claude-cli/2.1.289 (external, cli)" },
-      body: JSON.stringify({ model: "claude-opus-4", stream: true, system: "You are Claude Code.", tools, messages }),
+      body: JSON.stringify({
+        model: "claude-opus-4", stream: true, tools, messages,
+        // Claude Code names its folder in its system prompt: A works in ~/proj, B in ~/blog.
+        system: [{ type: "text", text: `You are Claude Code.\n\n# Environment\n - Primary working directory: ${session === A ? repo : blog}\n - Platform: linux` }],
+      }),
     });
     assert.equal(r.status, 200, await r.text());
     toModel.push(upstream.requests[0]!.bodyText);
@@ -150,8 +160,14 @@ test("the agent page of the agent that asked links its rule change, and the chan
       await new Promise((r) => setTimeout(r, 25));
     }
 
-    await servedProductPage(base, "/approvals", (doc: Doc) => !!cardOf(doc, id), async (doc: Doc) => {
+    await servedProductPage(base, "/approvals", (doc: Doc) => !!cardOf(doc, id)?.querySelector(".ask-from"), async (doc: Doc) => {
       const keep = () => rendered.push(doc.documentElement.outerHTML);
+      // R2: the card names the agent and the folder of the session that asked.
+      assert.equal(cardOf(doc, id).querySelector(".ask-sentence").textContent, "Claude Code wants to change a rule");
+      const sub = cardOf(doc, id).querySelector(".ask-sub");
+      assert.match(sub.textContent, / · from Claude Code in ~\/proj$/, "A's folder, not B's, with no period");
+      assert.equal(sub.querySelector(".ask-from code").textContent, "~/proj", "the folder is code");
+      assert.equal(doc.getElementById("approvals-proposals-head").textContent, "Rule changes your agent asked for", "the heading is unchanged");
       // R2: the card links the agent that asked.
       const to = cardOf(doc, id).querySelector("a.ask-link");
       assert.ok(to, "the card links the agent that asked");

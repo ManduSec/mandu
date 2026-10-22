@@ -65,6 +65,8 @@ pub mod names {
     pub const PAIRED_APPROVALS: &str = "paired-approvals";
     pub const BROWSER_PROFILE: &str = "browser-profile";
     pub const LAUNCH_LOGS: &str = "launch-logs";
+    pub const DASHBOARD_ACCOUNT: &str = "dashboard-account";
+    pub const LAST_SCAN: &str = "last-scan";
     pub const EVENTS: &str = "events";
     pub const EVENTS_TEST: &str = "events-test";
     pub const RUNS_ROOT: &str = "runs-root";
@@ -134,6 +136,10 @@ pub const PATHS: &[Entry] = &[
     Entry { name: "browser-profile", base: "state-root", rel: "browser", kind: Kind::Dir, mode: Some(0o700), agent_readable: false, env: None },
     // one log per launch: every launch line and Mandu helper message the terminal did not show by default; the last 20 kept (packaging.md §5 "Launch display policy")
     Entry { name: "launch-logs", base: "state-root", rel: "launch-logs", kind: Kind::Dir, mode: Some(0o700), agent_readable: false, env: None },
+    // the Mandu dashboard account: a username and a salted scrypt hash of its password, never the password (dashboard.md §6.z); `mandu dashboard --set-password` writes it
+    Entry { name: "dashboard-account", base: "state-root", rel: "dashboard-account.json", kind: Kind::File, mode: Some(0o600), agent_readable: false, env: None },
+    // the last `mandu scan`'s report: kinds, masks, names, files, counts, hosts, dates, never a value (confidentiality-plan-17 §3 item 12)
+    Entry { name: "last-scan", base: "state-root", rel: "last-scan.json", kind: Kind::File, mode: Some(0o600), agent_readable: false, env: None },
     // session history; holds originals
     Entry { name: "events", base: "mandu-home", rel: "events", kind: Kind::Dir, mode: Some(0o700), agent_readable: false, env: None },
     // the test tenant's events
@@ -298,6 +304,8 @@ mod generated_cases {
         ("home only", &[], "/home/u", "paired-approvals", "/home/u/.mandu/state/paired-approvals"),
         ("home only", &[], "/home/u", "browser-profile", "/home/u/.mandu/state/browser"),
         ("home only", &[], "/home/u", "launch-logs", "/home/u/.mandu/state/launch-logs"),
+        ("home only", &[], "/home/u", "dashboard-account", "/home/u/.mandu/state/dashboard-account.json"),
+        ("home only", &[], "/home/u", "last-scan", "/home/u/.mandu/state/last-scan.json"),
         ("home only", &[], "/home/u", "events", "/home/u/.mandu/events"),
         ("home only", &[], "/home/u", "events-test", "/home/u/.mandu/events/test"),
         ("home only", &[], "/home/u", "runs-root", "/home/u/.mandu/runs"),
@@ -339,6 +347,8 @@ mod generated_cases {
         ("home with trailing slash", &[], "/home/u/", "paired-approvals", "/home/u/.mandu/state/paired-approvals"),
         ("home with trailing slash", &[], "/home/u/", "browser-profile", "/home/u/.mandu/state/browser"),
         ("home with trailing slash", &[], "/home/u/", "launch-logs", "/home/u/.mandu/state/launch-logs"),
+        ("home with trailing slash", &[], "/home/u/", "dashboard-account", "/home/u/.mandu/state/dashboard-account.json"),
+        ("home with trailing slash", &[], "/home/u/", "last-scan", "/home/u/.mandu/state/last-scan.json"),
         ("home with trailing slash", &[], "/home/u/", "events", "/home/u/.mandu/events"),
         ("home with trailing slash", &[], "/home/u/", "events-test", "/home/u/.mandu/events/test"),
         ("home with trailing slash", &[], "/home/u/", "runs-root", "/home/u/.mandu/runs"),
@@ -380,6 +390,8 @@ mod generated_cases {
         ("root home", &[], "/", "paired-approvals", "/.mandu/state/paired-approvals"),
         ("root home", &[], "/", "browser-profile", "/.mandu/state/browser"),
         ("root home", &[], "/", "launch-logs", "/.mandu/state/launch-logs"),
+        ("root home", &[], "/", "dashboard-account", "/.mandu/state/dashboard-account.json"),
+        ("root home", &[], "/", "last-scan", "/.mandu/state/last-scan.json"),
         ("root home", &[], "/", "events", "/.mandu/events"),
         ("root home", &[], "/", "events-test", "/.mandu/events/test"),
         ("root home", &[], "/", "runs-root", "/.mandu/runs"),
@@ -421,6 +433,8 @@ mod generated_cases {
         ("every XDG root set", &[("XDG_STATE_HOME", "/x/state"), ("XDG_CONFIG_HOME", "/x/config"), ("XDG_CACHE_HOME", "/x/cache"), ("XDG_RUNTIME_DIR", "/run/user/1000"), ("XDG_DATA_HOME", "/x/data")], "/home/u", "paired-approvals", "/home/u/.mandu/state/paired-approvals"),
         ("every XDG root set", &[("XDG_STATE_HOME", "/x/state"), ("XDG_CONFIG_HOME", "/x/config"), ("XDG_CACHE_HOME", "/x/cache"), ("XDG_RUNTIME_DIR", "/run/user/1000"), ("XDG_DATA_HOME", "/x/data")], "/home/u", "browser-profile", "/home/u/.mandu/state/browser"),
         ("every XDG root set", &[("XDG_STATE_HOME", "/x/state"), ("XDG_CONFIG_HOME", "/x/config"), ("XDG_CACHE_HOME", "/x/cache"), ("XDG_RUNTIME_DIR", "/run/user/1000"), ("XDG_DATA_HOME", "/x/data")], "/home/u", "launch-logs", "/home/u/.mandu/state/launch-logs"),
+        ("every XDG root set", &[("XDG_STATE_HOME", "/x/state"), ("XDG_CONFIG_HOME", "/x/config"), ("XDG_CACHE_HOME", "/x/cache"), ("XDG_RUNTIME_DIR", "/run/user/1000"), ("XDG_DATA_HOME", "/x/data")], "/home/u", "dashboard-account", "/home/u/.mandu/state/dashboard-account.json"),
+        ("every XDG root set", &[("XDG_STATE_HOME", "/x/state"), ("XDG_CONFIG_HOME", "/x/config"), ("XDG_CACHE_HOME", "/x/cache"), ("XDG_RUNTIME_DIR", "/run/user/1000"), ("XDG_DATA_HOME", "/x/data")], "/home/u", "last-scan", "/home/u/.mandu/state/last-scan.json"),
         ("every XDG root set", &[("XDG_STATE_HOME", "/x/state"), ("XDG_CONFIG_HOME", "/x/config"), ("XDG_CACHE_HOME", "/x/cache"), ("XDG_RUNTIME_DIR", "/run/user/1000"), ("XDG_DATA_HOME", "/x/data")], "/home/u", "events", "/home/u/.mandu/events"),
         ("every XDG root set", &[("XDG_STATE_HOME", "/x/state"), ("XDG_CONFIG_HOME", "/x/config"), ("XDG_CACHE_HOME", "/x/cache"), ("XDG_RUNTIME_DIR", "/run/user/1000"), ("XDG_DATA_HOME", "/x/data")], "/home/u", "events-test", "/home/u/.mandu/events/test"),
         ("every XDG root set", &[("XDG_STATE_HOME", "/x/state"), ("XDG_CONFIG_HOME", "/x/config"), ("XDG_CACHE_HOME", "/x/cache"), ("XDG_RUNTIME_DIR", "/run/user/1000"), ("XDG_DATA_HOME", "/x/data")], "/home/u", "runs-root", "/home/u/.mandu/runs"),
@@ -462,6 +476,8 @@ mod generated_cases {
         ("empty XDG values fall through", &[("MANDU_HOME", ""), ("XDG_STATE_HOME", ""), ("XDG_CONFIG_HOME", ""), ("XDG_CACHE_HOME", ""), ("XDG_RUNTIME_DIR", ""), ("TMPDIR", "")], "/home/u", "paired-approvals", "/home/u/.mandu/state/paired-approvals"),
         ("empty XDG values fall through", &[("MANDU_HOME", ""), ("XDG_STATE_HOME", ""), ("XDG_CONFIG_HOME", ""), ("XDG_CACHE_HOME", ""), ("XDG_RUNTIME_DIR", ""), ("TMPDIR", "")], "/home/u", "browser-profile", "/home/u/.mandu/state/browser"),
         ("empty XDG values fall through", &[("MANDU_HOME", ""), ("XDG_STATE_HOME", ""), ("XDG_CONFIG_HOME", ""), ("XDG_CACHE_HOME", ""), ("XDG_RUNTIME_DIR", ""), ("TMPDIR", "")], "/home/u", "launch-logs", "/home/u/.mandu/state/launch-logs"),
+        ("empty XDG values fall through", &[("MANDU_HOME", ""), ("XDG_STATE_HOME", ""), ("XDG_CONFIG_HOME", ""), ("XDG_CACHE_HOME", ""), ("XDG_RUNTIME_DIR", ""), ("TMPDIR", "")], "/home/u", "dashboard-account", "/home/u/.mandu/state/dashboard-account.json"),
+        ("empty XDG values fall through", &[("MANDU_HOME", ""), ("XDG_STATE_HOME", ""), ("XDG_CONFIG_HOME", ""), ("XDG_CACHE_HOME", ""), ("XDG_RUNTIME_DIR", ""), ("TMPDIR", "")], "/home/u", "last-scan", "/home/u/.mandu/state/last-scan.json"),
         ("empty XDG values fall through", &[("MANDU_HOME", ""), ("XDG_STATE_HOME", ""), ("XDG_CONFIG_HOME", ""), ("XDG_CACHE_HOME", ""), ("XDG_RUNTIME_DIR", ""), ("TMPDIR", "")], "/home/u", "events", "/home/u/.mandu/events"),
         ("empty XDG values fall through", &[("MANDU_HOME", ""), ("XDG_STATE_HOME", ""), ("XDG_CONFIG_HOME", ""), ("XDG_CACHE_HOME", ""), ("XDG_RUNTIME_DIR", ""), ("TMPDIR", "")], "/home/u", "events-test", "/home/u/.mandu/events/test"),
         ("empty XDG values fall through", &[("MANDU_HOME", ""), ("XDG_STATE_HOME", ""), ("XDG_CONFIG_HOME", ""), ("XDG_CACHE_HOME", ""), ("XDG_RUNTIME_DIR", ""), ("TMPDIR", "")], "/home/u", "runs-root", "/home/u/.mandu/runs"),
@@ -503,6 +519,8 @@ mod generated_cases {
         ("MANDU_HOME moves the home", &[("MANDU_HOME", "/m/")], "/home/u", "paired-approvals", "/m/state/paired-approvals"),
         ("MANDU_HOME moves the home", &[("MANDU_HOME", "/m/")], "/home/u", "browser-profile", "/m/state/browser"),
         ("MANDU_HOME moves the home", &[("MANDU_HOME", "/m/")], "/home/u", "launch-logs", "/m/state/launch-logs"),
+        ("MANDU_HOME moves the home", &[("MANDU_HOME", "/m/")], "/home/u", "dashboard-account", "/m/state/dashboard-account.json"),
+        ("MANDU_HOME moves the home", &[("MANDU_HOME", "/m/")], "/home/u", "last-scan", "/m/state/last-scan.json"),
         ("MANDU_HOME moves the home", &[("MANDU_HOME", "/m/")], "/home/u", "events", "/m/events"),
         ("MANDU_HOME moves the home", &[("MANDU_HOME", "/m/")], "/home/u", "events-test", "/m/events/test"),
         ("MANDU_HOME moves the home", &[("MANDU_HOME", "/m/")], "/home/u", "runs-root", "/m/runs"),
@@ -544,6 +562,8 @@ mod generated_cases {
         ("TMPDIR only for runtime", &[("TMPDIR", "/var/tmp/")], "/home/u", "paired-approvals", "/home/u/.mandu/state/paired-approvals"),
         ("TMPDIR only for runtime", &[("TMPDIR", "/var/tmp/")], "/home/u", "browser-profile", "/home/u/.mandu/state/browser"),
         ("TMPDIR only for runtime", &[("TMPDIR", "/var/tmp/")], "/home/u", "launch-logs", "/home/u/.mandu/state/launch-logs"),
+        ("TMPDIR only for runtime", &[("TMPDIR", "/var/tmp/")], "/home/u", "dashboard-account", "/home/u/.mandu/state/dashboard-account.json"),
+        ("TMPDIR only for runtime", &[("TMPDIR", "/var/tmp/")], "/home/u", "last-scan", "/home/u/.mandu/state/last-scan.json"),
         ("TMPDIR only for runtime", &[("TMPDIR", "/var/tmp/")], "/home/u", "events", "/home/u/.mandu/events"),
         ("TMPDIR only for runtime", &[("TMPDIR", "/var/tmp/")], "/home/u", "events-test", "/home/u/.mandu/events/test"),
         ("TMPDIR only for runtime", &[("TMPDIR", "/var/tmp/")], "/home/u", "runs-root", "/home/u/.mandu/runs"),
@@ -585,6 +605,8 @@ mod generated_cases {
         ("every override set", &[("MANDU_RUNTIME_DIR", "/o/runtime-dir"), ("MANDU_PREFIX", "/o/install-prefix"), ("MANDU_BIN_DIR", "/o/bin-dir")], "/home/u", "paired-approvals", "/home/u/.mandu/state/paired-approvals"),
         ("every override set", &[("MANDU_RUNTIME_DIR", "/o/runtime-dir"), ("MANDU_PREFIX", "/o/install-prefix"), ("MANDU_BIN_DIR", "/o/bin-dir")], "/home/u", "browser-profile", "/home/u/.mandu/state/browser"),
         ("every override set", &[("MANDU_RUNTIME_DIR", "/o/runtime-dir"), ("MANDU_PREFIX", "/o/install-prefix"), ("MANDU_BIN_DIR", "/o/bin-dir")], "/home/u", "launch-logs", "/home/u/.mandu/state/launch-logs"),
+        ("every override set", &[("MANDU_RUNTIME_DIR", "/o/runtime-dir"), ("MANDU_PREFIX", "/o/install-prefix"), ("MANDU_BIN_DIR", "/o/bin-dir")], "/home/u", "dashboard-account", "/home/u/.mandu/state/dashboard-account.json"),
+        ("every override set", &[("MANDU_RUNTIME_DIR", "/o/runtime-dir"), ("MANDU_PREFIX", "/o/install-prefix"), ("MANDU_BIN_DIR", "/o/bin-dir")], "/home/u", "last-scan", "/home/u/.mandu/state/last-scan.json"),
         ("every override set", &[("MANDU_RUNTIME_DIR", "/o/runtime-dir"), ("MANDU_PREFIX", "/o/install-prefix"), ("MANDU_BIN_DIR", "/o/bin-dir")], "/home/u", "events", "/home/u/.mandu/events"),
         ("every override set", &[("MANDU_RUNTIME_DIR", "/o/runtime-dir"), ("MANDU_PREFIX", "/o/install-prefix"), ("MANDU_BIN_DIR", "/o/bin-dir")], "/home/u", "events-test", "/home/u/.mandu/events/test"),
         ("every override set", &[("MANDU_RUNTIME_DIR", "/o/runtime-dir"), ("MANDU_PREFIX", "/o/install-prefix"), ("MANDU_BIN_DIR", "/o/bin-dir")], "/home/u", "runs-root", "/home/u/.mandu/runs"),
@@ -626,6 +648,8 @@ mod generated_cases {
         ("empty overrides fall through", &[("MANDU_RUNTIME_DIR", ""), ("MANDU_PREFIX", ""), ("MANDU_BIN_DIR", "")], "/home/u", "paired-approvals", "/home/u/.mandu/state/paired-approvals"),
         ("empty overrides fall through", &[("MANDU_RUNTIME_DIR", ""), ("MANDU_PREFIX", ""), ("MANDU_BIN_DIR", "")], "/home/u", "browser-profile", "/home/u/.mandu/state/browser"),
         ("empty overrides fall through", &[("MANDU_RUNTIME_DIR", ""), ("MANDU_PREFIX", ""), ("MANDU_BIN_DIR", "")], "/home/u", "launch-logs", "/home/u/.mandu/state/launch-logs"),
+        ("empty overrides fall through", &[("MANDU_RUNTIME_DIR", ""), ("MANDU_PREFIX", ""), ("MANDU_BIN_DIR", "")], "/home/u", "dashboard-account", "/home/u/.mandu/state/dashboard-account.json"),
+        ("empty overrides fall through", &[("MANDU_RUNTIME_DIR", ""), ("MANDU_PREFIX", ""), ("MANDU_BIN_DIR", "")], "/home/u", "last-scan", "/home/u/.mandu/state/last-scan.json"),
         ("empty overrides fall through", &[("MANDU_RUNTIME_DIR", ""), ("MANDU_PREFIX", ""), ("MANDU_BIN_DIR", "")], "/home/u", "events", "/home/u/.mandu/events"),
         ("empty overrides fall through", &[("MANDU_RUNTIME_DIR", ""), ("MANDU_PREFIX", ""), ("MANDU_BIN_DIR", "")], "/home/u", "events-test", "/home/u/.mandu/events/test"),
         ("empty overrides fall through", &[("MANDU_RUNTIME_DIR", ""), ("MANDU_PREFIX", ""), ("MANDU_BIN_DIR", "")], "/home/u", "runs-root", "/home/u/.mandu/runs"),
@@ -667,6 +691,8 @@ mod generated_cases {
         ("the retired per-path overrides move nothing", &[("MANDU_CONFIG", "/o/c"), ("MANDU_SECRETS", "/o/s"), ("MANDU_SYMBOL_DB", "/o/db"), ("MANDU_VIEW_STATE", "/o/v"), ("MANDU_EVENT_DIR", "/o/e"), ("MANDU_CI_RUNS_DIR", "/o/r"), ("MANDU_MATRIX_RESULTS_DIR", "/o/m"), ("MANDU_DOCKER_HOME", "/o/d"), ("MANDU_CI_CACHE", "/o/k")], "/home/u", "paired-approvals", "/home/u/.mandu/state/paired-approvals"),
         ("the retired per-path overrides move nothing", &[("MANDU_CONFIG", "/o/c"), ("MANDU_SECRETS", "/o/s"), ("MANDU_SYMBOL_DB", "/o/db"), ("MANDU_VIEW_STATE", "/o/v"), ("MANDU_EVENT_DIR", "/o/e"), ("MANDU_CI_RUNS_DIR", "/o/r"), ("MANDU_MATRIX_RESULTS_DIR", "/o/m"), ("MANDU_DOCKER_HOME", "/o/d"), ("MANDU_CI_CACHE", "/o/k")], "/home/u", "browser-profile", "/home/u/.mandu/state/browser"),
         ("the retired per-path overrides move nothing", &[("MANDU_CONFIG", "/o/c"), ("MANDU_SECRETS", "/o/s"), ("MANDU_SYMBOL_DB", "/o/db"), ("MANDU_VIEW_STATE", "/o/v"), ("MANDU_EVENT_DIR", "/o/e"), ("MANDU_CI_RUNS_DIR", "/o/r"), ("MANDU_MATRIX_RESULTS_DIR", "/o/m"), ("MANDU_DOCKER_HOME", "/o/d"), ("MANDU_CI_CACHE", "/o/k")], "/home/u", "launch-logs", "/home/u/.mandu/state/launch-logs"),
+        ("the retired per-path overrides move nothing", &[("MANDU_CONFIG", "/o/c"), ("MANDU_SECRETS", "/o/s"), ("MANDU_SYMBOL_DB", "/o/db"), ("MANDU_VIEW_STATE", "/o/v"), ("MANDU_EVENT_DIR", "/o/e"), ("MANDU_CI_RUNS_DIR", "/o/r"), ("MANDU_MATRIX_RESULTS_DIR", "/o/m"), ("MANDU_DOCKER_HOME", "/o/d"), ("MANDU_CI_CACHE", "/o/k")], "/home/u", "dashboard-account", "/home/u/.mandu/state/dashboard-account.json"),
+        ("the retired per-path overrides move nothing", &[("MANDU_CONFIG", "/o/c"), ("MANDU_SECRETS", "/o/s"), ("MANDU_SYMBOL_DB", "/o/db"), ("MANDU_VIEW_STATE", "/o/v"), ("MANDU_EVENT_DIR", "/o/e"), ("MANDU_CI_RUNS_DIR", "/o/r"), ("MANDU_MATRIX_RESULTS_DIR", "/o/m"), ("MANDU_DOCKER_HOME", "/o/d"), ("MANDU_CI_CACHE", "/o/k")], "/home/u", "last-scan", "/home/u/.mandu/state/last-scan.json"),
         ("the retired per-path overrides move nothing", &[("MANDU_CONFIG", "/o/c"), ("MANDU_SECRETS", "/o/s"), ("MANDU_SYMBOL_DB", "/o/db"), ("MANDU_VIEW_STATE", "/o/v"), ("MANDU_EVENT_DIR", "/o/e"), ("MANDU_CI_RUNS_DIR", "/o/r"), ("MANDU_MATRIX_RESULTS_DIR", "/o/m"), ("MANDU_DOCKER_HOME", "/o/d"), ("MANDU_CI_CACHE", "/o/k")], "/home/u", "events", "/home/u/.mandu/events"),
         ("the retired per-path overrides move nothing", &[("MANDU_CONFIG", "/o/c"), ("MANDU_SECRETS", "/o/s"), ("MANDU_SYMBOL_DB", "/o/db"), ("MANDU_VIEW_STATE", "/o/v"), ("MANDU_EVENT_DIR", "/o/e"), ("MANDU_CI_RUNS_DIR", "/o/r"), ("MANDU_MATRIX_RESULTS_DIR", "/o/m"), ("MANDU_DOCKER_HOME", "/o/d"), ("MANDU_CI_CACHE", "/o/k")], "/home/u", "events-test", "/home/u/.mandu/events/test"),
         ("the retired per-path overrides move nothing", &[("MANDU_CONFIG", "/o/c"), ("MANDU_SECRETS", "/o/s"), ("MANDU_SYMBOL_DB", "/o/db"), ("MANDU_VIEW_STATE", "/o/v"), ("MANDU_EVENT_DIR", "/o/e"), ("MANDU_CI_RUNS_DIR", "/o/r"), ("MANDU_MATRIX_RESULTS_DIR", "/o/m"), ("MANDU_DOCKER_HOME", "/o/d"), ("MANDU_CI_CACHE", "/o/k")], "/home/u", "runs-root", "/home/u/.mandu/runs"),

@@ -23,6 +23,7 @@ import type { Layout } from "./layout.js";
 import type { ServiceDeps } from "./primitives.js";
 import { humanSockEnv } from "../human-plane.js";
 import { hardenedGitArgs, hardenedGitEnv } from "../hardened-git.js";
+import { countGitCall } from "../launch-timings.js";
 
 /** Bound the one-shot subprocesses so a wedged CLI can't hang the launch/exit. */
 const GIT_PROBE_TIMEOUT_MS = 10_000;
@@ -103,6 +104,7 @@ export async function startFsView(
   warn: (msg: string) => void = (m) => console.error(`mandu: ${m}`),
 ): Promise<FsViewResult | null> {
   // Hardened (hardened-git.ts): the workspace is the agent's to configure.
+  countGitCall(false); // the launch's costs (launch-timings.ts)
   const probe = deps.runOnce("git", hardenedGitArgs(["-C", plan.humanCwd, "rev-parse", "--show-toplevel"]), {
     cwd: plan.humanCwd, env: hardenedGitEnv(), timeoutMs: GIT_PROBE_TIMEOUT_MS,
   });

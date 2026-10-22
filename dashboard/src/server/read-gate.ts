@@ -66,6 +66,9 @@ export const READ_ROUTES: readonly ReadRoute[] = [
   { path: "/api/home/answered", access: "open", why: "Approvals' earlier answers past the newest 20: the asks' names and destinations, as /api/home carries the newest 20" },
   { path: "/api/home/original", access: "admin", why: "one step's whole original behind its mask: a value" },
   { path: "/api/data-locations", access: "open", why: "where Mandu keeps its files (stat only)" },
+  { path: "/api/scan", access: "open", why: "the last mandu scan: key names, files, masks, hosts, counts and the masked commands the AI already saw; never a value" },
+  { path: /^\/api\/scan\/section\/[^/]+$/, access: "open", why: "a page of one Scan page section's rows (and its filter's matches): the same rows /api/scan carries; never a value" },
+  { path: /^\/api\/scan\/item\/[^/]+$/, access: "open", why: "one Scan page row's examples (dates, projects, masked commands): what /api/scan carried whole before the paging; never a value" },
   { path: "/api/tenants", access: "open", why: "the tenant names" },
   // ── rules and decisions ──
   { path: "/api/policy/panel", access: "open", why: "posture, the approval queue (names, paths, destinations), rule catalog" },

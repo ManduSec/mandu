@@ -17,8 +17,10 @@
  * (`makeApprovalsArbiter`), and the served product page (its own
  * index.html and home.js in jsdom, signed in) draws Approvals:
  *
- *   Q1  both cards are still groups named "Your agent wants to change a
- *       rule"; each card's Allow, Not now and link still read their words,
+ *   Q1  both cards are still groups of one name, the headline the page
+ *       draws ("Claude Code wants to change a rule" since 2026-10-20, the
+ *       agent of each session, dashboard.md *The card names who asked*;
+ *       the server's is still "Your agent wants to change a rule"); each card's Allow, Not now and link still read their words,
  *       are named by its own request (`.env` and its host), each link to
  *       its own agent; no two answers and no two links share a name;
  *   Q2  no name carries the reason A's agent gave (drawn on its card);
@@ -62,6 +64,8 @@ const PENDING = "/api/policy/proposals?status=pending";
 const CHANGES = "/api/policy/changes?limit=20";
 const LINK = "See what the agent was doing";
 const HEADLINE = "Your agent wants to change a rule";
+/** The headline the page draws: Home models both sessions, Claude Code's. */
+const DRAWN = "Claude Code wants to change a rule";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Doc = any;
@@ -154,7 +158,7 @@ test("Approvals: each waiting request's Allow, Not now and agent link are named 
       // Q1: alike groups; each control named by its own request.
       for (const [id, host, session] of [[ids.a, "api.stripe.com", A], [ids.b, "api.github.com", B]] as const) {
         const card = cardOf(doc, id);
-        assert.equal(groupName(doc, card), HEADLINE, `${id}: the group is still named by the headline`);
+        assert.equal(groupName(doc, card), DRAWN, `${id}: the group is still named by the headline`);
         const name = String(buttonOf(doc, id, "Allow").getAttribute("aria-label"));
         assert.match(name, /^Allow: /, `${id}: Allow is named by its request`);
         const about = name.slice("Allow: ".length);

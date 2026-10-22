@@ -5,7 +5,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyReplyFilter, launcherReplyOutputFormat, REPLY_WRAP_RULE_ENV, replyWrapRuleEnv } from "../../src/reply-filter.js";
+import {
+  applyReplyFilter, launcherReplyOutputFormat, REPLY_TAB_ORIGIN_ENV, REPLY_WRAP_RULE_ENV, replyTabOriginEnv, replyWrapRuleEnv,
+} from "../../src/reply-filter.js";
 import { Layout } from "../../src/services/layout.js";
 import { emptyMutation } from "../../src/backend/types.js";
 import type { LaunchPlan } from "../../src/types.js";
@@ -120,4 +122,28 @@ test("wrap rule (reply-row-reservation.md §17, differential-interactive.md §35
   const path = "../../../interceptors/reply-filter/src/reserve-block.ts";
   const { WRAP_RULE_ENV } = await import(path) as { WRAP_RULE_ENV: string };
   assert.equal(REPLY_WRAP_RULE_ENV, WRAP_RULE_ENV);
+});
+
+test("TAB origin (reply-row-reservation.md §19.7): Claude Code's filter gets MANDU_REPLY_TAB_ORIGIN=content, every other target nothing", async () => {
+  const claude = { replyFilter: true, target: "claude", argv: ["claude"], arbiterHumanSock: "/run/h.sock" } as unknown as LaunchPlan;
+  assert.deepEqual(replyTabOriginEnv("claude"), { [REPLY_TAB_ORIGIN_ENV]: "content" });
+  // Serial form: in mut.env (the filter strips it from its child, childEnv).
+  const mut = emptyMutation();
+  const w = applyReplyFilter(claude, Layout.dev("/repo"), mut, always, () => {});
+  assert.equal(w?.filterEnv[REPLY_TAB_ORIGIN_ENV], "content");
+  assert.equal(mut.env[REPLY_TAB_ORIGIN_ENV], "content");
+  // Hand-off form: in the filter's own env only.
+  const handed = emptyMutation();
+  const h = applyReplyFilter(claude, Layout.dev("/repo"), handed, always, () => {}, { handOff: true });
+  assert.equal(h?.filterEnv[REPLY_TAB_ORIGIN_ENV], "content");
+  assert.equal(handed.env[REPLY_TAB_ORIGIN_ENV], undefined);
+  for (const target of ["codex", "goose", "opencode", "openclaw", "shell"] as const) {
+    assert.deepEqual(replyTabOriginEnv(target), {}, target);
+    const r = applyReplyFilter({ ...claude, target } as LaunchPlan, Layout.dev("/repo"), emptyMutation(), always, () => {});
+    assert.equal(r?.filterEnv[REPLY_TAB_ORIGIN_ENV], undefined, target);
+  }
+  // The name is the filter's (interceptors/reply-filter/src/reserve-block.ts).
+  const path = "../../../interceptors/reply-filter/src/reserve-block.ts";
+  const { TAB_ORIGIN_ENV } = await import(path) as { TAB_ORIGIN_ENV: string };
+  assert.equal(REPLY_TAB_ORIGIN_ENV, TAB_ORIGIN_ENV);
 });

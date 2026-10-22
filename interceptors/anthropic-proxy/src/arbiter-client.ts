@@ -745,6 +745,9 @@ export interface SessionRelayState {
   wrap?: boolean;
   /** The agent's TUI wraps its reply by this rule (§17); absent: `ink`. */
   rule?: ReplyLayoutRule;
+  /** Where the agent's TUI counts a reply TAB's stops from (§19.7); absent:
+   *  `screen`. */
+  tabs?: "screen" | "content";
   updatedAt: number;
 }
 

@@ -24,6 +24,7 @@ import {
   sessionSandboxFlags, SESSION_PROC_FLAGS, type GitSession, type GitSessionOpts,
 } from "../../src/git-session.js";
 import { gitCommand } from "../../src/hardened-git.js";
+import { gitCounts } from "../../src/launch-timings.js";
 import { stateAxes } from "../axes.js";
 
 stateAxes("secrets"); // the runner serves the confidentiality axis's launch prep; it reads no axis
@@ -198,6 +199,32 @@ test("a session answers byte for byte as the per-call runner: output, exit codes
   assert.equal(viaSession[2]!.code, 1, "config's 'none set' is exit 1 in both, not a generic failure");
   assert.equal(viaSession[10]!.code, 128);
   assert.deepEqual([s.stats.sandboxes, s.stats.inSession, s.stats.perCall], [1, calls.length, 0]);
+});
+
+test("`binary: true` answers byte for byte (one character per byte) in a session and per call, and is its own shared-answer key", async () => {
+  process.env["PATH"] = savedPath;
+  const repo = mkdtempSync(join(dir, "repo-bin-"));
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@x", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@x" };
+  execFileSync("git", ["init", "-q"], { cwd: repo, env });
+  // A tree's entries hold raw object ids; a blob over a pipe's 64 KiB with
+  // bytes that are not UTF-8 crosses chunk boundaries.
+  writeFileSync(join(repo, "bin.dat"), Buffer.concat([Buffer.from([0xff, 0xfe, 0xc3]), Buffer.alloc(150_000, 0xe9), Buffer.from([0xe2, 0x82])]));
+  execFileSync("git", ["add", "."], { cwd: repo, env });
+  execFileSync("git", ["commit", "-qm", "one"], { cwd: repo, env });
+  const input = "HEAD^{tree}\nHEAD:bin.dat\n";
+  const want = execFileSync("git", ["cat-file", "--batch"], { cwd: repo, env, input });
+  const s = session();
+  try {
+    for (const [name, run] of [["session", s.runner()], ["per call", defaultGitRunner]] as const) {
+      const r = await run(["cat-file", "--batch"], { cwd: repo, input, binary: true });
+      assert.equal(r.code, 0, name);
+      assert.ok(Buffer.from(r.stdout, "latin1").equals(want), `${name}: the answer's bytes, every one`);
+      const text = await run(["cat-file", "--batch"], { cwd: repo, input });
+      assert.ok(!Buffer.from(text.stdout, "latin1").equals(want), `${name}: without it the answer is decoded as UTF-8`);
+    }
+  } finally { s.close(); }
+  const { sharedCallKey } = await import("../../src/git-shared-answers.js");
+  assert.notEqual(sharedCallKey(["cat-file", "--batch"], { cwd: repo, binary: true }), sharedCallKey(["cat-file", "--batch"], { cwd: repo }));
 });
 
 test("a session passes argv and the environment exactly (no shell), and keeps concurrent calls apart", async () => {
@@ -375,6 +402,31 @@ test("a session shares a sandbox only where Yama ptrace_scope is 1 or more; 0, a
   assert.equal(hostPtraceScope(() => "-1\n"), null);
   assert.equal(hostPtraceScope(() => ""), null);
   assert.equal(hostPtraceScope(() => { throw Object.assign(new Error("no Yama"), { code: "ENOENT" }); }), null, "no Yama in this kernel");
+});
+
+test("the launch's costs (launch-timings.ts): a call is one git; per call it is one sandbox unless none is made, in a session the sandbox is the session's one", async () => {
+  fakeGit(`echo ok`);
+  // Per call with no sandbox: a git, no sandbox.
+  let c0 = gitCounts();
+  assert.equal((await perCallGitRunner(undefined, () => null)(["status"], { cwd: dir })).code, 0);
+  assert.deepEqual(gitCounts(), { git: c0.git + 1, sandboxes: c0.sandboxes });
+  // Per call in a sandbox (a stand-in bubblewrap that runs what follows `--`): a git and its sandbox.
+  const fakeBwrap = join(dir, "fake-bwrap");
+  writeFileSync(fakeBwrap, `#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n`);
+  chmodSync(fakeBwrap, 0o755);
+  c0 = gitCounts();
+  const r = await perCallGitRunner(undefined, () => ({ bwrap: fakeBwrap, flags: [] }))(["status"], { cwd: dir });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(gitCounts(), { git: c0.git + 1, sandboxes: c0.sandboxes + 1 });
+  // A session: three calls, one sandbox (its runner), whatever their order.
+  c0 = gitCounts();
+  const s = session();
+  const run = s.runner();
+  const rs = await Promise.all([run(["a"], { cwd: dir }), run(["b"], { cwd: dir }), run(["c"], { cwd: dir })]);
+  assert.ok(rs.every((x) => x.code === 0), JSON.stringify(rs));
+  assert.deepEqual(gitCounts(), { git: c0.git + 3, sandboxes: c0.sandboxes + 1 });
+  assert.deepEqual([s.stats.sandboxes, s.stats.inSession], [1, 3], "the session's own stats agree");
+  process.env["PATH"] = savedPath;
 });
 
 test("a session left open and idle does not keep the process alive", () => {

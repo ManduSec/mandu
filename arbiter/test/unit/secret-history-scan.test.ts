@@ -182,6 +182,31 @@ test("walk: a key committed and then deleted is found in history, traced to its 
   } finally { r.done(); }
 });
 
+test("walk (2026-10-21): a shallow file written over a full history hides no key from the scan; a real shallow clone's boundary is honoured", async () => {
+  const r = repo();
+  try {
+    r.put("README.md", "hello\n");
+    r.git("add", "."); r.git("commit", "-qm", "init");
+    r.put("deploy/id_ed25519", PEM);
+    r.git("add", "."); r.git("commit", "-qm", "add deploy key");
+    r.git("rm", "-q", "deploy/id_ed25519"); r.git("commit", "-qm", "oops, remove it");
+    r.git("reflog", "expire", "--expire=now", "--all");
+    // The forged boundary: the last commit, whose parent is in the store.
+    writeFileSync(join(r.root, ".git", "shallow"), `${r.git("rev-parse", "HEAD").trim()}\n`);
+    assert.equal(r.git("log", "--format=%s").trim(), "oops, remove it", "git log stops at it");
+    const scan = await scanSecretHistory([r.root], { classifyPaths: classify });
+    assert.equal(scan.findings.length, 1, "the key in the history behind it is found");
+    assert.equal(scan.capped.lines.length, 0, scan.capped.lines.join("; "));
+    // A real shallow clone: its boundary is true, the scan runs within it.
+    rmSync(join(r.root, ".git", "shallow"));
+    const clone = join(r.root, "..", "clone");
+    execFileSync("git", ["clone", "-q", "--depth", "1", `file://${r.root}`, clone], { encoding: "utf8" });
+    const shallow = await scanSecretHistory([clone], { classifyPaths: classify });
+    assert.equal(shallow.capped.unlisted, false, shallow.capped.lines.join("; "));
+    assert.equal(shallow.findings.length, 0, "the key is past its boundary: not in this store");
+  } finally { r.done(); }
+});
+
 test("walk: a history-only key is covered once a human label holds its gone path, or its blob is locked (plan 14 §8.1, §8.2)", async () => {
   const r = repo();
   try {

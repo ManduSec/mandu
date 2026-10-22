@@ -100,7 +100,7 @@ the deny lists, and the event log (secret-bearing) would stay outside.
 ├── packs/  pack-keys/          signed consumer packs and trusted keys
 ├── prompt-filters/             the person's prompt filter packs (confidentiality-plan-15 §4.2)
 ├── secrets.json                developer API keys (scripts/secrets-to-env.mjs)
-├── dashboard.env               a resident dashboard's EnvironmentFile (DASHBOARD_BASIC_AUTH; dashboard.md §6)
+├── dashboard.env               a resident dashboard's EnvironmentFile (its host, allowlist, base path; a DASHBOARD_BASIC_AUTH there moves into state/dashboard-account.json; dashboard.md §6.z)
 ├── state/                      durable; losing it loses approvals and history
 │   ├── mandu.db                0600  symbol table + every durable policy table (+ the cache seals)
 │   ├── mandu-test.db           0600  the test tenant
@@ -108,11 +108,15 @@ the deny lists, and the event log (secret-bearing) would stay outside.
 │   ├── object-walks/           git history-walk cache (names protected blobs)
 │   │   ├── history-scan/       0600  the arbiter's history-scan cache, one file per repository
 │   │   ├── launch-hints/       0600  what the last launch per workspace read of git (a hint; confidentiality.md §7.2a "The prefetch")
-│   │   ├── twin-index/         0600  a running launch's record of the git index entries whose cached stat it set to a protected file's twin (index path, file path, blob id and the stat words before and after, never a value), written before each patched index lands; removed once the session's end put every entry back, a crashed launch's restored by the next launch before its own patch or by `mandu reap`, only while this folder and object-walks/ are real directories inside the home (confidentiality.md §7.2a "A twinned file git tracks looks clean")
+│   │   ├── locked-memory/      0600  per object store, every (version, path) a launch found protected, only ever added to (confidentiality.md §7.2a "A version once locked stays locked")
+│   │   ├── store-scan/<key>/   0600  per object store, every object id its scan has seen, every (object, path) a tree names, the path table, and a sealed state.json naming them by identity (ids and paths, never content; confidentiality.md §7.2a "Every stored object is checked once")
+│   │   ├── twin-index/         0600  a running launch's record (in the HOME's own `~/.mandu` whatever MANDU_HOME says, so a scratch home removed after a killed launch does not take it along; every launch and reap reads it, and MANDU_HOME's own too) of the git index entries whose cached stat it set to a protected file's twin (index path, file path, blob id and the stat words before and after, never a value), written before each patched index lands; removed once the session's end put every entry back, a crashed launch's restored by the next launch before its own patch or by `mandu reap`, only while this folder and object-walks/ are real directories inside the home (confidentiality.md §7.2a "A twinned file git tracks looks clean")
 │   │   └── placeholder-checks/ 0600  a running launch's note of the protected files in a git work tree to check for a commit of their placeholder (ids, paths and commit names, never a value); removed once checked, a crashed launch's checked by the next (kept until a check of it completes), only while this folder and object-walks/ are real directories inside the home, made one level at a time, each checked first (confidentiality.md §7.2a "A placeholder in your repository")
 │   ├── paired-approvals/       one-shot approvals for paired evaluation runs
 │   ├── browser/                0700  the Chrome profile `mandu --browser` starts the agent's browser with: the person's logins and cookies on the sites the agent uses; one session's Chrome at a time (devtools-relay.md §6.4)
-│   └── launch-logs/            0600  one log per launch: every line it said, in full, and its helpers' messages (never a value, never the agent's output); the newest 20 kept; `mandu log` (packaging.md §5 "Launch display policy")
+│   ├── dashboard-account.json  0600  the Mandu dashboard account: a username and a salted scrypt hash of its password, never the password; written by `mandu dashboard --set-password` (and once from DASHBOARD_BASIC_AUTH), read per request by the dashboard, which refuses it unless it is the user's own private regular file with one link (dashboard.md §6.z). Hidden from a confined agent with the rest of the home (§4) and in the secret catalog
+│   ├── launch-logs/            0600  one log per launch: every line it said, in full, and its helpers' messages (never a value, never the agent's output); the newest 20 kept; `mandu log` (packaging.md §5 "Launch display policy")
+│   └── last-scan.json          0600  the last `mandu scan`'s report: kinds, masks, names, files, counts, hosts, dates, never a value; written whole by the command, read by the dashboard and `mandu doctor` (confidentiality-plan-17 §3 item 12)
 ├── events/                     session history, 90-day retention (holds originals)
 │   └── test/                   the test tenant
 ├── runs/                       results the dashboard reads; made only when used

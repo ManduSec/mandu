@@ -40,7 +40,7 @@ import type { SessionRef } from "../../../src/event-source/contract.js";
 import { walkthroughEvents, SESSION as WALK } from "./walkthrough-fixture.js";
 import { secretRef } from "../../../src/view-model/secret-ref.js";
 import { agentNotice, answeredOutcome } from "../../../src/view-model/home.js";
-import type { SessionHealth } from "../../../src/session-health.js";
+import { SECRETS_PARTIAL_NOTE, SECRETS_SENTENCE, type SessionHealth } from "../../../src/session-health.js";
 
 /** A hidden box without its secrets' refs (asserted on their own). */
 function withoutRefs<T extends { secrets?: unknown }>(h: T): Omit<T, "secrets"> {
@@ -1661,7 +1661,13 @@ test("a call to Mandu's own rule tools says what was asked and what Mandu answer
   assert.equal(step.icon, "shield");
   assert.equal(step.outcome, "plain", "no count, tone or fold changes");
   assert.equal(step.split, null);
-  assert.equal(step.note, "Mandu applied it at once, because it only adds protection. You can undo it under Rule changes in Approvals.");
+  assert.equal(step.note, "Mandu applied it at once, because it only adds protection. You can undo it in Approvals.");
+  // Its word Approvals links the change it made (`ask`, drawn as askRowLink).
+  assert.deepEqual(step.noteParts, [
+    { kind: "text", text: "Mandu applied it at once, because it only adds protection. You can undo it in " },
+    { kind: "text", text: "Approvals", ask: "pc-000001" },
+    { kind: "text", text: "." },
+  ]);
   assert.equal(turn.tone, "plain", "a rule change is not one of the turn's blocks or masks");
   assert.equal(page.blocked + page.sent, 0);
   assert.doesNotMatch(JSON.stringify(page), /mandu_policy_propose|hide it/, "neither the tool's name nor the agent's reason");
@@ -1671,6 +1677,7 @@ test("a call to Mandu's own rule tools says what was asked and what Mandu answer
   const pending = policyPage("mcp__mandu_policy__mandu_policy_propose", relax, JSON.stringify({ tool: "mandu_policy_propose", applied: false, proposalId: "pp-000002", relaxes: [{ facet: "connect", subject: "pypi.org:443" }] }));
   assert.equal(text(pending.step.sentence), "Asked Mandu to let your agent's programs connect to pypi.org:443");
   assert.equal(pending.step.note, "Not applied: it would loosen protection, so Mandu asked for your OK in Approvals.");
+  assert.deepEqual(pending.step.noteParts!.filter((p) => p.ask), [{ kind: "text", text: "Approvals", ask: "pp-000002" }], "the request waiting for you");
   assert.equal(pending.step.outcome, "plain");
 
   // A read and a test (OpenCode's and Goose's spellings).
@@ -1678,6 +1685,11 @@ test("a call to Mandu's own rule tools says what was asked and what Mandu answer
   const asked = policyPage("mandu-policy__mandu_policy_test", { destination: "paste.example" }, JSON.stringify({ tool: "mandu_policy_test", masked: false, level: "public", egress: "ask", stage: null, rule: null }));
   assert.equal(text(asked.step.sentence), "Asked Mandu whether data could be sent to paste.example");
   assert.equal(asked.step.note, "Only a question: nothing was sent or changed. Mandu answered that it would ask you first.");
+  assert.equal(asked.step.noteParts, undefined, "nothing to link: the note is all");
+  // An answer with no id keeps its plain words.
+  const same = policyPage(PROPOSE, lock, JSON.stringify({ tool: "mandu_policy_propose", applied: true, message: "Nothing changed" }));
+  assert.equal(same.step.note, "Nothing changed: your rules already said this.");
+  assert.equal(same.step.noteParts, undefined);
 });
 
 test("Mandu's rule tools claim nothing they cannot back: another server's tool, a masked or missing answer; a token in a path is a chip", () => {
@@ -1695,6 +1707,7 @@ test("Mandu's rule tools claim nothing they cannot back: another server's tool, 
   assert.equal(text(masked.step.sentence), "Asked Mandu to make /home/u/ws/.env a secret no AI may read");
   assert.equal(masked.step.outcome, "masked");
   assert.doesNotMatch(String(masked.step.note), /applied/);
+  assert.equal(masked.step.noteParts, undefined, "and links nothing");
   // No answer recorded yet.
   assert.equal(policyPage("mcp__mandu-policy__mandu_policy_propose", lock, null).step.note, null);
   // A masked item inside a value is a chip, named when it is a secret; never the token.
@@ -1711,7 +1724,7 @@ test("§4.34 a call to Mandu's rule tools names a file under the dashboard's hom
   const mine = policyPage(PROPOSE, lock, applied, { home: "/home/u" });
   assert.equal(text(mine.step.sentence), "Asked Mandu to make ~/ws/.env a secret no AI may read");
   assert.deepEqual(mine.step.sentence.filter((p) => p.kind === "code"), [{ kind: "code", text: "~/ws/.env" }]);
-  assert.equal(mine.step.note, "Mandu applied it at once, because it only adds protection. You can undo it under Rule changes in Approvals.");
+  assert.equal(mine.step.note, "Mandu applied it at once, because it only adds protection. You can undo it in Approvals.");
   // Another account's home, and a page with no home: as recorded.
   assert.equal(text(policyPage(PROPOSE, lock, applied, { home: "/home/other" }).step.sentence), "Asked Mandu to make /home/u/ws/.env a secret no AI may read");
   assert.equal(text(policyPage(PROPOSE, lock, applied).step.sentence), "Asked Mandu to make /home/u/ws/.env a secret no AI may read");
@@ -1843,6 +1856,31 @@ test("the page's title names the agent's generation from its own version check: 
   assert.equal(page("goose", health("goose", "1.53.0")).agent, "Goose");
 });
 
+test("a broken session's notice is marked to be written out under the header; a degraded one's stays behind the mark (dashboard.md §4.21 On the product page)", () => {
+  const health = (over: Partial<SessionHealth>): SessionHealth => ({
+    verdict: "ok", live: [], dropped: [], relay: null, clientVersion: null, unknownTools: [], turns: 1, toolFailures: 0, exitCode: null, reasons: [], agentVersion: null,
+    ...over,
+  });
+  const page = (h: SessionHealth | undefined) =>
+    buildAgentPage({ session: { ...SESSION, agent: "claude", health: h }, id: "s1", vm: null, cwd: null, waiting: [] });
+  const relay = page(health({ verdict: "broken", relay: "passthrough", broken: ["relay"] }));
+  assert.equal(relay.noticeShown, true);
+  assert.match(relay.notice!, /^Your terminal showed masked values instead of your real ones/);
+  assert.equal(relay.noticeParts!.map((p) => p.text).join(""), relay.notice);
+  const all = page(health({ verdict: "broken", toolFailures: 4, broken: ["commands"] }));
+  assert.equal(all.noticeShown, true);
+  assert.equal(all.notice, "None of the 4 commands the agent ran could start: a sandbox or a missing program stopped them. Run mandu log s1 for this launch's notices.");
+  assert.deepEqual(all.noticeParts!.filter((p) => p.kind === "code").map((p) => p.text), ["mandu log s1"], "the page's own session's log");
+  const some = page(health({ verdict: "degraded", toolFailures: 1 }));
+  assert.equal(some.notice, "1 of the commands the agent ran could not start.");
+  assert.equal(some.noticeShown, false, "degraded: behind the mark only");
+  for (const quiet of [page(health({})), page(undefined), buildAgentPage({ session: null, id: "gone", vm: null, cwd: null, waiting: [] })]) {
+    assert.equal(quiet.notice, null);
+    assert.equal(quiet.noticeParts, null);
+    assert.equal(quiet.noticeShown, false);
+  }
+});
+
 test("an agent outside the tested versions says so on its page in its Home row's words, worded for the level (supported-agents.md §3)", () => {
   const health = (agentVersion: object | undefined, unknownTools: string[] = []): SessionHealth => ({
     verdict: "degraded", live: [], dropped: [], relay: null, clientVersion: null, unknownTools, turns: 1, toolFailures: 0, exitCode: null, reasons: [],
@@ -1865,4 +1903,29 @@ test("an agent outside the tested versions says so on its page in its Home row's
   assert.equal(page(health({ agent: "goose", name: "Goose", version: "1.53.0", verdict: "tested", min: "1.53.0", max: "1.54.0" })).notice, null);
   assert.equal(page(undefined).notice, null);
   assert.equal(buildAgentPage({ session: null, id: "gone", vm: null, cwd: null, waiting: [] }).notice, null);
+});
+
+test("a gated session's page carries its own launch's posture with the fix, in the session's words; confined, read-blocked or no launcher record, none (dashboard.md §4.23)", () => {
+  const health = (secrets?: SessionHealth["secrets"]): SessionHealth => ({
+    verdict: "ok", live: [], dropped: [], relay: null, clientVersion: null, unknownTools: [], agentVersion: null, turns: 1, toolFailures: 0, exitCode: null, reasons: [],
+    ...(secrets ? { secrets } : {}),
+  });
+  const gated = buildAgentPage({ session: { ...SESSION, health: health({ posture: "gated", gap: "apparmor-userns", sentence: SECRETS_SENTENCE.gated, fix: "mandu setup" }) }, id: "s1", vm: null, cwd: null, waiting: [] });
+  assert.deepEqual(gated.secretsPosture, {
+    gap: "apparmor-userns",
+    headline: "Programs this agent ran could read your credential files.",
+    sentence: SECRETS_SENTENCE.gated,
+    note: null,
+    fix: "mandu setup",
+    fixParts: [{ kind: "text", text: "Run " }, { kind: "code", text: "mandu setup" }, { kind: "text", text: " in a terminal once, then start your agent again." }],
+  });
+  const noGuard = buildAgentPage({ session: { ...SESSION, health: health({ posture: "gated", gap: "no-guard", sentence: SECRETS_SENTENCE.gated }) }, id: "s1", vm: null, cwd: null, waiting: [] });
+  assert.equal(noGuard.secretsPosture?.note, SECRETS_PARTIAL_NOTE["no-guard"]);
+  assert.equal(noGuard.secretsPosture?.fixParts, null);
+  for (const posture of ["confined", "read-blocked"] as const) {
+    assert.equal(buildAgentPage({ session: { ...SESSION, health: health({ posture, sentence: SECRETS_SENTENCE[posture] }) }, id: "s1", vm: null, cwd: null, waiting: [] }).secretsPosture, null, posture);
+  }
+  assert.equal(buildAgentPage({ session: { ...SESSION, health: health() }, id: "s1", vm: null, cwd: null, waiting: [] }).secretsPosture, null, "no posture on record");
+  assert.equal(buildAgentPage({ session: SESSION, id: "s1", vm: null, cwd: null, waiting: [] }).secretsPosture, null, "a session no launcher recorded");
+  assert.equal(buildAgentPage({ session: null, id: "gone", vm: null, cwd: null, waiting: [] }).secretsPosture, null);
 });

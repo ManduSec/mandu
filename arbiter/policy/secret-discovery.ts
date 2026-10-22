@@ -112,7 +112,8 @@ export function documentFileVerdict(path: string, r: DocumentTextRead): Document
   return personalDocumentKind(path, r.text) ?? "clean";
 }
 import { catalogPrefixesUnder, CONTENT_RULE, DOCUMENT_RULE, isContentRule, GOOSE_DATA_SHAPE_RE, normalizedPrefixes, OPENCODE_DATA_SHAPE_RE, pathConfidentiality, type LabelLookup, type SecretCatalogMatch } from "./secret-catalog.js";
-import { CONTENT_PROBE_MAX_FILES, CONTENT_PROBE_MAX_TOTAL, contentProbeCandidate, credentialInDataFile, readCandidate, type ProbeTier } from "./found-labels.js";
+import { CONTENT_PROBE_MAX_FILES, CONTENT_PROBE_MAX_TOTAL, contentProbeCandidate, credentialInDataFile, MCP_CONFIG_PROBE_MAX_BYTES, mcpConfigCandidate, mcpConfigCredential, readCandidate, type ProbeTier } from "./found-labels.js";
+import { mcpConfigKind, mcpConfigReader, mcpHomeConfigPaths } from "./mcp-config.js";
 import { isSecret, maxConfidentiality, type ConfidentialityLevel } from "../symbol-table/confidentiality.js";
 import { getSymbolPattern, hasSymbols } from "../symbol-table/symbol-table.js";
 
@@ -285,7 +286,15 @@ export interface SessionLogins {
   ullmBinary?: string;
   otherLoginsRaw?: boolean;
   loginEnv?: Record<string, string>;
+  /** The MCP configs the session's agent reads in its own process outside
+   *  HOME (Claude Code's project `.mcp.json`, secret-discovery.md §2.10):
+   *  absolute paths, each kept only when it is a config a kept agent reads
+   *  (`mcpConfigReader`), at most MAX_SESSION_MCP_CONFIGS. */
+  mcpConfigs?: string[];
 }
+
+/** How many `mcpConfigs` a session's value may name. */
+export const MAX_SESSION_MCP_CONFIGS = 16;
 
 /** `raw` (a wire field) as a SessionLogins, or null when it is not one (no
  *  absolute `home`): then nothing is exempt. Pure. */
@@ -294,13 +303,38 @@ export function parseSessionLogins(raw: unknown): SessionLogins | null {
   const r = raw as Record<string, unknown>;
   if (typeof r["home"] !== "string" || !r["home"].startsWith("/")) return null;
   const loginEnv = pickLoginEnv(r["loginEnv"]);
+  const mcp = Array.isArray(r["mcpConfigs"])
+    ? [...new Set((r["mcpConfigs"] as unknown[]).filter((p): p is string => typeof p === "string" && p.startsWith("/") && mcpConfigKind(p) !== null).map(plainPath))].slice(0, MAX_SESSION_MCP_CONFIGS)
+    : [];
   return {
     home: plainPath(r["home"]),
     ...(typeof r["target"] === "string" && r["target"] !== "" ? { target: r["target"] } : {}),
     ...(typeof r["ullmBinary"] === "string" && r["ullmBinary"] !== "" ? { ullmBinary: r["ullmBinary"] } : {}),
     ...(r["otherLoginsRaw"] === true ? { otherLoginsRaw: true } : {}),
     ...(Object.keys(loginEnv).length > 0 ? { loginEnv } : {}),
+    ...(mcp.length > 0 ? { mcpConfigs: mcp } : {}),
   };
+}
+
+/**
+ * The MCP configs a kept agent reads in its own process, by this session's
+ * keying (secret-discovery.md §2.10): Codex's `config.toml` (HOME's, and
+ * `$CODEX_HOME`'s) when Codex is kept, and each of the session's
+ * `mcpConfigs` whose reader is a kept agent (a `.mcp.json` for Claude
+ * Code). Claude Code's `.claude.json` is a login file already. Pure.
+ */
+export function sessionMcpConfigPaths(s: SessionLogins): string[] {
+  const owners = s.otherLoginsRaw === true ? new Set(LOGIN_OWNERS) : keptLoginOwners(s.target, s.ullmBinary);
+  const out = new Set<string>();
+  if (owners.has("codex")) {
+    for (const p of mcpHomeConfigPaths(s.home, s.loginEnv ?? {})) if (mcpConfigKind(p) === "codex" || p.endsWith("/config.toml")) out.add(plainPath(p));
+  }
+  for (const p of s.mcpConfigs ?? []) {
+    const kind = mcpConfigKind(p);
+    const reader = kind === null ? null : mcpConfigReader(kind);
+    if (reader !== null && owners.has(reader)) out.add(plainPath(p));
+  }
+  return [...out];
 }
 
 /**
@@ -309,12 +343,17 @@ export function parseSessionLogins(raw: unknown): SessionLogins | null {
  * MANDU_OTHER_AGENT_LOGINS=raw. Another session may have registered them
  * (registration is global and durable); in THIS session their rows are
  * inert to the egress tripwire, as they were before they were registered
- * anywhere. Only login files: a session cannot exempt any other path. Pure.
+ * anywhere. Since 2026-10-21 (secret-discovery.md §2.10) the kept agents'
+ * own MCP configs too (`sessionMcpConfigPaths`), an HTTP server's
+ * credential in one narrowed to its own host (server.ts
+ * `keptRowWireHost`). Only login files and MCP configs a kept agent reads:
+ * a session cannot exempt any other path. Pure.
  */
 export function sessionLoginPaths(s: SessionLogins): string[] {
   const owners = s.otherLoginsRaw === true ? new Set(LOGIN_OWNERS) : keptLoginOwners(s.target, s.ullmBinary);
   const out = new Set<string>();
   for (const o of owners) for (const p of agentLoginPaths(o, s.home, s.loginEnv ?? {})) out.add(p);
+  for (const p of sessionMcpConfigPaths(s)) out.add(p);
   return [...out];
 }
 
@@ -638,6 +677,11 @@ export interface DiscoveryOptions {
    *  read clean (`cleared`). Default on; `false` walks names only (and
    *  reads no document either, §2.7). */
   contentTier?: boolean;
+  /** The walk's file cap, when above MAX_FILES (never below it). Only the
+   *  past-sessions scan raises it (transcript-known.ts SCAN_MAX_FILES): it
+   *  reads the files' values and binds nothing, so the cap a launch's argv
+   *  needs must not decide which of the person's secrets it knows. */
+  maxFiles?: number;
   /** The found labels' paths (files an earlier walk found a credential in):
    *  each is a candidate wherever it lies, as a derived path is. */
   foundPaths?: readonly string[];
@@ -708,6 +752,13 @@ export interface DiscoveredSecret {
    *  not run on: the launcher leaves it readable under
    *  MANDU_OTHER_AGENT_LOGINS=raw and names it in the launch note. */
   agentLogin?: LoginOwner;
+  /** THIS launch's agent's own MCP config (secret-discovery.md §2.10:
+   *  Claude Code's `.claude.json` and the `.mcp.json` at a walk root,
+   *  Codex's `config.toml`), holding a server's credential: the launcher
+   *  registers it (its values are known to the model gates and the
+   *  tripwire) and leaves it readable to the agent, which starts its MCP
+   *  servers from it and keeps its own state in it. */
+  agentConfig?: "claude" | "codex";
 }
 
 /**
@@ -1294,7 +1345,8 @@ export function discoverSecretsReport(
   // the catalog matches we did see and could not mask.
   // The cap in force: MAX_FILES, then the label roots' own budget on top of
   // what the passes before them found (MAX_LABEL_FILES).
-  let limit = MAX_FILES;
+  const maxFiles = opts.maxFiles !== undefined && Number.isInteger(opts.maxFiles) && opts.maxFiles > MAX_FILES ? opts.maxFiles : MAX_FILES;
+  let limit = maxFiles;
   const capped = (): boolean => out.size >= limit;
 
   // The content tier (found-labels.ts, secret-discovery.md §2.6): a config
@@ -1308,6 +1360,9 @@ export function discoverSecretsReport(
   const content = { read: 0, capped: 0, bytes: 0 };
   const documents = { read: 0, capped: 0, bytes: 0 };
   const documentFiles = { read: 0, bytes: 0 };
+  // The MCP configs the walk's probe read (§2.10): the MCP pass reads the
+  // rest of the HOME places.
+  const mcpProbed = new Set<string>();
   // The document tier's project test (personal-documents.ts
   // `inSoftwareProject`): each directory's names, listed once.
   const listings = new Map<string, ReadonlySet<string>>();
@@ -1328,6 +1383,16 @@ export function discoverSecretsReport(
     const base = tier === "home" ? home : root;
     if (!isSelfOrAncestor(base, full) || full === base) return null;
     const rel = full.slice(base.endsWith("/") ? base.length : base.length + 1).split("/");
+    // An MCP or editor config (§2.10): read for its servers' values, with a
+    // cap of its own (`.claude.json`-sized files are not read here, and the
+    // HOME places a prune hides are read by the MCP pass below).
+    if (mcpConfigCandidate(rel, tier)) {
+      mcpProbed.add(full);
+      const text = readCandidate(full, MCP_CONFIG_PROBE_MAX_BYTES);
+      if (text === null) return null;
+      const field = mcpConfigCredential(full, text);
+      return field === null ? "clean" : { field };
+    }
     if (contentProbeCandidate(rel, tier)) {
       if (content.read >= CONTENT_PROBE_MAX_FILES || content.bytes >= CONTENT_PROBE_MAX_TOTAL) { content.capped++; return null; }
       const text = readCandidate(full);
@@ -1589,6 +1654,64 @@ export function discoverSecretsReport(
     }
   }
 
+  // §2.10: the MCP and editor configs at their HOME places, read wherever a
+  // prune kept the walk out (`~/.codex` is a store, `~/Library` a macOS
+  // prune, `.claude.json` a login), and the launched agent's own configs
+  // tagged `agentConfig`: registered, so their values are known, but left
+  // readable to the agent, which starts its servers from them and keeps
+  // its state in two of them (the launcher's `agentOwnFiles` posture).
+  if (contentOn && rootList.includes(plainPath(home))) {
+    for (const p of mcpHomeConfigPaths(home, loginEnv)) {
+      if (out.has(p) || cleared.has(p) || mcpProbed.has(p)) continue;
+      const kind = mcpConfigKind(p);
+      if (kind === null || kind === "claude-project") continue; // `~/.mcp.json`: the HOME root's walk reads it as a project's
+      let st: ReturnType<typeof statSync> | undefined;
+      try { st = statSync(p, { throwIfNoEntry: false }); } catch { st = undefined; }
+      if (!st || !st.isFile()) continue;
+      const reader = mcpConfigReader(kind);
+      const agent = agentFile(p);
+      // Another agent's login (`.claude.json` under codex) is the walk's,
+      // judged and twinned like any login above.
+      if (agent?.kind === "other") continue;
+      const owned = reader !== null && (agent?.kind === "kept" || agent?.kind === "store");
+      const text = readCandidate(p, MCP_CONFIG_PROBE_MAX_BYTES);
+      if (text === null) continue;
+      const field = mcpConfigCredential(p, text);
+      if (field === null) {
+        if (!owned && isContentRule(pathConfidentiality(p, home, resolveLabel).rule)) cleared.add(p);
+        continue;
+      }
+      let match = judge(p, undefined);
+      if (owned) {
+        // A label of the human's decides (a `public` one leaves it out).
+        if (match.rule === null) match = { level: "no-model", bindings: [], rule: `mcp-config:${reader}` };
+        if (!isSecret(match.level)) continue;
+      } else {
+        if (match.rule !== null && !isContentRule(match.rule)) {
+          if (!isSecret(match.level)) continue;
+        } else {
+          found.push({ path: p, field });
+          match = { level: "no-model", bindings: [], rule: CONTENT_RULE };
+        }
+      }
+      if (!isReadableFile(p)) { skip(p, "unreadable"); continue; }
+      if (out.size >= limit) { skip(p, "count"); truncated = true; continue; }
+      // The launched agent's own (`kept` login, or its `store`): left
+      // readable to it. A store of an agent this launch does not run
+      // (Codex's `config.toml` under claude) is twinned like any secret.
+      const ownConfig = owned && (agent?.kind === "kept" || kept.has(reader!));
+      out.set(p, { path: p, level: match.level, rule: match.rule ?? CONTENT_RULE, ...(ownConfig ? { agentConfig: reader! } : {}) });
+    }
+  }
+  // A project's `.mcp.json` at a walk root is the one Claude Code reads
+  // there (its project scope): under a launch that keeps Claude Code, it is
+  // the agent's own config too.
+  if (kept.has("claude")) {
+    for (const [p, f] of out) {
+      if (mcpConfigKind(p) === "claude-project" && rootList.includes(path.posix.dirname(p)) && f.agentLogin === undefined) out.set(p, { ...f, agentConfig: "claude" });
+    }
+  }
+
   // The label roots (opts.labelRoots, 2026-10-17), last and under their own
   // budget: a folder the human labelled that lies outside HOME and the
   // workspace, below the depth cap from them, or past the file cap, is
@@ -1619,7 +1742,7 @@ export function discoverSecretsReport(
   const files = [...out.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const skipped = [...skippedMain, ...skippedQuiet].slice(0, MAX_SKIP_RECORDS);
   return {
-    files, skipped, counts, limits: { maxDepth: MAX_DEPTH, maxFiles: MAX_FILES, maxLabelFiles: MAX_LABEL_FILES }, truncated, depthAreas: depthAreasOf(deepDirs, dirRoots),
+    files, skipped, counts, limits: { maxDepth: MAX_DEPTH, maxFiles, maxLabelFiles: MAX_LABEL_FILES }, truncated, depthAreas: depthAreasOf(deepDirs, dirRoots),
     // Every file found, a listed one or one past the file cap (a `count`
     // record): its label gates it at the open all the same.
     found, cleared: [...cleared].sort(), content: { read: content.read, capped: content.capped },

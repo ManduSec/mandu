@@ -124,7 +124,8 @@ test("a row reads its counts under its prompt, and when it started or ended alon
   // mostly empty prompt column, and a running row with counts never said
   // when it started.
   const started = new Date(Date.now() - 3 * 60_000).toISOString();
-  const running = { ...idleAgent("r1", 0), state: "running", startedAt: started, cwd: "/home/u/ws", secrets: { masked: 1, early: 0 }, blocked: 1, waiting: 1 };
+  // Its last step is its start: the last step's words have their own tests below.
+  const running = { ...idleAgent("r1", 0), state: "running", startedAt: started, lastAt: started, cwd: "/home/u/ws", secrets: { masked: 1, early: 0 }, blocked: 1, waiting: 1 };
   const tour = { ...idleAgent("t1", 3, {}, 1, { masked: 1, early: 1 }), sent: 1 };
   const { doc, err } = load({ homeVm: home({ waiting: [], agents: [running, tour] }) });
   assert.equal(err, null);
@@ -163,6 +164,89 @@ test("a running row with nothing counted has no counts line; with no recorded st
   assert.equal(u.querySelector(".agent-counts").textContent, "1 secret masked");
   assert.equal(u.querySelector(".agent-when").textContent, "");
   assert.doesNotMatch(u.textContent, /started/);
+});
+
+// ── A live row names its last step (§4.25 *Agents, not sessions*) ─────────
+
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+/** A Running now agent that started `startedMin` and last acted `lastMin` minutes ago. */
+const liveAgent = (id: string, startedMin: number, lastMin: number | null, over: Record<string, unknown> = {}) =>
+  ({ ...idleAgent(id, 0), state: "running", startedAt: minutesAgo(startedMin), lastAt: lastMin === null ? null : minutesAgo(lastMin), ...over });
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const liveRow = (doc: any, id: string) => doc.querySelector(`#home-agents .row.agent[data-session="${id}"]`);
+
+test("a Running now row says when it started and when it last did something, each a moment with its clock on hover", async () => {
+  // Two terminals open: "started 6 hours ago" on both said nothing about
+  // which agent is working.
+  const a = liveAgent("w1", 6 * 60, 2);
+  const { doc, err } = load({ homeVm: home({ waiting: [], agents: [a] }) });
+  assert.equal(err, null);
+  await tick();
+  const line = liveRow(doc, "w1").querySelector(".agent-when .agent-started");
+  assert.equal(line.textContent, "started 6 hours ago · last step 2 minutes ago");
+  const [start, last] = [...line.querySelectorAll("time.ago")] as any[];
+  assert.equal(start.getAttribute("datetime"), a.startedAt);
+  assert.equal(last.getAttribute("datetime"), a.lastAt);
+  assert.ok(last.classList.contains("agent-last"));
+  for (const t of [start, last]) assert.match(t.getAttribute("title"), new RegExp(`^${CLOCK}$`), "the clock time on hover");
+  // Each phrase is one box, the dot ending the first: a narrow column breaks
+  // only between them, never "· last step" over "2 minutes ago".
+  assert.deepEqual([...line.querySelectorAll(".when-phrase")].map((x: any) => x.textContent), ["started 6 hours ago ·", "last step 2 minutes ago"]);
+});
+
+test("a Running now row with no last step, or one within a minute of its start, says only when it started", async () => {
+  const none = liveAgent("n1", 30, null);
+  const same = liveAgent("s1", 30, 30);
+  const soon = { ...liveAgent("j1", 2, null), lastAt: new Date(Date.parse(minutesAgo(2)) + 40_000).toISOString() };
+  const { doc, err } = load({ homeVm: home({ waiting: [], agents: [none, same, soon] }) });
+  assert.equal(err, null);
+  await tick();
+  assert.equal(liveRow(doc, "n1").querySelector(".agent-when").textContent, "started 30 minutes ago");
+  assert.equal(liveRow(doc, "s1").querySelector(".agent-when").textContent, "started 30 minutes ago");
+  assert.equal(liveRow(doc, "j1").querySelector(".agent-when").textContent, "started 2 minutes ago");
+  assert.equal(doc.querySelector("#home-agents time.agent-last"), null);
+});
+
+test("a waiting row keeps its amber dot and its question first, and names its last step too", async () => {
+  const a = liveAgent("q1", 3 * 60, 5, { state: "waiting", waiting: 1, blocked: 1 });
+  const { doc, err } = load({ homeVm: home({ waiting: [], agents: [a] }) });
+  assert.equal(err, null);
+  await tick();
+  const row = liveRow(doc, "q1");
+  assert.equal(row.querySelector(".dot").className, "dot warn");
+  assert.match(row.querySelector(".agent-counts").textContent, /^1 question waiting for you, /);
+  assert.equal(row.querySelector(".agent-when").textContent, "started 3 hours ago · last step 5 minutes ago");
+});
+
+test("a poll in which only the last step moved moves its moment in place: the row stays, and so does a focused Details", async () => {
+  const a = liveAgent("m1", 6 * 60, 20);
+  const p = load({ homeVm: home({ waiting: [], agents: [a] }) });
+  assert.equal(p.err, null);
+  await tick();
+  const row = liveRow(p.doc, "m1");
+  const details = row.querySelector("a");
+  details.focus();
+  const later = { ...a, lastAt: minutesAgo(1) };
+  p.setHome(home({ waiting: [], agents: [later] }));
+  p.doc.dispatchEvent(new p.doc.defaultView.Event("visibilitychange"));
+  await tick();
+  assert.equal(liveRow(p.doc, "m1"), row, "the row is the node already there");
+  assert.equal(p.doc.activeElement, details, "its Details keeps the focus");
+  const last = row.querySelector("time.agent-last");
+  assert.equal(last.getAttribute("datetime"), later.lastAt);
+  assert.equal(last.textContent, "1 minute ago");
+  assert.match(last.getAttribute("title"), new RegExp(`^${CLOCK}$`));
+  // A row that had no last step gets one once it has one: drawn again once.
+  const fresh = liveAgent("f1", 5, 5);
+  p.setHome(home({ waiting: [], agents: [later, fresh] }));
+  p.doc.dispatchEvent(new p.doc.defaultView.Event("visibilitychange"));
+  await tick();
+  assert.equal(liveRow(p.doc, "f1").querySelector(".agent-when").textContent, "started 5 minutes ago");
+  p.setHome(home({ waiting: [], agents: [later, { ...fresh, lastAt: minutesAgo(0) }] }));
+  p.doc.dispatchEvent(new p.doc.defaultView.Event("visibilitychange"));
+  await tick();
+  assert.equal(liveRow(p.doc, "f1").querySelector(".agent-when").textContent, "started 5 minutes ago · last step just now");
+  assert.equal(liveRow(p.doc, "m1"), row, "the other row is still the node already there");
 });
 
 test("app.css: a Home row's counts sit in its widest column and wrap, never cut; its prompt keeps one line (§4.25)", () => {
@@ -237,13 +321,14 @@ test("the hero's facts: actions blocked and sends with a real value filled in, e
   const many = await facts({ masked: 3, secretsMasked: 3, blocked: 2, sent: 3 });
   assert.match(many.textContent, /3 secrets masked before the AI saw them .*2 actions blocked.*3 sends with a real value filled in/);
   const sent = [...many.children].find((s: any) => /^\d+ sends? with a real value filled in$/.test(s.textContent)) as any;
-  assert.equal(sent.title, "Each went to a destination allowed to receive it. A session's page shows where.");
+  // No one session named (window.only): the link opens History's sessions where Mandu stepped in.
+  assert.equal(sent.querySelector("a").title, "Each went to a destination allowed to receive it. Opens History: the sessions where Mandu stepped in.");
   assert.doesNotMatch(many.textContent, /allowed by you|sends? blocked/);
   const one = await facts({ masked: 1, secretsMasked: 1, blocked: 1, sent: 1 });
   assert.match(one.textContent, /1 action blocked.*1 send with a real value filled in/);
   // One send is "It", not "Each".
   const oneSent = [...one.children].find((s: any) => /^1 send with a real value filled in$/.test(s.textContent)) as any;
-  assert.equal(oneSent.title, "It went to a destination allowed to receive it. A session's page shows where.");
+  assert.equal(oneSent.querySelector("a").title, "It went to a destination allowed to receive it. Opens History: the sessions where Mandu stepped in.");
   const none = await facts({ masked: 1, secretsMasked: 1 });
   assert.doesNotMatch(none.textContent, /\d+ actions? blocked|with a real value filled in/, "a zero count is left out");
 });
@@ -274,7 +359,7 @@ test("the hero and the rows count secrets as each session's page does: masked, r
   assert.match(facts.children[0].textContent, /^In the last 24 hours: 2 secrets masked before the AI saw them \?/, "the window's lead, then the first count and its \"?\"");
   const early = [...facts.children].find((f: any) => /read before/.test(f.textContent)) as any;
   assert.ok(early.querySelector("strong.warn"), "amber, as the page's tile");
-  assert.equal(early.title, "The AI read the real value as it was, before it was marked a secret. A session's page says when.");
+  assert.equal(early.querySelector("a").title, "The AI read the real value as it was, before it was marked a secret. Opens History: the sessions where Mandu stepped in.");
   assert.doesNotMatch(facts.textContent, /items masked(?! before)|secrets? guarded|\b9\b/);
   const rows = [...doc.querySelectorAll("#home-earlier .row.agent")].map((r: any) => r.querySelector(".agent-counts")?.textContent ?? null);
   assert.deepEqual(rows, [
@@ -321,7 +406,7 @@ test("the hero's counts name their window: 'In the last 24 hours:' leads the fir
   const early = await facts({ secretsEarly: 1, blocked: 1 });
   assert.deepEqual(texts(early), ["In the last 24 hours: 1 secret the AI read before it was marked a secret", "1 action blocked"]);
   const earlyFact = early.children[0].querySelector(":scope > span:not(.facts-when)");
-  assert.match(earlyFact.title, /^The AI read the real value as it was/);
+  assert.match(earlyFact.querySelector("a").title, /^The AI read the real value as it was/);
   assert.ok(earlyFact.querySelector("strong.warn"), "still amber");
   const blocked = await facts({ blocked: 1, sent: 2 });
   assert.deepEqual(texts(blocked), ["In the last 24 hours: 1 action blocked", "2 sends with a real value filled in"]);
@@ -594,7 +679,7 @@ function failedHome() {
 const PRIMED = { "mandu.home.notifyPrimed": "1", "mandu.home.seenAsks": "[\"egr-1\"]", "mandu.home.seenFailed": "[]" };
 const DOWN_HOME = { status: 503, body: { error: "the arbiter is not reachable", tenant: "live", unreachable: true } };
 /** Home answered by `answer()` each poll; `readAgain` makes the page poll. */
-function polled(answer: () => unknown, opts: { storage?: Record<string, string>; permission?: string; homeVm?: unknown } = {}) {
+function polled(answer: () => unknown, opts: { storage?: Record<string, string>; permission?: string; homeVm?: unknown; url?: string } = {}) {
   const page = load({ ...opts, routes: { "GET home": () => answer() } });
   const readAgain = () => page.doc.dispatchEvent(new page.window.Event("visibilitychange"));
   return { ...page, readAgain };
@@ -680,11 +765,109 @@ test("alarms: the service stopping right after a read with a running agent notif
   assert.equal(blocked.notes.length, 0);
 });
 
-test("alarms: Settings › Notifications' On line names all three", async () => {
+test("alarms: Settings › Notifications' On line names all four", async () => {
   const { doc } = load({ url: "http://127.0.0.1:4500/mandu/settings" });
   await tick();
   assert.equal(doc.getElementById("notify-state").textContent,
-    "On. You get a notification when an agent needs your OK, when protection fails, and when the protection service stops under a running agent.");
+    "On. You get a notification when an agent needs your OK, when protection fails, when the protection service stops under a running agent, and when another agent can reach Mandu's controls.");
+});
+
+// ── The alarms: another agent can reach Mandu's controls (dashboard.md §4.25
+// *Notifications*, §4.25x) ───────────────────────────────────────────────────
+
+const EXPOSED_TITLE = "Mandu: another agent can reach Mandu's controls";
+const EXPOSED_BODY = "Your other agents get masked copies of secret files and masked output until it stops. Open Home to see which agent.";
+const SINCE = 1_790_000_000_000;
+/** Home with an exposure since `since` (null: an answer without it). */
+function exposedHome(since: number | null = SINCE) {
+  return home({ waiting: [], exposure: {
+    headline: "Another agent can reach Mandu's own controls.",
+    sentence: "An agent was started without the file guard.",
+    fix: "Stop that agent.", fixParts: [{ kind: "text", text: "Stop that agent." }],
+    ...(since === null ? {} : { since }),
+    causes: [{ pid: 4242, session: "claude-x1", words: "Claude Code, process 4242, protection off, no file guard",
+      parts: [{ kind: "link", text: "Claude Code", to: "agent", session: "claude-x1" }, { kind: "text", text: ", process 4242, protection off, no file guard" }] }],
+  } });
+}
+const PRIMED_EXPOSURE = { ...PRIMED, "mandu.home.seenExposure": "[]" };
+
+test("alarms: an exposure that starts notifies once with fixed words and its own tag, and its click opens Home", async () => {
+  let answer: unknown = home({ waiting: [] });
+  const page = polled(() => answer, { storage: PRIMED_EXPOSURE, url: "http://127.0.0.1:4500/mandu/settings" });
+  await tick();
+  assert.equal(page.notes.length, 0, "nothing exposed: nothing told");
+  answer = exposedHome();
+  page.readAgain();
+  await tick();
+  assert.equal(page.notes.length, 1, page.notes.map((n) => n.title).join(" | "));
+  assert.equal(page.notes[0]!.title, EXPOSED_TITLE);
+  assert.equal(page.notes[0]!.body, EXPOSED_BODY);
+  assert.equal(page.notes[0]!.tag, `mandu-exposure-${SINCE}`, "two open tabs show one");
+  for (const w of [page.notes[0]!.title, page.notes[0]!.body]) {
+    assert.doesNotMatch(w, /4242|claude-x1|Claude Code|\/home\/|~\//, "no agent, process, session or path from the causes");
+  }
+  assert.deepEqual(JSON.parse(page.window.localStorage.getItem("mandu.home.seenExposure")), [`mandu-exposure-${SINCE}`]);
+  page.notes[0]!.note.onclick();
+  await tick();
+  assert.equal(page.window.location.pathname, "/mandu/");
+  assert.equal(page.doc.getElementById("page-home").hidden, false);
+});
+
+test("alarms: the same exposure never notifies twice, also across a poll without it; a new one notifies again", async () => {
+  let answer: unknown = exposedHome();
+  const page = polled(() => answer, { storage: PRIMED_EXPOSURE });
+  await tick();
+  assert.equal(page.notes.length, 1);
+  page.readAgain();
+  await tick();
+  assert.equal(page.notes.length, 1, "the same since: no second notification");
+  answer = home({ waiting: [] }); // it ended (or one read could not tell)
+  page.readAgain();
+  await tick();
+  answer = exposedHome();
+  page.readAgain();
+  await tick();
+  assert.equal(page.notes.length, 1, "the same since again: still told once");
+  answer = exposedHome(SINCE + 60_000);
+  page.readAgain();
+  await tick();
+  assert.equal(page.notes.length, 2, "a new exposure is told again");
+  assert.equal(page.notes[1]!.tag, `mandu-exposure-${SINCE + 60_000}`);
+});
+
+test("alarms: an exposure without since uses one tag, forgotten when it ends", async () => {
+  let answer: unknown = exposedHome(null);
+  const page = polled(() => answer, { storage: PRIMED_EXPOSURE });
+  await tick();
+  assert.deepEqual(page.notes.map((n) => n.tag), ["mandu-exposure"]);
+  page.readAgain();
+  await tick();
+  assert.equal(page.notes.length, 1, "still the same one");
+  answer = home({ waiting: [] });
+  page.readAgain();
+  await tick();
+  assert.deepEqual(JSON.parse(page.window.localStorage.getItem("mandu.home.seenExposure")), []);
+  answer = exposedHome(null);
+  page.readAgain();
+  await tick();
+  assert.equal(page.notes.length, 2, "a later one is told again");
+});
+
+test("alarms: the first visit records an exposure already showing silently; turned off or without permission none is shown, but it is recorded", async () => {
+  const first = load({ storage: PRIMED, homeVm: exposedHome() });
+  await tick();
+  assert.equal(first.notes.length, 0, "the first visit primes silently");
+  assert.deepEqual(JSON.parse(first.window.localStorage.getItem("mandu.home.seenExposure")), [`mandu-exposure-${SINCE}`]);
+  for (const permission of ["default", "denied"]) {
+    const { notes, window } = load({ homeVm: exposedHome(), permission, storage: PRIMED_EXPOSURE });
+    await tick();
+    assert.equal(notes.length, 0, permission);
+    assert.match(window.localStorage.getItem("mandu.home.seenExposure"), new RegExp(`mandu-exposure-${SINCE}`), permission);
+  }
+  const off = load({ homeVm: exposedHome(), storage: { ...PRIMED_EXPOSURE, "mandu.home.notifyOff": "1" } });
+  await tick();
+  assert.equal(off.notes.length, 0, "turned off in Settings");
+  assert.match(off.window.localStorage.getItem("mandu.home.seenExposure"), new RegExp(`mandu-exposure-${SINCE}`), "still recorded, so turning on brings no backlog");
 });
 
 test("an agent outside the tested versions shows a warning mark that opens its notice, as text (supported-agents.md)", async () => {
@@ -718,6 +901,29 @@ test("an agent outside the tested versions shows a warning mark that opens its n
   const { doc: plain } = load();
   await tick();
   assert.equal(plain.querySelector("#home-agents .notice-btn"), null);
+});
+
+test("a session that could not do its job shows its notice behind the row's warning mark, each command as code, never written on the row (dashboard.md §4.21 On the product page)", async () => {
+  const vm = home();
+  const notice = "None of the 3 commands the agent ran could start: a sandbox or a missing program stopped them. Run mandu log s-claude for this launch's notices. <b>x</b>";
+  (vm.agents as any[])[0].notice = notice;
+  (vm.agents as any[])[0].noticeParts = [
+    { kind: "text", text: "None of the 3 commands the agent ran could start: a sandbox or a missing program stopped them. Run " },
+    { kind: "code", text: "mandu log s-claude" },
+    { kind: "text", text: " for this launch's notices. <b>x</b>" },
+  ];
+  const { doc, err } = load({ homeVm: vm });
+  assert.equal(err, null);
+  await tick();
+  const btn = doc.querySelector("#home-agents .row.agent .name .notice-btn");
+  assert.ok(btn, "a warning mark by the name");
+  const pop = doc.getElementById(btn.getAttribute("aria-controls"));
+  assert.equal(pop.textContent, notice, "the parts read as the plain line");
+  assert.deepEqual([...pop.querySelectorAll("code")].map((c: any) => c.textContent), ["mandu log s-claude"]);
+  assert.equal(pop.querySelector("b"), null, "server words stay text");
+  const shown = doc.getElementById("home-agents").cloneNode(true);
+  for (const p of shown.querySelectorAll(".help-pop")) p.remove();
+  assert.doesNotMatch(shown.textContent, /could start/, "the row holds the mark, not the sentence");
 });
 
 const PREVIEW = (label: string) => ({
@@ -1253,7 +1459,7 @@ test("a home that cannot be read says each section could not be checked, with th
   await tick();
   assert.equal(down.doc.getElementById("hero-headline").textContent, "Not connected.");
   assertNotChecked(down.doc, "503 unreachable", CAUSE.down);
-  assert.equal(down.window.document.title, "Mandu");
+  assert.equal(down.window.document.title, "Not connected · Mandu", "the tab says it too (§4.25 *The tab says the protection state*)");
   // The page's own server failing says it answered, with its status.
   const failed = load({ routes: { "GET home": { status: 500, body: null } } });
   await tick();
@@ -1291,7 +1497,7 @@ test("a page left open when the protection service stops keeps none of the last 
   assert.equal(doc.getElementById("hero-headline").textContent, "Not connected.");
   assertNotChecked(doc, "after the service stopped", CAUSE.down);
   assert.equal(doc.getElementById("nav-approvals-count").hidden, true);
-  assert.equal(window.document.title, "Mandu", "the tab no longer counts a question it cannot check");
+  assert.equal(window.document.title, "Not connected · Mandu", "the tab no longer counts a question it cannot check, and says why");
   assert.doesNotMatch(doc.getElementById("favicon").href, /%3Ctext/, "nor does its icon");
   // The same cause again leaves each line as it is; another cause draws it again.
   const line = doc.querySelector("#approvals-waiting .empty");
@@ -1310,6 +1516,113 @@ test("a page left open when the protection service stops keeps none of the last 
   assert.equal(doc.getElementById("home-history").textContent, "History: 9 sessions");
   assert.equal(doc.getElementById("home-earlier-block").hidden, false);
   assert.equal(window.document.title, "(1) Mandu");
+});
+
+// ── The tab says the protection state (dashboard.md §4.25) ─────────────────
+
+/** The favicon's SVG, decoded. */
+const iconSvg = (doc: any): string => decodeURIComponent(doc.getElementById("favicon").href.replace(/^data:image\/svg\+xml,/, ""));
+/** The fill of the icon's shield (its first path). */
+const shieldFill = (doc: any): string => /<path d='M16 3[^']*' fill='([^']+)'/.exec(iconSvg(doc))?.[1] ?? "";
+const GREEN = "#1e7f4f";
+const GREY = "#6c6c74";
+const RED = "#b4342a";
+/** The verdict's home, nothing waiting unless `waiting` says. */
+const verdictHome = (verdict: string, waiting: unknown[] = []) => home({
+  verdict, headline: "", sentence: "", waiting,
+  protection: { level: verdict === "off" ? "off" : "secrets", configured: "secrets", connected: verdict !== "unknown" },
+  window: QUIET_WINDOW_TAB,
+});
+const QUIET_WINDOW_TAB = { hours: 24, sessions: 1, counted: 1, masked: 0, secretsMasked: 0, secretsEarly: 0, untrusted: 0, blocked: 0, sent: 0, waiting: 0 };
+
+test("the tab's icon and title follow the hero's verdict: off, failed and not connected are never the green check", async () => {
+  // Until 2026-10-22 every state but a waiting question drew the green shield
+  // with its check and the title "Mandu": a pinned tab said "protected" with
+  // protection off or the service down.
+  let vm: any = verdictHome("protected");
+  let fail = false;
+  const { doc, window, err } = load({ routes: { "GET home": () => { if (fail) throw new TypeError("Failed to fetch"); return vm; } } });
+  assert.equal(err, null);
+  await tick();
+  const base = doc.getElementById("favicon").href;
+  assert.equal(window.document.title, "Mandu");
+  assert.equal(shieldFill(doc), GREEN);
+  assert.match(iconSvg(doc), /M11 16l3.5 3.5L21 13/, "the check");
+  const poll = async () => { doc.dispatchEvent(new window.Event("visibilitychange")); await tick(); };
+
+  const cases: [string, () => void, string, string, RegExp | null][] = [
+    ["off", () => { vm = verdictHome("off"); }, "Protection off · Mandu", GREY, /M12 11l8 8M20 11l-8 8/],
+    ["failed", () => { vm = verdictHome("failed"); }, "Protection failed · Mandu", RED, /M16 9v7\.5[^]*<circle cx='16' cy='21\.5'/],
+    ["the server not connected", () => { vm = verdictHome("unknown"); }, "Not connected · Mandu", GREY, null],
+    ["a failed poll", () => { fail = true; }, "Not connected · Mandu", GREY, null],
+  ];
+  for (const [what, set, title, fill, mark] of cases) {
+    set();
+    await poll();
+    assert.equal(window.document.title, title, what);
+    assert.equal(shieldFill(doc), fill, what);
+    assert.doesNotMatch(iconSvg(doc), /M11 16l3\.5 3\.5L21 13/, `${what}: never the check`);
+    if (mark) assert.match(iconSvg(doc), mark, `${what}: its mark`);
+    else assert.doesNotMatch(iconSvg(doc), /stroke|circle/, `${what}: a shield with no mark`);
+    // Back to protected: the baseline icon, exactly.
+    fail = false;
+    vm = verdictHome("protected");
+    await poll();
+    assert.equal(doc.getElementById("favicon").href, base, `after ${what}: the baseline again`);
+    assert.equal(window.document.title, "Mandu");
+  }
+
+  // Each of the protected verdicts is the baseline; the waiting one too.
+  for (const v of ["quiet", "secrets-only"]) {
+    vm = verdictHome(v);
+    await poll();
+    assert.equal(doc.getElementById("favicon").href, base, v);
+    assert.equal(window.document.title, "Mandu", v);
+  }
+});
+
+test("the waiting count rides on each shield, first in the title; an unknown verdict keeps the baseline", async () => {
+  let vm: any = verdictHome("waiting", [ASK]);
+  const { doc, window, err } = load({ routes: { "GET home": () => vm } });
+  assert.equal(err, null);
+  await tick();
+  const poll = async () => { doc.dispatchEvent(new window.Event("visibilitychange")); await tick(); };
+  const count = /<circle cx='23' cy='9' r='9' fill='#a35d00'\/><text[^>]*>1<\/text>/;
+  assert.equal(window.document.title, "(1) Mandu");
+  assert.equal(shieldFill(doc), GREEN);
+  assert.match(iconSvg(doc), count);
+  for (const [v, title, fill] of [["off", "(1) Protection off · Mandu", GREY], ["failed", "(1) Protection failed · Mandu", RED]] as const) {
+    vm = verdictHome(v, [ASK]);
+    await poll();
+    assert.equal(window.document.title, title, v);
+    assert.equal(shieldFill(doc), fill, v);
+    assert.match(iconSvg(doc), count, `${v}: the count's dot`);
+    assert.doesNotMatch(iconSvg(doc), /stroke/, `${v}: the dot takes the mark's place`);
+  }
+  // A verdict this page does not know (an older or newer server) claims nothing.
+  vm = verdictHome("checking-later", []);
+  await poll();
+  assert.equal(window.document.title, "Mandu");
+  assert.equal(shieldFill(doc), GREEN);
+  assert.match(iconSvg(doc), /M11 16l3\.5 3\.5L21 13/);
+});
+
+test("the tab state follows the page's name on a sub-page, and an unchanged poll does not write the icon again", async () => {
+  const { doc, window, err } = load({ url: "http://127.0.0.1:4500/mandu/rules", homeVm: verdictHome("off") });
+  assert.equal(err, null);
+  await tick();
+  assert.equal(window.document.title, "Protection off · Mandu · Rules");
+  const link = doc.getElementById("favicon");
+  const proto = Object.getPrototypeOf(link);
+  const desc = Object.getOwnPropertyDescriptor(proto, "href")!;
+  let writes = 0;
+  Object.defineProperty(link, "href", { configurable: true, get() { return desc.get!.call(this); }, set(v) { writes++; desc.set!.call(this, v); } });
+  doc.dispatchEvent(new window.Event("visibilitychange"));
+  await tick();
+  doc.dispatchEvent(new window.Event("visibilitychange"));
+  await tick();
+  assert.equal(writes, 0, "the same state: the icon is left as it is");
+  assert.equal(shieldFill(doc), GREY);
 });
 
 // ── The hero links where it points (dashboard.md §4.25) ──────────────────────
@@ -1533,4 +1846,210 @@ test("app.css: a session row shows it opens on a click: the pointer, and the pag
   assert.ok(hover, "a hover rule");
   assert.equal(declValue(hover.block, "background"), "var(--bg)", "the page's row hover, as a file row's");
   assert.ok(plain.some((r) => r.selectors.includes(".row.file-rule:hover") && declValue(r.block, "background") === "var(--bg)"), "the same as the Rules rows'");
+});
+
+test("the hero's counts link where they point: one session's page at the step its tile goes to, else History's sessions where Mandu stepped in; waiting, Approvals; a poll that brings a second session's block turns the link to History (§4.25 *The counts link where they point*)", async () => {
+  const zero = { sessions: 2, counted: 2, masked: 0, secretsMasked: 0, secretsEarly: 0, untrusted: 0, blocked: 0, sent: 0, waiting: 0 };
+  const verdict = { verdict: "secrets-only", headline: "Your secrets are guarded.", sentence: "No agent is running right now.", protection: { level: "secrets", configured: "secrets", connected: true }, waiting: [] };
+  const owners = (o: Record<string, string | null> = {}) => ({ secretsMasked: null, secretsEarly: null, blocked: null, sent: null, ...o });
+  let w: Record<string, unknown> = { hours: 24, ...zero, secretsMasked: 2, secretsEarly: 1, untrusted: 1, blocked: 1, sent: 1, only: owners({ secretsMasked: "s1", secretsEarly: "s1", blocked: "s1", sent: "s1" }) };
+  let over: Record<string, unknown> = {};
+  const { doc, err } = load({ routes: { "GET home": () => home({ ...verdict, ...over, window: w }) } });
+  assert.equal(err, null);
+  await tick();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const link = (re: RegExp): any => [...doc.querySelectorAll("#hero-facts a")].find((a: any) => re.test(a.textContent));
+  const one = "Opens the session where it happened.";
+  const many = "Opens History: the sessions where Mandu stepped in.";
+  // One session holds each: its page, where its tile goes.
+  const blocked = link(/action blocked/);
+  assert.equal(blocked.textContent, "1 action blocked", "the link's name is the count's words");
+  assert.equal(blocked.getAttribute("href"), "/mandu/agents/s1?go=blocked");
+  assert.deepEqual([blocked.dataset.pageLink, blocked.dataset.session, blocked.dataset.land], ["agent", "s1", "blocked"]);
+  assert.equal(blocked.title, one);
+  assert.equal(blocked.querySelector("strong").textContent, "1", "the number still bold");
+  assert.equal(link(/^1 send/).getAttribute("href"), "/mandu/agents/s1?go=sent");
+  assert.equal(link(/^1 send/).title, `It went to a destination allowed to receive it. ${one}`);
+  assert.equal(link(/secrets masked/).getAttribute("href"), "/mandu/agents/s1?go=secrets");
+  assert.equal(link(/read before/).getAttribute("href"), "/mandu/agents/s1?go=secrets");
+  assert.equal(link(/read before/).title, `The AI read the real value as it was, before it was marked a secret. ${one}`);
+  assert.ok(link(/read before/).querySelector("strong.warn"), "still amber");
+  assert.equal(link(/untrusted/), undefined, "the frozen levels' untrusted count stays words");
+  assert.ok(doc.querySelector("#hero-facts .help-btn"), "the masked count keeps its \"?\"");
+  assert.doesNotMatch(doc.getElementById("hero-facts").innerHTML, /A session's page (shows|says)/, "no tooltip sends the reader away without a way there");
+
+  // A poll brings a second session's block: no one session holds it now.
+  w = { ...w, only: owners({ secretsMasked: "s1", secretsEarly: "s1", blocked: null, sent: "s1" }), blocked: 2 };
+  Object.defineProperty(doc, "visibilityState", { value: "visible", configurable: true });
+  doc.dispatchEvent(new doc.defaultView.Event("visibilitychange"));
+  await tick(40);
+  const both = link(/actions blocked/);
+  assert.equal(both.textContent, "2 actions blocked");
+  assert.equal(both.getAttribute("href"), "/mandu/history?only=stepped-in");
+  assert.deepEqual([both.dataset.pageLink, both.dataset.land], ["history", "stepped-in"]);
+  assert.equal(both.title, many);
+  assert.equal(link(/^1 send/).getAttribute("href"), "/mandu/agents/s1?go=sent", "the others still name their session");
+
+  // Pressed: History opens with its switch on, and asks for those sessions.
+  both.click();
+  await tick(40);
+  assert.equal(doc.defaultView.location.pathname + doc.defaultView.location.search, "/mandu/history?only=stepped-in");
+  assert.equal(doc.getElementById("history-only").getAttribute("aria-checked"), "true");
+
+  // Partly counted: never one session, even if the payload named one.
+  w = { hours: 24, ...zero, sessions: 31, counted: 26, blocked: 1, only: owners({ blocked: "s1" }) };
+  over = { verdict: "failed", headline: "Protection failed.", sentence: "One item reached the AI unmasked in the last 24 hours.", waiting: [ASK] };
+  doc.defaultView.eval(`setPage('home', true)`);
+  doc.dispatchEvent(new doc.defaultView.Event("visibilitychange"));
+  await tick(40);
+  assert.equal(link(/action blocked/).getAttribute("href"), "/mandu/history?only=stepped-in");
+  // "N waiting for you", when the headline does not count it: Approvals.
+  w = { ...w, waiting: 1 };
+  doc.dispatchEvent(new doc.defaultView.Event("visibilitychange"));
+  await tick(40);
+  const waiting = link(/waiting for you/);
+  assert.equal(waiting.getAttribute("href"), "/mandu/approvals");
+  assert.equal(waiting.dataset.pageLink, "approvals");
+  assert.equal(waiting.title, "Opens Approvals.");
+
+  // An older server, with no `window.only`: History.
+  const older = load({ homeVm: home({ ...verdict, window: { hours: 24, ...zero, blocked: 1 } }) });
+  await tick();
+  assert.equal([...older.doc.querySelectorAll("#hero-facts a")].map((a: any) => a.getAttribute("href")).join(), "/mandu/history?only=stepped-in"); // eslint-disable-line @typescript-eslint/no-explicit-any
+});
+
+// ── The newest launch left programs able to read your credential files (§4.23) ─
+
+const POSTURE = {
+  gap: "apparmor-userns",
+  session: "claude-x1",
+  headline: "Programs your agent runs can still read your credential files.",
+  sentence: "The AI sees placeholders and a secret is sent out only where a rule or your OK allows, but programs the AI runs can still read your credential files.",
+  note: null,
+  fix: "mandu setup",
+  fixParts: [
+    { kind: "text", text: "Run " },
+    { kind: "code", text: "mandu setup" },
+    { kind: "text", text: " in a terminal once, then start your agent again." },
+  ],
+};
+
+test("secret posture: a gated newest launch draws the amber card with its sentence and the fix as code, as text; no posture, no card (§4.23)", async () => {
+  const quiet = load();
+  await tick();
+  assert.equal(quiet.doc.getElementById("home-posture").hidden, true, "no `secretsPosture`: no card");
+  const { doc, err } = load({ homeVm: home({ secretsPosture: { ...POSTURE, sentence: POSTURE.sentence + " <b>x</b>" } }) });
+  assert.equal(err, null);
+  await tick();
+  const card = doc.getElementById("home-posture");
+  assert.equal(card.hidden, false);
+  assert.equal(card.getAttribute("role"), null, "a known host condition, never an alert");
+  assert.ok(card.classList.contains("exposure"), "the exposure card's amber frame");
+  assert.equal(doc.getElementById("posture-headline").textContent, POSTURE.headline);
+  assert.equal(doc.getElementById("posture-sentence").textContent, POSTURE.sentence + " <b>x</b>");
+  assert.equal(card.querySelector("b"), null, "server words stay text");
+  assert.equal(doc.getElementById("posture-note").hidden, true, "no partial note for this gap");
+  const fix = doc.getElementById("posture-fix");
+  assert.equal(fix.hidden, false);
+  assert.equal(fix.textContent, "Run mandu setup in a terminal once, then start your agent again.");
+  assert.deepEqual([...fix.querySelectorAll("code")].map((c: any) => c.textContent), ["mandu setup"]);
+  const hero = doc.getElementById("home-exposure").compareDocumentPosition(card);
+  assert.ok(hero & 4, "beside the exposure card, under the headline");
+});
+
+test("secret posture: a bind-only gap says its partial note and offers no command (§4.23)", async () => {
+  const note = "The mount layer still puts a placeholder over each credential file, but Mandu's file guard is turned off, so a file replaced while the AI runs is readable.";
+  const { doc, err } = load({ homeVm: home({ secretsPosture: { ...POSTURE, gap: "guard-off", note, fix: null, fixParts: null } }) });
+  assert.equal(err, null);
+  await tick();
+  assert.equal(doc.getElementById("home-posture").hidden, false);
+  const n = doc.getElementById("posture-note");
+  assert.equal(n.hidden, false);
+  assert.equal(n.textContent, note);
+  assert.equal(doc.getElementById("posture-fix").hidden, true);
+  assert.equal(doc.getElementById("posture-fix").textContent, "");
+});
+
+test("secret posture: a poll with the same posture leaves the card as drawn; one with none hides it, and a failed load too (§4.23, §4.25 *The poll keeps your place*)", async () => {
+  const { doc, err, window, setHome } = load({ homeVm: home({ secretsPosture: POSTURE }) });
+  assert.equal(err, null);
+  await tick();
+  const code = doc.querySelector("#posture-fix code");
+  assert.ok(code);
+  setHome(home({ secretsPosture: { ...POSTURE } }));
+  doc.dispatchEvent(new window.Event("visibilitychange"));
+  await tick();
+  assert.equal(doc.querySelector("#posture-fix code"), code, "not drawn again");
+  setHome(home()); // a confined launch is now the newest: the server sends none
+  doc.dispatchEvent(new window.Event("visibilitychange"));
+  await tick();
+  assert.equal(doc.getElementById("home-posture").hidden, true);
+  setHome(home({ secretsPosture: POSTURE }));
+  doc.dispatchEvent(new window.Event("visibilitychange"));
+  await tick();
+  assert.equal(doc.getElementById("home-posture").hidden, false, "it comes back with the next gated launch");
+});
+
+// ── A newer release with security fixes (dashboard.md §4.25 *A newer release*) ──
+
+const ABOUT_BASE = {
+  version: "0.2.0-beta.7",
+  guideUrl: "https://github.com/mandusec/mandu/blob/main/docs/usage.md",
+  troubleshootingUrl: "https://github.com/mandusec/mandu/blob/main/docs/usage.md#troubleshooting",
+  issuesUrl: "https://github.com/mandusec/mandu/issues",
+};
+const INSTALL = "npm install -g @mandusec/mandu@0.2.0-beta.9";
+const withUpdate = (update: unknown) => home({ about: { ...ABOUT_BASE, update } });
+const SECURITY = { state: "newer", at: Date.now() - 3 * 3_600_000, newest: "0.2.0-beta.9", security: true, install: INSTALL };
+
+test("update notice: a release with security fixes shows under the hero, with the command as code and a link to About Mandu", async () => {
+  const { doc, err } = load({ homeVm: withUpdate(SECURITY) });
+  assert.equal(err, null);
+  await tick();
+  const block = doc.getElementById("home-update");
+  assert.equal(block.hidden, false);
+  assert.equal(doc.getElementById("update-headline").textContent, "A security update for Mandu is out");
+  assert.equal(doc.getElementById("update-sentence").textContent, "Mandu 0.2.0-beta.9 fixes security problems in the version you run (0.2.0-beta.7).");
+  const fix = doc.getElementById("update-fix");
+  assert.equal(fix.textContent, `Update now: ${INSTALL}, then start your agent again. About Mandu in Settings`);
+  assert.equal(fix.querySelector("code").textContent, INSTALL, "the command is code, to copy");
+  const link = fix.querySelector("a");
+  assert.equal(link.textContent, "About Mandu in Settings");
+  assert.match(link.getAttribute("href"), /\/settings#about$/);
+  // It sits with the other notices under the hero, after the exposure card.
+  assert.equal(block.previousElementSibling.id, "home-exposure");
+});
+
+test("update notice: a plain update, the newest release, no answer or a failed poll show nothing on Home", async () => {
+  for (const update of [
+    { ...SECURITY, security: false }, { state: "current", at: Date.now() }, { state: "unknown" }, null,
+    { state: "newer", newest: "", install: INSTALL, security: true, at: null },
+  ]) {
+    const { doc } = load({ homeVm: withUpdate(update) });
+    await tick();
+    assert.equal(doc.getElementById("home-update").hidden, true, JSON.stringify(update));
+  }
+  const { doc } = load({ homeVm: home({ about: { ...ABOUT_BASE, version: "unknown", update: SECURITY } }) });
+  await tick();
+  assert.equal(doc.getElementById("home-update").hidden, true, "no version known: nothing named");
+});
+
+test("update notice: drawn once across polls, and gone when the answer stops naming it", async () => {
+  const { doc, window, setHome } = load({ homeVm: withUpdate(SECURITY) });
+  await tick();
+  const code = doc.querySelector("#update-fix code");
+  assert.ok(code);
+  doc.dispatchEvent(new window.Event("visibilitychange"));
+  await tick();
+  assert.equal(doc.querySelector("#update-fix code"), code, "the same answer: left as drawn (sameAsDrawn)");
+  setHome(withUpdate({ state: "current", at: Date.now() })); // updated and restarted
+  doc.dispatchEvent(new window.Event("visibilitychange"));
+  await tick();
+  assert.equal(doc.getElementById("home-update").hidden, true);
+});
+
+test("update notice: the version from the answer stays text", async () => {
+  const { doc } = load({ homeVm: withUpdate({ ...SECURITY, newest: "<img src=x onerror=alert(1)>", install: "<b>x</b>" }) });
+  await tick();
+  assert.equal(doc.querySelector("#home-update img, #home-update b"), null);
 });

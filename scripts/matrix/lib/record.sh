@@ -8,6 +8,7 @@
 #   <store>/<runId>/meta.json   target, suite, executor, status, rc, commit, labels, times, flags
 #   <store>/<runId>/suite.log   the suite's full output (guest or host)
 #   <store>/<runId>/steps.log   PASS/FAIL/NOTE step lines, when the suite writes them
+#   <store>/<runId>/timings.tsv, report.md   the npm-release suite's timings and summary
 #   <store>/<runId>/run.log     the host console of run.sh (ANSI stripped)
 #   <store>/<runId>/serial.log  the guest serial console, last 1 MiB, on FAIL only
 #   <store>/<runId>/logs-<name>.log  the `all` suite's per-package logs
@@ -73,6 +74,9 @@ record_finish() {
   src="$RUN_WORK/out"; [[ -d "$src" ]] || src="$RUN_WORK"
   [[ -s "$src/suite.log" ]] && cp "$src/suite.log" "$dir/suite.log"
   [[ -s "$src/steps.log" ]] && cp "$src/steps.log" "$dir/steps.log"
+  # The npm-release suite's timing table and summary (os-test-matrix.md §10.18).
+  [[ -s "$src/timings.tsv" ]] && cp "$src/timings.tsv" "$dir/timings.tsv"
+  [[ -s "$src/report.md" ]] && cp "$src/report.md" "$dir/report.md"
   local reason=""
   [[ -s "$src/RESULT" ]] && reason="$(head -c 400 "$src/RESULT" | tr -d '\n')"
   if [[ -d "$src/test-all-logs" ]]; then

@@ -44,7 +44,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { buildAgentPage } from "../../../src/view-model/agent-page.js";
-import { aiSaw, FINDING_POINTER, releaseWhere, RELEASES_SHOWN, secretsStory, secretShortName, secretWhat, SECRET_ALL_CAP, SECRET_CAP, type SecretsStory } from "../../../src/view-model/secret-story.js";
+import { aiSaw, FINDING_POINTER, releaseWhere, RELEASES_SHOWN, secretFile, secretsStory, secretShortName, secretWhat, SECRET_ALL_CAP, SECRET_CAP, type SecretsStory } from "../../../src/view-model/secret-story.js";
 import { believedEvents, type ManduEvent } from "../../../src/event-model.js";
 import { toSessionViewModel } from "../../../src/view-model.js";
 import type { SymbolLineage } from "../../../src/view-model/lineage.js";
@@ -249,14 +249,16 @@ test("a level that lets a model read it says so, not \"placeholder only\"", () =
  *  tour's `deploy/staging.conf`), at `prefix`'s level. */
 const DELIVERED = "2026-10-05T01:41:29.686Z";
 const MASKED = "2026-10-05T01:42:05.942Z";
-function earlyStory(requests: number, opts: { prefix?: "nomodel" | "localmodel" | "anymodel"; flagged?: boolean; mode?: "secrets" | "off" | null } = {}): SecretsStory {
+function earlyStory(requests: number, opts: { prefix?: "nomodel" | "localmodel" | "anymodel"; flagged?: boolean; mode?: "secrets" | "off" | null; root?: string; origin?: string | null } = {}): SecretsStory {
   const vm = toSessionViewModel(SESSION, walkthroughEvents());
-  const root = `$MDU:${opts.prefix ?? "nomodel"}_Read[cccc]`;
-  const flow: SymbolLineage = { root, nodes: [], edges: [], summary: { root, originLabel: "/srv/app/deploy/staging.conf", minted: true, contextTurns: requests, echoed: false, terminal: "context-only" } };
+  const root = opts.root ?? `$MDU:${opts.prefix ?? "nomodel"}_Read[cccc]`;
+  const flow: SymbolLineage = { root, nodes: [], edges: [], summary: { root, originLabel: opts.origin === undefined ? "/srv/app/deploy/staging.conf" : opts.origin, minted: true, contextTurns: requests, echoed: false, terminal: "context-only" } };
   const read = { id: "tool:c-read", step: "tool", callId: "c-read", ts: DELIVERED, turn: 5, maskedLater: { ts: MASKED, deliveredTs: DELIVERED, symbols: [root] } } as unknown as DualStep;
   return secretsStory({ ...vm, dualLanes: { ...vm.dualLanes, steps: [read] }, lineage: { ...vm.lineage, flows: [flow] } }, [], opts.flagged ?? false, opts.mode === undefined ? "secrets" : opts.mode);
 }
 const OWN_WORDS = "warn: Anything the AI wrote from its real value went back to the AI as written with each later request: Mandu does not mask the AI's own words.";
+const CHANGE_FILE = "warn: If it holds a key or a password, change it: the AI saw it as it was.";
+const CHANGE_KEY = "warn: Change this key: the AI saw its real value, and marking it a secret does not take that back.";
 
 test("a secret the AI read before its label: a placeholder in its place after, never \"only\", and the AI's own words are not masked (§4.25b)", () => {
   // The proxies forward the AI's own replies as written (confidentiality.md
@@ -265,19 +267,66 @@ test("a secret the AI read before its label: a placeholder in its place after, n
   assert.deepEqual(linesOf(earlyStory(2), 0), [
     `warn: The AI read its real value at ${DELIVERED}, before it was marked a secret. From ${MASKED} on it got a placeholder in its place, in 2 requests.`,
     OWN_WORDS,
+    CHANGE_FILE,
     "good: Mandu did not fill in its real value for any request off this machine.",
   ]);
   assert.deepEqual(earlyStory(2).counts, { masked: 0, early: 1 }, "the tiles count it as read before its label");
-  // No later request carried it: nothing went back to the AI.
-  assert.deepEqual(linesOf(earlyStory(0), 0).slice(0, 2), [
+  // No later request carried it: nothing went back to the AI, and the advice
+  // follows the first line.
+  assert.deepEqual(linesOf(earlyStory(0), 0).slice(0, 3), [
     `warn: The AI read its real value at ${DELIVERED}, before it was marked a secret. From ${MASKED} on it got a placeholder in its place.`,
+    CHANGE_FILE,
     "good: Mandu did not fill in its real value for any request off this machine.",
   ]);
-  // Your own model's level: its line after the two.
-  assert.deepEqual(linesOf(earlyStory(1, { prefix: "localmodel" }), 0).slice(1, 3), [
+  // Your own model's level: its line after the advice.
+  assert.deepEqual(linesOf(earlyStory(1, { prefix: "localmodel" }), 0).slice(1, 4), [
     OWN_WORDS,
+    CHANGE_FILE,
     "plain: Its level lets only your own model read it. An outside AI gets a placeholder.",
   ]);
+});
+
+test("a secret the AI read before its label says to change it: a named key \"Change this key\", anything else \"If it holds a key or a password\" (§4.25b)", () => {
+  // The kind comes from how the card names it (secretWhat's branch), never
+  // from its words: a file's key and an environment variable are keys.
+  const cases: [string, string, string | null, string, string][] = [
+    ["a file", "$MDU:nomodel_Read[cccc]", "/srv/app/deploy/staging.conf", "The file /srv/app/deploy/staging.conf", CHANGE_FILE],
+    ["a file's key", "$MDU:nomodel_Read[cccc].STRIPE_KEY", "/srv/app/.env", "STRIPE_KEY in /srv/app/.env", CHANGE_KEY],
+    ["a key in a file not placed", "$MDU:nomodel_Read[cccc].STRIPE_KEY", null, "STRIPE_KEY in a file", CHANGE_KEY],
+    ["an environment variable", "$MDU:nomodel_Env[cccc].GITHUB_TOKEN", null, "The environment variable GITHUB_TOKEN", CHANGE_KEY],
+    ["a step's output", "$MDU:nomodel_Bash[cccc]", null, "Output of a Bash step that held a secret", CHANGE_FILE],
+  ];
+  for (const [what, root, origin, named, advice] of cases) {
+    for (const requests of [0, 2]) {
+      const story = earlyStory(requests, { root, origin });
+      assert.equal(words(story.secrets[0]!.what), named, what);
+      const lines = linesOf(story, 0);
+      assert.equal(lines[requests > 0 ? 2 : 1], advice, `${what}, ${requests} requests: ${lines.join(" | ")}`);
+      assert.equal(lines.filter((l) => l === CHANGE_FILE || l === CHANGE_KEY).length, 1, `${what}: one advice line`);
+      assert.deepEqual(story.counts, { masked: 0, early: 1 }, `${what}: wording only, the tiles count the same`);
+    }
+  }
+});
+
+test("only a card that says the AI read the real value before its label says to change it", () => {
+  const vm = toSessionViewModel(SESSION, walkthroughEvents());
+  const own: SymbolLineage = { root: "$MDU:localmodel_Env[bbbb].B", nodes: [], edges: [], summary: { root: "$MDU:localmodel_Env[bbbb].B", originLabel: null, minted: true, contextTurns: 2, echoed: false, terminal: "context-only" } };
+  const cases: [string, SecretsStory][] = [
+    ["a level that lets the AI read it", earlyStory(2, { prefix: "anymodel" })],
+    ["a fired leak check", earlyStory(2, { flagged: true })],
+    ["Off", earlyStory(2, { mode: "off" })],
+    ["a key, a fired leak check", earlyStory(2, { flagged: true, root: "$MDU:nomodel_Read[cccc].STRIPE_KEY", origin: "/srv/app/.env" })],
+    ["a key, Off", earlyStory(2, { mode: "off", root: "$MDU:nomodel_Read[cccc].STRIPE_KEY", origin: "/srv/app/.env" })],
+    ["masked from the start", pageOf().secrets],
+    ["your own model's level, masked from the start", secretsStory({ ...vm, lineage: { ...vm.lineage, flows: [own] } }, [], false, "secrets")],
+  ];
+  for (const [what, story] of cases) {
+    assert.ok(story.secrets.length > 0, what);
+    for (let i = 0; i < story.secrets.length; i++) {
+      assert.ok(story.secrets[i]!.saw !== "early", what);
+      assert.ok(!linesOf(story, i).some((l) => /change it|Change this key/.test(l)), `${what}: ${linesOf(story, i).join(" | ")}`);
+    }
+  }
 });
 
 test("the AI's own words line only on a card that says the AI read the real value before its label", () => {
@@ -752,6 +801,52 @@ test("Your secrets: two flows of one key, one naming its file and one not, are o
   const story = mintedStory([{ tool: "Read", args: { file_path: "/home/user/app/.env" }, result: key }], [{ root: key, origin: "/home/user/app/.env" }, { root: key }], null, home);
   assert.deepEqual(story.secrets.map((x) => words(x.what)), ["STRIPE_KEY in ~/app/.env"]);
   assert.deepEqual(story.counts, { masked: 1, early: 0 });
+});
+
+test("a card's file, which it links to Rules: a key's file, a whole file, a minted read's; ~/… under home, else absolute; none where no file is named (§4.25b)", () => {
+  const f = (root: string, originLabel: string | null = null): SymbolLineage => ({ root, nodes: [], edges: [], summary: { root, originLabel, minted: true, contextTurns: 0, echoed: false, terminal: "dormant" } });
+  const home = "/home/user";
+  // A recorded origin: the key's file, the whole file; under home as ~/….
+  assert.equal(secretFile(f("$MDU:nomodel_Read[aaaa].KEY", "/home/user/app/.env"), home), "~/app/.env");
+  assert.equal(secretFile(f("$MDU:nomodel_read_file[aaaa]", "/home/user/.ssh/id_ed25519"), home), "~/.ssh/id_ed25519");
+  // Outside home, another account's home, or no home known: absolute.
+  assert.equal(secretFile(f("$MDU:nomodel_Read[aaaa].KEY", "/srv/app/.env"), home), "/srv/app/.env");
+  assert.equal(secretFile(f("$MDU:nomodel_Read[aaaa].KEY", "/home/bob/.env"), home), "/home/bob/.env");
+  assert.equal(secretFile(f("$MDU:nomodel_Read[aaaa].KEY", "/home/user/app/.env")), "/home/user/app/.env");
+  // A relative origin is placed in the session's folder, else not linked.
+  assert.equal(secretFile(f("$MDU:nomodel_Read[aaaa].KEY", "app/.env"), home, null, "/home/user/proj"), "~/proj/app/.env");
+  assert.equal(secretFile(f("$MDU:nomodel_Read[aaaa].KEY", "app/.env"), home), null);
+  assert.equal(secretFile(f("$MDU:nomodel_Read[aaaa].KEY", "~/app/.env"), "", null, "/w"), null, "~ with no home known is never the session's folder");
+  // The file of the read that minted it, when no origin was recorded; a recorded one wins.
+  assert.equal(secretFile(f("$MDU:nomodel_Read[aaaa].KEY"), home, "/home/user/mandu-try/.env"), "~/mandu-try/.env");
+  assert.equal(secretFile(f("$MDU:nomodel_Read[aaaa].KEY", "/srv/real/.env"), home, "/home/user/x/.env"), "/srv/real/.env");
+  // No file named: a variable, a command's output, a search, a secret item, an unknown read.
+  assert.equal(secretFile(f("$MDU:nomodel_Env[aaaa].NPM_TOKEN"), home), null);
+  assert.equal(secretFile(f("$MDU:nomodel_Read[aaaa].KEY", "env:NPM_TOKEN"), home), null);
+  assert.equal(secretFile(f("$MDU:nomodel_Bash[aaaa]", "/home/user/app/.env"), home, "/home/user/app/.env"), null);
+  assert.equal(secretFile(f("$MDU:nomodel_Grep[aaaa]", "/home/user/app"), home), null);
+  assert.equal(secretFile(f("$MDU:nomodel_Read[aaaa].KEY"), home), null);
+  assert.equal(secretFile(f("$MDU:secret[aaaa]"), home), null);
+  // A token with no tool tag names a file only by an absolute or ~/ origin.
+  assert.equal(secretFile(f("$MDU:secret[aaaa]", "/home/user/notes/plan.md"), home), "~/notes/plan.md");
+  assert.equal(secretFile(f("$MDU:secret[aaaa]", "plan.md"), home, null, "/home/user"), null);
+  assert.equal(secretFile(f("$MDU:secret[aaaa]", "https://example.com/x"), home, null, "/home/user"), null);
+});
+
+test("Your secrets: a card that names a file carries it, a minted read's too; a variable's and a command output's carry none (§4.25b)", () => {
+  const home = "/home/user";
+  const key = "$MDU:nomodel_Read[d005].STRIPE_KEY";
+  const minted = mintedStory([{ tool: "Read", args: { file_path: "/home/user/mandu-try/.env" }, result: key }], [{ root: key }], null, home);
+  assert.equal(minted.secrets[0]!.file, "~/mandu-try/.env");
+  const unplaced = mintedStory([{ tool: "Read", args: { file_path: "app/.env" }, result: key }], [{ root: key }], null, home);
+  assert.equal(words(unplaced.secrets[0]!.what), "STRIPE_KEY in a file");
+  assert.equal("file" in unplaced.secrets[0]!, false, "a path that could not be placed: no link");
+  const { secrets } = pageOf(walkthroughEvents(), "/home/dev");
+  const byName = new Map(secrets.secrets.map((s) => [words(s.what), s.file]));
+  assert.equal(byName.get("PASTE_KEY in ~/app/.env"), "~/app/.env");
+  assert.equal(byName.get("The environment variable GITHUB_TOKEN"), undefined);
+  const outputs = causeStory([{ token: "$MDU:nomodel_Bash[a001]", note: namesNote("a secret file (./.env)") }], home);
+  assert.equal("file" in outputs.secrets[0]!, false, "a command's output names no file of its own");
 });
 
 test("short names: a variable, a file's key, a file; never a piece of a command or a web address (§4.25b)", () => {

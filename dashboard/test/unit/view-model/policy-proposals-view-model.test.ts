@@ -296,6 +296,14 @@ test("history rows: who did it in plain words; Undo only where the arbiter says 
   for (const r of [tight, approved, undo]) assert.doesNotMatch([r.sentence, ...r.rows.map(text)].join("\n"), FORBIDDEN);
 });
 
+test("§4.25 Details: a history row names the request it answered, so a link to that request marks it; others name none", () => {
+  const base = { requestedBy: "dashboard", sessionKey: null, createdAt: 5, undoneAt: null, undoneBy: null, edits: [], delta: [], undoable: true };
+  assert.equal(toChangeRow({ ...base, id: "pc-000004", via: "proposal", proposalId: "pp-000002" }).proposalId, "pp-000002");
+  for (const proposalId of [null, ""]) {
+    assert.equal("proposalId" in toChangeRow({ ...base, id: "pc-000005", via: "agent-tighten", proposalId }), false, String(proposalId));
+  }
+});
+
 // ── dashboard.md §4.34: `~` is the dashboard's home ──────────────────────────
 
 const HOME = "/home/alice";

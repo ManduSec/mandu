@@ -17,6 +17,7 @@
  * only two enums and an id per answer).
  */
 import { tildePath } from "./file-browser.js";
+import { MODELS_LINK, type ModelsPlacePart } from "./model-endpoints.js";
 
 // ── the wire (arbiter/ipc/protocol.ts), declared here so the dashboard
 //    typechecks standalone ──────────────────────────────────────────────────
@@ -83,6 +84,9 @@ export interface ModelOptionVM {
   enabled: boolean;
   /** Why it cannot be picked, or null. */
   why: string | null;
+  /** `why` as parts where it names a place the page links (Settings ›
+   *  Models); absent otherwise. */
+  whyParts?: ModelsPlacePart[];
 }
 
 export interface ModelPickerVM {
@@ -101,6 +105,13 @@ export const NOT_OFFERED = "Not offered yet: asking a model is still being teste
  *  asking a model is still being tested."). */
 export const NOT_OFFERED_LINE = "Asking a model to suggest rules is not offered yet: it is still being tested.";
 export const NO_OWN_MODEL = "No model of your own is set up. Add one in Settings › Models, and mark it as your own.";
+/** `NO_OWN_MODEL` as parts, "Settings › Models" the link: joined, the same
+ *  words (dashboard.md §4.25t). */
+export const NO_OWN_MODEL_PARTS: readonly ModelsPlacePart[] = [
+  { kind: "text", text: "No model of your own is set up. Add one in " },
+  MODELS_LINK,
+  { kind: "text", text: ", and mark it as your own." },
+];
 export const MODELS_UNKNOWN = "Your models could not be read from the protection service.";
 
 /** The picker (§14.5). Pure. `endpoints` null: the list could not be read. */
@@ -112,7 +123,7 @@ export function modelPickerVM(offered: boolean, endpoints: readonly ModelEndpoin
     options: [
       { value: "off", label: "Off", enabled: true, why: null },
       { value: "names", label: "Names only", enabled: offered, why: offered ? null : NOT_OFFERED },
-      { value: "contents", label: "Contents (your own model)", enabled: contentsWhy === null, why: contentsWhy },
+      { value: "contents", label: "Contents (your own model)", enabled: contentsWhy === null, why: contentsWhy, ...(contentsWhy === NO_OWN_MODEL ? { whyParts: [...NO_OWN_MODEL_PARTS] } : {}) },
     ],
     ownModels: own,
     hint: offered

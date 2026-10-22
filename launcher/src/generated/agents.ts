@@ -15,3 +15,9 @@ export type AgentLine = (typeof LINES)[number];
 export function isAgent(s: unknown): s is Agent {
   return (AGENTS as readonly unknown[]).includes(s);
 }
+
+/** The agents only the past-sessions scan knows: Mandu does not run them,
+ *  and the scan reads their sessions (`read`) or counts them (plan 17 §4). */
+export const SCAN_ONLY_AGENTS = ["gemini", "copilot", "cursor"] as const;
+export type ScanOnlyAgent = (typeof SCAN_ONLY_AGENTS)[number];
+export const SCAN_ONLY_NAMES: Readonly<Record<ScanOnlyAgent, string>> = { gemini: "Gemini CLI", copilot: "Copilot CLI", cursor: "Cursor" };

@@ -27,6 +27,7 @@ import {
   deriveTenant,
   tenantedTags,
   testNumber,
+  withCwd,
 } from "./registry.js";
 import { deriveHealth } from "../session-health.js";
 import { withCounts } from "../view-model/session-counts.js";
@@ -84,6 +85,7 @@ export class FileEventSource implements EventSource {
       const ref: SessionRef = {
         id,
         ...sessionLabelFields(events, id),
+        ...withCwd(events),
         eventCount: events.length,
         firstTs: events.length ? events[0]!.ts : null,
         lastTs: events.length ? events[events.length - 1]!.ts : null,

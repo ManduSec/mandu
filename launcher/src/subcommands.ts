@@ -15,14 +15,18 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { assertRuntimeBaseTrusted, resolveArbiterSock, runtimeBase } from "./arbiter-sock.js";
 import { accountRendezvous, ensurePrivateIfFallback, isSharedStickyMode, ownedDirProblem, type DirStat } from "./runtime-base.js";
-import { requestSignInLink, SIGN_IN_HOW, wantsSignInLink, type SignInOutcome } from "./dashboard-sign-in.js";
+import { requestSignInLink, SIGN_IN_HOW, signInWords, wantsSignInLink, type SignInOutcome } from "./dashboard-sign-in.js";
+import { accountState, realSetPasswordDeps, runSetPassword, type SetPasswordDeps } from "./dashboard-account.js";
 import { lastStartFailure } from "./arbiter.js";
 import { listDashboards, listInstances, planReap, readDashManifestLite, readManifestLite, realReapDeps, runReap, type ReapAction, type ReapDeps } from "./reap.js";
+import { findAbandonedDaemons } from "./abandoned-stacks.js";
 import { realDeps } from "./services/primitives.js";
 import { runDoctor } from "./doctor.js";
 import { realSetupDeps, runSetup } from "./setup.js";
 import { runDoctorLive, wantsLive } from "./doctor-live.js";
 import { runDoctorSecrets, wantsSecrets } from "./doctor-secrets.js";
+import { manduCommand, realScanDeps, runScan } from "./scan-command.js";
+import { connectHost, dashboardUrl, liveDashboards, registeredDashboards, type LiveDashboard } from "./live-dashboards.js";
 import { configPath, DEFAULT_CONFIG_TOML } from "./config.js";
 import { runMode } from "./mode-command.js";
 import { runWhy } from "./why.js";
@@ -36,7 +40,11 @@ import { subcommandUsage, wantsHelp } from "./subcommand-help.js";
 import type { Layout } from "./services/layout.js";
 
 /** Reserved management verbs. Anything else (claude/codex/any binary) launches. */
-export const RESERVED_SUBCOMMANDS = new Set(["status", "stop", "dashboard", "doctor", "init", "reap", "setup", "mode", "why", "revert", "demo", "paths", "policy", "log", "version"]);
+// The registry readers moved to live-dashboards.ts (mandu scan reads them too);
+// re-exported for the modules and tests that import them from here.
+export { dashboardUrl, liveDashboards, registeredDashboards, type LiveDashboard };
+
+export const RESERVED_SUBCOMMANDS = new Set(["status", "stop", "dashboard", "doctor", "init", "reap", "setup", "mode", "why", "revert", "demo", "paths", "policy", "log", "version", "scan"]);
 
 type Env = Record<string, string | undefined>;
 
@@ -391,6 +399,12 @@ export async function runStatus(env: Env, opts: StatusOpts = {}): Promise<number
   if (leftovers !== null) {
     out(`  leftovers: ${leftovers} (\`mandu reap\` cleans them up; \`mandu reap --dry-run\` lists them)\n`);
   }
+  // Other stacks' services whose code folder is gone (abandoned-stacks.ts).
+  const abandoned = reapDeps.abandoned ? findAbandonedDaemons(runtimeBase(env), reapDeps.abandoned).length : 0;
+  if (abandoned > 0) {
+    out(`  abandoned: ${abandoned} service${abandoned === 1 ? "" : "s"} of other stacks whose code folder is gone ` +
+      "(`mandu reap --dry-run` lists them; `mandu reap --other-stacks` stops them)\n");
+  }
   if (!opts.verbose) {
     out("(`mandu status --verbose` lists every registered service and Mandu process)\n");
     return 0;
@@ -544,21 +558,6 @@ export async function stopStackAndWait(
   return { stopped, survivors };
 }
 
-/** A registered dashboard this user runs (registry.ts manifest, lite). */
-export interface LiveDashboard { id: string; pid: number; host: string; port: number; basePath?: string; signInSock?: string }
-
-/** The URL a user opens for a registered dashboard: loopback for a wildcard
- *  bind, the dashboard's own base path (registry entry; entries from before
- *  2026-09-26 carry none and were served under /mandu), and a trailing /. */
-export function dashboardUrl(d: { host: string; port: number; basePath?: string }): string {
-  const prefix = (d.basePath ?? "/mandu").replace(/\/+$/, "");
-  return `http://${connectHost(d.host)}:${d.port}${prefix}/`;
-}
-
-/** This user's registered dashboards whose process is alive, newest first. */
-export function liveDashboards(env: Env, pidAlive: (pid: number) => boolean = realReapDeps.pidAlive): LiveDashboard[] {
-  return registeredDashboards(env).filter((d) => pidAlive(d.pid));
-}
 
 /** Injectable I/O for `mandu dashboard` (tests never touch a real port). */
 export interface DashboardDeps {
@@ -587,33 +586,15 @@ export interface DashboardDeps {
   /** Ask a dashboard's sign-in socket for a one-time link
    *  (dashboard-sign-in.ts requestSignInLink). Optional: absent = no link. */
   signIn?: (d: LiveDashboard, env: Env) => Promise<SignInOutcome>;
+  /** `--set-password`'s terminal (dashboard-account.ts). Optional: absent =
+   *  the real terminal. */
+  setPassword?: (env: Env) => SetPasswordDeps;
+  /** On a terminal with no dashboard account yet, offer to make one
+   *  (dashboard.md §6.z). Optional: absent = no offer. */
+  offerAccount?: (env: Env) => Promise<void>;
 }
 
-/** The runtime registry the dashboard writes (dashboard/src/registry.ts,
- *  runtime-instances.md §10): `<runtimeBase>/dashboards/<id>.json`. Per user
- *  by construction (the runtime base lives under XDG_RUNTIME_DIR, the
- *  per-user TMPDIR, or the private 0700 /tmp/mandu-<uid>, §3b). */
-export function registeredDashboards(env: Env): LiveDashboard[] {
-  const dir = join(runtimeBase(env), "dashboards");
-  let names: string[] = [];
-  try { names = readdirSync(dir); } catch { return []; }
-  const out: LiveDashboard[] = [];
-  for (const name of names.filter((n) => n.endsWith(".json")).sort().reverse()) {
-    const m = readDashManifestLite(join(dir, name));
-    if (!m || typeof m.port !== "number" || m.port <= 0) continue;
-    out.push({
-      id: name.replace(/\.json$/, ""), pid: m.pid, host: m.host ?? "127.0.0.1", port: m.port,
-      ...(typeof m.basePath === "string" ? { basePath: m.basePath } : {}),
-      ...(typeof m.signInSock === "string" ? { signInSock: m.signInSock } : {}),
-    });
-  }
-  return out;
-}
 
-/** A wildcard bind is reached over loopback. */
-function connectHost(host: string): string {
-  return host === "0.0.0.0" || host === "::" || host === "" ? "127.0.0.1" : host;
-}
 
 function realDashboardDeps(layout: Layout): DashboardDeps {
   return {
@@ -640,7 +621,33 @@ function realDashboardDeps(layout: Layout): DashboardDeps {
     err: (m) => { process.stderr.write(m); },
     isTTY: process.stdout.isTTY === true,
     signIn: (d, env) => requestSignInLink(d, runtimeBase(env)),
+    setPassword: (env) => realSetPasswordDeps(env),
+    offerAccount: (env) => offerDashboardAccount(env),
   };
+}
+
+/** `mandu setup`, then (dashboard.md §6.z) the dashboard account's offer:
+ *  setup is where a person prepares this computer for Mandu at a terminal,
+ *  so a missing account is asked for there too. Not after `--print` or
+ *  `--uninstall`; the offer itself asks only on a terminal, only when there
+ *  is no account. Exported for the unit test. */
+export async function runSetupThenAccount(rest: string[], setup: () => Promise<number>, offer: () => Promise<void>): Promise<number> {
+  const rc = await setup();
+  if (rest.includes("--print") || rest.includes("--uninstall")) return rc;
+  await offer();
+  return rc;
+}
+
+/** No dashboard account yet and a person at the terminal: offer to make one
+ *  (dashboard.md §6.z). MANDU_NO_ACCOUNT_OFFER=1 skips it. */
+async function offerDashboardAccount(env: Env): Promise<void> {
+  if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) return;
+  if (env["MANDU_NO_ACCOUNT_OFFER"] === "1") return;
+  const deps = realSetPasswordDeps(env);
+  if (accountState(deps.path) !== null) return;
+  const answer = await deps.askLine("Your dashboard has no account yet: one username and password for every page. Make one now? [Y/n] ");
+  if (answer === null || /^n/i.test(answer.trim())) return;
+  await runSetPassword(deps);
 }
 
 /**
@@ -662,7 +669,9 @@ function realDashboardDeps(layout: Layout): DashboardDeps {
  *      refusal naming the conflict (never a stranger's URL).
  * A dashboard run directly (`npm run serve`, a systemd unit) keeps its own
  * default of 4500 — the resident deployment's bookmark — and, registered like
- * every dashboard, is what step 1 finds.
+ * every dashboard, is what step 1 finds. Finding or starting it is
+ * {@link ensureDashboard}, which `mandu scan --open` uses too
+ * ({@link dashboardForScan}); this prints what it found.
  */
 export async function runDashboard(
   rest: string[],
@@ -670,17 +679,56 @@ export async function runDashboard(
   layout: Layout,
   deps: DashboardDeps = realDashboardDeps(layout),
 ): Promise<number> {
+  // `--set-password` (dashboard.md §6.z): the account every dashboard page
+  // asks for, typed in this terminal; no dashboard is started for it.
+  if (rest.includes("--set-password")) return runSetPassword(deps.setPassword ? deps.setPassword(env) : realSetPasswordDeps(env));
+  const r = await ensureDashboard(env, deps);
+  if ("code" in r) return r.code;
+  if (!r.started) {
+    deps.out(`dashboard already up — ${dashboardUrl(r.d)}\n`);
+    await printSignIn(r.d, env, deps);
+    return 0;
+  }
+  const bound = r.port;
+  deps.out(`dashboard up — ${dashboardUrl(r)}\n`);
+  if (r.notRunning) {
+    deps.out(`Mandu is not running, so it protects no agent now: start yours with ${manduCommand(env, "claude")} (or ${manduCommand(env, "codex")}). The dashboard shows your last scan under Scan.\n`);
+  }
+  if (deps.signIn && wantsSignInLink(deps.isTTY, env)) {
+    // The new dashboard registers itself (with its sign-in socket) just
+    // after it publishes its port: wait for the entry.
+    let entry: LiveDashboard | undefined;
+    await deps.waitFor(() => { entry = deps.registered(env).find((d) => d.port === bound); return entry !== undefined; });
+    if (entry) await printSignIn(entry, env, deps);
+    else deps.err(`mandu: the new dashboard did not register; ${SIGN_IN_HOW}\n`);
+  }
+  return 0;
+}
+
+/** What {@link ensureDashboard} found: a live dashboard of this user, or one
+ *  it started (where, and whether no arbiter was there to join). */
+export type EnsuredDashboard =
+  | { started: false; d: LiveDashboard }
+  | { started: true; host: string; port: number; basePath: string; notRunning: boolean };
+
+/**
+ * This user's live dashboard, else one started, as `mandu dashboard` does
+ * it (the rules above {@link runDashboard}): the started one runs on as a
+ * resident daemon (no owner pid) after this command exits. A refusal or a
+ * failed start is printed through `deps.err` and answered with its exit
+ * code. Prints nothing else.
+ */
+export async function ensureDashboard(env: Env, deps: DashboardDeps): Promise<EnsuredDashboard | { code: number }> {
   const host = env["DASHBOARD_HOST"] || "127.0.0.1";
   // The prefix a dashboard started here serves under (the dashboard's own
   // default is none); a dashboard found in the registry carries its own.
   const basePath = env["DASHBOARD_BASE_PATH"] ?? "";
-  const urlOf = (h: string, port: number): string => dashboardUrl({ host: h, port, basePath });
   const pinnedRaw = env["DASHBOARD_PORT"] ?? "";
   const pinned = pinnedRaw !== "";
   const port = pinned ? Number(pinnedRaw) : 0;
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     deps.err(`mandu: DASHBOARD_PORT must be a port number 0..65535 (0 = a free port), got '${pinnedRaw}'\n`);
-    return 2;
+    return { code: 2 };
   }
 
   // The registry and the arbiter rendezvous live under the runtime base: a
@@ -692,7 +740,7 @@ export async function runDashboard(
     sock = arbiterSock(env);
   } catch (err) {
     deps.err(`${(err as Error).message}\n`);
-    return 1;
+    return { code: 1 };
   }
 
   // This user's live dashboards: registered, pid alive, port answering.
@@ -705,31 +753,34 @@ export async function runDashboard(
   if (pinned && port !== 0) {
     if (await deps.probePort(host, port)) {
       const mine = live.find((d) => d.port === port);
-      if (mine) {
-        deps.out(`dashboard already up — ${dashboardUrl(mine)}\n`);
-        await printSignIn(mine, env, deps);
-        return 0;
-      }
+      if (mine) return { started: false, d: mine };
       deps.err(
         `mandu: ${host}:${port} is in use by something that is not one of your Mandu dashboards — ` +
         `refusing to point you at it. Unset DASHBOARD_PORT (a free port is picked) or pin another one.\n`,
       );
-      return 1;
+      return { code: 1 };
     }
   } else if (port === 0 && live.length > 0) {
     // Unset, or an explicit 0 ("any free port"): reuse before starting another.
-    const d = live[0]!;
-    deps.out(`dashboard already up — ${dashboardUrl(d)}\n`);
-    await printSignIn(d, env, deps);
-    return 0;
+    return { started: false, d: live[0]! };
   }
 
-  if (!deps.sockExists(sock)) {
+  // No arbiter answers here. A socket the person pinned (MANDU_ARBITER_SOCK)
+  // that is absent is a mistake to name. Otherwise Mandu is not running, or
+  // never ran: the person who only ran `mandu scan` (plan 17 §3 item 12)
+  // opens the dashboard to read the scan it kept. So the dashboard starts
+  // anyway, and starts nothing of Mandu's (DASHBOARD_AUTOSTART=0: opening a
+  // page is not starting protection); its Home says protection is off
+  // (dashboard.md §4.25, the verdict ladder), and it joins the arbiter the
+  // first `mandu claude` starts.
+  const pinnedSock = env["MANDU_ARBITER_SOCK"] || env["MANDU_ARBITER_SOCKET"];
+  const notRunning = !deps.sockExists(sock);
+  if (notRunning && pinnedSock) {
     deps.err(
       `mandu: arbiter socket ${sock} is absent — start a session first (mandu claude …) ` +
       `or point MANDU_ARBITER_SOCK at a running arbiter.\n`,
     );
-    return 2;
+    return { code: 2 };
   }
 
   // The runtime base: the path table's `runtime-dir` (arbiter-sock.ts), the
@@ -741,7 +792,7 @@ export async function runDashboard(
     (deps.ensureRuntimeDir ?? ((d: string) => ensurePrivateIfFallback(d, env)))(base);
   } catch (err) {
     deps.err(`mandu: ${(err as Error).message}\n`);
-    return 1;
+    return { code: 1 };
   }
   const logPath = `${base}/dashboard.log`;
   // Port 0: the kernel picks, the dashboard publishes the bound port here
@@ -750,7 +801,11 @@ export async function runDashboard(
   if (portFile) rmSync(portFile, { force: true });
   const daemonEnv: Record<string, string | undefined> = {
     ...process.env,
-    MANDU_ARBITER_SOCK: sock,
+    // With no arbiter, nothing is pinned: the dashboard dials the `current`
+    // rendezvous itself (server-main.ts), where a later launch's arbiter
+    // promotes, and its control plane starts one there, never at a pinned path.
+    MANDU_ARBITER_SOCK: notRunning ? undefined : sock,
+    ...(notRunning ? { MANDU_ARBITER_SOCKET: undefined, DASHBOARD_AUTOSTART: "0" } : {}),
     DASHBOARD_HOST: host,
     DASHBOARD_PORT: String(port),
     DASHBOARD_BASE_PATH: basePath,
@@ -774,7 +829,7 @@ export async function runDashboard(
     if (got === null) {
       handle.stop();
       deps.err(`mandu: the dashboard did not start${reason()} (log: ${logPath})\n`);
-      return 1;
+      return { code: 1 };
     }
     bound = got;
   }
@@ -782,27 +837,37 @@ export async function runDashboard(
   if (!up) {
     handle.stop();
     deps.err(`mandu: the dashboard did not answer on ${host}:${bound}${reason()} (log: ${logPath})\n`);
-    return 1;
+    return { code: 1 };
   }
-  deps.out(`dashboard up — ${urlOf(host, bound)}\n`);
-  if (deps.signIn && wantsSignInLink(deps.isTTY, env)) {
-    // The new dashboard registers itself (with its sign-in socket) just
-    // after it publishes its port: wait for the entry.
-    let entry: LiveDashboard | undefined;
-    await deps.waitFor(() => { entry = deps.registered(env).find((d) => d.port === bound); return entry !== undefined; });
-    if (entry) await printSignIn(entry, env, deps);
-    else deps.err(`mandu: no sign-in link: the new dashboard did not register; ${SIGN_IN_HOW} once it has\n`);
-  }
-  return 0;
+  return { started: true, host, port: bound, basePath, notRunning };
 }
 
 /**
- * Print a one-time sign-in link for `d` (policy-surface.md §2.6 "Signing
- * in"): to stdout, only when it is a terminal. Asked over the dashboard's
- * sign-in socket, which an agent's sandbox cannot reach: run from inside
- * one, this says so instead of printing a link.
+ * `mandu scan --open`'s dashboard (confidentiality-plan-17-past-sessions-scan.md
+ * §3 item 12): {@link ensureDashboard}, and for one it started, its registry
+ * entry once it registers (whether it asks for a sign-in first rides there),
+ * else where it answers. Null when none could start (the reason printed).
+ * Handed to runScan by the dispatcher, so scan-command.ts imports nothing
+ * of this module.
+ */
+export async function dashboardForScan(env: Env, deps: DashboardDeps): Promise<{ d: LiveDashboard | { host: string; port: number; basePath: string }; started: boolean } | null> {
+  const r = await ensureDashboard(env, deps);
+  if ("code" in r) return null;
+  if (!r.started) return { d: r.d, started: false };
+  let entry: LiveDashboard | undefined;
+  await deps.waitFor(() => { entry = deps.registered(env).find((d) => d.port === r.port); return entry !== undefined; });
+  return { d: entry ?? { host: r.host, port: r.port, basePath: r.basePath }, started: true };
+}
+
+/**
+ * Say how to sign in to `d` (dashboard.md §6.z): with the Mandu dashboard
+ * account, or, with none yet, to set one (the offer comes first on a
+ * terminal). Asked over the dashboard's human-plane socket, which an agent's
+ * sandbox cannot reach: run from inside one, this says so. An older
+ * dashboard's one-time link is printed to stdout, only on a terminal.
  */
 async function printSignIn(d: LiveDashboard, env: Env, deps: DashboardDeps): Promise<void> {
+  if (deps.offerAccount && deps.isTTY === true) await deps.offerAccount(env);
   if (!deps.signIn || !wantsSignInLink(deps.isTTY, env)) return;
   let outcome: SignInOutcome;
   try {
@@ -815,7 +880,7 @@ async function printSignIn(d: LiveDashboard, env: Env, deps: DashboardDeps): Pro
       deps.out(`sign in (this link works once): ${outcome.url}\n`);
       return;
     case "password":
-      deps.out("sign in with the dashboard's password\n");
+      deps.out(`${signInWords(outcome)}\n`);
       return;
     case "not-asked":
       return;
@@ -824,8 +889,8 @@ async function printSignIn(d: LiveDashboard, env: Env, deps: DashboardDeps): Pro
       return;
     case "unavailable":
       deps.err(
-        `mandu: no sign-in link: ${outcome.why} (an agent's sandbox cannot reach the sign-in channel, by design: ` +
-        "run `mandu dashboard` in your own terminal)\n",
+        `mandu: could not ask the dashboard how to sign in: ${outcome.why} (an agent's sandbox cannot reach its ` +
+        `human-plane socket, by design); ${SIGN_IN_HOW}\n`,
       );
       return;
   }
@@ -881,9 +946,12 @@ export async function runSubcommand(
       // /tmp fallback is refused first (runtime-instances.md §3b).
       assertRuntimeBaseTrusted(env);
       return runReap(rest, env);
-    case "setup": return runSetup(rest, realSetupDeps(layout));
+    case "setup": return runSetupThenAccount(rest, () => runSetup(rest, realSetupDeps(layout)), () => offerDashboardAccount(env));
     case "mode": return runMode(rest, env, userEnv ?? env);
     case "why": return runWhy(rest, env, layout);
+    // `--open` starts a dashboard as `mandu dashboard` does: handed in, so
+    // scan-command.ts needs nothing of this module.
+    case "scan": return runScan(rest, env, layout, { ...realScanDeps, openDashboard: (e) => dashboardForScan(e, realDashboardDeps(layout)) });
     case "revert": return runRevert(rest, env, layout);
     case "demo": return runDemo(rest, env, layout);
     case "paths": return runPaths(rest, env);

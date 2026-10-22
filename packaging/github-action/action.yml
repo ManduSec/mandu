@@ -1,0 +1,176 @@
+# The Mandu GitHub Action: run Claude Code or Codex in a workflow under Mandu,
+# so the model sees the job's secrets (repository secrets in the env, .env
+# files, cloud credentials) only as placeholders, and a secret's real value
+# goes only to the hosts a rule binds it to. Nobody approves anything in CI:
+# a send no rule allows is blocked, and the job summary says so.
+#
+# Design: docs/design/distribution/github-action.md. User docs:
+# docs/github-action.md. The pure logic is lib/*.mjs (tested by
+# test/*.test.mjs); run.mjs runs it.
+name: Mandu (secrets kept from your AI agent)
+description: Run Claude Code or Codex with your CI secrets masked from the model and sent only where you bind them.
+author: Mandu Security
+branding:
+  icon: shield
+  color: gray-dark
+
+inputs:
+  agent:
+    description: "The agent to run: claude (Claude Code, `claude -p`) or codex (Codex, `codex exec`)."
+    required: false
+    default: claude
+  prompt:
+    description: The task for the agent.
+    required: false
+    default: ""
+  prompt-file:
+    description: A file in the repository holding the prompt (instead of `prompt`).
+    required: false
+    default: ""
+  agent-args:
+    description: "Extra arguments for the agent, as a shell-like string or a JSON array (for example `--allowedTools Bash,Read,Edit` or `--full-auto`). Nothing is expanded."
+    required: false
+    default: ""
+  bindings:
+    description: "Where each secret of the job's environment may go, one per line: `NAME: host, host`. Its real value goes to those hosts only; every other send of it is blocked."
+    required: false
+    default: ""
+  mask-env:
+    description: Extra variable names to mask, beyond the ones Mandu recognizes by name or value (comma or newline separated).
+    required: false
+    default: ""
+  policy-file:
+    description: "A Mandu policy.yaml in the repository (default `.github/mandu/policy.yaml` when it exists). Read from the commit the workflow runs for."
+    required: false
+    default: ""
+  policy:
+    description: A Mandu policy.yaml given inline (instead of `policy-file`); the safe choice under pull_request_target.
+    required: false
+    default: ""
+  trust-workspace-policy:
+    description: Read `policy-file` from the checkout even when it is not the commit the workflow runs for.
+    required: false
+    default: "false"
+  require-confinement:
+    description: "Refuse to run unless the agent's programs cannot read a secret file raw (Mandu's `confined` posture)."
+    required: false
+    default: "true"
+  fail-on-blocked:
+    description: Fail the step when Mandu blocked a send of a secret.
+    required: false
+    default: "true"
+  allow-persisted-credentials:
+    description: "Run even though the checkout left its token in the git config (actions/checkout without `persist-credentials: false`)."
+    required: false
+    default: "false"
+  setup:
+    description: "Run `mandu setup` first (Mandu's own bubblewrap; needs passwordless sudo): auto (for Codex only), true or false."
+    required: false
+    default: auto
+  working-directory:
+    description: Where the agent works, relative to the repository root.
+    required: false
+    default: "."
+  summary:
+    description: Write the job summary (what was masked, what was blocked or sent).
+    required: false
+    default: "true"
+  verbose:
+    description: Print every protection layer as it comes up.
+    required: false
+    default: "false"
+  mandu-version:
+    description: The @mandusec/mandu version to install from npm.
+    required: false
+    default: 0.2.0-beta.7
+  agent-version:
+    description: "The agent CLI version to install from npm (default: the newest Mandu was tested with); `none` uses the one already on PATH."
+    required: false
+    default: ""
+  node-version:
+    description: The Node.js version to set up (Mandu needs 22.13 or later).
+    required: false
+    default: "22"
+  anthropic-api-key:
+    description: An Anthropic API key for Claude Code. Mandu masks it from the agent's programs and puts it back only on the way to the model.
+    required: false
+    default: ""
+  claude-code-oauth-token:
+    description: A Claude Code OAuth token (instead of an API key).
+    required: false
+    default: ""
+  openai-api-key:
+    description: An OpenAI API key for Codex.
+    required: false
+    default: ""
+
+outputs:
+  exit-code:
+    description: The agent's exit code (2 when the run was refused before it started).
+    value: ${{ steps.run.outputs.exit-code }}
+  masked:
+    description: How many secrets (variables and files) the model saw only as placeholders.
+    value: ${{ steps.run.outputs.masked }}
+  blocked:
+    description: How many requests carrying a secret were blocked.
+    value: ${{ steps.run.outputs.blocked }}
+  sent:
+    description: How many requests carried a secret's real value to a bound host.
+    value: ${{ steps.run.outputs.sent }}
+  result-file:
+    description: The agent's output (placeholders, never values).
+    value: ${{ steps.run.outputs.result-file }}
+  report-file:
+    description: The summary's facts as JSON (names and hosts only).
+    value: ${{ steps.run.outputs.report-file }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install Mandu and the agent
+      shell: bash
+      env:
+        MANDU_VERSION: ${{ inputs.mandu-version }}
+        AGENT: ${{ inputs.agent }}
+        AGENT_VERSION: ${{ inputs.agent-version }}
+      run: |
+        set -euo pipefail
+        npm install -g --no-audit --no-fund "@mandusec/mandu@${MANDU_VERSION}"
+        case "$AGENT" in
+          claude) pkg="@anthropic-ai/claude-code"; tested="2.1.295" ;;
+          codex)  pkg="@openai/codex"; tested="0.162.0" ;;
+          *) echo "::error title=Mandu::agent must be claude or codex"; exit 2 ;;
+        esac
+        if [ "$AGENT_VERSION" != "none" ]; then
+          npm install -g --no-audit --no-fund "${pkg}@${AGENT_VERSION:-$tested}"
+        fi
+        mandu version
+
+    - id: run
+      name: Run the agent under Mandu
+      shell: bash
+      env:
+        MANDU_ACTION_AGENT: ${{ inputs.agent }}
+        MANDU_ACTION_PROMPT: ${{ inputs.prompt }}
+        MANDU_ACTION_PROMPT_FILE: ${{ inputs.prompt-file }}
+        MANDU_ACTION_AGENT_ARGS: ${{ inputs.agent-args }}
+        MANDU_ACTION_BINDINGS: ${{ inputs.bindings }}
+        MANDU_ACTION_MASK_ENV: ${{ inputs.mask-env }}
+        MANDU_ACTION_POLICY_FILE: ${{ inputs.policy-file }}
+        MANDU_ACTION_POLICY: ${{ inputs.policy }}
+        MANDU_ACTION_TRUST_WORKSPACE_POLICY: ${{ inputs.trust-workspace-policy }}
+        MANDU_ACTION_REQUIRE_CONFINEMENT: ${{ inputs.require-confinement }}
+        MANDU_ACTION_FAIL_ON_BLOCKED: ${{ inputs.fail-on-blocked }}
+        MANDU_ACTION_ALLOW_PERSISTED_CREDENTIALS: ${{ inputs.allow-persisted-credentials }}
+        MANDU_ACTION_SETUP: ${{ inputs.setup }}
+        MANDU_ACTION_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        MANDU_ACTION_SUMMARY: ${{ inputs.summary }}
+        MANDU_ACTION_VERBOSE: ${{ inputs.verbose }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key || env.ANTHROPIC_API_KEY }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token || env.CLAUDE_CODE_OAUTH_TOKEN }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key || env.OPENAI_API_KEY }}
+      run: node "$GITHUB_ACTION_PATH/run.mjs"

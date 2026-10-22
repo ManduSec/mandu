@@ -17,7 +17,8 @@
  *   A2  Block over the real route: `/api/home`'s answered row carries the
  *       session that raised it;
  *   A3  the served Approvals page (its own index.html and home.js in jsdom):
- *       the row's when line ends with "See what the agent was doing",
+ *       the row's when line carries "See what the agent was doing" (then
+ *       "Kept in Rules", a standing answer's link to Rules),
  *       addressed to `/agents/<session>?ask=<id>`; a click opens the served
  *       agent page with that step marked "Mandu asked you here", an EXACT
  *       match;
@@ -160,7 +161,8 @@ test("an answer under Answered earlier links the session that asked, and the lin
       const line = served.querySelector(".answered-what").lastElementChild;
       assert.equal(line.className, "dim answered-when", "the link is on the line under the words");
       assert.ok(line.querySelector("time"), "after when, as a <time>");
-      assert.match(line.textContent, /\. See what the agent was doing$/);
+      // A standing answer (Blocked) ends with Kept in Rules (§4.25).
+      assert.match(line.textContent, /\. See what the agent was doing\. Kept in Rules$/);
       const link = line.querySelector("a.ask-link");
       assert.equal(link.getAttribute("href"), `/agents/${SESSION}?ask=${row!.id}`, "the product's agent page at the ask");
       assert.equal(served.children[1].textContent, "Blocked");

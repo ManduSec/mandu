@@ -176,3 +176,13 @@ test("extractToolUsesFromJson pulls tool_use blocks from a non-streaming respons
   assert.equal(out[0].name, "Read");
   assert.deepEqual(out[1].input, { command: "pwd" });
 });
+
+test("messageId: message_start's message.id, the first one only; undefined without one", () => {
+  const p = new SseToolUseParser(() => {});
+  p.feed(buildTextSse("hi"));
+  p.feed(buildTextSse("again").replace('"id":"msg_txt"', '"id":"msg_second"'));
+  assert.equal(p.messageId(), "msg_txt");
+  const q = new SseToolUseParser(() => {});
+  q.feed(sseEvent("content_block_stop", { type: "content_block_stop", index: 0 }));
+  assert.equal(q.messageId(), undefined);
+});

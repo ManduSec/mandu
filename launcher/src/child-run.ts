@@ -20,6 +20,19 @@
  *     is SIGKILL to the WHOLE group: nice, bubblewrap and its sandbox child
  *     until that child calls setsid (`--new-session`), which it does only
  *     after the eventfd read, so the orphan above is always in the group;
+ *   - and to every descendant read just before the kill (found 2026-10-21,
+ *     CI jobs 18255 to 18296): after its setsid the sandbox child (the
+ *     sandbox's pid 1) leads a session of its own, out of the group's
+ *     reach, and binds its life to bubblewrap's (`--die-with-parent`) only
+ *     in its init, after it forked the command, with no check that
+ *     bubblewrap is still there. A kill in that window left the sandbox
+ *     running the command to its end, unbound, holding the pipes (2 of 8192
+ *     kills within 3 ms of the spawn on an idle host; at nice 19 in a busy
+ *     cgroup, `git --version` past a 5 s grace). So a kill reads the
+ *     child's descendants (`descendants`), kills the group, then each
+ *     descendant and its group. Each is read while its parent lives, so it
+ *     has not been reaped (its pid not reused) at the read; microseconds
+ *     pass between the read and the kill;
  *   - a kill settles the call within `killGraceMs` whatever still holds the
  *     pipes (they are destroyed: nothing more is read);
  *   - an exit whose output does not close within `closeGraceMs` (a process
@@ -38,6 +51,7 @@
  * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code (no reference origin).
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 
 export interface ChildRunOptions {
   cwd: string;
@@ -51,6 +65,9 @@ export interface ChildRunOptions {
   onStdout?: (chunk: string) => void;
   /** stdout raw, a chunk at a time, instead of collected. */
   onStdoutBytes?: (chunk: Buffer) => void;
+  /** How collected stdout is decoded: UTF-8 (the default), or `latin1`, one
+   *  character per byte, for a binary answer. */
+  stdoutEncoding?: "utf8" | "latin1";
   /** Collected stdout over this many characters kills the call (a
    *  failure, never a silently truncated answer). Default: unbounded. */
   maxStdout?: number;
@@ -83,6 +100,38 @@ export interface RunningChild {
 
 export const CHILD_CLOSE_GRACE_MS = 10_000;
 export const CHILD_KILL_GRACE_MS = 1_000;
+
+/** At most this many descendants are read for a kill (a git call has a
+ *  handful: bubblewrap's pid 1 and the command). */
+export const CHILD_MAX_DESCENDANTS = 256;
+
+/** The live descendants of `pid`, parents first, from
+ *  /proc/<pid>/task/<tid>/children (Linux, CONFIG_PROC_CHILDREN: on in the
+ *  distributions' kernels). None where there is no /proc (macOS, where the
+ *  Seatbelt sandbox execs git in place and leaves no sandbox child) or the
+ *  file cannot be read: the group kill alone, as before. */
+export function descendants(pid: number): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>([pid]);
+  const queue = [pid];
+  while (queue.length > 0 && out.length < CHILD_MAX_DESCENDANTS) {
+    const p = queue.shift()!;
+    let tasks: string[];
+    try { tasks = readdirSync(`/proc/${p}/task`); } catch { continue; }
+    for (const t of tasks) {
+      let kids: string;
+      try { kids = readFileSync(`/proc/${p}/task/${t}/children`, "utf8"); } catch { continue; }
+      for (const k of kids.split(" ")) {
+        const n = Number(k);
+        if (k === "" || !Number.isInteger(n) || n <= 0 || seen.has(n) || out.length >= CHILD_MAX_DESCENDANTS) continue;
+        seen.add(n);
+        out.push(n);
+        queue.push(n);
+      }
+    }
+  }
+  return out;
+}
 
 /** Run `file args` (see the module comment); `children` tracks it while it
  *  runs so an owner's `stop` can kill it. */
@@ -119,10 +168,20 @@ export function runChild(
       resolveRun(r);
     };
     // The group: nice, bubblewrap, and bubblewrap's sandbox child before
-    // its setsid (a group of its own since `detached`).
+    // its setsid (a group of its own since `detached`); then each
+    // descendant read before the kill, which reaches that sandbox child
+    // after its setsid (see the module comment). Only while node has not
+    // reaped the child (its exit reported on this same thread): a reaped
+    // child's pid may be another process's by now.
     const killGroup = (): void => {
+      const unreaped = child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+      const left = unreaped ? descendants(child.pid!) : [];
       if (child.pid !== undefined) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ } }
       try { child.kill("SIGKILL"); } catch { /* gone */ }
+      for (const pid of left) {
+        try { process.kill(-pid, "SIGKILL"); } catch { /* leads no group */ }
+        try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+      }
     };
     // Stop reading: output a straggler holds open is never waited for.
     const abandon = (reason: string, error?: string): void => {
@@ -142,7 +201,7 @@ export function runChild(
     if (opts.onStdoutBytes) {
       child.stdout!.on("data", (c: Buffer) => { if (!settled) opts.onStdoutBytes!(c); });
     } else {
-      child.stdout!.setEncoding("utf8");
+      child.stdout!.setEncoding(opts.stdoutEncoding ?? "utf8");
       child.stdout!.on("data", (c: string) => {
         if (settled) return;
         if (opts.onStdout) { opts.onStdout(c); return; }

@@ -53,7 +53,7 @@ stateAxes("secrets");
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ADMIN_TOKEN = `settings-focus-admin-${process.pid}`;
 const SESSION_SECRET = `settings-focus-secret-${process.pid}`;
-const SIGN_IN = "Sign in first: in your own terminal, run mandu dashboard and open the sign-in link it prints (each link works once), or sign in with the dashboard's password if it has one.";
+const SIGN_IN = "Sign in first: reload this page and sign in with your dashboard account (if there isn't one yet, run mandu dashboard --set-password in your own terminal).";
 const text = (el: any): string => String(el?.textContent ?? "").replace(/\s+/g, " ").trim();
 const row = (doc: any): any => doc.getElementById("settings-service-main");
 const name = (doc: any): string => text(row(doc)?.querySelector(".service-state"));

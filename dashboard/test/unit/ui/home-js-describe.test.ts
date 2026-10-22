@@ -2,6 +2,9 @@
  * home-js-describe.test — Describe what you want (policy-surface.md §8
  * §5.2) on the Rules page: Suggest, the suggested rows, Apply and its
  * conflicts, the typed ALLOW, the no-helper and empty-box cases, and Try it.
+ * With no helper, the card says why in the page's words by the answer's
+ * `reason` (the server's HELPER_WORDS, the command as code), the original
+ * text only under Details for `other`, and no Settings link.
  *
  * Split out of home-js.test.ts, which drove the PRODUCT page script
  * (public/js/home.js) in jsdom over a fetch stub (dashboard.md §4.25); the
@@ -12,6 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { load, tick } from "./home-js-fixtures.js";
+import { HELPER_WORDS, type AssistantUnavailableReason } from "../../../src/policy-assistant.js";
 
 // ── Describe what you want (policy-surface.md §8.5.2) ─────────────────────
 
@@ -98,18 +102,62 @@ test("describe: a wide change needs ALLOW before Apply, and keeps needing it aft
   const apply = [...doc.querySelectorAll("#describe-result button")].find((b: any) => b.textContent === "Apply") as any;
   const input = doc.querySelector("#describe-result .proposal-confirm") as any;
   assert.equal(apply.disabled, true);
+  input.value = "ALLO";
+  input.dispatchEvent(new window.Event("input"));
+  assert.equal(apply.disabled, true, "the word must be typed whole");
   input.value = "allow";
   input.dispatchEvent(new window.Event("input"));
-  assert.equal(apply.disabled, true, "the word must be exact");
-  input.value = "ALLOW";
-  input.dispatchEvent(new window.Event("input"));
-  assert.equal(apply.disabled, false);
+  assert.equal(apply.disabled, false, "in any case");
   apply.click();
   await tick();
   assert.match(doc.querySelector("#describe-result .ask-error").textContent, /did not answer/);
+  assert.equal(apply.disabled, false, "the typed word still counts after the failed Apply");
   input.value = "";
   input.dispatchEvent(new window.Event("input"));
   assert.equal(apply.disabled, true);
+});
+
+test("describe: the ALLOW box counts the word in any case, trimmed, says when it does not, and Enter presses Apply once", async () => {
+  const wide = { ...SUGGESTION, rows: [{ ...SUGGESTION.rows[1], overBroad: true }] };
+  const { doc, window, calls } = load({ url: RULES_URL, routes: { "POST policy/assistant": wide, "POST policy/assistant/apply": { ok: true } } });
+  await tick();
+  await describe(doc, window, "Trust anything.");
+  await tick();
+  const apply = [...doc.querySelectorAll("#describe-result button")].find((b: any) => b.textContent === "Apply") as any;
+  const input = doc.querySelector("#describe-result .proposal-confirm") as any;
+  const hint = doc.querySelector("#describe-result .confirm-hint") as any;
+  assert.equal(input.getAttribute("autocapitalize"), "characters");
+  assert.equal(input.getAttribute("autocorrect"), "off");
+  assert.equal(input.getAttribute("spellcheck"), "false");
+  assert.equal(input.getAttribute("autocomplete"), "off");
+  assert.equal(hint.hidden, true, "nothing typed: no hint");
+  const type = (text: string) => { input.value = text; input.dispatchEvent(new window.Event("input")); };
+  const enter = () => input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  const applies = () => calls.filter((c) => c.method === "POST" && c.url === "/mandu/api/policy/assistant/apply");
+  for (const word of ["ALLO", "ALLOWED"]) {
+    type(word);
+    assert.equal(apply.disabled, true, `"${word}" keeps Apply off`);
+    assert.equal(hint.hidden, false);
+    assert.equal(hint.textContent, "Type the word ALLOW to turn on Apply.");
+    assert.equal(input.getAttribute("aria-describedby"), hint.id);
+  }
+  enter();
+  await tick();
+  assert.equal(applies().length, 0, "off: Enter applies nothing");
+  for (const word of ["Allow", "allow", " ALLOW "]) {
+    type(word);
+    assert.equal(apply.disabled, false, `"${word}" turns Apply on`);
+    assert.equal(hint.hidden, true);
+  }
+  type("");
+  assert.equal(apply.disabled, true, "empty keeps Apply off");
+  assert.equal(hint.hidden, true, "empty: no hint");
+  type("Allow");
+  enter();
+  enter();
+  await tick();
+  assert.equal(applies().length, 1, "on: Enter applies once");
+  assert.deepEqual(applies()[0].body, { edits: wide.edits, expected: wide.expected });
 });
 
 test("describe: a wide row says so beside its words, and the foot says what it opens (dashboard.md §4.25 *A wide change says what is open*)", async () => {
@@ -179,16 +227,45 @@ test("describe: 409 on Apply shows the server's words and Describe it again re-r
   assert.deepEqual(posts[1]!.body, { sentence: "Keep ~/.ssh secret. We use PyPI." });
 });
 
-test("describe: no helper configured shows the reason and a Settings link, never rows; 422 shows the problems", async () => {
-  const off = load({ url: RULES_URL, routes: { "POST policy/assistant": { status: 503, body: { error: "No helper model is set up for this dashboard.", unconfigured: true } } } });
+test("describe: no helper configured says why in the page's words, by reason, with no Settings link and never rows; 422 shows the problems", async () => {
+  const codes: Record<AssistantUnavailableReason, string[]> = {
+    "no-channel": ["claude"],
+    "not-installed": ["mandu doctor"],
+    "api-key-missing": ["ANTHROPIC_API_KEY"],
+    "cli-missing": ["claude"],
+    other: [],
+  };
+  for (const reason of Object.keys(codes) as AssistantUnavailableReason[]) {
+    const detail = reason === "other" ? "declared model endpoint 'x' cannot be read (fail closed)" : undefined;
+    const off = load({ url: RULES_URL, routes: { "POST policy/assistant": { status: 503, body: { error: HELPER_WORDS[reason], unconfigured: true, reason, ...(detail ? { detail } : {}) } } } });
+    await tick();
+    await describe(off.doc, off.window, "Keep .env secret.");
+    await tick();
+    const host = off.doc.getElementById("describe-result");
+    const said = host.querySelector(".ask-error");
+    assert.equal(said.getAttribute("role"), "alert");
+    assert.equal(said.textContent, HELPER_WORDS[reason], `${reason}: the page's words are the server's`);
+    assert.deepEqual([...said.querySelectorAll("code")].map((c: any) => c.textContent), codes[reason], `${reason}: the command as code`);
+    assert.equal(host.querySelector("a"), null, `${reason}: no link (Settings fixes none of these)`);
+    assert.equal(host.querySelector(".suggestion"), null, "no fallback rows");
+    const fold = host.querySelector("details.describe-detail");
+    if (detail) {
+      assert.equal(fold.querySelector("summary").textContent, "Details");
+      assert.equal(fold.open, false, "folded");
+      assert.equal(fold.querySelector(".dim").textContent, detail, "the original text, as text");
+    } else assert.equal(fold, null, `${reason}: no Details`);
+  }
+
+  // A reason the page does not know: its general words, the server's text
+  // under Details.
+  const odd = load({ url: RULES_URL, routes: { "POST policy/assistant": { status: 503, body: { error: "No assistant model is set up: <b>x</b>", unconfigured: true, reason: "later" } } } });
   await tick();
-  await describe(off.doc, off.window, "Keep .env secret.");
+  await describe(odd.doc, odd.window, "Keep .env secret.");
   await tick();
-  const host = off.doc.getElementById("describe-result");
-  assert.match(host.querySelector(".ask-error").textContent, /No helper model/);
-  const link = host.querySelector('a[data-page-link="settings"]');
-  assert.ok(link, "a link to Settings");
-  assert.equal(host.querySelector(".suggestion"), null, "no fallback rows");
+  const oh = odd.doc.getElementById("describe-result");
+  assert.equal(oh.querySelector(".ask-error").textContent, "Mandu's helper cannot run right now.");
+  assert.equal(oh.querySelector("details.describe-detail .dim").textContent, "No assistant model is set up: <b>x</b>");
+  assert.equal(oh.querySelector("b"), null, "never markup");
 
   const bad = load({ url: RULES_URL, routes: { "POST policy/assistant": { status: 422, body: { error: "The suggestion was not a valid rule change.", problems: ["edits[0] (lock-path): path: must be a non-empty string"] } } } });
   await tick();

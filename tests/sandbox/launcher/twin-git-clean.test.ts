@@ -27,6 +27,20 @@
  *   T4 a launcher SIGKILLed mid-session leaves the twin's stat in the index
  *      (` M` outside) and its crash record; the next launch puts it back
  *      before its own patch, and says so.
+ *   T6 THE 2026-10-21 INCIDENT: two launches overlap on one repository,
+ *      each with its own Mandu home (the demo battery's sides), and the
+ *      first ends first: after both, the human's git is clean (before the
+ *      fix the second put back its launch stat, the first's twin stat, and
+ *      ` M .env` stayed with no crash record anywhere).
+ *   T7 the scope: a repository under HOME the launch is not in (its .env
+ *      tracked and twinned) keeps its index as is, so the human's git there
+ *      is clean while the session runs and the agent's git there sees the
+ *      twin modified (as before the patch); the launch's own repository is
+ *      patched (clean in the agent's world).
+ *   T8 a launcher SIGKILLed while its MANDU_HOME is a scratch home that is
+ *      then removed (the demo battery's sides): the crash record is in the
+ *      HOME's own store, so `mandu reap`, and separately the next launch,
+ *      each with yet another MANDU_HOME, put the real stat back.
  *   T5 bind-only (`--no-net-guard`, posture gated): nothing is patched (a
  *      human's `git stash` would replace the real file and detach the bind,
  *      review of !1642 M1); the twin shows modified there, as before.
@@ -39,7 +53,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -207,6 +221,95 @@ echo "AGENT_DONE"
   }, { mode: "secrets", seed });
 });
 
+test("T6 (bind) THE 2026-10-21 INCIDENT: two overlapping launches in two Mandu homes (the demo battery's sides), the first ends first: the human's git is clean after both", { skip: GATE, timeout: 400_000 }, async () => {
+  await withStack(async ({ tmp, workspace, home, launcherEnv }) => {
+    moreHistory(workspace);
+    writeFileSync(join(tmp, "work.sh"), String.raw`
+set -u
+cd "$WS"
+echo "STATUS0<$(${AGENT_GIT} status --porcelain | tr '\n' '|')>"
+${PAUSE}
+echo "AGENT_DONE"
+`);
+    // Each side its own Mandu home (neither sees the other's crash record)
+    // and its own pause.
+    const launch = (side: "a" | "b"): ReturnType<typeof runLauncher> => {
+      const out = join(tmp, side);
+      mkdirSync(out, { recursive: true });
+      const sh = join(tmp, `agent-${side}.sh`);
+      writeFileSync(sh, `WS='${workspace}' OUT='${out}' exec bash ${join(tmp, "work.sh")}\n`);
+      const env = { ...launcherEnv("https://127.0.0.1:1", 0), HOME: home, ...(side === "b" ? { MANDU_HOME: join(tmp, "mandu-home-b") } : {}) };
+      return runLauncher(["--no-scope", "--no-mcp", "--no-reply-filter", "--target", "claude", "--", "/bin/sh", sh], env, workspace, 300_000);
+    };
+    const a = launch("a");
+    await waitFor(join(tmp, "a", "mid"));
+    const b = launch("b");
+    await waitFor(join(tmp, "b", "mid"));
+    writeFileSync(join(tmp, "a", "release"), "");
+    const ra = await a;
+    const between = humanStatus(workspace);
+    writeFileSync(join(tmp, "b", "release"), "");
+    const rb = await b;
+    const diag = `\n--- side a (tail) ---\n${ra.out.slice(-3000)}\n--- side b (tail) ---\n${rb.out.slice(-3000)}`;
+    assert.equal(ra.code, 0, diag);
+    assert.equal(rb.code, 0, diag);
+    assert.ok(!ra.out.includes(KEY) && !rb.out.includes(KEY), `CONFIDENTIALITY VIOLATION${diag}`);
+    assert.match(ra.out, /STATUS0<>/, `side a: clean in its world${diag}`);
+    assert.match(rb.out, /STATUS0<>/, `side b: clean in its world${diag}`);
+    assert.equal(between, " M .env\n", "side b still holds the entry after side a ended");
+    // Before the fix side b put back its launch stat, side a's twin stat:
+    // ` M .env` with no diff for good, and no crash record in either home.
+    assert.equal(humanStatus(workspace), "", `outside, clean after both${diag}`);
+  }, { mode: "secrets", seed });
+});
+
+test("T7 (bind) only the launch's own repositories are patched: another repository's index under HOME is never written, so the human's git there stays clean while the session runs", { skip: GATE, timeout: 300_000 }, async () => {
+  await withStack(async ({ tmp, workspace, home, launcherEnv }) => {
+    moreHistory(workspace);
+    // A repository the session never touches, its .env tracked and twinned
+    // (the walk covers HOME), as the main checkout is on a dev host.
+    const other = join(home, "other");
+    mkdirSync(other, { recursive: true });
+    seed(other);
+    git(other, "init", "-q");
+    git(other, "add", "-A");
+    git(other, "commit", "-qm", "other");
+    moreHistory(other);
+    const otherIndex = readFileSync(join(other, ".git", "index"));
+    writeFileSync(join(tmp, "work.sh"), String.raw`
+set -u
+cd "$WS"
+echo "STATUS0<$(${AGENT_GIT} status --porcelain | tr '\n' '|')>"
+cd "$OTHER"
+echo "OTHER<$(GIT_OPTIONAL_LOCKS=0 ${AGENT_GIT} status --porcelain | tr '\n' '|')>"
+echo "OTHERSEEN<$(/bin/cat .env 2>&1 | tr '\n' '|')>"
+${PAUSE}
+echo "AGENT_DONE"
+`);
+    const sh = join(tmp, "agent.sh");
+    writeFileSync(sh, `WS='${workspace}' OTHER='${other}' OUT='${tmp}' exec bash ${join(tmp, "work.sh")}\n`);
+    const launched = runLauncher(["--no-scope", "--no-mcp", "--no-reply-filter", "--target", "claude", "--", "/bin/sh", sh],
+      { ...launcherEnv("https://127.0.0.1:1", 0), HOME: home }, workspace, 240_000);
+    await waitFor(join(tmp, "mid"));
+    const duringOther = humanStatus(other);
+    const duringOwn = humanStatus(workspace);
+    const otherIndexDuring = readFileSync(join(other, ".git", "index"));
+    writeFileSync(join(tmp, "release"), "");
+    const r = await launched;
+    const diag = `\n--- launch output (tail) ---\n${r.out.slice(-6000)}`;
+    assert.equal(r.code, 0, diag);
+    assert.ok(!r.out.includes(KEY), `CONFIDENTIALITY VIOLATION${diag}`);
+    assert.match(r.out, /OTHERSEEN<STRIPE_SECRET_KEY='?\$MDU:/, `the other repository's .env is twinned too (the test is not vacuous)${diag}`);
+    assert.match(r.out, /STATUS0<>/, `the launch's own repository: clean in the agent's world${diag}`);
+    assert.match(r.out, /OTHER< M \.env\|>/, `another repository: the twin shows modified in the agent's world, as before the patch${diag}`);
+    assert.equal(duringOwn, " M .env\n", "the launch's own repository: patched (the trade-off, T3)");
+    assert.equal(duringOther, "", "another repository: the human's git is clean while the session runs");
+    assert.ok(otherIndexDuring.equals(otherIndex), "another repository's index never written");
+    assert.equal(humanStatus(other), "", "and clean after");
+    assert.equal(humanStatus(workspace), "", "the launch's own repository clean after");
+  }, { mode: "secrets", seed });
+});
+
 test("T5 (bind-only: no guard, posture gated) the index is NOT patched: a human's git stash there would replace the real file and detach the bind (review of !1642 M1)", { skip: GATE, timeout: 300_000 }, async () => {
   await withStack(async ({ tmp, workspace, home, launcherEnv }) => {
     moreHistory(workspace);
@@ -267,5 +370,61 @@ ${PAUSE}
     assert.equal(r.code, 0, diag);
     assert.match(r.out, /put back the index stat of a protected file an earlier session left/, `the next launch says it repaired it${diag}`);
     assert.equal(humanStatus(workspace), "", `clean again outside${diag}`);
+  }, { mode: "secrets", seed });
+});
+
+/** Launch with `env`, wait for the agent's pause, SIGKILL the launcher's
+ *  whole group (no exit path of it runs), then release the paused agent.
+ *  Returns what the killed launch printed. */
+async function killedLaunch(tmp: string, workspace: string, env: Record<string, string | undefined>, tag: string): Promise<string> {
+  const out = join(tmp, tag);
+  mkdirSync(out, { recursive: true });
+  writeFileSync(join(tmp, `work-${tag}.sh`), String.raw`
+set -u
+cd "$WS"
+echo "STATUS0<$(${AGENT_GIT} status --porcelain | tr '\n' '|')>"
+${PAUSE}
+`);
+  const sh = join(tmp, `agent-${tag}.sh`);
+  writeFileSync(sh, `WS='${workspace}' OUT='${out}' exec bash ${join(tmp, `work-${tag}.sh`)}\n`);
+  const child = spawn(LAUNCHER_TSX, [LAUNCHER_MAIN, "--no-scope", "--no-mcp", "--no-reply-filter", "--target", "claude", "--", "/bin/sh", sh], {
+    cwd: workspace, env: env as NodeJS.ProcessEnv, stdio: ["ignore", "pipe", "pipe"], detached: true,
+  });
+  let printed = "";
+  child.stdout!.setEncoding("utf8").on("data", (c: string) => { printed += c; });
+  child.stderr!.setEncoding("utf8").on("data", (c: string) => { printed += c; });
+  const closed = new Promise<void>((res) => child.on("close", () => res()));
+  const exited = new Promise<void>((res) => child.on("exit", () => res()));
+  await waitFor(join(out, "mid"));
+  process.kill(-child.pid!, "SIGKILL");
+  await exited;
+  writeFileSync(join(out, "release"), "");
+  await closed;
+  return printed;
+}
+
+test("T8 (bind) a launcher killed in a Mandu home that is then removed (the demo battery's sides): its crash record survives in the HOME's store, and `mandu reap` or the next launch from another Mandu home puts the real stat back", { skip: GATE, timeout: 600_000 }, async () => {
+  await withStack(async ({ tmp, workspace, home, launcherEnv }) => {
+    moreHistory(workspace);
+    const base = { ...launcherEnv("https://127.0.0.1:1", 0), HOME: home };
+    for (const healer of ["reap", "next-launch"] as const) {
+      const scratch = join(tmp, `scratch-home-${healer}`);
+      const killed = await killedLaunch(tmp, workspace, { ...base, MANDU_HOME: scratch }, `k-${healer}`);
+      assert.ok(!killed.includes(KEY), "CONFIDENTIALITY VIOLATION in the killed session");
+      assert.match(killed, /STATUS0<>/, `${healer}: the killed session's agent saw a clean tree\n${killed.slice(-4000)}`);
+      rmSync(scratch, { recursive: true, force: true }); // the side's home goes with it
+      assert.equal(humanStatus(workspace), " M .env\n", `${healer}: the dead session's twin stat is still in the index`);
+      const other = { ...base, MANDU_HOME: join(tmp, `other-home-${healer}`) };
+      if (healer === "reap") {
+        const r = await runLauncher(["reap"], other, workspace, 120_000);
+        assert.match(r.out, /restored the index stat of a protected file in /, `reap from another Mandu home restores it\n${r.out.slice(-3000)}`);
+      } else {
+        writeFileSync(join(tmp, "noop.sh"), "exit 0\n");
+        const r = await runLauncher(["--no-scope", "--no-mcp", "--no-reply-filter", "--target", "claude", "--", "/bin/sh", join(tmp, "noop.sh")], other, workspace, 240_000);
+        assert.equal(r.code, 0, r.out.slice(-4000));
+        assert.match(r.out, /put back the index stat of a protected file an earlier session left/, `the next launch from another Mandu home restores it first\n${r.out.slice(-3000)}`);
+      }
+      assert.equal(humanStatus(workspace), "", `${healer}: clean outside again`);
+    }
   }, { mode: "secrets", seed });
 });

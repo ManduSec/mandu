@@ -76,12 +76,19 @@ stateAxes("secrets");
 const READ_ID = "toolu_mdu_nested_read";
 
 /** The stand-in `claude` (see the header). Records each start's resolved base
- *  URL and the request's status in `record` (one JSON line each). */
-function standInClaude(record: string): string {
+ *  URL and the request's status in `record` (one JSON line each), and in
+ *  `trace` that it began (its arguments) and any throw that ended it before
+ *  a record: a red with no start then says whether the stand-in never ran
+ *  (a shim refusal, the launch's own exit: the launch's output) or ran and
+ *  died, and of what (continuous-integration.md §11). */
+function standInClaude(record: string, trace: string): string {
   return `#!/usr/bin/env node
 "use strict";
 const fs = require("fs"), path = require("path"), http = require("http"), https = require("https"), cp = require("child_process");
+const trace = (rec) => { try { fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ pid: process.pid, ...rec }) + "\\n"); } catch { /* the record says the rest */ } };
+process.on("uncaughtException", (e) => { trace({ died: String((e && e.stack) || e) }); console.error(e); process.exit(1); });
 const a = process.argv.slice(2);
+trace({ began: a });
 let settings, nest, prompt;
 for (let i = 0; i < a.length; i++) {
   if (a[i] === "--") break;
@@ -228,6 +235,9 @@ interface Rig {
   secret: { path: string; log: string; canary: string };
   /** The stand-in's starts: `{ base, status }` per line. */
   starts(): Array<{ base: string; status?: number; error?: string }>;
+  /** The stand-in's trace (standInClaude): `{ pid, began }` per run, and
+   *  `{ pid, died }` for one a throw ended. */
+  trace(): Array<{ pid: number; began?: string[]; died?: string }>;
   /** A launch with the stand-in first on PATH. */
   launch(argv: string[], extraEnv?: Record<string, string>): Promise<{ code: number; out: string }>;
   /** The user settings file of the launch's Claude config dir. */
@@ -276,7 +286,8 @@ async function withRig(tag: string, fn: (r: Rig) => Promise<void>): Promise<void
         const bin = join(ctx.tmp, "bin");
         mkdirSync(bin, { recursive: true });
         const record = join(ctx.tmp, "claude-starts.jsonl");
-        writeFileSync(join(bin, "claude"), standInClaude(record), { mode: 0o755 });
+        const trace = join(ctx.tmp, "claude-trace.jsonl");
+        writeFileSync(join(bin, "claude"), standInClaude(record, trace), { mode: 0o755 });
         const env = ctx.launcherEnv(shim.origin, 0);
         const userSettings = join(env["CLAUDE_CONFIG_DIR"]!, "settings.json");
         mkdirSync(env["CLAUDE_CONFIG_DIR"]!, { recursive: true });
@@ -285,6 +296,9 @@ async function withRig(tag: string, fn: (r: Rig) => Promise<void>): Promise<void
           ctx, fake, secret: { path, log, canary }, userSettings, capture, claudeBin: join(bin, "claude"),
           starts: () => existsSync(record)
             ? readFileSync(record, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { base: string; status?: number })
+            : [],
+          trace: () => existsSync(trace)
+            ? readFileSync(trace, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { pid: number; began?: string[]; died?: string })
             : [],
           launch: async (argv, extraEnv = {}) => {
             try {
@@ -308,21 +322,26 @@ async function withRig(tag: string, fn: (r: Rig) => Promise<void>): Promise<void
 
 /** The oracle: no model request carried the canary, and every start of the
  *  stand-in went to the launch's model proxy (loopback, not the model's
- *  own port), whose request reached the model with the Read as a symbol. */
-function assertRouted(r: Rig, starts: number, what: string): void {
+ *  own port), whose request reached the model with the Read as a symbol.
+ *  `launched` is the launch's result: every failure here names its exit,
+ *  its output's tail and the stand-in's trace (a local full run once saw 0
+ *  of 2 starts with none of them; continuous-integration.md §11). */
+function assertRouted(r: Rig, starts: number, what: string, launched: { code: number; out: string }): void {
+  const why = `\n--- the stand-in's trace ---\n${JSON.stringify(r.trace(), null, 1).slice(-3000)}` +
+    `\n--- the launch: exit ${launched.code}, its output's tail ---\n${launched.out.slice(-4000)}`;
   assert.ok(!modelSawCanary(r.fake.requests, r.secret.canary),
-    `CONFIDENTIALITY VIOLATION (${what}): a nested claude sent the secret to the model around the proxy`);
+    `CONFIDENTIALITY VIOLATION (${what}): a nested claude sent the secret to the model around the proxy${why}`);
   const got = r.starts();
-  assert.equal(got.length, starts, `the stand-in's starts: ${JSON.stringify(got)}`);
+  assert.equal(got.length, starts, `the stand-in's starts: ${JSON.stringify(got)}${why}`);
   const direct = new URL(r.fake.origin).port;
   for (const s of got) {
-    assert.match(s.base, /^http:\/\/127\.0\.0\.1:\d+$/, `${what}: ${JSON.stringify(s)}`);
-    assert.notEqual(new URL(s.base).port, direct, `${what}: the nested claude went to the model directly`);
-    assert.equal(s.status, 200, `${what}: ${JSON.stringify(s)}`);
+    assert.match(s.base, /^http:\/\/127\.0\.0\.1:\d+$/, `${what}: ${JSON.stringify(s)}${why}`);
+    assert.notEqual(new URL(s.base).port, direct, `${what}: the nested claude went to the model directly${why}`);
+    assert.equal(s.status, 200, `${what}: ${JSON.stringify(s)}${why}`);
   }
   const reads = r.fake.requests.filter((q) => q.body.includes(READ_ID));
-  assert.equal(reads.length, starts, `${what}: each nested request reached the model through the proxy`);
-  for (const q of reads) assert.match(q.body, SYMBOL_TOKEN_RE, `${what}: the Read reached the model as a symbol`);
+  assert.equal(reads.length, starts, `${what}: each nested request reached the model through the proxy${why}`);
+  for (const q of reads) assert.match(q.body, SYMBOL_TOKEN_RE, `${what}: the Read reached the model as a symbol${why}`);
 }
 
 test(
@@ -330,8 +349,12 @@ test(
   { timeout: 170_000 },
   async () => {
     await withRig("NSH", async (r) => {
-      const out = await r.launch(["--", "/bin/sh", "-c", `claude -p 'Read the file ${r.secret.path}' && claude -p 'Read the file ${r.secret.log}'`]);
-      assertRouted(r, 2, "user settings.json");
+      // Both run whatever the first one's end, and the shell says each exit
+      // (a red then shows whether one start or every start failed).
+      const script = `claude -p 'Read the file ${r.secret.path}'; a=$?; claude -p 'Read the file ${r.secret.log}'; b=$?; ` +
+        `echo "nested claude exits: $a $b" >&2; [ "$a" = 0 ] && [ "$b" = 0 ]`;
+      const out = await r.launch(["--", "/bin/sh", "-c", script]);
+      assertRouted(r, 2, "user settings.json", out);
       assert.equal(out.code, 0, out.out.slice(-2000));
     });
   },
@@ -353,7 +376,7 @@ test(
         `CLAUDE_CONFIG_DIR=${other} claude -p 'Read the file ${r.secret.log}'`,
       ].join(" && ");
       const out = await r.launch(["--", "claude", "--nest", agent]);
-      assertRouted(r, 3, "nested under mandu claude");
+      assertRouted(r, 3, "nested under mandu claude", out);
       assert.equal(out.code, 0, out.out.slice(-2000));
     });
   },
@@ -375,7 +398,7 @@ test(
       assert.deepEqual(r.capture.hits.map((h) => h.url), [], "CONFIDENTIALITY VIOLATION: the host's proxy received the model request");
       assert.ok(!modelSawCanary(r.capture.hits, r.secret.canary));
       for (const s of r.starts()) assert.equal((s as { proxy?: string }).proxy, "", `the stand-in used no proxy: ${JSON.stringify(s)}`);
-      assertRouted(r, 2, "an SDK host's own proxy");
+      assertRouted(r, 2, "an SDK host's own proxy", out);
       assert.equal(out.code, 0, out.out.slice(-2000));
     });
   },
@@ -392,7 +415,7 @@ test(
       assert.deepEqual(r.capture.hits.map((h) => h.url), [], "CONFIDENTIALITY VIOLATION: the forged route sent the model request to the capture server");
       assert.ok(!modelSawCanary(r.capture.hits, r.secret.canary));
       for (const s of r.starts()) assert.equal((s as { proxy?: string }).proxy, "", `the stand-in used no proxy: ${JSON.stringify(s)}`);
-      assertRouted(r, 2, "a forged SDK route");
+      assertRouted(r, 2, "a forged SDK route", out);
       assert.equal(out.code, 0, out.out.slice(-2000));
     });
   },
@@ -418,6 +441,7 @@ test(
       assert.match(err, /refusing to start .*claude: its --settings .* is not inline JSON/);
       assert.match(err, /CLAUDE_CODE_USE_BEDROCK/);
       assert.deepEqual(r.starts(), [], "the stand-in never started");
+      assert.deepEqual(r.trace(), [], "the shim refused both before the stand-in ran");
       assert.equal(r.fake.requests.length, 0, "no request reached the model");
     });
   },

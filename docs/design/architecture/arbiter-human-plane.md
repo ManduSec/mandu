@@ -459,7 +459,9 @@ directory `<runtime>/human`:
 The directory also holds one socket that is not the arbiter's: the
 dashboard's **sign-in socket**, `dashboard-<pid>.sock` (2026-10-05,
 [policy-surface.md](../ui/policy-surface.md) §2.6 "Signing in"), where the
-launcher and `mandu dashboard` ask for a one-time sign-in link. Every wall
+launcher and `mandu dashboard` ask for a one-time sign-in link, and where the
+launcher asks, after its agent exits, for the session's last line
+(`sessionKept`, 2026-10-21, [dashboard.md](../ui/dashboard.md) §4.25ah). Every wall
 above names the directory, so each covers it with no change; the dashboard
 verifies the directory as the arbiter does and mints nothing while
 `humanPlaneStatus` reports a launch with no wall. The arbiter's sweep never

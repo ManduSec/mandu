@@ -425,8 +425,12 @@ answers non-200, a tool call the demo did not script) ends the run with
   with no placeholder copy (each agent), a reply filter that prints the raw
   reply, a net-proxy without the human-plane socket, a policy that binds
   `paste.example` too, and (where the host runs the guard) a guard whose
-  reports go to the data socket only (an explicit human socket that is the
-  data socket): it still serves the tree, the arbiter takes its reports as
+  reports go to the data socket only (its policy walls off no human-plane
+  directory, so it can believe no human socket at its start or later, and
+  says so on stderr, which the test checks; until 2026-10-21 an explicit
+  human socket that is the data socket, which the guard's later look for the
+  human plane rightly ignores and could undo on a slow host,
+  [continuous-integration.md](../testing/continuous-integration.md) §11): it still serves the tree, the arbiter takes its reports as
   claims, Codex's read stays whole, and the run fails on the new check, so
   the release rests on the guard's attested record and not on the text;
   each exits 1 naming the failed check. A run with `MANDU_NET_GUARD=0`

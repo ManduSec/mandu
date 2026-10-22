@@ -26,6 +26,10 @@
  *       to* draw each name as its own code, one of at most 24 characters
  *       kept on one line (`.code-whole`, `white-space: nowrap`), a longer
  *       one a plain code; the words read as the answer's;
+ *       and app.env's row says on the page how to change where its values
+ *       go: a line under the sentence naming `values:` and the policy file
+ *       as the panel reports it, which describes the disabled menu
+ *       (`aria-describedby`); .env's row (whole-file hosts) has none;
  *   R3  the oracle: no page or answer read here carries a file's value,
  *       and none a minted token (`$MDU:NAME[hex]`).
  *
@@ -142,7 +146,8 @@ test("the Rules page names each host as its own code and keeps each short one wh
     const appLine = await why(app);
     assert.equal(appLine.text, APP_SEND, "app.env: where each value may go, not the whole file's nowhere");
     assert.deepEqual(codes(appLine.parts!), APP_CODES, "app.env: each key and host its own code");
-    const panel = JSON.parse(await read("/api/policy/panel", { Cookie: ADMIN_COOKIE })) as { panel: { yourRules: Array<{ id: string; plain: { send?: string; sendParts?: Part[] } }> } };
+    const panel = JSON.parse(await read("/api/policy/panel", { Cookie: ADMIN_COOKIE })) as { panel: { policyFile: { path: string | null } | null; yourRules: Array<{ id: string; plain: { send?: string; sendParts?: Part[] } }> } };
+    assert.equal(panel.panel.policyFile?.path, policyPath, "the panel names the policy file the page will point at");
     const row = panel.panel.yourRules.find((r) => r.id === `lock:${app}`);
     assert.ok(row?.plain.sendParts, `the panel's row for app.env: ${JSON.stringify(panel.panel.yourRules.map((r) => r.id))}`);
     assert.equal(row!.plain.send, APP_SEND);
@@ -176,6 +181,16 @@ test("the Rules page names each host as its own code and keeps each short one wh
       const values = ruleRow(doc, app).querySelector(".file-values");
       assert.equal(values.textContent, APP_SEND, "the Per value sentence reads as the answer");
       assert.deepEqual(drawnCodes(values), APP_CODES, "the Per value sentence: each key and host its own code");
+      // Where to change the per-value hosts, said on the page (§4.25p *Per value*).
+      const how = ruleRow(doc, app).querySelector(".file-values-how");
+      assert.ok(how, "app.env's row says how to change where its values go");
+      assert.equal(how.previousElementSibling, values, "right under the Per value sentence");
+      assert.equal(how.textContent, `Each value has its own hosts, so this menu cannot change them. Edit values: for this file in ${policyPath}.`);
+      assert.deepEqual([...how.querySelectorAll("code")].map((c: Doc) => c.textContent), ["values:", policyPath], "it names values: and the policy file");
+      const perValueMenu = ruleRow(doc, app).querySelector("select.send-select");
+      assert.equal(perValueMenu.disabled, true, "the menu stays read only");
+      assert.equal(perValueMenu.getAttribute("aria-describedby"), how.id, "the line describes the menu");
+      assert.equal(ruleRow(doc, env).querySelector(".file-values-how"), null, ".env's row (whole-file hosts) has no such line");
       for (const [path, words, want] of [[env, ENV_HOSTS.join(", "), ENV_HOSTS], [app, APP_SEND, APP_CODES]] as const) {
         ruleRow(doc, path).querySelector(".file-more").click();
         await until(() => !!doc.querySelector(`#files-tree .file-why[data-path="${path}"] dl`), `What the rules say for ${path}`);

@@ -207,6 +207,22 @@ export function toModelEndpointRows(raw: unknown, versions?: unknown): ModelEndp
  *  home.js carries the same words for the labels made on the page. */
 export const NO_OWN_MODEL_WARNING = "No AI of your own is listed, so no AI reads this file. Add one in Settings › Models.";
 
+/** A part of a sentence that names Settings › Models: the page links it
+ *  there, at the Models card (home.js `placeLink`, dashboard.md §4.25 *The
+ *  hero links where it points*). It names the place, never an address. */
+export type ModelsPlacePart = { kind: "text"; text: string } | { kind: "link"; text: string; to: "models" };
+
+/** The place's name in a sentence, as a link part. */
+export const MODELS_LINK: ModelsPlacePart = { kind: "link", text: "Settings › Models", to: "models" };
+
+/** `NO_OWN_MODEL_WARNING` as parts, "Settings › Models" the link: joined,
+ *  the same words. */
+export const NO_OWN_MODEL_WARNING_PARTS: readonly ModelsPlacePart[] = [
+  { kind: "text", text: "No AI of your own is listed, so no AI reads this file. Add one in " },
+  MODELS_LINK,
+  { kind: "text", text: "." },
+];
+
 /** Does the snapshot declare at least one model the user runs themselves?
  *  The Rules page offers "Your own AI only" exactly when this holds. */
 export function hasLocalModel(rows: readonly ModelEndpointRow[] | null | undefined): boolean {

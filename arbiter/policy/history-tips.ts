@@ -84,7 +84,7 @@ export async function reflogNamesOf(git: TipsGit, root: string): Promise<ReflogN
   if (cfg.code !== 0 && cfg.code !== 1) return { oids: null, fallback: "the config could not be read" };
   const storage = cfg.code === 0 ? refStorageOf(cfg.stdout) : "";
   if (storage !== "" && storage.toLowerCase() !== "files") return { oids: null, fallback: `extensions.refStorage is ${storage}` };
-  const got = readReflogOids(resolve(root, common), fmt === "sha256" ? 64 : 40);
+  const got = await readReflogOids(resolve(root, common), fmt === "sha256" ? 64 : 40);
   return "oids" in got ? { oids: got.oids, fallback: null } : { oids: null, fallback: got.fallback };
 }
 

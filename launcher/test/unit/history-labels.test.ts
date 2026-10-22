@@ -9,7 +9,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   compileHistoryGlob, compileHistoryLabels, historyGlobMatches, historyPathspecs, labelledAbovePublic,
-  levelRank, resolveHistoryLevel, withRealSpellings, type HistoryLabel,
+  IGNORE_SHALLOW_ARGS, levelRank, parseParentLines, parsePresentObjects, parseShallowEntries, resolveHistoryLevel, walkShallowRule,
+  withRealSpellings, type HistoryLabel, type ShallowRuleGit,
 } from "../../src/history-labels.js";
 import { stateAxes } from "../axes.js";
 
@@ -91,4 +92,60 @@ test("withRealSpellings: a literal or a pattern's literal prefix written through
   const c = compileHistoryLabels(out);
   assert.equal(labelledAbovePublic("/mnt/data/work/repo/deploy/id_rsa", c), true);
   assert.equal(labelledAbovePublic("/mnt/data/work/repo/README.md", c), false);
+});
+
+// ── the shallow rule (security fix 2026-10-21) ─────────────────────────────
+
+const A = "a".repeat(40);
+const B = "b".repeat(40);
+const P = "c".repeat(40);
+const Q = "d".repeat(40);
+
+/** A scripted git for walkShallowRule: each commit's parents, the objects
+ *  present, and the calls it was asked. */
+function shallowGit(parents: Record<string, string[]>, present: string[], fail?: "parents" | "check"): { git: ShallowRuleGit; calls: string[] } {
+  const calls: string[] = [];
+  const git: ShallowRuleGit = async (args, input) => {
+    calls.push(args.join(" "));
+    const asked = input.split("\n").filter((x) => x !== "");
+    if (args.includes("--parents")) {
+      if (fail === "parents") return { code: 128, stdout: "" };
+      return { code: 0, stdout: asked.filter((c) => c in parents).map((c) => [c, ...parents[c]!].join(" ")).join("\n") };
+    }
+    if (fail === "check") return { code: 128, stdout: "" };
+    return { code: 0, stdout: asked.map((o) => (present.includes(o) ? `${o} commit` : `${o} missing`)).join("\n") };
+  };
+  return { git, calls };
+}
+
+test("shallow rule: parsing the shallow file, the parents and the presence answers", () => {
+  assert.deepEqual(parseShallowEntries(`${B}\n${A}\n${A}\n`, 40), [A, B]);
+  assert.deepEqual(parseShallowEntries("", 40), []);
+  assert.equal(parseShallowEntries(`${A}\nnot-an-object\n`, 40), null);
+  assert.equal(parseShallowEntries(`${A.slice(0, 39)}\n`, 40), null);
+  assert.deepEqual([...parseParentLines(`${A} ${P} ${Q}\n${B}\n`, 40)], [[A, [P, Q]], [B, []]]);
+  assert.deepEqual([...parsePresentObjects(`${P} commit\n${Q} missing\n`)], [P]);
+});
+
+test("shallow rule: honoured only when no commit it names has a parent in the store; anything else ignores the file", async () => {
+  // No file, or an empty one: nothing to decide, no git call.
+  const none = shallowGit({}, []);
+  assert.deepEqual(await walkShallowRule(none.git, "", 40), { args: [], honoured: "" });
+  assert.deepEqual(none.calls, []);
+  // A true boundary (a `clone --depth`): the parents are not in the store.
+  const real = shallowGit({ [A]: [P] }, []);
+  assert.deepEqual(await walkShallowRule(real.git, `${A}\n`, 40), { args: [], honoured: A });
+  assert.match(real.calls[0]!, /^--shallow-file  rev-list --no-walk --parents/, "the parents are read past the shallow file");
+  // A root commit, or a commit the store lacks, cuts nothing.
+  assert.deepEqual((await walkShallowRule(shallowGit({ [A]: [] }, []).git, `${A}\n`, 40)).args, []);
+  assert.deepEqual((await walkShallowRule(shallowGit({}, []).git, `${A}\n`, 40)).args, []);
+  // A forged entry: its parent is in the store, so the file cuts history
+  // the store holds; and one forged beside a true one.
+  const ignore = { args: [...IGNORE_SHALLOW_ARGS], honoured: "" };
+  assert.deepEqual(await walkShallowRule(shallowGit({ [A]: [P] }, [P]).git, `${A}\n`, 40), ignore);
+  assert.deepEqual(await walkShallowRule(shallowGit({ [A]: [P], [B]: [Q] }, [Q]).git, `${A}\n${B}\n`, 40), ignore);
+  // Doubts ignore it too: a line that is not an object name, a git failure.
+  assert.deepEqual(await walkShallowRule(shallowGit({}, []).git, "garbage\n", 40), ignore);
+  assert.deepEqual(await walkShallowRule(shallowGit({ [A]: [P] }, [], "parents").git, `${A}\n`, 40), ignore);
+  assert.deepEqual(await walkShallowRule(shallowGit({ [A]: [P] }, [], "check").git, `${A}\n`, 40), ignore);
 });

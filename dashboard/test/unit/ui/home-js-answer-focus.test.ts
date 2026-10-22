@@ -9,9 +9,12 @@
  * an empty list, or a refusal's words were never read out, and a refused
  * answer's button, on again, had lost the focus. Now:
  *
- *   - an answer that worked gives the focus to the card that took its place
- *     (else the one before it, else the list's line, else the section's or
- *     the page's heading), never to an answer button;
+ *   - an answer that worked to a waiting question gives the focus to the
+ *     line it leaves where its card was (dashboard.md §4.25 *An answer says
+ *     what it did*, since 2026-10-22; before, the card that took its place,
+ *     else the one before it, else the list's line); a rule change's answer
+ *     to the next request, else the section's or the page's heading; never
+ *     an answer button;
  *   - an answered row still drawn (Block instead, Undo) and a let-through's
  *     row keep it;
  *   - a refused answer gives it back to the button pressed, described by
@@ -64,7 +67,7 @@ async function poll(doc: any): Promise<void> {
   await tick(30);
 }
 
-test("Approvals: an answer that worked gives the focus to the card that took its place, then the one before it, then the list's line", async () => {
+test("Approvals: an answer that worked gives the focus to the line it leaves where the card was, each time, above 'Nothing is waiting for you.' at the end", async () => {
   // eslint-disable-next-line prefer-const
   let page: Page;
   const after = (waiting: unknown[]) => () => (page.setHome(home({ waiting })), {});
@@ -75,22 +78,26 @@ test("Approvals: an answer that worked gives the focus to the card that took its
   } });
   const { doc } = page;
   await tick();
+  const list = doc.getElementById("approvals-waiting");
   press(button(cardOf(doc, "approvals-waiting", "egr-1"), "Allow once"));
   await tick(30);
-  assert.equal(focused(doc), cardOf(doc, "approvals-waiting", "egr-2"), "the next question: the card itself");
-  assert.equal(focused(doc).getAttribute("tabindex"), "-1", "a card is no Tab stop");
-  // The last card answered: the one before it.
+  assert.equal(focused(doc), doc.querySelector("#approvals-waiting .answer-line"), "the line where the card was");
+  assert.equal(focused(doc).getAttribute("tabindex"), "-1", "a line is no Tab stop");
+  assert.equal(list.firstElementChild, focused(doc), "in the first card's place");
+  // The last card answered: its line, after the card before it.
   press(button(cardOf(doc, "approvals-waiting", "egr-3"), "Block"));
   await tick(30);
-  assert.equal(focused(doc), cardOf(doc, "approvals-waiting", "egr-2"));
-  // None left: the line that says so.
+  assert.equal(focused(doc), doc.querySelector("#approvals-waiting .answer-line"));
+  assert.equal(focused(doc).previousElementSibling, cardOf(doc, "approvals-waiting", "egr-2"));
+  // None left: the line, over the one that says so.
   press(button(cardOf(doc, "approvals-waiting", "egr-2"), "Always allow"));
   await tick(30);
-  assert.equal(focused(doc).textContent, "Nothing is waiting for you.");
+  assert.match(focused(doc).textContent, /^Always allowed: /);
   assert.equal(focused(doc).parentElement.id, "approvals-waiting");
+  assert.equal(focused(doc).nextElementSibling.textContent, "Nothing is waiting for you.");
 });
 
-test("Home: the next card takes the focus, never its Details link nor an answer button", async () => {
+test("Home: the line where the card was takes the focus, never the next card's Details link nor an answer button", async () => {
   // eslint-disable-next-line prefer-const
   let page: Page;
   page = load({ homeVm: home({ waiting: [ASK, ASK2] }), routes: {
@@ -101,12 +108,13 @@ test("Home: the next card takes the focus, never its Details link nor an answer 
   press(button(cardOf(doc, "home-waiting", "egr-1"), "Block"));
   await tick(30);
   const card = cardOf(doc, "home-waiting", "egr-2");
-  assert.equal(focused(doc), card);
+  assert.equal(focused(doc), doc.querySelector("#home-waiting .answer-line"));
   assert.equal(focused(doc).tagName, "DIV");
+  assert.equal(focused(doc).nextElementSibling, card, "the next question right after it");
   assert.ok(card.querySelector(".ask-details"), "its link is there, after it in the Tab order");
 });
 
-test("the agent page: the last card answered hides Needs your OK, and the agent's name takes the focus", async () => {
+test("the agent page: the last card answered leaves its line in Needs your OK, which stays shown, and the line takes the focus", async () => {
   let agent: unknown = { ...AGENT, waiting: [ASK] };
   const { doc } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: {
     "GET home/agent?session=s1": () => agent,
@@ -115,8 +123,8 @@ test("the agent page: the last card answered hides Needs your OK, and the agent'
   await tick();
   press(button(cardOf(doc, "agent-waiting", "egr-1"), "Allow once"));
   await tick(40);
-  assert.equal(doc.getElementById("agent-waiting-block").hidden, true);
-  assert.equal(focused(doc), doc.getElementById("agent-name"));
+  assert.equal(doc.getElementById("agent-waiting-block").hidden, false, "shown while its line is");
+  assert.equal(focused(doc), doc.querySelector("#agent-waiting .answer-line"));
 });
 
 test("Answered earlier: Block instead keeps the focus on its row, drawn again with the new outcome", async () => {
@@ -236,7 +244,7 @@ test("a poll while the answer is on its way moves nothing; the answer's own draw
   assert.equal(focused(doc), doc.body, "nothing moves while the answer is on its way");
   release();
   await tick(30);
-  assert.equal(focused(doc), cardOf(doc, "approvals-waiting", "egr-2"));
+  assert.equal(focused(doc), doc.querySelector("#approvals-waiting .answer-line"));
 });
 
 test("a focus moved elsewhere meanwhile is kept, and a press without the focus in its card moves nothing", async () => {
@@ -263,6 +271,7 @@ test("a focus moved elsewhere meanwhile is kept, and a press without the focus i
   await tick(30);
   assert.equal(cardOf(doc, "approvals-waiting", "egr-2"), undefined, "answered");
   assert.notEqual(focused(doc), cardOf(doc, "approvals-waiting", "egr-3"), "not the answered card's place");
+  assert.notEqual(focused(doc), doc.querySelector("#approvals-waiting .answer-line"), "nor its line");
   // A click made with the focus elsewhere (a mouse in a browser that does
   // not focus a clicked button).
   doc.activeElement.blur();

@@ -35,6 +35,13 @@ import { toolFamily } from "./view-model/tool-family.js";
 
 export type HealthVerdict = "ok" | "degraded" | "broken";
 
+/** Why a session is `broken`, as codes the product page words (home.ts
+ *  `agentNotice`, dashboard.md §4.21 *On the product page*): the relay in
+ *  passthrough (`relay`) or its lookups failing (`relay-lookup`), every
+ *  command run failing (`commands`), model calls but no turn (`no-turn`),
+ *  a non-zero exit before any model call (`no-call`). */
+export type BrokenCause = "relay" | "relay-lookup" | "commands" | "no-turn" | "no-call";
+
 export interface SessionHealth {
   verdict: HealthVerdict;
   /** Rungs the launcher reported LIVE (names). */
@@ -73,6 +80,9 @@ export interface SessionHealth {
   /** One-line reasons behind a non-ok verdict, and notes that grade
    *  nothing (an unreadable version, a preview agent), for the chip's tooltip. */
   reasons: string[];
+  /** The causes behind a `broken` verdict, in the order `reasons` gives
+   *  them; absent unless broken. */
+  broken?: BrokenCause[];
   /** The secret-confinement posture the launcher recorded
    *  (launcher/src/confinement-posture.ts; rootless-confinement-ubuntu-2404.md
    *  §3.4): confined / read-blocked / gated. Absent when the confidentiality
@@ -210,7 +220,8 @@ export function deriveHealth(events: readonly ManduEvent[]): SessionHealth | nul
   const reasons: string[] = [];
   let verdict: HealthVerdict = "ok";
   const degrade = (why: string): void => { reasons.push(why); if (verdict === "ok") verdict = "degraded"; };
-  const breakIt = (why: string): void => { reasons.push(why); verdict = "broken"; };
+  const broken: BrokenCause[] = [];
+  const breakIt = (cause: BrokenCause, why: string): void => { broken.push(cause); reasons.push(why); verdict = "broken"; };
 
   // The gated notice is a multi-line banner; the chip's tooltip gets the one
   // honest sentence + the fix instead, and the verdict is amber, never red.
@@ -230,25 +241,26 @@ export function deriveHealth(events: readonly ManduEvent[]): SessionHealth | nul
     reasons.push(`the launcher could not read the ${agentVersion.name} version (tested: ${rangeWords(agentVersion)})`);
   }
   if (preview !== null) reasons.push(`${preview} support is a preview: tested less than Claude Code and Codex`);
-  if (relay === "passthrough") breakIt("reply-filter in PASSTHROUGH: symbols stay opaque on the terminal");
-  else if (relayFailure !== undefined) breakIt(`reply-filter cannot resolve placeholders (${relayFailure}): symbols stay opaque on the terminal`);
+  if (relay === "passthrough") breakIt("relay", "reply-filter in PASSTHROUGH: symbols stay opaque on the terminal");
+  else if (relayFailure !== undefined) breakIt("relay-lookup", `reply-filter cannot resolve placeholders (${relayFailure}): symbols stay opaque on the terminal`);
   const modelCalls = events.filter((e) => e.kind === "tllm_call").length;
-  if (exitEv && modelCalls > 0 && turns === 0) breakIt("the agent made model calls but never completed a conversation turn");
+  if (exitEv && modelCalls > 0 && turns === 0) breakIt("no-turn", "the agent made model calls but never completed a conversation turn");
   // No model call at all: a `--version` / quit-at-the-prompt launch is normal
   // (exit 0, nothing to grade); a non-zero exit with no model call is the
   // agent dying before its first request — broken.
   if (exitEv && modelCalls === 0) {
-    if (exitCode !== null && exitCode !== 0) breakIt(`the agent exited ${exitCode} without a single model call`);
+    if (exitCode !== null && exitCode !== 0) breakIt("no-call", `the agent exited ${exitCode} without a single model call`);
     else reasons.push("no model call in this session (a --version or quit-only launch)");
   }
   if (toolFailures > 0) {
     const ran = events.filter((e) => e.kind === "exec_action").length;
-    if (ran > 0 && toolFailures >= ran) breakIt(`every command run (${ran}) could not execute`);
+    if (ran > 0 && toolFailures >= ran) breakIt("commands", `every command run (${ran}) could not execute`);
     else degrade(`${toolFailures} command ${toolFailures === 1 ? "run" : "runs"} could not execute (exit 126/127, sandbox or lookup failure)`);
   }
 
   return {
     verdict, live, dropped, relay, clientVersion, unknownTools, agentVersion, turns, toolFailures, exitCode, reasons,
+    ...(broken.length ? { broken } : {}),
     ...(secrets ? { secrets } : {}),
     ...(relayFailure !== undefined ? { relayFailure } : {}),
     ...(preview !== null ? { preview } : {}),

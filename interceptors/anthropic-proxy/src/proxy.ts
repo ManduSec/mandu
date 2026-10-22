@@ -97,6 +97,7 @@ import { classifyRoute, classifyOpenAiRoute, type OpenAiRoute } from "./route.js
 import { substituteAuthHeaders, upstreamDestination } from "./auth-substitution.js";
 import { OpenAiWireError, providerSideRefusal, shadowFor, type CallMemory, type OpenAiApi } from "./openai-wire.js";
 import { ChatStreamRewriter, ResponsesStreamRewriter, gateChatJson, gateResponsesJson, type CallGate, type ReleasedCall } from "./openai-sse.js";
+import { ResponseIdSniffer, responseIdOfBody } from "./response-id.js";
 import { isCloudBackedModel } from "./cloud-model.js";
 import { REPLY_MEDIA_TOOL, type ReplyMediaResult } from "./reply-media.js";
 import {
@@ -120,6 +121,8 @@ import {
   type FullInputBlock,
   type TllmCallShape,
   makeTllmCall,
+  responseIdOf,
+  agentSessionIdOf,
   makeToolResult,
   makeSymbolize,
   makeToolUse,
@@ -363,6 +366,9 @@ interface EmitState {
   rewritten: RewriteResult;
   forwardedText: string;
   model: string;
+  /** The agent's own session id the request carried (`agentSessionIdOf`),
+   *  for the `tllm_call`. */
+  agentSessionId?: string | undefined;
 }
 
 /** Pull the assistant text blocks from a non-streaming Messages response. */
@@ -1158,7 +1164,7 @@ export class AnthropicProxy {
 
     await this.forwardAndStream(
       method, path, req.headers, outBody, res, /*sniff*/ true, parsed.stream,
-      { ctx, rewritten, forwardedText: outBodyText, model: rewritten.request.model },
+      { ctx, rewritten, forwardedText: outBodyText, model: rewritten.request.model, agentSessionId: agentSessionIdOf(req.headers) },
     );
   }
 
@@ -1348,7 +1354,7 @@ export class AnthropicProxy {
       api,
       textCalls: this.openaiTextCalls.has(route.provider),
       stream: parsed["stream"] === true,
-      emit: { ctx, rewritten, forwardedText: outBody.toString("utf8"), model },
+      emit: { ctx, rewritten, forwardedText: outBody.toString("utf8"), model, agentSessionId: agentSessionIdOf(req.headers) },
     }, this.openaiUpstreams.get(route.provider));
   }
 
@@ -1417,6 +1423,7 @@ export class AnthropicProxy {
         upstream.body.on("error", () => resolve());
       });
       let buf = Buffer.concat(chunks);
+      let responseId: string | undefined;
       if (upstream.status < 400) {
         // A 2xx answer carries the model's calls: it goes out only as read.
         try {
@@ -1428,6 +1435,9 @@ export class AnthropicProxy {
           const mediaOpts = await this.replyMediaFor(sessionId, emit);
           if (mediaOpts && (gated.api === "chat" ? await gateChatJsonReply(obj, mediaOpts) : await gateResponsesJsonReply(obj, mediaOpts))) changed = true;
           if (changed) buf = Buffer.from(JSON.stringify(obj), "utf8");
+          // The answer's id as the agent gets it (no gate touches `id`), for
+          // `mandu scan`'s join (plan 17 §3 item 6, response-id.ts).
+          responseId = responseIdOfBody(obj);
         } catch (err) {
           this.log(`FAIL-CLOSED: the provider's answer could not be read (${(err as Error).message})`);
           this.emitTllmCall(emit, seen, texts.join(""), { status: 502, error: "the provider's answer could not be read" });
@@ -1435,7 +1445,7 @@ export class AnthropicProxy {
           return;
         }
       }
-      this.emitTllmCall(emit, seen, texts.join(""), { status: upstream.status });
+      this.emitTllmCall(emit, seen, texts.join(""), { status: upstream.status, responseId });
       res.writeHead(upstream.status, this.responseHeaders(upstream.headers, { dropContentLength: true }));
       res.end(buf);
       await Promise.allSettled(recorded);
@@ -1455,6 +1465,9 @@ export class AnthropicProxy {
     const mediaReady = this.replyMediaFor(sessionId, emit).then((o) => {
       media = o ? new ReplyMediaFilter(gated.api === "chat" ? CHAT_WIRE : RESPONSES_WIRE, o) : null;
     });
+    // The response id, read off what the agent is sent, after every gate:
+    // the id the agent keeps (response-id.ts). It never throws.
+    const ids = new ResponseIdSniffer(gated.api);
     const src = upstream.body;
     src.setEncoding("utf8");
     let broken = false;
@@ -1464,6 +1477,7 @@ export class AnthropicProxy {
       if (broken) return;
       try {
         const out = await fn();
+        ids.feed(out);
         if (out !== "") res.write(out);
       } catch (err) {
         // A rewriter fault ends the relay: nothing ungated goes out after it.
@@ -1484,7 +1498,7 @@ export class AnthropicProxy {
           const m = media as ReplyMediaFilter | null;
           return m ? m.feed(tail) + (await m.end()) : tail;
         });
-        this.emitTllmCall(emit, seen, texts.join(""), { status: upstream.status });
+        this.emitTllmCall(emit, seen, texts.join(""), { status: upstream.status, responseId: ids.value() });
         res.end();
         resolve();
       });
@@ -2631,7 +2645,7 @@ export class AnthropicProxy {
           // pendingEmits the instant the client observes the stream complete
           // (close() can then deterministically drain it). All tool_use names are
           // known here (parser.end() flushed any open block). Best-effort.
-          if (emit) this.emitTllmCall(emit, seen, parser.assistantText(), { status: upstreamStatus });
+          if (emit) this.emitTllmCall(emit, seen, parser.assistantText(), { status: upstreamStatus, responseId: parser.messageId() });
           res.end();
           resolve();
         });
@@ -2660,7 +2674,7 @@ export class AnthropicProxy {
           if (expander) tail = (await expander.feed(tail)) + expander.end();
           if (tail !== "") res.write(tail);
           try { parser.end(); } catch { /* non-fatal */ }
-          if (emit) this.emitTllmCall(emit, seen, parser.assistantText(), { status: upstreamStatus });
+          if (emit) this.emitTllmCall(emit, seen, parser.assistantText(), { status: upstreamStatus, responseId: parser.messageId() });
           res.end();
           resolve();
         });
@@ -2687,6 +2701,7 @@ export class AnthropicProxy {
     let tus: ReconstructedToolUse[] = [];
     let assistantText = "";
     let upstreamError: string | undefined;
+    let responseId: string | undefined;
     try {
       const obj = JSON.parse(buf.toString("utf8")) as Record<string, unknown>;
       // Forward map + P3 gate over the buffered tool_use blocks (the JSON twin
@@ -2712,6 +2727,8 @@ export class AnthropicProxy {
       }
       tus = extractToolUsesFromJson(obj);
       assistantText = extractAssistantText(obj);
+      // The response's id (`msg_…`), for `mandu scan`'s join (plan 17 §3 item 6).
+      responseId = responseIdOf(obj["id"]);
       if (upstreamStatus !== undefined && upstreamStatus >= 400) {
         upstreamError = extractAnthropicError(obj) ?? undefined;
       }
@@ -2725,7 +2742,7 @@ export class AnthropicProxy {
       for (const t of tus) {
         this.safeEmit(makeToolUse({ ctx: emit.ctx, callId: t.id, name: t.name, input: t.input }));
       }
-      this.emitTllmCall(emit, tus, assistantText, { status: upstreamStatus, error: upstreamError });
+      this.emitTllmCall(emit, tus, assistantText, { status: upstreamStatus, error: upstreamError, responseId });
     }
     // Pass the bytes through unchanged.
     res.end(buf);
@@ -2745,7 +2762,7 @@ export class AnthropicProxy {
     emit: EmitState,
     tools: ReconstructedToolUse[],
     assistantText: string,
-    upstream?: { status?: number; error?: string },
+    upstream?: { status?: number; error?: string; responseId?: string | undefined },
   ): void {
     // The symbols that landed in the forwarded prompt, for the input DualRepr.
     const inputSymbols: SymbolRef[] = [];
@@ -2815,6 +2832,14 @@ export class AnthropicProxy {
         // §4.2c). Computed HERE, the single funnel for every tllm_call (SSE end,
         // SSE error, JSON, relayed 4xx/429), so an errored turn still carries it.
         callShape: requestCallShape(emit.rewritten.request),
+        // The response's id, which the agent's transcript keeps too: the
+        // join key of `mandu scan` (plan 17 §3 item 6). Read off the relayed
+        // bytes like the text above; it changes nothing that is forwarded.
+        ...(upstream?.responseId !== undefined ? { responseId: upstream.responseId } : {}),
+        // The agent's own session id from the request's headers (OpenCode's
+        // `X-Session-Id`), the join key where the agent keeps no response
+        // id; read, never changed: the headers go upstream as they came.
+        ...(emit.agentSessionId !== undefined ? { agentSessionId: emit.agentSessionId } : {}),
         outputText,
         violatedInvariant: survivor !== null,
         invariantDetail: survivor

@@ -223,7 +223,12 @@ const LINE_RULES: readonly LineRule[] = [
     (v) => (/^sk-(?:proj|svcacct|admin)-/.exec(v)?.[0].length ?? 3), mixed),
   prefixRule("github-token", /(?<![A-Za-z0-9_])(gh[pousr]_[A-Za-z0-9]{36,255})(?![A-Za-z0-9_])/g, () => 4, githubTokenOk),
   prefixRule("github-token", /(?<![A-Za-z0-9_])(github_pat_[A-Za-z0-9_]{60,255})(?![A-Za-z0-9_])/g, () => 11, mixed),
-  prefixRule("gitlab-token", /(?<![A-Za-z0-9_-])(glpat-[A-Za-z0-9_-]{20,})/g, () => 6, mixed),
+  // GitLab's newer tokens go on past a dot: `glpat-<body>.<version>.<id>`
+  // (the version two characters, the id base-36). The whole token is the
+  // value; stopping at the dot left the rest in the clear and made a piece
+  // of the person's own token look like a different key (step 0 hand check,
+  // 2026-10-22).
+  prefixRule("gitlab-token", /(?<![A-Za-z0-9_-])(glpat-[A-Za-z0-9_-]{20,}(?:\.[0-9a-z]{2}\.[0-9a-z]{6,16})?)/g, () => 6, mixed),
   prefixRule("slack-token", /(?<![A-Za-z0-9_-])(xox[abposr]-[A-Za-z0-9-]{10,})/g, () => 5, mixed),
   prefixRule("stripe-key", /(?<![A-Za-z0-9_])((?:sk|rk)_live_[A-Za-z0-9]{20,})/g, () => 8, mixed),
   prefixRule("google-api-key", /(?<![A-Za-z0-9_-])(AIza[0-9A-Za-z_-]{35})(?![0-9A-Za-z_-])/g, () => 4, (v) => !isStandIn(v)),
@@ -324,6 +329,61 @@ export function detectSecretShapes(text: string, opts: { maxHits?: number } = {}
         add(rule.shape, value, rule.preview(m), start + a0);
       }
     }
+  }
+  return hits;
+}
+
+/** One credential-shaped value with its mask: what
+ *  {@link detectSecretShapes} reports, plus the VALUE itself, for a scan
+ *  that must tell one secret from another across many texts (the
+ *  past-sessions scan, confidentiality-plan-17 §3 item 2). The value never
+ *  leaves the caller's process: the caller keys a hash on it and drops it. */
+export interface SecretValueHit {
+  shape: SecretShape;
+  value: string;
+  preview: string;
+}
+
+/** Every credential-shaped value in `text` with its mask, by the same rules,
+ *  checks, precedence and order as {@link detectSecretShapes}, one per
+ *  (shape, value), at most `maxHits`. Kept apart from `detectSecretShapes`
+ *  so the history scan's fingerprint (that function's source) does not
+ *  move; a unit test holds the two to the same shapes and masks. Pure. */
+export function findSecretValues(text: string, opts: { maxHits?: number } = {}): SecretValueHit[] {
+  const max = opts.maxHits ?? 1000;
+  const hits: SecretValueHit[] = [];
+  const seen = new Set<string>();
+  const add = (shape: SecretShape, value: string, preview: string): void => {
+    const key = `${shape}\0${value}`;
+    if (seen.has(key) || hits.length >= max) return;
+    seen.add(key);
+    hits.push({ shape, value, preview: safePreview(preview, value, shape) });
+  };
+  PRIVATE_KEY_RE.lastIndex = 0;
+  for (let m = PRIVATE_KEY_RE.exec(text); m !== null && hits.length < max; m = PRIVATE_KEY_RE.exec(text)) {
+    add("private-key", m[3]!, `-----BEGIN ${m[1] ?? ""}PRIVATE KEY${m[2] ?? ""}-----…`);
+  }
+  let start = 0;
+  while (start <= text.length && hits.length < max) {
+    const nl = text.indexOf("\n", start);
+    const line = text.slice(start, nl < 0 ? text.length : nl);
+    if (line.length <= MAX_LINE && line.length >= 12) {
+      const claimed: Array<[number, number]> = [];
+      for (const rule of LINE_RULES) {
+        rule.re.lastIndex = 0;
+        for (let m = rule.re.exec(line); m !== null; m = rule.re.exec(line)) {
+          const a0 = m.index;
+          const b0 = m.index + m[0].length;
+          if (claimed.some(([a, b]) => a0 < b && b0 > a)) continue;
+          const value = rule.value(m);
+          if (rule.ok && !rule.ok(value)) continue;
+          claimed.push([a0, b0]);
+          add(rule.shape, value, rule.preview(m));
+        }
+      }
+    }
+    if (nl < 0) break;
+    start = nl + 1;
   }
   return hits;
 }

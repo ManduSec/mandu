@@ -125,8 +125,8 @@ export function load(opts: { url?: string; homeVm?: unknown; storage?: Record<st
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
   };
   // `note` is the Notification object itself, so a test can fire its onclick.
-  const notes: { title: string; body: string; note: any }[] = [];
-  function N(this: any, title: string, o: any) { notes.push({ title, body: o.body, note: this }); this.close = () => {}; }
+  const notes: { title: string; body: string; tag: string; note: any }[] = [];
+  function N(this: any, title: string, o: any) { notes.push({ title, body: o.body, tag: o.tag, note: this }); this.close = () => {}; }
   (N as any).permission = opts.permission ?? "granted";
   (N as any).requestPermission = () => Promise.resolve("granted");
   window.Notification = N;

@@ -2,7 +2,12 @@
 # §3): scripts/ci/guest/boot.sh reads the input disk, runs the pipeline as the
 # user `ci`, writes the output disk and powers off. Installed and enabled by
 # provision.sh; it does nothing on the provisioning boot itself (the ready
-# marker is written last).
+# marker is written last). Delegate=: boot.sh delegates a cgroup of the
+# unit's subtree to `ci` (continuous-integration.md §3), which systemd leaves
+# alone. memory and pids only, never cpu: with cpu on above the suites they
+# are a task group of their own, where the kernel applies no autogroups, and
+# a single-threaded TUI drill starves beside the builds (boot.sh, "a cgroup
+# delegated to ci").
 [Unit]
 Description=Mandu CI: run the job on the input disk, write the results, power off
 After=local-fs.target systemd-udevd.service systemd-sysctl.service
@@ -14,6 +19,7 @@ ExecStart=/usr/local/lib/mandu-ci/boot.sh
 StandardOutput=journal+console
 StandardError=journal+console
 TimeoutStartSec=infinity
+Delegate=memory pids
 
 [Install]
 WantedBy=multi-user.target

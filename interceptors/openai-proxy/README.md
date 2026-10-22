@@ -23,7 +23,14 @@ P4) the SSE passes through a conservative `function_call`-argument path rewriter
 (`src/sse-rewrite.ts`) so HumanView paths in the model's shell commands map into
 the AgentView. The `tllm_call` event it emits carries a readable `▸ role`
 transcript of the forwarded request and the model's answer, which a passive
-reader takes off the relayed body without changing a byte (`src/transcript.ts`).
+reader takes off the relayed body without changing a byte (`src/transcript.ts`),
+and the provider's id for the response (`model.responseId`), the one the
+agent keeps in its own transcript, which `mandu scan` joins on
+(confidentiality-plan-17 §3 item 6): on the Responses route the first
+`response.*` event's `response.id` or the body's `id` (`resp_…`), on the
+Chat Completions route the id the agent was sent after the gate, the first
+chunk's or the body's (`chatcmpl-…`, `src/response-id.ts`, shared verbatim
+with the anthropic-proxy). Only a well-formed id is kept.
 
 ## What it does
 
@@ -139,6 +146,7 @@ proxy cannot mask (403, above).
 | `src/sse-rewrite.ts` | `ResponsesArgsRewriter` — forward-maps `function_call` command args in the model→agent SSE (buffers deltas per item, rewrites at `.done`, rewrites item snapshots in place). |
 | `src/unmapped-upload.ts` · `src/unmapped-upload-core.ts` · `test/unit/unmapped-upload.test.ts` | The unmapped upload leg (2026-10-17; supported-agents.md §2, "The upload residuals", item 4): every local path in a call of a tool Codex does not ship (an MCP server's, called directly or from a code cell) goes to the arbiter's `fileUploadDecision` in its unmapped form; a held one becomes a path that names no file (a cell is replaced whole by the sentinel cell), an upload after a possible writer of the same response is withheld. The core is byte-equal with the anthropic-proxy's copy (pinned by the unit test). |
 | `src/events.ts` | Best-effort `ManduEvent` builders (`tllm_call` / `tool_result` / `symbolize`), mirroring the dashboard schema field-for-field so Codex sessions render in the dual-view trace. Off the security path (`safeEmit`). |
+| `src/response-id.ts` | The provider's id of the response the agent was sent on the Chat Completions route, read off the relayed bytes after the gates, for `tllm_call`'s `model.responseId` (`mandu scan`'s join, confidentiality-plan-17 §3 item 6). Observability only; one module copied verbatim to both proxies. |
 | `src/responses-types.ts` | The subset of the OpenAI Responses API the proxy parses (permissive, passthrough-preserving). |
 | `src/arbiter-client.ts` | The narrow `Arbiter` interface the proxy depends on (`classify` / `symbolize` / `handlingPrompt` / `emit`) + `ArbiterClientAdapter` bridging the real `arbiter/ipc/client.ts`. Decouples the proxy from the arbiter so tests use a mock. |
 | `src/server-main.ts` | Deployment entry point: wires the real arbiter client adapter + listens. The only file that imports the sibling arbiter package. |
@@ -150,6 +158,7 @@ proxy cannot mask (403, above).
 | `test/unit/chatgpt-upstream.test.ts` | Which upstream (`chooseUpstream`): a ChatGPT sign-in to the ChatGPT base, anything else to the API, a declared main model the only upstream (a sign-in there refused, 403); the path mapping, the relayed headers, no credential in events or logs. |
 | `test/unit/view-map.test.ts` / `test/unit/proxy-view-map.test.ts` / `test/unit/sse-rewrite.test.ts` | The P4 map core, its wiring through the proxy (both directions), and the SSE rewriter's buffer-and-re-emit behavior. |
 | `test/unit/events.test.ts` | The event builders (shape, DualRepr, surviving-untrusted refs). |
+| `test/unit/response-id.test.ts` | The id sniffer: the first Chat chunk's id, `response.created`'s, a body's; however the stream is cut; none for an ill-formed or missing id; never throws (shared verbatim with the other proxy). |
 | `test/component/invariant-oracle.test.ts` | The Track-A invariant oracle for the OpenAI/Codex wire shape. |
 | `test/component/view-map-rewrite.test.ts` | End-to-end P4 rewrite through the HTTP proxy against the fake upstream. |
 

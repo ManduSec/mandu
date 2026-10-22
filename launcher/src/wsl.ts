@@ -287,6 +287,7 @@ export const WINDOWS_PROFILE_SECRET_PATHS: readonly string[] = [
   ".ngrok2", ".circleci/cli.yml", ".sentryclirc", ".kaggle", ".huggingface",
   ".cache/huggingface/token", ".cache/huggingface/stored_tokens",
   ".config/github-copilot", ".config/op", ".op",
+  ".mandu/state/dashboard-account.json",
   // Where Windows builds of the same tools keep them.
   "_netrc",
   "AppData/Roaming/gcloud", "AppData/Roaming/GitHub CLI", "AppData/Roaming/rclone",

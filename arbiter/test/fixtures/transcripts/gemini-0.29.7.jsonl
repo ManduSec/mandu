@@ -1,0 +1,5 @@
+{"sessionId":"id-1","projectHash":"id-2","startTime":"2026-01-01T00:00:01.000Z","lastUpdated":"2026-01-01T00:00:02.000Z","messages":[]}
+{"id":"id-3","timestamp":"2026-01-01T00:00:03.000Z","type":"user","content":[{"text":"<text>"}]}
+{"id":"id-4","timestamp":"2026-01-01T00:00:04.000Z","type":"gemini","content":"<text>","model":"<text>","thoughts":[],"toolCalls":[{"id":"id-5","name":"read_file","args":{"file_path":"/home/user/project"},"result":[{"functionResponse":{"id":"id-5","name":"read_file","response":{"output":"<text>"}}}],"status":"success","timestamp":"2026-01-01T00:00:05.000Z","resultDisplay":"<text>","displayName":"<text>","description":"<text>","renderOutputAsMarkdown":true}]}
+{"id":"id-6","timestamp":"2026-01-01T00:00:06.000Z","type":"gemini","content":"<text>","thoughts":[],"tokens":{"input":9,"output":1,"cached":0,"thoughts":0,"tool":0,"total":10},"model":"<text>"}
+{"id":"id-7","timestamp":"2026-01-01T00:00:07.000Z","type":"info","content":"<text>"}

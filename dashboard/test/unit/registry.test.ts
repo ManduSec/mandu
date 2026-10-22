@@ -14,6 +14,7 @@ import {
   dashboardId,
   registerDashboard,
   resolveOwnerPid,
+  rewriteDashboardEntry,
   sweepDeadDashboards,
   unregisterDashboard,
   type DashboardManifest,
@@ -64,6 +65,21 @@ test("registerDashboard writes dashboards/<id>.json atomically; unregister remov
     unregisterDashboard(path);
     assert.ok(!existsSync(path), "unregister removes the entry");
     unregisterDashboard(path); // idempotent — a raced double-exit must not throw
+  });
+});
+
+test("rewriteDashboardEntry writes the entry again in place (the sign-in mode once the account is made); never through a linked registry", () => {
+  withBase((base) => {
+    const { path } = registerDashboard(base, manifest({ signInMode: "no-account" }));
+    rewriteDashboardEntry(path, manifest({ signInMode: "account" }));
+    assert.equal((JSON.parse(readFileSync(path, "utf8")) as DashboardManifest).signInMode, "account");
+    assert.ok(!existsSync(`${path}.tmp`), "no tmp litter");
+    assert.deepEqual(readdirSync(join(base, "dashboards")), [path.split("/").pop()], "the same one entry");
+    const real = join(base, "elsewhere");
+    mkdirSync(real);
+    symlinkSync(real, join(base, "linked"));
+    assert.throws(() => rewriteDashboardEntry(join(base, "linked", "x.json"), manifest()), /not a real directory/);
+    assert.deepEqual(readdirSync(real), [], "nothing written through the link");
   });
 });
 

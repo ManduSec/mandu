@@ -55,6 +55,7 @@ import type {
   SymbolShapeResult,
   SessionRelayMode,
   ReplyLayoutRule,
+  ReplyTabOrigin,
   SetSessionRelayResult,
   SessionRelayWire,
   ReserveBlockWire,
@@ -139,6 +140,8 @@ import type {
   EndLaunchResult,
   HumanPlaneStatusResult,
   AgentReceiptTaintResultWire,
+  SuggestFromScanOpRequest,
+  SuggestFromScanResultWire,
 } from "./protocol.js";
 import type {
   ArbiterEvent,
@@ -755,6 +758,13 @@ export class ArbiterClient {
     return this.request<PolicySuggestionsResult>("policySuggestions", status ? { status } : {});
   }
 
+  /** Plan 17 §3 item 13: name the files `mandu scan`'s secrets came from
+   *  (paths and key names, never a value); each one no rule covers, once the
+   *  arbiter has checked it, becomes a suggestion. */
+  async suggestFromScan(home: string, files: SuggestFromScanOpRequest["files"]): Promise<SuggestFromScanResultWire> {
+    return this.request<SuggestFromScanResultWire>("suggestFromScan", { home, files });
+  }
+
   /** Apply one suggestion if it is still a pure tightening (data plane). */
   async applySuggestion(suggestionId: string, requestedBy?: string): Promise<ApplySuggestionResult> {
     return this.request<ApplySuggestionResult>("applySuggestion", { suggestionId, ...(requestedBy ? { requestedBy } : {}) });
@@ -1048,7 +1058,8 @@ export class ArbiterClient {
   }
 
   /** Report the reply filter's relay mode for a session (and again on resize) —
-   * reply-row-reservation.md §3.6, §11.5 (`wrap`: it paints v2 heads). Human
+   * reply-row-reservation.md §3.6, §11.5 (`wrap`: it paints v2 heads; `tabs`,
+   * §19.7: where the TUI counts a TAB's stops from). Human
    * plane only: the data socket refuses it. */
   async setSessionRelay(args: {
     sessionKey: string;
@@ -1058,6 +1069,7 @@ export class ArbiterClient {
     rows?: number;
     wrap?: boolean;
     rule?: ReplyLayoutRule;
+    tabs?: ReplyTabOrigin;
   }): Promise<void> {
     await this.request<SetSessionRelayResult>("setSessionRelay", args);
   }

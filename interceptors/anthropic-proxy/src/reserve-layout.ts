@@ -23,8 +23,9 @@
  * against vanilla Claude Code 2.1.285 screens (reply-row-reservation.md
  * §11.1). The `terminal` rule (2026-10-07) is a terminal's autowrap, pinned
  * against vanilla Goose 1.53.0 screens (§17.1). A TAB counts its stop from
- * the terminal's column 0, not the value's (2026-10-18, §11.2): vanilla
- * Claude Code leaves the TAB to the terminal.
+ * the column `indent` names (§11.2, §19.7): the terminal's column 0 for a
+ * TUI whose stops are the screen's (Codex), the content area's own for one
+ * that expands each TAB from its text (Claude Code 2.1.295 and later).
  *
  * Pure: no I/O, never throws, no state.
  */
@@ -77,11 +78,11 @@ export function layoutLines(value: string): string[] {
 }
 
 /** One line cleaned for a frame: escapes and control bytes removed, each TAB
- *  expanded to the spaces that reach the terminal's next tab stop (the next
- *  multiple of 8 of the ABSOLUTE column, as a terminal advances), the line's
- *  first glyph sitting at terminal column `col0` (§11.2: the content area's
- *  left column, plus the head's offset on its row). `col0` absent, negative
- *  or not an integer counts from 0, the line's own start. */
+ *  expanded to the spaces that reach the next tab stop (the next multiple of
+ *  8 of the column counted from the TUI's TAB origin), the line's first
+ *  glyph sitting at column `col0` of that count (§11.2: the content area's
+ *  `indent`, plus the head's offset on its row). `col0` absent, negative or
+ *  not an integer counts from 0, the line's own start. */
 export function cleanLine(line: string, col0: number = 0): string {
   const flat = line.replace(LAYOUT_CSI_RE, "").replace(LAYOUT_C0_RE, "");
   if (!flat.includes("\t")) return flat;
@@ -210,13 +211,14 @@ export interface LayoutRow {
  * stays empty), under the TUI's wrap `rule` (default `ink`). Every line gets
  * at least one row.
  *
- * `indent` is the terminal column of the content area's left edge: the
- * relay's columns minus `width` (2 for a Claude Code or Codex reply, more in
- * a list item, 0 under the `terminal` rule). A TAB reaches the terminal's
- * own tab stop (cleanLine): line 1 on a head row `first` wide starts at
- * column `indent + width − first` (that row ends at the right edge), every
- * other line at `indent`. Absent (or not a positive integer): 0, the
- * content area at the terminal's column 0.
+ * `indent` is the column of the content area's left edge in the count a
+ * TAB's stops follow (§19.7): for a TUI whose stops are the screen's, the
+ * relay's columns minus `width` (2 for a Codex reply, more in a list item, 0
+ * under the `terminal` rule); for one that expands each TAB from its text
+ * (Claude Code), 0. A TAB reaches that tab stop (cleanLine): line 1 on a
+ * head row `first` wide starts at column `indent + width − first` (that row
+ * ends at the right edge), every other line at `indent`. Absent (or not a
+ * positive integer): 0, the stops counted from the content area itself.
  */
 export function layoutRows(
   value: string, width: number, first: number = width, rule: LayoutRule = "ink", indent: number = 0,

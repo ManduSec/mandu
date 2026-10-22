@@ -170,6 +170,41 @@ check "watchdog: marks the run, says so, SIGTERMs every process of ci, then SIGK
   "[[ -f '$T/wd/job/watchdog' ]] && grep -q '^mandu-ci: watchdog: the pipeline still runs at the budget (2550s of uptime)' <<<\"\$WD_OUT\" && [[ \"\$(head -1 '$T/wd/calls')\" == 'pkill -TERM -u ci' && \"\$(tail -1 '$T/wd/calls')\" == 'pkill -KILL -u ci' ]]"
 check "boot.sh: --deadline to the pipeline and the watchdog only from a budget; the watchdog stopped after the pipeline" \
   "grep -qF 'args+=(--deadline \"\$deadline\")' '$BOOT' && grep -qF 'watchdog \"\$wd_in\" &' '$BOOT' && grep -qF '[[ -n \"\$WATCHDOG\" ]] && kill \"\$WATCHDOG\"' '$BOOT'"
+# delegate_cgroup and in_ci_cgroup on a fake cgroup tree (plain files; the
+# kernel's own files made by the stub mkdir, runuser a stub running as this user).
+mkdir -p "$T/cg/bin" "$T/cg/unit"
+printf '#!/bin/sh\nfor d in "$@"; do case "$d" in -*) ;; *) /bin/mkdir -p "$d" && for f in cgroup.procs cgroup.threads cgroup.subtree_control; do : > "$d/$f"; done ;; esac; done\n' > "$T/cg/bin/mkdir"
+printf '#!/bin/sh\nshift 3; exec "$@"\n' > "$T/cg/bin/runuser"
+chmod +x "$T/cg/bin/mkdir" "$T/cg/bin/runuser"
+echo "cpu io memory pids" > "$T/cg/unit/cgroup.controllers"; : > "$T/cg/unit/cgroup.subtree_control"
+ME="$(id -un)"
+CG_OUT="$(PATH="$T/cg/bin:$PATH" bash -c "$(grep '^say() ' "$BOOT")
+$(fn delegate_cgroup)
+$(fn in_ci_cgroup)
+delegate_cgroup '$T/cg/unit' '$ME' && echo \"run=\$CI_CGROUP\" && in_ci_cgroup sh -c 'echo moved=\$(cat \"\$1/cgroup.procs\")' _ \"\$CI_CGROUP\"")"
+check "delegate_cgroup: boot.sh into <unit>/boot, memory and pids on (cpu and io not asked), ci/run and ci/spare under ci/, the suites in run/" \
+  "[[ -s '$T/cg/unit/boot/cgroup.procs' && \"\$(cat '$T/cg/unit/cgroup.subtree_control')\" == '+pids' && -d '$T/cg/unit/ci/run' && -d '$T/cg/unit/ci/spare' ]] && grep -qx 'run=$T/cg/unit/ci/run' <<<\"\$CG_OUT\" && grep -qx 'moved=0' <<<\"\$CG_OUT\""
+check "delegate_cgroup: the controllers switched on below ci/ for run/ and spare/, cpu never (a cpu task group has no autogroups)" \
+  "[[ \"\$(cat '$T/cg/unit/ci/cgroup.subtree_control')\" == '+memory +pids' ]]"
+# cpu_group_of on a fake tree (its /sys/fs/cgroup prefix moved under $T):
+# nothing in the root task group, else the nearest cgroup at or above with
+# cpu on (a cpu.weight file).
+CGF="$T/cg/sys/fs/cgroup"
+mkdir -p "$CGF/a/b/c"
+{ fn cpu_group_of | sed "s#/sys/fs/cgroup#$CGF#g"
+  echo "[[ -z \"\$(cpu_group_of '$CGF/a/b/c')\" ]] || exit 1"
+  echo ": > '$CGF/a/cpu.weight'"
+  echo "[[ \"\$(cpu_group_of '$CGF/a/b/c')\" == '$CGF/a' ]]"; } > "$T/cg/cpu-of.sh"
+check "cpu_group_of: none in the root task group (autogroups apply), else the nearest cgroup with cpu on" \
+  "grep -q '^cpu_group_of() {\$' '$BOOT' && bash '$T/cg/cpu-of.sh'"
+check "boot.sh: says on the console whether the suites are in the root cpu task group" \
+  "grep -qF 'cg_cpu=\"\$(cpu_group_of \"\${CI_CGROUP:-\$unit_cg}\")\"' '$BOOT' && grep -qF 'say \"cpu: WARNING: the suites share the cpu task group of' '$BOOT'"
+check "delegate_cgroup: ci owns ci/ and its three delegation files (cgroup-v2.rst), and makes run/ and spare/ itself" \
+  "grep -qF 'chown \"\$user:\$user\" \"\$d\" \"\$d/cgroup.procs\" \"\$d/cgroup.threads\" \"\$d/cgroup.subtree_control\"' '$BOOT' && grep -qF 'runuser -u \"\$user\" -- mkdir -p \"\$d/run\" \"\$d/spare\"' '$BOOT'"
+check "delegate_cgroup: fails on a unit cgroup it cannot write (boot.sh then runs the suites where they ran before)" \
+  "PATH='$T/cg/bin':\$PATH bash -c \"\$(grep '^say() ' '$BOOT'); \$(fn delegate_cgroup); CI_CGROUP=x; ! delegate_cgroup /proc/nonexistent/unit '$ME' 2>/dev/null\""
+check "boot.sh: the pipeline and the shell-mode login run through in_ci_cgroup; mandu-ci.service delegates memory and pids, not cpu" \
+  "grep -qF 'in_ci_cgroup runuser -u \"\$CI_USER\" -- env -i' '$BOOT' && grep -qF 'in_ci_cgroup setsid --ctty --wait runuser -l' '$BOOT' && grep -qx 'Delegate=memory pids' '$REPO/scripts/ci/guest/mandu-ci.service'"
 check "boot.sh: after the watchdog, the stage watchdog: error in the runner's summary, else an error summary of its own" \
   "grep -qF 'add-stage --out \"\$RESULTS\" --stage watchdog=error' '$BOOT' && grep -qF 'summary.mjs\" write --out \"\$RESULTS\" \"\${meta[@]}\" --result error' '$BOOT'"
 
@@ -213,12 +248,19 @@ dry --shell --exec true >/dev/null; check "--shell with --exec is refused" "[[ $
 
 # the work tree: +dirty, untracked-not-ignored in, ignored out
 echo "change" >> "$F/arbiter/index.ts"; echo "new" > "$F/arbiter/new.ts"
+# a relative link to a directory, as the inspector's fixtures links are
+mkdir -p "$F/sub/deeper"; ln -s ../../arbiter "$F/sub/deeper/linked"
 W="$(dry --worktree)"
 check "--worktree with changes: commit <sha>+dirty" "grep -q \"^#   MANDU_CI_COMMIT=$SHA+dirty\" <<<\"\$W\""
 ( CI_REPO_ROOT="$F"; . "$F/scripts/ci/lib.sh"; ci_source_tar --worktree "$T/wt.tar"; ci_source_tar HEAD "$T/head.tar" )
 wt="$(tar -tf "$T/wt.tar")"; hd="$(tar -tf "$T/head.tar")"
 check "the work-tree tar has the untracked file and the change, under src/" "grep -qx 'src/arbiter/new.ts' <<<\"\$wt\" && tar -xOf '$T/wt.tar' src/arbiter/index.ts | grep -q change"
 check "the work-tree tar has no ignored file (node_modules, secrets.local.json)" "! grep -qE 'node_modules|secrets\.local\.json' <<<\"\$wt\""
+# GNU tar's --transform also rewrites link targets unless told not to (`S`):
+# the link once arrived as `-> src/../../arbiter`, dangling in the guest.
+mkdir -p "$T/wt-x"; tar -xf "$T/wt.tar" -C "$T/wt-x" src/sub/deeper/linked src/arbiter/new.ts 2>/dev/null
+check "the work-tree tar keeps a relative symlink's target as written, so it resolves after unpacking" \
+  "[[ \"\$(readlink '$T/wt-x/src/sub/deeper/linked')\" == ../../arbiter && -f '$T/wt-x/src/sub/deeper/linked/new.ts' ]]"
 # the promoted replay baselines (step 5 decision 8): newest first under the cap,
 # only <key>/baseline.json regular files of a key-named directory
 B="$T/bstore"; mkdir -p "$B/k-old" "$B/k-new" "$B/k-big" "$B/bad name" "$B/k-link" "$B/k-other"

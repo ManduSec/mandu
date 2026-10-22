@@ -43,7 +43,7 @@ const host = (doc: any) => doc.getElementById("settings-services");
 const STOPPED = { state: "stopped", name: "Stopped", since: null, sentence: "It starts again by itself when you next start an agent with mandu.", action: { label: "Start", path: "control/arbiter/start", confirm: null } };
 /** The admin gate's own 403 (server.ts), as every control POST answers it signed out. */
 const SIGNED_OUT = { status: 403, body: { error: ADMIN_SESSION_REQUIRED } };
-const SIGN_IN = "Sign in first: in your own terminal, run mandu dashboard and open the sign-in link it prints (each link works once), or sign in with the dashboard's password if it has one.";
+const SIGN_IN = "Sign in first: reload this page and sign in with your dashboard account (if there isn't one yet, run mandu dashboard --set-password in your own terminal).";
 /** The row's answer line, or null. */
 const answer = (doc: any) => doc.querySelector("#settings-service-main .ask-error");
 
@@ -147,7 +147,7 @@ test("signed out, Start says how to sign in on its row, the command as code; the
   const line = answer(doc);
   assert.ok(line, "the click is answered on the row (it used to repaint the row and say nothing)");
   assert.equal(line.textContent, SIGN_IN);
-  assert.equal(line.querySelector("code")?.textContent, "mandu dashboard", "the command reads as code");
+  assert.equal(line.querySelector("code")?.textContent, "mandu dashboard --set-password", "the command reads as code");
   assert.doesNotMatch(host(doc).textContent, /admin session|DASHBOARD_PASSWORD|`/, "never the server's developer text");
   assert.equal(doc.querySelector("#settings-service-main .service-state").textContent, "Stopped");
   assert.equal(doc.querySelector("#settings-service-main button").disabled, false, "the button is back");
@@ -677,11 +677,177 @@ test("cards and folds: every Settings section is a card that says one line, the 
   await tick();
   const cards = [...doc.querySelectorAll("#page-settings > section.card")];
   assert.deepEqual(cards.map((c: any) => c.querySelector("h2").textContent),
-    ["Protection", "Models", "Sensitivity labels", "Prompt filters", "Notifications", "Appearance", "Developer view"]);
+    ["Protection", "Models", "Sensitivity labels", "Prompt filters", "Notifications", "Appearance", "Dashboard account", "About Mandu", "Developer view"]);
   for (const id of ["settings-prompt-about"]) assert.ok(doc.getElementById(id).closest("details.more"), `${id} is folded`);
   assert.equal(doc.querySelectorAll("#page-settings [data-help]").length, 0, "every data-help became a help button");
   const helps = [...doc.querySelectorAll("#model-form .help-btn")] as any[];
   assert.equal(helps.length, 3, "the model form's three long explanations are behind a ?");
   helps[0].click();
   assert.match(doc.getElementById(helps[0].getAttribute("aria-controls")).textContent, /^It runs on this computer/);
+});
+
+// ── Dashboard account (dashboard.md §6.z) ─────────────────────────────────────
+
+test("dashboard account: Sign out shows only to a browser with a sign-in session; a changed account file is said on Home", async () => {
+  const signedOut = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": home({ signIn: { signOut: false, accountChangedAt: null } }) } });
+  await tick();
+  assert.equal(signedOut.doc.getElementById("settings-account-block").hidden, true, "no Sign out without a sign-in session");
+  assert.equal(signedOut.doc.getElementById("home-account-changed").hidden, true);
+  const none = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": home({}) } });
+  await tick();
+  assert.equal(none.doc.getElementById("settings-account-block").hidden, true, "a home without signIn shows none");
+
+  const at = "2026-10-22T09:30:00.000Z";
+  const { doc } = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": home({ signIn: { signOut: true, accountChangedAt: at } }) } });
+  await tick();
+  const card = doc.getElementById("settings-account-block");
+  assert.equal(card.hidden, false);
+  const form = doc.getElementById("settings-sign-out-form");
+  assert.equal(form.getAttribute("method"), "POST");
+  assert.equal(form.getAttribute("action"), "logout", "relative to the page's <base>, so it works under a base path");
+  assert.equal(doc.getElementById("settings-sign-out").textContent, "Sign out");
+  assert.match(card.querySelector("p.note").textContent, /mandu dashboard --set-password/);
+  const notice = doc.getElementById("home-account-changed");
+  assert.equal(notice.hidden, false);
+  assert.match(doc.getElementById("account-changed-sentence").textContent, /^The dashboard account file changed at .+, so every browser was signed out then\.$/);
+  assert.match(notice.textContent, /If you did not change it, something on this computer did/);
+});
+
+// ── About Mandu (dashboard.md §4.25 *About Mandu*) ──────────────────────────
+
+const ABOUT = {
+  version: "0.2.0-beta.7",
+  guideUrl: "https://github.com/mandusec/mandu/blob/main/docs/usage.md",
+  troubleshootingUrl: "https://github.com/mandusec/mandu/blob/main/docs/usage.md#troubleshooting",
+  issuesUrl: "https://github.com/mandusec/mandu/issues",
+};
+const aboutRow = (doc: any) => doc.getElementById("settings-about-version");
+const aboutLinks = (doc: any) => [...doc.querySelectorAll("#settings-about-links a")] as any[];
+
+test("about: the card shows Mandu <version>, the doctor note and three links, each in a new tab with noopener noreferrer", async () => {
+  const { doc } = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": home({ about: ABOUT }) } });
+  await tick();
+  const card = doc.getElementById("settings-about-block");
+  assert.equal(card.querySelector("h2").textContent, "About Mandu");
+  assert.equal(card.querySelector(".row .name").textContent, "Version");
+  assert.equal(aboutRow(doc).textContent, "Mandu 0.2.0-beta.7");
+  assert.equal(card.querySelector("p.note").textContent, "To check this computer's setup, run mandu doctor in a terminal.");
+  assert.equal(card.querySelector("p.note code").textContent, "mandu doctor");
+  assert.equal(card.querySelector("p.note code").className, "code-whole", "a command is kept whole (§4.25u)");
+  const links = aboutLinks(doc);
+  assert.deepEqual(links.map((a) => [a.textContent, a.getAttribute("href")]), [
+    ["Guide", ABOUT.guideUrl], ["Troubleshooting", ABOUT.troubleshootingUrl], ["Report a problem", ABOUT.issuesUrl],
+  ]);
+  for (const a of links) {
+    assert.equal(a.getAttribute("target"), "_blank", a.textContent);
+    assert.equal(a.getAttribute("rel"), "noopener noreferrer", a.textContent);
+  }
+  assert.equal(doc.getElementById("settings-about-links").textContent, "Guide · Troubleshooting · Report a problem");
+  assert.equal(links[2].getAttribute("title"), "Say which version you run: Mandu 0.2.0-beta.7.");
+  const report = doc.getElementById("settings-about-report");
+  assert.equal(report.hidden, false);
+  assert.equal(report.textContent, "When you report a problem, say which version you run: Mandu 0.2.0-beta.7.");
+  // The card is the last product card, before the developer-only one (the
+  // dashboard account's, shown only to a signed-in browser, comes before it).
+  const cards = [...doc.querySelectorAll("#page-settings > section.card")] as any[];
+  assert.equal(cards[cards.indexOf(card) - 1].id, "settings-account-block");
+  assert.ok(cards[cards.indexOf(card) + 1].hasAttribute("data-dev-only"));
+});
+
+test("about: an unknown version says to run mandu --version, never an empty row or a bare unknown; the links stay", async () => {
+  const { doc } = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": home({ about: { ...ABOUT, version: "unknown" } }) } });
+  await tick();
+  assert.equal(aboutRow(doc).textContent, "Not known. Run mandu --version in a terminal.");
+  assert.equal(aboutRow(doc).querySelector("code").textContent, "mandu --version");
+  assert.equal(aboutRow(doc).querySelector("code").className, "code-whole", "kept whole (ownCode)");
+  assert.equal(aboutLinks(doc).length, 3);
+  assert.equal(aboutLinks(doc)[2].getAttribute("title"), null, "no version to name");
+  assert.equal(doc.getElementById("settings-about-report").hidden, true);
+});
+
+test("about: before an answer it reads Checking…; a poll that fails first says how to find the version, and a later failure keeps what an answer drew", async () => {
+  let release: (() => void) | null = null;
+  const { doc, window } = load({ url: URL, routes: { "GET control/summary": summary() }, homeVm: home({ about: ABOUT }), before: (w) => {
+    const real = w.fetch;
+    w.fetch = (url: string, init?: unknown) => /\/api\/home$/.test(url)
+      ? new Promise((r) => { release = () => r(real(url, init)); })
+      : real(url, init);
+  } });
+  await tick();
+  assert.equal(aboutRow(doc).textContent, "Checking…");
+  assert.equal(doc.getElementById("settings-about-links").hidden, true, "no links before an answer");
+  release!();
+  await tick();
+  assert.equal(aboutRow(doc).textContent, "Mandu 0.2.0-beta.7");
+  // A later poll that fails keeps the card as drawn: the hero says it
+  // could not check, the release stays.
+  window.fetch = (url: string) => Promise.reject(new TypeError(`fetch failed: ${url}`));
+  await pollOf(doc, window)();
+  assert.equal(doc.getElementById("hero-headline").textContent, "Not connected.", "the poll failed");
+  assert.equal(aboutRow(doc).textContent, "Mandu 0.2.0-beta.7");
+  assert.equal(aboutLinks(doc).length, 3);
+});
+
+test("about: with no answer at all, the row never stays at Checking…", async () => {
+  const { doc } = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": { status: 500, body: {} } } });
+  await tick();
+  assert.equal(aboutRow(doc).textContent, "Not known. Run mandu --version in a terminal.");
+  assert.equal(doc.getElementById("settings-about-links").hidden, true);
+});
+
+test("about: only an https address is drawn as a link", async () => {
+  const { doc } = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": home({ about: { ...ABOUT, guideUrl: "javascript:alert(1)", troubleshootingUrl: "http://x.example/" } }) } });
+  await tick();
+  assert.deepEqual(aboutLinks(doc).map((a) => a.textContent), ["Report a problem"]);
+});
+
+// ── About Mandu: a newer release (dashboard.md §4.25 *A newer release*) ──────
+
+const UPDATE_AT = Date.now() - 3 * 3_600_000;
+const NPM_LINE = "npm install -g @mandusec/mandu@0.2.0-beta.9";
+const aboutWith = (update: unknown) => home({ about: { ...ABOUT, update } });
+const checkLine = (doc: any) => doc.getElementById("settings-about-check");
+
+test("about update: a newer release names itself and the command to install it, as code, and when Mandu checked", async () => {
+  const { doc } = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": aboutWith({ state: "newer", at: UPDATE_AT, newest: "0.2.0-beta.9", security: false, install: NPM_LINE }) } });
+  await tick();
+  assert.match(aboutRow(doc).textContent, new RegExp(`^Mandu 0\\.2\\.0-beta\\.7\\. Mandu 0\\.2\\.0-beta\\.9 is out\\. To update: ${NPM_LINE.replace(/[.@]/g, "\\$&")}, then start your agent again \\(checked ${CLOCK} · 3 hours ago\\)\\.$`));
+  assert.equal(aboutRow(doc).querySelector("code").textContent, NPM_LINE);
+  const up = aboutRow(doc).querySelector(".about-update");
+  assert.equal(up.classList.contains("security"), false, "a plain update is not in the warn tint");
+  assert.equal(up.querySelector("time.when").getAttribute("datetime"), new Date(UPDATE_AT).toISOString());
+  assert.equal(checkLine(doc).hidden, true);
+});
+
+test("about update: with security fixes the row says update now, in the warn tint", async () => {
+  const { doc } = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": aboutWith({ state: "newer", at: UPDATE_AT, newest: "0.2.0-beta.9", security: true, install: NPM_LINE }) } });
+  await tick();
+  assert.match(aboutRow(doc).textContent, /^Mandu 0\.2\.0-beta\.7\. Mandu 0\.2\.0-beta\.9 is out with security fixes\. Update now: npm install/);
+  const up = aboutRow(doc).querySelector(".about-update");
+  assert.equal(up.classList.contains("security"), true);
+  assert.equal(up.dataset.update, "security");
+});
+
+test("about update: the newest release says so; without a time it says no 'checked'", async () => {
+  const { doc } = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": aboutWith({ state: "current", at: UPDATE_AT }) } });
+  await tick();
+  assert.match(aboutRow(doc).textContent, new RegExp(`^Mandu 0\\.2\\.0-beta\\.7\\. This is the newest release \\(checked ${CLOCK} · 3 hours ago\\)\\.$`));
+  assert.equal(checkLine(doc).hidden, true);
+  const { doc: d2 } = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": aboutWith({ state: "current", at: null }) } });
+  await tick();
+  assert.equal(aboutRow(d2).textContent, "Mandu 0.2.0-beta.7. This is the newest release.");
+});
+
+test("about update: no answer leaves the row as it was and adds when Mandu checks; nothing to compare adds nothing", async () => {
+  const { doc } = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": aboutWith({ state: "unknown" }) } });
+  await tick();
+  assert.equal(aboutRow(doc).textContent, "Mandu 0.2.0-beta.7");
+  assert.equal(checkLine(doc).hidden, false);
+  assert.equal(checkLine(doc).textContent, "Mandu checks for a newer release when you start an agent from a terminal.");
+  for (const about of [{ ...ABOUT, update: null }, { ...ABOUT, version: "unknown", update: { state: "unknown" } }, ABOUT]) {
+    const { doc: d } = load({ url: URL, routes: { "GET control/summary": summary(), "GET home": home({ about }) } });
+    await tick();
+    assert.equal(checkLine(d).hidden, true, JSON.stringify(about));
+    assert.equal(aboutRow(d).querySelector(".about-update"), null);
+  }
 });

@@ -55,6 +55,9 @@ export class SseToolUseParser {
   /** Accumulated assistant TEXT deltas (the model's visible reply), in order —
    *  captured alongside tool_use so the tllm_call event carries real output. */
   private readonly textParts: string[] = [];
+  /** The response's id from `message_start` (`message.id`), unchecked: the
+   *  event builder keeps it only when it is well formed. */
+  private msgId: string | undefined;
 
   constructor(private readonly onToolUse: (tu: ReconstructedToolUse) => void) {}
 
@@ -89,6 +92,13 @@ export class SseToolUseParser {
    *  (empty string if the turn was tool_use-only). */
   assistantText(): string {
     return this.textParts.join("");
+  }
+
+  /** The response's id (`message_start`'s `message.id`), the one the agent's
+   *  transcript keeps (confidentiality-plan-17 §3 item 6); undefined when
+   *  the stream carried none. */
+  messageId(): string | undefined {
+    return this.msgId;
   }
 
   // ── internals ───────────────────────────────────────────────────────────────
@@ -131,6 +141,11 @@ export class SseToolUseParser {
   private handleData(obj: Record<string, unknown>): void {
     const type = obj["type"];
     switch (type) {
+      case "message_start": {
+        const m = obj["message"] as Record<string, unknown> | undefined;
+        if (this.msgId === undefined && m && typeof m["id"] === "string") this.msgId = m["id"];
+        break;
+      }
       case "content_block_start": {
         const index = numOr(obj["index"], -1);
         const cb = obj["content_block"] as Record<string, unknown> | undefined;

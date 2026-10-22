@@ -16,9 +16,11 @@ import { execFileSync, spawn } from "node:child_process";
 import type { DaemonSpec, Layout } from "./services/layout.js";
 import { manduPath } from "./generated/mandu-paths.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./hardened-git.js";
+import { countGitCall } from "./launch-timings.js";
 import { openAppendLog, serviceReadyDeadlineMs } from "./services/primitives.js";
 import { resolveNativeBin } from "./services/native-bins.js";
 import { movedBaseHint } from "./arbiter-sock.js";
+import { describeSupervisor, stackService, type StackSupervisor } from "./stack-supervisor.js";
 import {
   accountRendezvous as defaultBaseRendezvous, ensurePrivateIfFallback, ensureRuntimeBaseDir, fallbackBaseContaining,
   instanceBaseProblem, instanceSockSuffix, maxPidDigitsFor, resolveRuntimeBase, runtimeBaseContaining,
@@ -158,7 +160,7 @@ export async function ensureArbiter(opts: EnsureArbiterOpts): Promise<{ attached
         (opts.logPath ? `\n  (log: ${opts.logPath})` : ""),
     );
   }
-  return { attached: false };
+  return { attached: started?.attached === true };
 }
 
 /** Is there an entry at `p` (a dangling link counts: the rule refuses it)? */
@@ -321,6 +323,9 @@ export function arbiterClassifierArgs(
 export interface DaemonHandle {
   readonly pid: number | undefined;
   running(): boolean;
+  /** The arbiter that answered is not this launch's: a service's that was
+   *  starting (waitForStackService). ensureArbiter then reports it attached. */
+  readonly attached?: boolean;
 }
 
 export interface InstanceStartDeps {
@@ -368,6 +373,72 @@ export interface InstanceStartDeps {
   /** Test seams for the fallback rule and the private-dir check. */
   runtimeBaseOpts?: RuntimeBaseOptions;
   privateDirDeps?: PrivateDirDeps;
+  /** The systemd service running the stack at a base right now (defaults to
+   *  stack-supervisor.ts stackService; null = none). */
+  stackService?: (base: string) => StackSupervisor | null;
+  /** How long to wait for that service's arbiter (default: twice the
+   *  load-aware readiness deadline). */
+  serviceWaitMs?: number;
+  /** How often the service is looked for again while waiting (default 1 s). */
+  serviceRecheckMs?: number;
+  /** Extra looks, 100 ms apart, before deciding no service runs the stack
+   *  (default 3: a restart's gap between the old process and the new). */
+  serviceGraceChecks?: number;
+}
+
+/**
+ * Wait for the arbiter of the systemd service that runs the stack at `base`,
+ * when there is one (runtime-instances.md §4.1c). Resolves true once the
+ * stack's `current` answers; false at once when no service runs the stack,
+ * or once the service has had no process on it for two checks in a row (it
+ * was stopped: the caller autostarts as before). Throws, naming the service,
+ * when it is still there but its arbiter has not answered by the deadline:
+ * a launch never runs ungated, and a second stack beside the service is the
+ * thing this wait exists to prevent.
+ */
+export async function waitForStackService(
+  base: string,
+  env: NodeJS.ProcessEnv,
+  waitForSocket: (sock: string, tries: number, delayMs: number) => Promise<boolean>,
+  log: (msg: string) => void,
+  deps: Pick<InstanceStartDeps, "stackService" | "serviceWaitMs" | "serviceRecheckMs" | "serviceGraceChecks"> = {},
+): Promise<boolean> {
+  const find = deps.stackService ?? ((b: string) => stackService(b));
+  const sock = promotedSockPath(base);
+  // A restart has a moment with no process of the service on the stack: the
+  // old one has exited and the new one is not yet exec'd (a freshly forked
+  // child still has the service manager's environment). Measured on a user
+  // unit, about 100 ms; so a few more looks, 100 ms apart, before deciding
+  // there is no service (an autostart pays this once, at its start).
+  let svc = find(base);
+  for (let i = 0; svc === null && i < (deps.serviceGraceChecks ?? 3); i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    svc = find(base);
+  }
+  if (svc === null) return false;
+  const waitMs = deps.serviceWaitMs ?? 2 * serviceReadyDeadlineMs(env);
+  const recheckMs = Math.max(10, deps.serviceRecheckMs ?? 1_000);
+  log(`mandu: the Mandu services are starting under ${describeSupervisor(svc)}; waiting for them (up to ${Math.round(waitMs / 1000)} s)`);
+  const deadline = Date.now() + waitMs;
+  let missing = 0;
+  while (Date.now() < deadline) {
+    if (await waitForSocket(sock, Math.max(1, Math.round(recheckMs / 100)), Math.min(100, recheckMs))) return true;
+    const again = find(base);
+    if (again === null) {
+      if (++missing >= 2) {
+        log(`mandu: ${svc.unit} stopped without starting the Mandu services; starting them here`);
+        return false;
+      }
+    } else {
+      missing = 0;
+      svc = again;
+    }
+  }
+  if (await waitForSocket(sock, 1, 0)) return true;
+  throw new Error(
+    `mandu: refusing to launch: ${describeSupervisor(svc)} runs the Mandu services for ${base}, but its arbiter ` +
+      `did not answer within ${Math.round(waitMs / 1000)} s. Look at its log: journalctl${svc.user ? " --user" : ""} -u ${svc.unit}`,
+  );
 }
 
 /** The supervisor's grace past its first 6 s wait, for a service readiness
@@ -452,6 +523,14 @@ export function startArbiterInstance(
     if (moved !== null) log(moved);
     const spawnDaemon = deps.spawnDaemon ?? spawnDaemonSpec;
     const waitForSocket = deps.waitForSocket ?? pollSocket;
+    // A systemd service that runs this stack and is (re)starting it
+    // (runtime-instances.md §4.1c, 2026-10-21): no arbiter answers because the
+    // service is in the two seconds of a restart. Autostarting here put a
+    // second, ownerless stack beside the service, whose dashboard then adopted
+    // its arbiter for good. So wait for the service's arbiter instead; fall
+    // back to the autostart only once the service has no process on this
+    // stack (it was stopped, not restarted).
+    if (await waitForStackService(base, env, waitForSocket, log, deps)) return { pid: undefined, running: () => true, attached: true };
     const baseEnv: NodeJS.ProcessEnv = {
       ...env,
       MANDU_RUNTIME_DIR: base,
@@ -611,6 +690,7 @@ export function arbiterRevDir(layout: Layout): string {
  *  "nogit" when that fails. gitRevOf's dirty flag never changes the rev. */
 export function arbiterRevOf(dir: string): string {
   try {
+    countGitCall(false); // the launch's costs (launch-timings.ts)
     return execFileSync("git", hardenedGitArgs(["rev-parse", "--short", "HEAD"]), {
       cwd: dir, encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"],
       env: hardenedGitEnv(process.env, { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }),
@@ -629,10 +709,13 @@ export function arbiterRevOf(dir: string): string {
 export function arbiterTreesMatch(dir: string, a: string, b: string): boolean | null {
   const hex = /^[0-9a-f]{4,40}$/;
   if (!hex.test(a) || !hex.test(b)) return null;
-  const treeOf = (rev: string): string => execFileSync("git", hardenedGitArgs(["rev-parse", "--verify", "--quiet", `${rev}^{commit}:arbiter`]), {
-    cwd: dir, encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"],
-    env: hardenedGitEnv(process.env, { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }),
-  }).trim();
+  const treeOf = (rev: string): string => {
+    countGitCall(false); // the launch's costs (launch-timings.ts)
+    return execFileSync("git", hardenedGitArgs(["rev-parse", "--verify", "--quiet", `${rev}^{commit}:arbiter`]), {
+      cwd: dir, encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"],
+      env: hardenedGitEnv(process.env, { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }),
+    }).trim();
+  };
   try {
     const ta = treeOf(a);
     const tb = treeOf(b);

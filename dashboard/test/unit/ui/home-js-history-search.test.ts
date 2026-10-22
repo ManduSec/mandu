@@ -2,7 +2,7 @@
  * home-js-history-search.test — dashboard.md §4.25ae *Finding a session*.
  * History listed every session 25 at a time with no way to find one; now a
  * search box above the list ("Find a session") keeps the sessions whose
- * agent or prompt holds the words typed, read from the server
+ * agent, prompt or folder holds the words typed, read from the server
  * (`/api/home/history?q=`):
  *
  *   F1  typing reads once the typing stops (250 ms), not per key; the list
@@ -14,7 +14,14 @@
  *   F3  no match: "No session matches “…”." with Clear, which empties the
  *       box and the address, lists every session again and focuses the box;
  *   F4  `/history?q=` on load reads the search and shows it in the box;
- *       Enter reads at once; a link to History starts without a search.
+ *       Enter reads at once; a link to History starts without a search;
+ *   F5  *An empty History has nothing to find*: with no session on record
+ *       and no search, the box and the switch are hidden and the list says
+ *       how to start one; the poll that brings the first session shows them
+ *       again, the focus left where it was;
+ *   F6  a search or the switch keeps the box on an empty record (`?q=x`,
+ *       `?only=stepped-in`), and so does a box emptied while it has the
+ *       focus.
  */
 
 import { test } from "node:test";
@@ -38,6 +45,8 @@ const type = (doc: any, text: string) => {
   box.value = text;
   box.dispatchEvent(new doc.defaultView.Event("input", { bubbles: true }));
 };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const poll = async (doc: any) => { doc.dispatchEvent(new doc.defaultView.Event("visibilitychange")); await tick(); };
 const settle = async () => { await new Promise((r) => setTimeout(r, 300)); await tick(); };
 
 const ALL = { total: 214, rows: [row("s9"), row("s8")], next: "s8" };
@@ -50,6 +59,7 @@ test("F1: typing reads after the typing stops; the matches, their count, ?q= in 
   const form = doc.getElementById("history-search");
   assert.equal(form.getAttribute("role"), "search");
   assert.equal(doc.querySelector('label[for="history-q"]').textContent, "Find a session");
+  assert.equal(doc.getElementById("history-q").getAttribute("placeholder"), "What you asked, the agent or the folder", "the folder is searched too");
   assert.equal(doc.getElementById("history-count").hidden, true, "no count without a search");
   const entries = window.history.length;
   type(doc, "sta");
@@ -132,4 +142,49 @@ test("F4: ?q= on load is in the box; Enter reads at once; a link to History star
   assert.equal(doc.getElementById("history-q").value, "");
   assert.deepEqual(historyCalls(calls).slice(-1), ["home/history"]);
   assert.deepEqual(ids(doc), ["s9", "s8"]);
+});
+
+const EMPTY_LINE = "No session has been recorded yet. Start your agent through Mandu, mandu claude or mandu codex, and it shows up here.";
+
+test("F5: no session on record: no box, no switch, how to start one; the first session's poll brings them back, the focus kept", async () => {
+  const answers = [{ total: 0, rows: [], next: null }, { total: 0, rows: [], next: null }, { total: 1, rows: [row("s1", { state: "running" })], next: null }];
+  let i = 0;
+  const { doc, calls } = load({ extensions: "", url: URL, homeVm: home(), routes: { "GET home/history": () => answers[Math.min(i++, answers.length - 1)] } });
+  const form = doc.getElementById("history-search");
+  assert.equal(form.hidden, false, "before the first answer the box stays as served: no blink");
+  await tick();
+  assert.equal(form.hidden, true, "nothing to find: the form is hidden");
+  assert.equal(doc.getElementById("history-list").textContent, EMPTY_LINE);
+  assert.deepEqual([...doc.querySelectorAll("#history-list .empty code")].map((c: { textContent: string }) => c.textContent), ["mandu claude", "mandu codex"]);
+  // A poll with the same empty answer changes nothing.
+  await poll(doc);
+  assert.equal(form.hidden, true);
+  const heading = doc.querySelector("#page-history h1");
+  heading.tabIndex = -1;
+  heading.focus();
+  await poll(doc);
+  assert.deepEqual(historyCalls(calls), ["home/history", "home/history", "home/history"]);
+  assert.deepEqual(ids(doc), ["s1"], "the first session is listed");
+  assert.equal(form.hidden, false, "the form is back, no reload");
+  assert.equal(doc.getElementById("history-q").value, "", "its box as it was");
+  assert.equal(doc.activeElement, heading, "the focus is left where it was");
+});
+
+test("F6: a search or the switch keeps the box on an empty record; a box emptied with the focus in it stays", async () => {
+  const none = { total: 0, rows: [], next: null, query: { text: "x", all: 0 } };
+  const { doc } = load({ extensions: "", url: `${URL}?q=x`, homeVm: home(), routes: { "GET home/history?q=x": none, "GET home/history": { total: 0, rows: [], next: null } } });
+  await tick();
+  const form = doc.getElementById("history-search");
+  assert.equal(form.hidden, false, "?q= keeps the box, to clear it");
+  assert.equal(doc.getElementById("history-q").value, "x");
+  assert.equal(doc.getElementById("history-list").textContent, EMPTY_LINE);
+  type(doc, "");
+  await settle();
+  assert.equal(doc.defaultView.location.search, "", "the search is gone");
+  assert.equal(form.hidden, false, "the box the focus is in is not taken from under it");
+  assert.equal(doc.activeElement, doc.getElementById("history-q"));
+  const only = load({ extensions: "", url: `${URL}?only=stepped-in`, homeVm: home(), routes: { "GET home/history?only=stepped-in": { total: 0, rows: [], next: null, only: { through: 0 } } } });
+  await tick();
+  assert.equal(only.doc.getElementById("history-search").hidden, false, "the switch on keeps the form, to turn it off");
+  assert.equal(only.doc.getElementById("history-only").getAttribute("aria-checked"), "true");
 });

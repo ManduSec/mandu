@@ -72,7 +72,7 @@ test("requestSignInLink: a socket outside the human-plane directory is never dia
 test("requestSignInLink: an older dashboard (no socket) says how to get one", async () => {
   const o = await requestSignInLink({ host: "127.0.0.1", port: 4501 }, BASE, async () => { throw new Error("unreachable"); });
   assert.equal(o.kind, "unavailable");
-  assert.match((o as { why: string }).why, /predates sign-in links.*mandu stop/);
+  assert.match((o as { why: string }).why, /older than its human-plane socket.*mandu stop/);
 });
 
 test("requestSignInLink: each answer becomes its outcome", async () => {
@@ -84,7 +84,10 @@ test("requestSignInLink: each answer becomes its outcome", async () => {
     "a wildcard bind is reached over loopback",
   );
   assert.deepEqual(await at({ ok: false, reason: "password", error: "x" }), { kind: "password" });
-  assert.deepEqual(await at({ ok: false, reason: "basic-auth", error: "x" }), { kind: "password" });
+  assert.deepEqual(await at({ ok: false, reason: "basic-auth", error: "x" }), { kind: "password", with: "basic" });
+  assert.deepEqual(await at({ ok: false, reason: "account", error: "x" }), { kind: "password", with: "account" });
+  assert.deepEqual(await at({ ok: false, reason: "no-account", error: "x" }), { kind: "password", with: "no-account" });
+  assert.deepEqual(await at({ ok: false, reason: "account-unusable", error: "x" }), { kind: "password", with: "account-unusable" });
   assert.deepEqual(await at({ ok: false, reason: "exposed", error: "an agent … runs" }), { kind: "refused", why: "an agent … runs" });
   assert.equal((await at({ ok: true, path: "http://elsewhere/login" })).kind, "refused", "only a path, never another origin");
   assert.equal((await at(null)).kind, "refused");
@@ -105,11 +108,14 @@ test("terminalDashboardLines: the link rides the terminal line; the kept line ne
   assert.deepEqual(terminalDashboardLines(plain, { kind: "password" }), [
     "mandu: dashboard http://127.0.0.1:4501/ (approve requests, see what was protected; sign in with its password)",
   ]);
+  assert.deepEqual(terminalDashboardLines(plain, { kind: "password", with: "account" }), [
+    "mandu: dashboard http://127.0.0.1:4501/ (approve requests, see what was protected; sign in with your Mandu dashboard account)",
+  ]);
   const refused = terminalDashboardLines(plain, { kind: "refused", why: "an agent that can reach Mandu's own controls is running (pid 9)" });
   assert.deepEqual(refused, [plain, "mandu: ! no dashboard sign-in link: an agent that can reach Mandu's own controls is running (pid 9)"]);
   const gone = terminalDashboardLines(plain, { kind: "unavailable", why: "no answer" });
   assert.equal(gone[0], plain);
-  assert.match(gone[1]!, /^mandu: ! no dashboard sign-in link: no answer; to sign in later, run `mandu dashboard` in your own terminal/);
+  assert.match(gone[1]!, /^mandu: ! could not ask the dashboard how to sign in: no answer; sign in with your Mandu dashboard account \(no account yet: run `mandu dashboard --set-password` in your own terminal\)/);
 });
 
 test("bannerDashboard: the default banner's dashboard part carries the link in place of the URL (terminal only); a link that could not be made is a notice", () => {
@@ -120,6 +126,11 @@ test("bannerDashboard: the default banner's dashboard part carries the link in p
   assert.deepEqual(bannerDashboard(url, null), { part: `dashboard ${url}`, notes: [] });
   assert.deepEqual(bannerDashboard(url, { kind: "not-asked" }), { part: `dashboard ${url}`, notes: [] });
   assert.deepEqual(bannerDashboard(url, { kind: "password" }), { part: `dashboard ${url} (sign in with its password)`, notes: [] });
+  assert.deepEqual(bannerDashboard(url, { kind: "password", with: "account" }), { part: `dashboard ${url} (sign in with your Mandu dashboard account)`, notes: [] });
+  assert.deepEqual(bannerDashboard(url, { kind: "password", with: "basic" }), { part: `dashboard ${url} (sign in with its username and password)`, notes: [] });
+  // No account yet (dashboard.md §6.z: the dashboard serves nothing until one is set).
+  assert.deepEqual(bannerDashboard(url, { kind: "password", with: "no-account" }), { part: `dashboard ${url} (no account yet; set one: mandu dashboard --set-password)`, notes: [] });
+  assert.deepEqual(bannerDashboard(url, { kind: "password", with: "account-unusable" }), { part: `dashboard ${url} (its account cannot be used; set it again: mandu dashboard --set-password)`, notes: [] });
   assert.deepEqual(bannerDashboard(null, null), { part: "no dashboard (start one: `mandu dashboard`)", notes: [] });
   // The notes are what --verbose prints on a line of its own, and never carry a link.
   const plain = dashboardLine(url);
@@ -166,6 +177,48 @@ test("mandu dashboard on a terminal: the URL, then a one-time sign-in link for t
   assert.equal(h.asked[0]?.signInSock, SOCK);
 });
 
+test("mandu dashboard with no account yet: the URL, then to set one", async () => {
+  const h = harness({ signIn: async () => ({ kind: "password", with: "no-account" }) });
+  assert.equal(await runDashboard([], {}, LAYOUT, h.deps), 0);
+  assert.deepEqual(h.out, [
+    "dashboard already up — http://127.0.0.1:4501/\n",
+    "no account yet; set one: mandu dashboard --set-password\n",
+  ]);
+});
+
+test("mandu dashboard with the dashboard account: the URL, then how to sign in (no link)", async () => {
+  const h = harness({ signIn: async () => ({ kind: "password", with: "account" }) });
+  assert.equal(await runDashboard([], {}, LAYOUT, h.deps), 0);
+  assert.deepEqual(h.out, [
+    "dashboard already up — http://127.0.0.1:4501/\n",
+    "sign in with your Mandu dashboard account\n",
+  ]);
+});
+
+test("mandu dashboard on a terminal offers to make an account before it says how to sign in; --set-password starts no dashboard", async () => {
+  const order: string[] = [];
+  const h = harness({
+    offerAccount: async () => { order.push("offer"); },
+    signIn: async () => { order.push("sign-in"); return { kind: "password", with: "account" }; },
+  });
+  assert.equal(await runDashboard([], {}, LAYOUT, h.deps), 0);
+  assert.deepEqual(order, ["offer", "sign-in"]);
+  const pipe = harness({ isTTY: false, offerAccount: async () => { assert.fail("no offer without a terminal"); } });
+  assert.equal(await runDashboard([], {}, LAYOUT, pipe.deps), 0);
+
+  const asked: string[] = [];
+  const set = harness({
+    registered: () => assert.fail("--set-password looks for no dashboard"),
+    setPassword: () => ({
+      isTTY: false, path: "/nonexistent/account.json",
+      askLine: async () => { asked.push("line"); return null; }, askSecret: async () => { asked.push("secret"); return null; },
+      out: () => {}, err: (s) => asked.push(s),
+    }),
+  });
+  assert.equal(await runDashboard(["--set-password"], {}, LAYOUT, set.deps), 2);
+  assert.match(asked.join(""), /asks for the password in a terminal/);
+});
+
 test("mandu dashboard on a pipe: the URL only, no link asked", async () => {
   const h = harness({ isTTY: false });
   assert.equal(await runDashboard([], {}, LAYOUT, h.deps), 0);
@@ -177,7 +230,7 @@ test("mandu dashboard where the sign-in channel is walled off (inside an agent's
   const h = harness({ signIn: async () => ({ kind: "unavailable", why: "the dashboard's sign-in channel did not answer (connect EACCES)" }) });
   assert.equal(await runDashboard([], {}, LAYOUT, h.deps), 0);
   assert.deepEqual(h.out, ["dashboard already up — http://127.0.0.1:4501/\n"]);
-  assert.match(h.err.join(""), /no sign-in link: .*EACCES.*run `mandu dashboard` in your own terminal/);
+  assert.match(h.err.join(""), /could not ask the dashboard how to sign in: .*EACCES.*sign in with your Mandu dashboard account/);
 });
 
 test("mandu dashboard while an agent with no wall runs: the dashboard's refusal, verbatim", async () => {

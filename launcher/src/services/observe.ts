@@ -21,6 +21,7 @@
 import { randomUUID } from "node:crypto";
 import { ndjsonCall } from "../secret-setup.js";
 import { printablePath } from "../twin-writes.js";
+import type { LaunchTimings } from "../launch-timings.js";
 
 /** A launch banner line classified. `live` = a rung reported itself LIVE /
  *  ACTIVE; `dropped` = a default-on rung that did not come up, a degraded
@@ -93,6 +94,9 @@ export interface LaunchPostureInput {
    *  first-class so the dashboard can mark a session whose agent was outside
    *  it even when no proxy reported a client version (Codex). */
   agentVersion?: { agent: string; version: string | null; verdict: string; min: string; max: string };
+  /** How long each step before the agent took (launch-timings.ts,
+   *  runtime-instances.md §14.11). Display only. */
+  timings?: LaunchTimings;
 }
 
 const MAX_NOTES = 40;
@@ -134,6 +138,7 @@ export function launchPostureEvent(input: LaunchPostureInput): Record<string, un
     ...(input.secrets ? { secrets: input.secrets } : {}),
     ...(input.protection ? { protection: input.protection } : {}),
     ...(input.agentVersion ? { agentVersion: input.agentVersion } : {}),
+    ...(input.timings ? { timings: input.timings } : {}),
     notes: input.notes.slice(0, MAX_NOTES),
     input: { symbolized: summary, original: null, differs: false, symbols: [] },
     output: {
@@ -147,8 +152,9 @@ export function launchPostureEvent(input: LaunchPostureInput): Record<string, un
  *  files whose placeholder copy the session changed (twin-writes.ts), by
  *  path only; present only when there is one. The summary text shows each
  *  path with its control and format characters as `?` (twin-writes.ts
- *  `printablePath`); the field keeps the paths as they are. Pure. */
-export function sessionExitEvent(input: { scopeId: string; tenant?: string; batchId?: string; code: number; durationMs: number; discardedWrites?: readonly string[] }): Record<string, unknown> {
+ *  `printablePath`); the field keeps the paths as they are. `timings`: the
+ *  agent's run and the teardown steps so far (launch-timings.ts). Pure. */
+export function sessionExitEvent(input: { scopeId: string; tenant?: string; batchId?: string; code: number; durationMs: number; discardedWrites?: readonly string[]; timings?: LaunchTimings }): Record<string, unknown> {
   const discarded = input.discardedWrites ?? [];
   const summary = `agent exited ${input.code} after ${Math.round(input.durationMs / 1000)}s` +
     (discarded.length > 0
@@ -160,6 +166,7 @@ export function sessionExitEvent(input: { scopeId: string; tenant?: string; batc
     code: input.code,
     durationMs: input.durationMs,
     ...(discarded.length > 0 ? { discardedWrites: [...discarded] } : {}),
+    ...(input.timings ? { timings: input.timings } : {}),
     input: { symbolized: summary, original: null, differs: false, symbols: [] },
     output: null,
   };

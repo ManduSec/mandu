@@ -18,7 +18,7 @@
  *  well-formed percent-encoding (the client writes it with
  *  encodeURIComponent). Anything else is not a page: it falls through to the
  *  static files, which answer 404. */
-const PRODUCT_FIXED = new Set(["/", "/index.html", "/approvals", "/rules", "/settings", "/history"]);
+const PRODUCT_FIXED = new Set(["/", "/index.html", "/approvals", "/rules", "/settings", "/history", "/scan"]);
 const PRODUCT_PARAM = ["/approvals/", "/agents/"];
 
 /** The developer view's pages (dev/js/pages.js PAGES, dashboard.md §4.32):

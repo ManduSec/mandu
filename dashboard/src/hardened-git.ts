@@ -25,7 +25,16 @@
  *     `-c` can switch off without knowing `<x>`: a caller that must hash a
  *     working copy does it with `--no-filters` or in a scratch git directory
  *     (git-object-twins.ts `worktreeBlobNames`), never by `git add`, `git
- *     status` or `git diff` against the work tree.
+ *     status` or `git diff` against the work tree;
+ *   - sees history as the objects record it, not as a repository rewrites
+ *     it (security fix 2026-10-21, confidentiality.md §7.2a "What the walk
+ *     does not let a repository hide"): replace refs off
+ *     (GIT_NO_REPLACE_OBJECTS, core.useReplaceRefs=false) and an empty graft
+ *     file (GIT_GRAFT_FILE=/dev/null, its deprecation hint off), so a graft
+ *     or a `refs/replace/*` an agent wrote cannot cut commits out of a walk
+ *     that decides what is protected (a replace ref is still a ref: its
+ *     target is walked). The shallow file is the history walk's to judge
+ *     (history-labels.ts walkShallowRule).
  *
  * Defense in depth (gitSandbox): the launcher's and the arbiter's git runners
  * (launch prep; the history scan, lock resolver and prepared copies; not the
@@ -107,6 +116,10 @@ export const GIT_NO_PROGRAM_CONFIG: readonly string[] = [
   "maintenance.auto=false",
   "submodule.recurse=false",
   ...GIT_HOOK_EVENTS.map((e) => `hook.${e}.enabled=false`),
+  // History as the objects record it (the module comment): no replace
+  // refs, and no hint for the empty graft file the environment names.
+  "core.useReplaceRefs=false",
+  "advice.graftFileDeprecated=false",
 ];
 
 /** The global options every call starts with: no pager, then the forced
@@ -133,6 +146,9 @@ export const HARDENED_GIT_ENV: Readonly<Record<string, string>> = {
   GIT_ASKPASS: "",
   GIT_EDITOR: ":",
   GIT_SEQUENCE_EDITOR: ":",
+  // History as the objects record it (the module comment).
+  GIT_NO_REPLACE_OBJECTS: "1",
+  GIT_GRAFT_FILE: "/dev/null",
   // macOS: Apple's /usr/bin/git is an xcrun shim that runs whatever git the
   // per-user cache `$(getconf DARWIN_USER_TEMP_DIR)xcrun_db` names, a file of
   // the user's that the agent can rewrite. Without the cache the shim finds

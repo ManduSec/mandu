@@ -54,7 +54,7 @@ const STOPPED = { state: "stopped", name: "Stopped", since: null, sentence: "It 
 const STARTING = { state: "starting", name: "Starting", since: null, sentence: "", action: null };
 const CRASHED = { ...STOPPED, state: "crashed", name: "Stopped unexpectedly", sentence: "Press Start, or start an agent with mandu." };
 const SIGNED_OUT = { status: 403, body: { error: ADMIN_SESSION_REQUIRED } };
-const SIGN_IN = /^Sign in first: in your own terminal, run mandu dashboard/;
+const SIGN_IN = /^Sign in first: reload this page and sign in with your dashboard account/;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Doc = any;

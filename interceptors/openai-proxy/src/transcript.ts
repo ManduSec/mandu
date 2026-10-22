@@ -20,6 +20,7 @@ import { StringDecoder } from "node:string_decoder";
 import {
   flattenOutput,
 } from "./rewrite-request.js";
+import { responseIdOf } from "./events.js";
 import {
   isCustomToolCallItem,
   isFunctionCallItem,
@@ -167,6 +168,9 @@ const MAX_SNIFF_BYTES = 16 * 1024 * 1024;
  * `response.output_item.done` item, with `response.completed`'s `output` as
  * the fallback (Codex backends may send it empty); a `response.failed` or
  * `error` event's message. JSON (stream:false): the body's `output` / `error`.
+ * Both: the response's id (the first `response.*` event's `response.id`, or
+ * the body's `id`), the one Codex's rollout keeps, for `mandu scan`'s join
+ * (confidentiality-plan-17 §3 item 6).
  */
 export class ResponseSniffer {
   private readonly decoder = new StringDecoder("utf8");
@@ -175,6 +179,7 @@ export class ResponseSniffer {
   private readonly items: unknown[] = [];
   private completed: unknown[] | null = null;
   private error: string | null = null;
+  private responseId: string | undefined;
 
   constructor(private readonly kind: "sse" | "json") {}
 
@@ -194,6 +199,9 @@ export class ResponseSniffer {
       if (!data || data === "[DONE]") continue;
       let ev: Record<string, unknown>;
       try { ev = JSON.parse(data) as Record<string, unknown>; } catch { continue; }
+      if (this.responseId === undefined && typeof ev["type"] === "string" && ev["type"].startsWith("response.")) {
+        this.responseId = responseIdOf((ev["response"] as { id?: unknown } | undefined)?.id);
+      }
       if (ev["type"] === "response.output_item.done" && ev["item"]) this.items.push(ev["item"]);
       else if (ev["type"] === "response.completed") {
         const out = (ev["response"] as { output?: unknown } | undefined)?.output;
@@ -204,17 +212,20 @@ export class ResponseSniffer {
     }
   }
 
-  /** The summary once the body ended. */
-  finish(): { text: string; error: string | null } {
+  /** The summary once the body ended, with the response's id when it had
+   *  a well-formed one. */
+  finish(): { text: string; error: string | null; responseId?: string } {
     if (this.kind === "sse") {
       this.buf += this.decoder.end();
       this.drainEvents(true);
-      return { text: summarizeOutputItems(this.items.length ? this.items : this.completed ?? []), error: this.error };
+      const text = summarizeOutputItems(this.items.length ? this.items : this.completed ?? []);
+      return { text, error: this.error, ...(this.responseId !== undefined ? { responseId: this.responseId } : {}) };
     }
     this.buf += this.decoder.end();
     try {
       const obj = JSON.parse(this.buf) as Record<string, unknown>;
-      return { text: Array.isArray(obj["output"]) ? summarizeOutputItems(obj["output"]) : "", error: errorMessage(obj) };
+      const id = responseIdOf(obj["id"]);
+      return { text: Array.isArray(obj["output"]) ? summarizeOutputItems(obj["output"]) : "", error: errorMessage(obj), ...(id !== undefined ? { responseId: id } : {}) };
     } catch {
       return { text: "", error: null };
     }

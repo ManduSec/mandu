@@ -35,6 +35,7 @@ import {
 } from "../symbol-table/symbol-table.js";
 import { pathConfidentiality, type LabelLookup, type SecretCatalogMatch } from "../policy/secret-catalog.js";
 import { agentLoginConfidentiality, loginOwnerOf } from "../policy/secret-discovery.js";
+import { mcpConfigKind } from "../policy/mcp-config.js";
 import { syncRegisteredBindings } from "./current-bindings.js";
 import { isSecret, maxConfidentiality, type ConfidentialityLevel } from "../symbol-table/confidentiality.js";
 import { getActiveFormat } from "../symbol-table/symbol-format.js";
@@ -516,12 +517,26 @@ function mintFields(
 
 /** The files, relative to the launch HOME, whose wire-marked values are
  *  bound to their hosts (plan 10 §11.13.1): npm's user config and pip's two
- *  per-user config files. */
-const HOME_WIRE_FILES: readonly string[] = [".npmrc", ".config/pip/pip.conf", ".pip/pip.conf"];
+ *  per-user config files; since 2026-10-21 (secret-discovery.md §2.10) the
+ *  MCP configs of the editors and apps no supported agent reads in its own
+ *  process (Cursor's, Claude Desktop's, Windsurf's, VS Code's user file),
+ *  whose HTTP servers' Authorization credential goes to the host of the
+ *  entry's own `url`. Each is twinned in every launch, so nothing in the
+ *  agent's world writes the real file. NOT `~/.claude.json` or Codex's
+ *  `config.toml`: the launch of their agent leaves them readable and
+ *  writable to its world (its own state files), so a host a session wrote
+ *  there would be granted to the next launch; nor a workspace `.mcp.json`,
+ *  `.vscode/mcp.json` or `.cursor/mcp.json` (§11.6). */
+const HOME_WIRE_FILES: readonly string[] = [
+  ".npmrc", ".config/pip/pip.conf", ".pip/pip.conf",
+  ".cursor/mcp.json", ".config/Claude/claude_desktop_config.json", "Library/Application Support/Claude/claude_desktop_config.json",
+  ".codeium/windsurf/mcp_config.json", ".config/Code/User/mcp.json", "Library/Application Support/Code/User/mcp.json",
+];
 
 /** Is `path` one of the launch HOME's own wire files (`HOME_WIRE_FILES`:
- *  `~/.npmrc`, `~/.config/pip/pip.conf`, `~/.pip/pip.conf`)? A workspace
- *  copy, which the agent can write, never is. Without a home, no. */
+ *  `~/.npmrc`, `~/.config/pip/pip.conf`, `~/.pip/pip.conf`, the editors'
+ *  MCP configs)? A workspace copy, which the agent can write, never is.
+ *  Without a home, no. */
 export function isHomeWireFile(path: string, home: string | undefined): boolean {
   if (!home) return false;
   const p = resolve(path);
@@ -607,7 +622,9 @@ export function wireReleaseScheme(
   }
   if (row.tool !== REGISTRY_TOOL) return null;
   const shape = secretFileShape(row.origin);
-  if (shape !== "npmrc" && shape !== "pip-conf") return null;
+  // An MCP config's HTTP server credential (secret-discovery.md §2.10) is
+  // a wire credential too: its span says whether its URL is https.
+  if (shape !== "npmrc" && shape !== "pip-conf" && mcpConfigKind(row.origin) === null) return null;
   // The field's OWN file version: the base row of that origin whose hash the
   // field symbol shares (a re-registered file's rows carry their own hash).
   const fmt = getActiveFormat();

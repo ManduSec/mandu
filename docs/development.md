@@ -155,6 +155,8 @@ piece at a time.
 mandu claude                       # the normal way: the launcher starts the arbiter and proxies
 mandu --verbose claude             # print every protection layer as it comes up
 mandu log                          # what the last launch said in full (its helpers' messages too)
+mandu log --timings                # each launch step's time, the last five launches and their median
+                                   #   (runtime-instances.md §14.11; the nightly budget check: integration.launch-budget)
 scripts/dev-arbiter.sh             # an isolated arbiter for experiments (own DB and events;
                                    #   cleaned up by `mandu reap` when your session ends)
 scripts/dev-arbiter.sh stop <work> # stop it now: its whole process group, waiting for it
@@ -254,6 +256,12 @@ is described in the user guide:
 nginx, keep the `/mandu` prefix (`proxy_pass http://<host>:4500;` with no
 trailing path), redirect `/mandu` to `/mandu/`, and turn `proxy_buffering`
 off for the `/mandu/api/stream` SSE endpoint.
+
+**The README's demo picture.** `docs/assets/readme/demo-debug.jpg` is the
+poster frame of the homepage's Claude Code debug video (1280 px wide, cut
+with `ffmpeg -ss <poster time> -frames:v 1 -vf scale=1280:-1`), and links to
+the homepage's demos. When that video is filmed again, cut the picture again
+from the new take at its poster time.
 
 **The tour's screenshots.** `node scripts/tour-screenshots.mjs` redraws four
 of the dashboard pictures in [Your first session](first-session.md)

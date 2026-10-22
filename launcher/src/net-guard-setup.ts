@@ -23,6 +23,7 @@
 import { execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { hardenedGitArgs, hardenedGitEnv } from "./hardened-git.js";
+import { countGitCall } from "./launch-timings.js";
 import { resolve } from "node:path";
 import {
   computeNetGuardSpecs,
@@ -74,6 +75,7 @@ export const NET_GUARD_LINUX_ONLY_NOTE =
  *  Hardened (hardened-git.ts): the workspace's config is the agent's to write. */
 export function readGitRemotes(cwd: string): string[] {
   try {
+    countGitCall(false); // the launch's costs (launch-timings.ts)
     const out = execFileSync("git", hardenedGitArgs(["-C", cwd, "config", "--get-regexp", "^remote\\..*\\.url$"]), {
       encoding: "utf8",
       env: hardenedGitEnv(),

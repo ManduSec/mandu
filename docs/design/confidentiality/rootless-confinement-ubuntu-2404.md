@@ -220,6 +220,7 @@ proves too fragile, or if a non-Ubuntu host forbids nesting.
 | which bwrap: the distribution's, never one inside the working directory; an administrator's `bwrap_path` (§0.7) | `launcher/src/bwrap-path.ts` (four copies), `interceptors/exec-supervisor/src/sandbox.rs` `find_bwrap_in`, `arbiter/policy/admin-layer.ts` (the key's form) | `test/unit/bwrap-path.test.ts`, `test/component/bwrap-path-launch.test.ts` (the real CLI in a workspace with planted bwraps: doctor and a strict launch), the `sandbox.rs` unit tests, `interceptors/exec-supervisor/tests/kernel_integration.rs` `exec_box_bin_runs_only_the_resolved_system_bwrap` (the command box end to end, `rust.kernel`), `arbiter/test/unit/admin-layer.test.ts`, `tests/stack/hardened-git-parity.test.ts` (the copies equal) |
 | CVE-2026-87766 probe (behavior, then version) | `launcher/src/bwrap-symlink-probe.ts` | `test/unit/bwrap-symlink-probe.test.ts`, `test/component/bwrap-cve-version.test.ts` (a fake `bwrap` on PATH, old and new versions, through `mandu doctor`), `tests/sandbox/bind-only-posture.test.ts` (the host's real one) |
 | a dead guard fails closed | `launcher/src/guard-death.ts` | `test/guard-death-live.test.sh`, `test/kernel/guard-death.test.ts` |
+| the tree cannot freeze, throttle or move the guard through its cgroup (§12.2 "The cgroup") | `interceptors/net-supervisor/src/cgroup_guard.rs`, `cgroup_guard_kernel.rs` | its unit tests; `net-supervisor/tests/guard_integration.rs` `a_write_open_that_could_freeze_or_move_the_guard_is_refused` (opens only; runs in CI's `rust.kernel` in the cgroup the guest delegates to `ci`; self-SKIPs without a user-owned cgroup) |
 | the gated posture is honest | | `launcher-gated-posture.test.ts`, `tests/sandbox/bind-only-posture.test.ts` |
 | each release, fresh and upgraded | | the `fresh-install`, `fresh-agents` and `release-upgrade` VM suites on `ubuntu-2404`, `ubuntu-2510`, `ubuntu-2604` (`os-test-matrix.md §10` §14, §15) |
 
@@ -784,10 +785,103 @@ Residue:
   caller the guard cannot `pidfd_getfd` from gets `EPERM` for those four.
 - When the guard leads the session's group (under `script(1)` or `setsid`), a
   process that leaves it cannot come back.
-- The cgroup is not a signal. The session's systemd scope belongs to the
-  user, so the tree could freeze or throttle the guard (`cgroup.freeze`,
-  `cpu.max`) where `/sys/fs/cgroup` is writable to it. A frozen guard does not
-  fail closed: the tree's trapped calls wait. Nothing leaks; the session hangs.
+- The cgroup is not a signal, so it has its own rule (below, "The cgroup",
+  2026-10-21). Before it, the tree could freeze or throttle the guard where
+  `/sys/fs/cgroup` was writable to it. What is left: a mode with no guard
+  policy (`off`), a cgroup v1 hierarchy, and the cost (podman and crun
+  cannot place their own cgroups inside a session).
+
+**The cgroup (built 2026-10-21).** The launcher runs the guard and the agent
+in one `systemd-run --user --scope` under `user@UID.service/app.slice`, which
+the user owns (systemd delegates it, `nsdelegate`), files included. So any
+process of the uid could make a child cgroup, move the guard into it, and
+freeze or kill the scope, the child or `app.slice` (`cgroup.freeze`,
+`cgroup.kill`), or throttle it (`cpu.max`, `memory.max`). A frozen guard does
+not fail closed: the tree's trapped calls wait. Nothing leaks; the session
+hangs. A launch from a desktop terminal or tmux (a user-owned cgroup) had the
+same exposure; a guard in a root-owned cgroup (an SSH `session-N.scope`, the
+CI guest's service) or under a read-only `/sys/fs/cgroup` did not. No
+unprivileged placement fixes it: the owner of a cgroup can always give
+itself write access back. Every write to a cgroup file starts with an open,
+and the guard performs every open that can write (plan 10 §4.1a), so the
+guard refuses the open (`EACCES`)
+(`interceptors/net-supervisor/src/cgroup_guard.rs`, the decision, pure;
+`cgroup_guard_kernel.rs`, the facts, behind the `kernel` feature):
+
+- **What is judged.** A write-capable descriptor (any access mode but
+  `O_RDONLY`; never `O_PATH`) of a file on cgroup2, told by the descriptor's
+  `fstatfs` (magic `0x63677270`), never by a path. It is judged on the
+  descriptor about to be handed over, after the context helper's reopen
+  (plan 10 §4.1a "Pseudo-filesystems"), so a `/proc/self/fd/N` reopen, a
+  bind mount of `/sys/fs/cgroup` or a symlink to it is judged the same.
+- **Rule 1, the guard's cgroup and every one above it.** Any of their files
+  opened for writing is refused: `cgroup.freeze`, `cgroup.kill`, `cpu.max`,
+  `memory.max`, `pids.max`, `cgroup.procs`, `cgroup.subtree_control`, …
+- **Rule 2, a task list a move could use.** cgroup v2 lets a writer move a
+  task from cgroup S to D when it may write D's `cgroup.procs` (the open) and
+  the `cgroup.procs` of the common ancestor of S and D (a permission check at
+  the write, not an open). With S the guard's cgroup, the common ancestor is
+  the first cgroup above D that is also the guard's or above it. A
+  write-capable open of `cgroup.procs` or `cgroup.threads` anywhere else is
+  refused unless that ancestor's `cgroup.procs` is not writable to the
+  opener (mode bits: kernfs keeps no ACLs). So under `app.slice` every task
+  list of the user's tree is refused, and a guard in a root-owned SSH
+  session scope leaves the user's own cgroups usable (their common ancestor
+  with it, `user-UID.slice`, is root's).
+- **Every other cgroup file** (a cgroup beside or below the guard's:
+  `cgroup.freeze` of a child the agent made) opens as before; freezing a
+  cgroup the guard is not in hangs only what is in it.
+- **Fail-closed.** The guard's cgroup is `/proc/self/cgroup`'s `0::` path
+  under a cgroup2 mount of its `mountinfo` (the one with the shortest root
+  first), believed only when that directory's `cgroup.procs` lists the
+  guard. The opened file's cgroup is placed by the path its descriptor
+  names, opened in the guard's view and believed only when it holds the same
+  file (same device and inode; a kernfs node has one parent), then walked up
+  by `..` while the file system stays cgroup2. A guard that cannot find its
+  own cgroup refuses every write-capable cgroup2 open; so does one that
+  cannot place the target (a private cgroup2 mount in the tracee's own mount
+  namespace, a deleted cgroup), or whose two walks share no cgroup (the
+  target could be above what the guard's view shows), or that cannot read
+  the common ancestor's permission.
+- **The cost, accepted (the maintainer's call, 2026-10-21).** A tool in the
+  session that moves processes between cgroups is refused while the guard's
+  cgroup is the user's: podman and crun placing a container in a cgroup of
+  their own (with the cgroupfs manager, or crun's own write to the scope
+  systemd made), and anything that writes the session's own cgroup files
+  (`cgroup.subtree_control` to delegate controllers below the scope, a PSI
+  trigger on its `*.pressure` files). The guard says so once per session
+  where its messages go (`diag`). Run such tools outside the session.
+- **Not covered.** Mode `off` and any launch whose guard has no policy file
+  (opens are continued, not performed: nothing is judged); a cgroup v1
+  hierarchy (`cgroup`, not `cgroup2`: systemd delegates only v2 to users);
+  a process of the same uid outside the agent's tree, which could also kill
+  the guard; a write through a descriptor the tree did not open (none is
+  handed to it). A launcher watchdog on `cgroup.events` was weighed and not
+  built: the agent's tree could freeze the launcher's cgroup too, which is
+  the same one.
+
+Pinned, DEFENSIVELY (opens only, nothing is written to a cgroup file, and
+no test freezes, kills or moves anything), by
+`interceptors/net-supervisor/tests/guard_integration.rs`
+`a_write_open_that_could_freeze_or_move_the_guard_is_refused` (a tracee
+under the real guard: `O_WRONLY` and `O_RDWR` of the guard's own
+`cgroup.freeze`, `cgroup.kill`, `cgroup.procs`, `cgroup.threads`,
+`cgroup.subtree_control`, `cpu.max`, `memory.max`, `pids.max`, of the
+freeze, kill and task-list files of every user-owned cgroup above it, and of
+a sibling's `cgroup.procs` / `cgroup.threads` all answer `EACCES`, each one
+the kernel would have allowed; reads of the same files pass; first, the
+verdict behind each refusal, on descriptors the test opens itself and
+closes unwritten); the decision by `cgroup_guard.rs`'s unit tests. The
+kernel test runs in every CI run: the guest's `boot.sh` delegates a cgroup
+to `ci` in the shape a desktop session has (the suites' own cgroup, a
+user-owned parent above it and a user-owned sibling beside it:
+continuous-integration.md §3), so all three of its cases run, and
+`rust.kernel` allows no skip for it (the guest leaves `cpu` off, so CI
+covers `memory.max` and `pids.max` but not `cpu.max`, whose refusal is the
+same rule; a desktop run with `cpu` delegated covers it). Elsewhere it self-SKIPs where the
+test's own cgroup is not user-owned (an SSH `session-N.scope`); from a
+desktop terminal or tmux: `cargo test -p net-supervisor --features kernel
+--test guard_integration -- --ignored cgroup freeze`.
 
 **A dead guard fails closed, by kernel rule, and ends the session.** When a
 seccomp user-notification listener goes away, every syscall the filter routes

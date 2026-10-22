@@ -158,7 +158,9 @@ test("/api/home after one session that read .env: one agent, no system log as a 
   assert.deepEqual(h.agents.map((a) => [a.id, a.agent, a.state]), [[FIRST_SESSION, "Claude Code", "running"]]);
   assert.match(h.sentence, /^One agent is running under Mandu\./);
   assert.equal(h.history.total, 1, "the system logs are not sessions in the history either");
-  assert.deepEqual(h.window, { hours: 24, sessions: 1, counted: 1, masked: 1, secretsMasked: 1, secretsEarly: 0, untrusted: 0, blocked: 0, sent: 0, waiting: 0 });
+  // The one masked secret's session is named, so Home's count opens it (§4.25 *The counts link where they point*).
+  assert.deepEqual(h.window, { hours: 24, sessions: 1, counted: 1, masked: 1, secretsMasked: 1, secretsEarly: 0, untrusted: 0, blocked: 0, sent: 0, waiting: 0,
+    only: { secretsMasked: FIRST_SESSION, secretsEarly: null, blocked: null, sent: null } });
   assert.equal(h.firstRun, null);
 });
 

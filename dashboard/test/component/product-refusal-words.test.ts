@@ -32,7 +32,7 @@ import { pageFetch } from "../unit/page-fetch.js";
 
 const FIXTURES_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "fixtures");
 
-const SIGN_IN = "Sign in first: in your own terminal, run mandu dashboard and open the sign-in link it prints (each link works once), or sign in with the dashboard's password if it has one.";
+const SIGN_IN = "Sign in first: reload this page and sign in with your dashboard account (if there isn't one yet, run mandu dashboard --set-password in your own terminal).";
 /** The command spelled as a string mark, which the page must not show. */
 const MARKED_COMMAND = /"mandu dashboard"|`mandu dashboard`/;
 const NOT_CONNECTED = "The protection service is not connected.";
@@ -107,7 +107,7 @@ test("without the admin session, Settings says to sign in, or that no protection
     // signed-out read is asked to sign in first, whatever is behind it.
     assert.equal(text(doc, "settings-labels"), SIGN_IN, "the labels read is behind the read gate");
     assert.equal(text(doc, "settings-prompt-kinds"), SIGN_IN, "the prompt filters read is behind the admin session gate");
-    for (const id of ["settings-labels", "settings-prompt-kinds"]) assert.deepEqual(codes(doc, id), ["mandu dashboard"], `${id}: the command is code`);
+    for (const id of ["settings-labels", "settings-prompt-kinds"]) assert.deepEqual(codes(doc, id), ["mandu dashboard --set-password"], `${id}: the command is code`);
     assert.equal((doc.getElementById("prompt-exception-form") as HTMLElement).hidden, true);
     assert.doesNotMatch(text(doc, "page-settings"), DEVELOPER);
     assert.doesNotMatch(text(doc, "page-settings"), MARKED_COMMAND);
@@ -133,7 +133,7 @@ test("without the admin session, the Rules page's file explorer, Suggested view 
     (doc.getElementById("describe-form") as HTMLFormElement).dispatchEvent(new w.Event("submit", { cancelable: true }));
     await until(() => text(doc, "describe-result") !== "", "the refusal shows under the box");
     assert.equal(text(doc, "describe-result"), SIGN_IN);
-    for (const id of ["files-note", "suggest-error", "describe-result"]) assert.deepEqual(codes(doc, id), ["mandu dashboard"], `${id}: the command is code`);
+    for (const id of ["files-note", "suggest-error", "describe-result"]) assert.deepEqual(codes(doc, id), ["mandu dashboard --set-password"], `${id}: the command is code`);
     assert.doesNotMatch(text(doc, "page-rules"), DEVELOPER);
     assert.doesNotMatch(text(doc, "page-rules"), MARKED_COMMAND);
   } finally {

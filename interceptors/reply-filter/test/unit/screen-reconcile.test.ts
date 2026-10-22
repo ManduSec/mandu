@@ -283,6 +283,16 @@ test("tab in the value: expanded to the next 8-column stop from the value's exac
   r.dispose();
 });
 
+test("tab in the value, content origin (§19.7): the stops count from the TUI's text column, as Claude Code's renderer expands them", async () => {
+  const reserveCache = new ReserveValueCache(undefined, "ink", "content");
+  const r = new ScreenReconciler(new MockResolver({ [SYM]: "k\tv" }), { cols: 40, rows: 6, unknownRetryMs: 50, reserveCache });
+  both(r, ALT_ON + cup(2, 3) + SYM + " tail");
+  await r.reconcile();
+  // Value at column 2, the text's column 0: k@0, its TAB to 8 (7 spaces), v@10.
+  assert.equal((await r.humanLines())[1], "  k" + " ".repeat(7) + "v" + " tail");
+  r.dispose();
+});
+
 test("tab in the value: a row the stream filter spliced with its ONE-SPACE fallback is repainted to the tab-stop form", async () => {
   const { r } = make({ table: { [SYM]: "k\tv" } });
   r.feedTui(ALT_ON + cup(2, 3) + SYM);

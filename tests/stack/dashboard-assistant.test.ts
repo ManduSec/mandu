@@ -23,7 +23,12 @@
  *      op, an answer carrying one is a 422, an Apply carrying one is a 422,
  *      and the arbiter itself refuses the op for requestedBy "assistant"; the
  *      file never changes. Settings › Models, over the same wiring, still
- *      adds the model.
+ *      adds the model;
+ *   6. no helper (dashboard.md, *Describe what you want*): the dashboard's
+ *      OWN model factory (productionAssistantModel, the real inspect-mcp
+ *      selector) with no API key and a PATH holding no claude/codex answers
+ *      503 `{unconfigured, reason: "no-channel"}` in plain words, and nothing
+ *      is written to the policy, nothing filed.
  */
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -36,7 +41,7 @@ import { ArbiterClient } from "../../arbiter/ipc/client.js";
 import { resetCurrentPolicyForTests } from "../../arbiter/policy/compiled-policy.js";
 import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
-import type { AssistantModel } from "../../dashboard/src/policy-assistant.js";
+import { HELPER_WORDS, type AssistantModel } from "../../dashboard/src/policy-assistant.js";
 import type { EventSource, SessionRef } from "../../dashboard/src/event-source.js";
 import type { ManduEvent } from "../../dashboard/src/event-model.js";
 import { ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
@@ -222,6 +227,57 @@ test("Describe box: a model op is refused at suggest, at Apply and by the arbite
     assert.match(readFileSync(policyPath, "utf8"), /name: ollama/, "Settings › Models still declares the model");
     assert.deepEqual((await admin.modelEndpoints()).map((e) => e.name).sort(), ["gateway", "ollama"]);
   } finally {
+    await server.close();
+    wired.close();
+    admin.close();
+    await arbiter.close();
+  }
+});
+
+test("Describe box with no helper: the production model factory, no key and no claude/codex on PATH ⇒ 503 no-channel in plain words, nothing written", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-dash-assistant-nohelper-"));
+  dirs.push(dir);
+  const dataSock = join(dir, "arbiter.sock");
+  const adminSock = join(dir, "admin.sock");
+  const policyPath = join(dir, "policy.yaml");
+  writeFileSync(policyPath, "version: 1\nlists:\n  svc: [api.example.com]\n");
+  const arbiter = new ArbiterServer({
+    socketPath: dataSock, adminSocketPath: adminSock, dbPath: join(dir, "mandu.db"), eventDir: join(dir, "events"),
+    policyPath, policyPollMs: 0, integrity: true, confidentiality: true, log: () => {},
+  });
+  await arbiter.listen();
+  const admin = new ArbiterClient(adminSock);
+  await admin.connect();
+  const wired = await makeApprovalsArbiter(dataSock, () => ({ socketPath: adminSock }));
+  assert.ok(wired?.policyDoc);
+  // No `assistantModel`: the server's own productionAssistantModel(process.env),
+  // which imports inspect-mcp's selector from the checkout. Its env is the
+  // process's, read at the call: no key, no channel hints, and a PATH that is
+  // an empty directory (no claude, no codex, not even `which`).
+  const HELPER_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "MANDU_ULLM_MODE", "MANDU_ULLM_MODULE", "MANDU_ULLM_BINARY", "MANDU_ULLM_BINARY_PATH", "MANDU_ULLM_FORWARDER", "MANDU_ULLM_MODEL", "PATH"];
+  const saved = new Map(HELPER_ENV.map((k) => [k, process.env[k]]));
+  const emptyBin = mkdtempSync(join(dir, "bin-"));
+  const server = new DashboardServer({ source: fakeSource, policyDocArbiter: wired.policyDoc, log: () => {}, ...ADMIN_OPTS });
+  const port = await server.listen(0);
+  try {
+    for (const k of HELPER_ENV) delete process.env[k];
+    process.env["PATH"] = emptyBin;
+    const before = readFileSync(policyPath, "utf8");
+    const r = await fetch(`http://127.0.0.1:${port}/api/policy/assistant`, {
+      method: "POST", headers: { ...CSRF_ADMIN, "Content-Type": "application/json" }, body: JSON.stringify({ sentence: "Never send anything to pastebin.com" }),
+    });
+    for (const [k, v] of saved) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    const body = (await r.json()) as { error?: string; unconfigured?: boolean; reason?: string; detail?: string };
+    assert.equal(r.status, 503, JSON.stringify(body));
+    assert.equal(body.unconfigured, true);
+    assert.equal(body.reason, "no-channel", JSON.stringify(body));
+    assert.equal(body.error, HELPER_WORDS["no-channel"]);
+    assert.doesNotMatch(body.error!, /U-LLM|quarantin|fail closed|\bPATH\b|Cannot find module/);
+    assert.equal("detail" in body, false, "no internal text");
+    assert.equal(readFileSync(policyPath, "utf8"), before, "nothing written to the policy");
+    assert.deepEqual((await admin.policyProposals("pending")).proposals, [], "nothing filed");
+  } finally {
+    for (const [k, v] of saved) if (v === undefined) delete process.env[k]; else process.env[k] = v;
     await server.close();
     wired.close();
     admin.close();

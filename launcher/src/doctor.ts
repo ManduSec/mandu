@@ -68,6 +68,7 @@ import { addressReach, endpointApiBase, endpointPlacement, helperEndpointName, h
 import { ndjsonCall } from "./secret-setup.js";
 import { homeRows, realHomeFacts, type HomeFacts } from "./doctor-home.js";
 import { doctorUpdateFacts, launcherVersion, updateChannel, updateRows, type UpdateFacts } from "./update-check.js";
+import { lastScanLine, lastScanPath, readLastScan, secretsBeforeMandu, type LastScan } from "./scan-kept.js";
 import { commitWords, gatherVersionReport, realVersionDeps, type Problem, type VersionReport } from "./version-report.js";
 import { expandTrust, isTrusted, mountDestination, readTrustLookups, visibleRemoteMounts, type RemoteMountFacts, type TrustLookup } from "./remote-mounts.js";
 
@@ -177,6 +178,9 @@ export interface DoctorFacts {
   /** Is a newer Mandu release out (update-check.ts, packaging.md §11.5)?
    *  Optional: absent renders no row (older fixtures). */
   update?: UpdateFacts;
+  /** The last `mandu scan`'s kept report (scan-kept.ts, plan 17 §3 item
+   *  12): null when none was kept. Optional: absent renders no row. */
+  lastScan?: LastScan | null;
 }
 
 /** The sandbox Mandu's sandboxed git runners (the launcher's launch-prep
@@ -384,6 +388,10 @@ export interface DoctorDeps {
    *  fixture without it asks nothing, never GitHub. `installed`: the
    *  launcher runs from an installed package. */
   updateFacts?: (env: Env, installed: boolean) => Promise<UpdateFacts>;
+  /** The last `mandu scan`'s kept report, or null (scan-kept.ts
+   *  `readLastScan`). Optional: a fixture without it reads none, never the
+   *  host's. */
+  lastScan?: (env: Env) => LastScan | null;
 }
 
 /** The cases where a macOS launch keeps Claude Code's sandbox on instead
@@ -590,6 +598,7 @@ export const realDoctorDeps: DoctorDeps = {
   readPlistJson: realReadPlistJson,
   updateFacts: (env, installed) =>
     doctorUpdateFacts({ env, version: launcherVersion(), installed, interactive: process.stdout.isTTY === true, channel: updateChannel(Layout.detect(import.meta.url, env)) }),
+  lastScan: (env) => readLastScan(lastScanPath(env, env["HOME"] || homedir())),
 };
 
 /** Did the user turn the whole-agent guard off for launches? The launch's
@@ -772,6 +781,7 @@ export async function gatherFacts(env: Env, layout: Layout, deps: DoctorDeps): P
     },
     ...(deps.homeFacts ? { home: deps.homeFacts(env) } : {}),
     ...(deps.updateFacts ? { update: await deps.updateFacts(env, layout.mode === "installed") } : {}),
+    ...(deps.lastScan ? { lastScan: deps.lastScan(env) } : {}),
     ...(deps.platform() === "linux" ? { ptraceScope: ptraceScopeFacts(deps.readKnob) } : {}),
     ...(deps.platform() === "linux"
       ? {
@@ -1390,7 +1400,7 @@ export function ptraceScopeFacts(read: (path: string) => string | null): { value
 
 const PTRACE_SCOPE_WEAK =
   "any program running as you, the AI's included, can read the memory of your other programs " +
-  "(Mandu's service, the dashboard and its sign-in links, the reply filter), so the walls Mandu keeps " +
+  "(Mandu's service, the dashboard's human-plane socket, the reply filter), so the walls Mandu keeps " +
   "between programs of your account are weaker. Mandu's file guard refuses this either way. A warning only.";
 
 /** The doctor's Yama row, or null when not checked (off Linux). At 1 or
@@ -1548,6 +1558,8 @@ export function renderDoctor(f: DoctorFacts): string {
     if (fix !== null) L.push(`    fix: ${fix}`);
     L.push("    to refuse to launch instead of running unprotected: --require-confinement (config: require-confinement = true)");
   }
+  // The last `mandu scan` (plan 17 §3 item 12): what already left before.
+  if (f.lastScan !== undefined) L.push(`  ${f.lastScan !== null && secretsBeforeMandu(f.lastScan).length > 0 ? NO : DOT} ${lastScanLine(f.lastScan)}`);
   const cs = f.claudeSandbox;
   // macOS with the Seatbelt read-block: Mandu's profile wraps the agent, and
   // macOS refuses a sandbox inside it (sandbox_apply: Operation not

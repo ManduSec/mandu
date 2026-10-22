@@ -33,6 +33,11 @@ export interface SessionRef {
    *  (`posture`, `inspection`, `system`) names the session for a developer,
    *  so the product pages give it no title. Absent with no label. */
   labelFrom?: SessionLabelFrom;
+  /** The folder the agent worked in (session-paths.ts `sessionCwd`, the one
+   *  the session's row names), read from the agent's own prompt blocks, never
+   *  a tool result. History's search matches it (dashboard.md §4.25ae);
+   *  absent when the agent records none (Codex, an offline replay). */
+  cwd?: string;
   /** Event count currently known for the session. */
   eventCount: number;
   /** ISO ts of the FIRST event (the session's start), if any. With `lastTs`

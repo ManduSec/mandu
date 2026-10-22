@@ -30,8 +30,11 @@
  *     continuation row whose head never reached the screen (`reserveBlock`).
  *     Tokens and counts only; human-plane ops too.
  */
-import type { ReserveBlockWire, SessionRelayMode, SessionRelayWire } from "./protocol.js";
+import type { ReplyTabOrigin, ReserveBlockWire, SessionRelayMode, SessionRelayWire } from "./protocol.js";
 import { LAYOUT_RULES, layoutRows, layoutWidth, type LayoutRule } from "./reserve-layout.js";
+
+/** The TAB origins a reply filter can report (§19.7). */
+export const TAB_ORIGINS: readonly ReplyTabOrigin[] = ["screen", "content"];
 
 /** The relay modes a reply filter can report (reply-filter `relay_mode`). */
 export const SESSION_RELAY_MODES: readonly SessionRelayMode[] = ["pty", "pipe", "passthrough"];
@@ -155,6 +158,9 @@ export interface SessionRelayInput {
   wrap?: boolean;
   /** The agent's TUI wraps its reply by this rule (§17). Absent: `ink`. */
   rule?: LayoutRule;
+  /** Where the agent's TUI counts a reply TAB's stops from (§19.7). Absent:
+   *  `screen`. */
+  tabs?: ReplyTabOrigin;
 }
 
 function validDim(v: unknown): boolean {
@@ -185,6 +191,9 @@ export function parseSessionRelay(req: Record<string, unknown>): SessionRelayInp
   if (req.rule !== undefined && !isLayoutRule(req.rule)) {
     return `setSessionRelay: rule must be one of ${LAYOUT_RULES.join(", ")}`;
   }
+  if (req.tabs !== undefined && !(typeof req.tabs === "string" && (TAB_ORIGINS as readonly string[]).includes(req.tabs))) {
+    return `setSessionRelay: tabs must be one of ${TAB_ORIGINS.join(", ")}`;
+  }
   for (const dim of ["cols", "rows"] as const) {
     if (req[dim] !== undefined && !validDim(req[dim])) {
       return `setSessionRelay: ${dim} must be a positive integer ≤ ${SESSION_RELAY_MAX_DIM}`;
@@ -198,6 +207,7 @@ export function parseSessionRelay(req: Record<string, unknown>): SessionRelayInp
     ...(req.rows !== undefined ? { rows: req.rows as number } : {}),
     ...(req.wrap !== undefined ? { wrap: req.wrap as boolean } : {}),
     ...(req.rule !== undefined ? { rule: req.rule as LayoutRule } : {}),
+    ...(req.tabs !== undefined ? { tabs: req.tabs as ReplyTabOrigin } : {}),
   };
 }
 

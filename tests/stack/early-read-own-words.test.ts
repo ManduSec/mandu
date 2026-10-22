@@ -24,7 +24,8 @@
  *       placeholder in its place, in N requests" (never "only a
  *       placeholder"), then "Anything the AI wrote from its real value went
  *       back to the AI as written with each later request: Mandu does not
- *       mask the AI's own words."; its level tag is not drawn as held
+ *       mask the AI's own words.", then "If it holds a key or a password,
+ *       change it: the AI saw it as it was."; its level tag is not drawn as held
  *       (`saw` "early", §4.25b "The tag agrees with the card") and says
  *       since when, the card's own "From … on" moment (`since`); no token
  *       on the page, and the file's bytes only in the AI's own reply,
@@ -68,6 +69,7 @@ const READ_RENDER = FILE.split("\n").slice(0, -1).map((l, i) => `${String(i + 1)
 const DEDUP = "Wasted call — file unchanged since your last Read. Refer to that earlier tool_result instead.";
 const SYM_RE = /^\$MDU:[A-Za-z_][A-Za-z0-9_]*\[[0-9a-f]{4,8}\]$/;
 const OWN_WORDS = "Anything the AI wrote from its real value went back to the AI as written with each later request: Mandu does not mask the AI's own words.";
+const CHANGE_IT = "If it holds a key or a password, change it: the AI saw it as it was.";
 
 const dirs: string[] = [];
 after(() => {
@@ -204,6 +206,9 @@ test("a file the AI read before it was marked: the real proxy forwards the AI's 
     const lines = card.lines.map((l) => `${l.tone}: ${words(l.parts)}`);
     assert.match(lines[0]!, /^warn: The AI read its real value at <t>, before it was marked a secret\. From <t> on it got a placeholder in its place, in \d+ requests?\.$/, lines.join("\n"));
     assert.equal(lines[1], `warn: ${OWN_WORDS}`, lines.join("\n"));
+    // The value is out: the card says what to do, in a later label's words.
+    assert.equal(lines[2], `warn: ${CHANGE_IT}`, lines.join("\n"));
+    assert.equal(lines.filter((l) => /change it|Change this key/.test(l)).length, 1, lines.join("\n"));
     assert.ok(!lines.some((l) => /only a placeholder|never the real value/.test(l)), lines.join("\n"));
     assert.deepEqual(page!.secrets!.counts, { masked: 0, early: 1 }, "the tile counts it as read before it was marked");
     // The tag agrees with the card: read before its label, since the card's
@@ -225,6 +230,10 @@ test("a file the AI read before it was marked: the real proxy forwards the AI's 
     walk(page, "page");
     assert.ok(at.length > 0 && at.every((w) => /^page\.story\[\d+\]\.reply\./.test(w)), `file bytes only in the AI's own reply: ${JSON.stringify(at)}`);
     assert.ok(!FILE_PIECES.some((x) => JSON.stringify(page!.secrets).includes(x)), "none on Your secrets");
+    // The served response as a whole: its bytes only where the reply's are.
+    const served = await (await fetch(`${base}/api/home/agent?session=${session}`)).text();
+    const outside = served.split(JSON.stringify(reply).slice(1, -1)).join("");
+    assert.ok(!FILE_PIECES.some((x) => outside.includes(x)), "no real value of the file in the session page's response outside the AI's own reply");
 
     // ── L4: the inspector's row and header never count it as masked ────────
     const head = (await (await fetch(`${base}/api/events?session=${session}`)).json()) as { counts?: Record<string, number> };

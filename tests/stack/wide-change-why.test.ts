@@ -16,7 +16,8 @@
  *       programs connect to any address. Type ALLOW if you mean it.";
  *   W2  the send to anywhere: the foot names its source and "anywhere";
  *   W3  the gate is as before: each card's Allow stays off until ALLOW is
- *       typed exactly, and the server still flags each change wide;
+ *       typed (whole, in any case), and the server still flags each change
+ *       wide;
  *   W4  Allow with ALLOW typed records the answer: the connect change is
  *       approved and leaves the pending list; Not now on the other denies it;
  *   W5  the oracle: no page or answer read here carries the file's value or
@@ -114,15 +115,16 @@ test("Approvals over the real arbiter: a wide change's foot names what it opens;
       assert.match(card(doc, connect.proposalId).querySelector(".proposal-rows").textContent, /connect to any address/, "the row says the same place");
       assert.doesNotMatch(doc.body.textContent, /no limit on one side/, "the code's own wording is gone");
       noValue(doc.body.textContent, "the rendered Approvals page");
-      // W3: Allow waits for the exact word.
+      // W3: Allow waits for the whole word (in any case since *The typed
+      // ALLOW takes any case*).
       for (const id of [connect.proposalId, send.proposalId]) {
         const c = card(doc, id);
         const allow = c.querySelector(".proposal-allow");
         const input = c.querySelector(".proposal-confirm");
         assert.equal(allow.disabled, true, `${id}: Allow is off before the word`);
-        input.value = "allow";
+        input.value = "ALLO";
         input.dispatchEvent(new win.Event("input"));
-        assert.equal(allow.disabled, true, `${id}: the word must be exact`);
+        assert.equal(allow.disabled, true, `${id}: the word must be typed whole`);
       }
       // W4: Allow with ALLOW typed records the answer.
       const c = card(doc, connect.proposalId);

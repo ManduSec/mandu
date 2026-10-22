@@ -21,6 +21,7 @@ import {
   registeredPids,
   registryTrusted,
   runDashboard as runDashboardIn,
+  dashboardForScan as dashboardForScanIn,
   registeredDashboards,
   dashboardUrl,
   leftoverSummary,
@@ -29,6 +30,7 @@ import {
   type DashboardDeps,
   type Proc,
   type ProcOps,
+  runSetupThenAccount,
 } from "../../src/subcommands.js";
 import type { ReapAction } from "../../src/reap.js";
 import { Layout } from "../../src/services/layout.js";
@@ -39,6 +41,8 @@ import { hermetic } from "../lib/test-runtime.js";
 
 /** runDashboard with this file's own runtime dir when the env names none (test-runtime.ts). */
 const runDashboard = hermetic(runDashboardIn, 1);
+/** dashboardForScan likewise (its env is the first argument). */
+const dashboardForScan = hermetic(dashboardForScanIn, 0);
 
 /** Collect what fn() writes through the `out` sink it is handed. (Never patch
  *  process.stdout.write: the test runner reports through the same stream, and
@@ -50,7 +54,7 @@ async function captureOut(fn: (out: (s: string) => void) => Promise<unknown> | u
 }
 
 test("reserved verbs are exactly status/stop/dashboard/doctor/init/reap/setup/mode/why/revert/demo", () => {
-  assert.deepEqual([...RESERVED_SUBCOMMANDS].sort(), ["dashboard", "demo", "doctor", "init", "log", "mode", "paths", "policy", "reap", "revert", "setup", "status", "stop", "version", "why"]);
+  assert.deepEqual([...RESERVED_SUBCOMMANDS].sort(), ["dashboard", "demo", "doctor", "init", "log", "mode", "paths", "policy", "reap", "revert", "scan", "setup", "status", "stop", "version", "why"]);
 });
 
 test("parsePsLines: keeps mandu-titled procs, drops self + non-mandu, trims padding", () => {
@@ -465,10 +469,35 @@ test("dashboard: a PINNED port is adopted only when it is one of this user's reg
   assert.deepEqual(free.out, ["dashboard up — http://127.0.0.1:4600/\n"]);
 });
 
-test("dashboard: no arbiter → exit 2 before starting; no published port → the start is torn down, exit 1; a bad DASHBOARD_PORT → exit 2", async () => {
+test("dashboard, Mandu not running (plan 17 §3 item 12): the dashboard starts anyway, starts nothing of Mandu's, pins no socket, and says protection is off", async () => {
+  // The person who only ran `mandu scan`: no arbiter at the rendezvous.
+  const h = dashHarness({ sockExists: () => false, ensureRuntimeDir: () => {} });
+  assert.equal(await runDashboard([], { XDG_RUNTIME_DIR: "/run/u" }, LAYOUT, h.deps), 0);
+  assert.equal(h.started.length, 1);
+  assert.equal(h.started[0]!["DASHBOARD_AUTOSTART"], "0", "opening the page is not starting protection");
+  assert.equal(h.started[0]!["MANDU_ARBITER_SOCK"], undefined, "the dashboard dials the rendezvous itself, where a later launch promotes");
+  assert.equal(h.started[0]!["MANDU_OWNER_PID"], "none");
+  assert.deepEqual(h.out, [
+    "dashboard up — http://127.0.0.1:40123/\n",
+    "Mandu is not running, so it protects no agent now: start yours with mandu claude (or mandu codex). The dashboard shows your last scan under Scan.\n",
+  ]);
+  // Run through npx: the commands as the person types them.
+  const npx = dashHarness({ sockExists: () => false, ensureRuntimeDir: () => {} });
+  assert.equal(await runDashboard([], { XDG_RUNTIME_DIR: "/run/u", npm_command: "exec", npm_lifecycle_event: "npx", npm_lifecycle_script: "mandu" }, LAYOUT, npx.deps), 0);
+  assert.match(npx.out[1]!, /start yours with npx @mandusec\/mandu claude \(or npx @mandusec\/mandu codex\)\./);
+  // An arbiter there: the dashboard joins it as before, and says nothing more.
+  const up = dashHarness({ ensureRuntimeDir: () => {} });
+  assert.equal(await runDashboard([], { XDG_RUNTIME_DIR: "/run/u" }, LAYOUT, up.deps), 0);
+  assert.equal(up.started[0]!["DASHBOARD_AUTOSTART"], process.env["DASHBOARD_AUTOSTART"]);
+  assert.equal(up.started[0]!["MANDU_ARBITER_SOCK"], "/run/u/mandu/current/arbiter.sock");
+  assert.equal(up.out.length, 1);
+});
+
+test("dashboard: a PINNED arbiter socket that is absent → exit 2 before starting; no published port → the start is torn down, exit 1; a bad DASHBOARD_PORT → exit 2", async () => {
   const noSock = dashHarness({ sockExists: () => false });
-  assert.equal(await runDashboard([], {}, LAYOUT, noSock.deps), 2);
+  assert.equal(await runDashboard([], { MANDU_ARBITER_SOCK: "/run/u/elsewhere.sock" }, LAYOUT, noSock.deps), 2);
   assert.equal(noSock.started.length, 0);
+  assert.match(noSock.err.join(""), /arbiter socket \/run\/u\/elsewhere\.sock is absent/);
 
   const noPort = dashHarness({ readPortFile: () => null });
   assert.equal(await runDashboard([], {}, LAYOUT, noPort.deps), 1);
@@ -486,6 +515,45 @@ test("dashboard: no arbiter → exit 2 before starting; no published port → th
 
   const bad = dashHarness();
   assert.equal(await runDashboard([], { DASHBOARD_PORT: "http" }, LAYOUT, bad.deps), 2);
+});
+
+test("dashboardForScan (mandu scan --open): a live dashboard is reused as found; none, one started as mandu dashboard starts it, with its registry entry; a failed start is null, its reason printed", async () => {
+  // Reused: no start, the entry as registered (its sign-in mode with it).
+  const entry = { id: "x", pid: 9, host: "127.0.0.1", port: 4500, basePath: "", passwordFirst: true };
+  const live = dashHarness({ listening: [4500], registered: () => [entry] });
+  assert.deepEqual(await dashboardForScan({}, live.deps), { d: entry, started: false });
+  assert.equal(live.started.length, 0);
+  assert.deepEqual(live.out, [], "it prints nothing: the scan says what happened");
+
+  // None live: started exactly as `mandu dashboard` starts it (a free port,
+  // resident, no arbiter pinned when none runs), then its entry once it
+  // registers.
+  let registered: (typeof entry)[] = [];
+  const fresh = dashHarness({
+    sockExists: () => false, ensureRuntimeDir: () => {},
+    registered: () => registered,
+    readPortFile: () => { registered = [{ ...entry, id: "y", pid: 10, port: 40123, passwordFirst: false }]; fresh.deps.probePort = async () => true; return 40123; },
+  });
+  const got = await dashboardForScan({ XDG_RUNTIME_DIR: "/run/u" }, fresh.deps);
+  assert.deepEqual(got, { d: { ...entry, id: "y", pid: 10, port: 40123, passwordFirst: false }, started: true });
+  assert.equal(fresh.started.length, 1);
+  assert.equal(fresh.started[0]!["DASHBOARD_PORT"], "0");
+  assert.equal(fresh.started[0]!["MANDU_OWNER_PID"], "none", "it runs on after the scan exits, as mandu dashboard leaves it");
+  assert.equal(fresh.started[0]!["DASHBOARD_AUTOSTART"], "0");
+  assert.deepEqual(fresh.out, []);
+  // It never registered: where it answers, all the same.
+  const unregistered = dashHarness({ ensureRuntimeDir: () => {} });
+  assert.deepEqual(await dashboardForScan({ XDG_RUNTIME_DIR: "/run/u" }, unregistered.deps), { d: { host: "127.0.0.1", port: 40123, basePath: "" }, started: true });
+
+  // It did not start: null, the reason on stderr, the start torn down.
+  const failed = dashHarness({ readPortFile: () => null });
+  assert.equal(await dashboardForScan({}, failed.deps), null);
+  assert.equal(failed.stopped(), 1);
+  assert.match(failed.err.join(""), /the dashboard did not start/);
+  // Another user's server on a pinned port: refused, never opened.
+  const foreign = dashHarness({ listening: [4500] });
+  assert.equal(await dashboardForScan({ DASHBOARD_PORT: "4500" }, foreign.deps), null);
+  assert.match(foreign.err.join(""), /is in use by something that is not one of your Mandu dashboards/);
 });
 
 test("dashboard (runtime-instances.md §3b): the log and port file live in the DEFAULT runtime base, made safe first; a refused base starts nothing", async () => {
@@ -543,6 +611,36 @@ test("registeredDashboards: reads <runtime>/dashboards/*.json newest first, skip
     assert.deepEqual(registeredDashboards({ XDG_RUNTIME_DIR: join(dir, "nope") }), []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("registeredDashboards: a password or Basic-auth sign-in is password-first; one-time links and old entries are not (2026-10-22)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-dashreg-"));
+  try {
+    const reg = join(dir, "mandu", "dashboards");
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(join(reg, "20261022-0000-aaa-p1.json"), JSON.stringify({ pid: 1, port: 4501, signInMode: "basic-auth" }));
+    writeFileSync(join(reg, "20261022-0001-bbb-p2.json"), JSON.stringify({ pid: 2, port: 4502, signInMode: "password" }));
+    writeFileSync(join(reg, "20261022-0002-ccc-p3.json"), JSON.stringify({ pid: 3, port: 4503, signInMode: "tickets" }));
+    writeFileSync(join(reg, "20261022-0003-ddd-p4.json"), JSON.stringify({ pid: 4, port: 4504 }));
+    writeFileSync(join(reg, "20261022-0004-eee-p5.json"), JSON.stringify({ pid: 5, port: 4505, signInMode: "account" }));
+    const all = registeredDashboards({ XDG_RUNTIME_DIR: dir });
+    const first = new Map(all.map((d) => [d.port, d.passwordFirst === true]));
+    assert.deepEqual([...first].sort(), [[4501, true], [4502, true], [4503, false], [4504, false], [4505, true]]);
+    // With what: the dashboard account, a username and password, or the password.
+    const how = new Map(all.map((d) => [d.port, d.signInWith ?? null]));
+    assert.deepEqual([...how].sort(), [[4501, "basic"], [4502, null], [4503, null], [4504, null], [4505, "account"]]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("mandu setup then offers the dashboard account; not after --print or --uninstall (dashboard.md §6.z)", async () => {
+  for (const [rest, offered] of [[[], true], [["--yes"], true], [["--print"], false], [["--uninstall"], false]] as const) {
+    let asked = 0;
+    const rc = await runSetupThenAccount([...rest], async () => 3, async () => { asked++; });
+    assert.equal(rc, 3, "setup's own exit code");
+    assert.equal(asked, offered ? 1 : 0, JSON.stringify(rest));
   }
 });
 

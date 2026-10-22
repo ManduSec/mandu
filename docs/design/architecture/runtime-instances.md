@@ -5,7 +5,8 @@ supervisor, launcher), with unified discovery and instance-mode autostart,
 the symbol-DB single-writer lock, universal registration + `mandu reap`,
 port-0 everywhere and the container-scoped-pid rule (§§3–13). §14 is launch
 time: where a launch's seconds go (§14.7: the 2026-10-16 pass; §14.8: the guard's work per exec), and the readiness deadlines that bound how
-long it waits for the services it starts.
+long it waits for the services it starts; §14.11: every launch times its
+steps, and a nightly check compares them with a recorded baseline.
  macOS also uses the short, owner-checked
 private runtime base of §3b and an account rendezvous (macOS branch,
 2026-09-29); those copies obey the same shared discovery contract.
@@ -984,6 +985,132 @@ stack and a throwing probe ignored); `launcher/test/unit/version-report.test.ts`
 (the incident's shape: an npm mandu, the old shim behind it, its services
 kept alive by the unit).
 
+### 4.1b The dashboard does not keep a stale arbiter as the stack's (2026-10-21)
+
+**The incident.** On a dev host whose dashboard runs as a systemd user
+service, restarting the service left the stack's arbiter four days and two
+releases old, and every `mandu claude` refused it (§4.1, naming the service,
+§4.1a). That arbiter was the child of a second `mandu-dashboard`, outside
+the service: a restart had the service down for about two seconds, a launch
+in that window found no arbiter at `current` and autostarted a stack of its
+own (§10, a supervisor dashboard on a free port, ownerless), and the
+service's new dashboard came up a second later, found `current` answering
+and adopted it. Adopting was by design (a dashboard restart must not bounce
+a shared arbiter), so every later restart of the service adopted it again
+and logged STALE (§4); nothing replaced it, and the second dashboard had no
+reason to exit. (The race itself is closed in §4.1c: a launch in that gap now waits for the service.)
+
+**The rule** (`dashboard/src/supervisor/supervisor.ts` `bringUp`). In
+instance mode, an arbiter found answering at `current` that is STALE by the
+§4 verdict (another release, another build, or an `arbiter/` rev
+difference) and not foreign (§13) is **replaced** when no `mandu` session
+uses the stack: the same verified stop as the control panel's Replace
+(its `hello` pid, its command line an arbiter's, SIGTERM then SIGKILL, the
+endpoint clear) and then this dashboard's own arbiter. A session is what
+the launcher's release check counts (`stack-sessions.ts`, mirroring
+`liveLaunchersOn`: a process of this user titled `mandu` whose environment
+selects this stack, else whose scope dir is in it; not a container's). With
+a session, or when the process table cannot be read, or when the pid cannot
+be verified, it is adopted and flagged as before, the log saying why it was
+not replaced. This is the launcher's own rule for an unused older stack
+(§4.1), applied at the other place a stack is attached to. A pinned socket
+is never replaced (the caller owns it). Two dashboards of different builds
+started one after the other on one unused stack replace each other's
+arbiter at each start, as two such launches do (§4.1 "Not covered").
+
+**The dashboard of a launch's autostart ends with its arbiter**
+(`dashboard/src/server-main.ts`). A dashboard started with
+`DASHBOARD_AUTOSTART=arbiter` (the launch's stack autostart, and a service
+that runs it so) exists to supervise that arbiter. When its arbiter exits
+on its own while running (it crashed, or another dashboard replaced it as
+above) the dashboard exits too, code 1, removing its registry entry, so the
+next launch or the service manager starts the stack whole instead of
+leaving a dashboard beside the stack that supervises nothing. A stop or a
+restart from the dashboard is no such exit.
+
+**Tests.** `dashboard/test/unit/supervisor/supervisor-stale-adopt.test.ts`
+(replaced with no session; adopted and flagged with a session, with an
+unreadable process table, with an unverifiable pid, in pinned mode, opted
+out, or when not stale; `onCrash` once for a crash and never for a stop);
+`dashboard/test/unit/supervisor/stack-sessions.test.ts` (the scan);
+`dashboard/test/component/autostart-arbiter-exit.test.ts` (the real
+dashboard with `DASHBOARD_AUTOSTART=arbiter` exits 1 when its real arbiter
+is stopped under it, its registry entry gone);
+`tests/stack/dashboard-stale-arbiter.test.ts` (a real arbiter of an older
+release on the stack: replaced by the real supervisor with no session, its
+instance dir gone and `current` answering as this release; adopted, STALE
+and left running beside a `mandu` session, which the log names).
+
+### 4.1c A launch during the service's restart waits for the service (2026-10-21)
+
+**The race §4.1b healed, closed.** The second stack of §4.1b came from a
+launch in the two seconds of a service restart: no arbiter answered at
+`current`, so the autostart (§10) started a dashboard and arbiter of its
+own, ownerless, beside the service.
+
+**The rule** (`launcher/src/arbiter.ts waitForStackService`, called by
+`startArbiterInstance` before it spawns anything). The launch looks for a
+systemd service that runs this stack (`stack-supervisor.ts stackService`):
+a process of this user in a service's cgroup whose environment selects the
+stack (any process of it, so the unit's main process counts while it is
+still loading, before its dashboard has a title or an arbiter) and whose
+unit restarts it (§4.1a's rule: its main process or that process's child,
+`Restart=` set). A restart has a moment with no such process (the old one
+has exited, the new one is forked but not yet exec'd, so it still has the
+service manager's environment; about 100 ms measured on a user unit), so
+the launch looks three more times, 100 ms apart, before it decides there
+is none. With a service found it says so in one line ("the Mandu services
+are starting under the systemd user service … ; waiting for them") and
+waits for `current` to answer, up to twice the load-aware readiness
+deadline (§14.6), looking for the service again each second:
+
+- `current` answers: the launch attaches to it (`ensureArbiter` reports it
+  attached, so the release check, §4.1, judges it as the resident stack's,
+  not as "the arbiter this launch started"); nothing is spawned;
+- the service has no process on the stack for two looks in a row (it was
+  stopped, not restarted): the autostart goes on as before, and says so;
+- the deadline passes with the service still there: the launch refuses,
+  naming the service and `journalctl --user -u <unit>`; it never runs
+  ungated, and a second stack beside the service is what this exists to
+  prevent.
+
+No service (every host without one, and every launch on a stack of its
+own) costs the three extra looks, about 300 ms, once, on the launch that
+starts the stack. Linux only (/proc and systemd); elsewhere nothing is found
+and the autostart is as before.
+
+**The refusal says which process is old** (`arbiter-version.ts
+supervisedRefusal`, `stack-supervisor.ts withStackFacts`). The 2026-10-21
+refusal told the user to `systemctl --user disable --now
+mandu-dashboard.service`, while that service ran current code and only an
+arbiter it had adopted was old (the fix was `mandu stop`). The launch now
+reads whether the arbiter runs inside the unit's cgroup and whether the
+unit's folder (its `WorkingDirectory`, else its main process's) is inside
+this mandu's package or checkout:
+
+| The arbiter | The service runs | The refusal says |
+|---|---|---|
+| the service's own process | anything | the service runs old code: disable it, or run this mandu on a stack of its own (§4.1a) |
+| not the service's (adopted) | this mandu's code | only that arbiter is old: `mandu stop --stack <dir>` (or Replace on the dashboard), and the service starts a current one; never "disable" |
+| not the service's (adopted) | other code | replace the arbiter first (`mandu stop --stack`); if the service brings an old one back, it is old too: disable it or a stack of one's own |
+| no service keeps the stack | | restarted as before (§4.1) |
+
+`mandu version` names the same (`services-adopted-other-build`).
+
+**Tests.** `launcher/test/unit/stack-service-wait.test.ts` (which processes
+name a service: the main process while loading, not another stack's, a
+scope, a process deeper in a service or `Restart=no`; the wait: none, a
+service found on a later look, its arbiter answering, the service stopping,
+the deadline's refusal; `ensureArbiter` attached; `startArbiterInstance`
+spawning nothing while the service brings its arbiter up);
+`launcher/test/unit/supervised-refusal.test.ts` (each row of the table, the
+build variant, the stop a session refusal names, and `mandu version`);
+`tests/stack/unit-restart-race.test.ts` (a real transient user unit,
+`Restart=always`, whose process loads for two seconds before a real
+arbiter of this release: restarted, and the launcher's real autostart run
+in the gap spawns nothing, attaches, and `current` answers from the unit's
+process; skips without a systemd user manager).
+
 ## 5. Who runs in which mode
 
 | Starter | Mode | Promotes? |
@@ -1106,6 +1233,8 @@ launcher-autostarted arbiter (`launcher/src/arbiter.ts`) and the dashboard
 stack — the shared attach-or-start daemons that must OUTLIVE any one launcher
 (§5); their teardown remains `mandu stop` / the instance sweep. Test
 harnesses that start private arbiters DO pass the lifeline (they own them).
+One that does not, and the resident stack a test's launch autostarts, die
+with the test's process instead (§8a).
 
 **Ephemeral rendezvous (the collision half).** `MANDU_PROXY_PORT=0` lets the
 kernel pick the context-proxy port; the proxy publishes the bound port through
@@ -1157,7 +1286,15 @@ silently lost its egress gate to the foreign net-proxy holding 8790. So:
   registered dashboards; anything else is refused with the conflict named,
   never handed out as "already up". An operator's resident dashboard on 4500
   is found through the registry, so the deployment and its bookmark are
-  untouched.
+  untouched. With no arbiter at the rendezvous and none pinned (Mandu never
+  ran, or was stopped; 2026-10-22), it starts the dashboard anyway with
+  `DASHBOARD_AUTOSTART=0` and no `MANDU_ARBITER_SOCK`: the page shows the
+  last `mandu scan` and says protection is off, and the dashboard joins the
+  arbiter a later launch promotes at `current` (dashboard.md §4.25,
+  *Protection is off when nothing runs*; plan 17 §3 item 12). That launch,
+  finding no arbiter, still starts its own supervisor dashboard; `mandu
+  dashboard` then reuses the newest. A pinned socket that is absent is
+  refused, naming it.
 - The dashboard SUPERVISOR's own stack (`dashboard/src/supervisor/supervisor-defs.ts`:
   8788 / 8789 / 8790 for the proxies it supervises) is an operator-run shared
   stack and keeps its pinned ports; launches do not depend on it (they start
@@ -1182,6 +1319,70 @@ SIGTERM-ignoring service felled by the severed pipe),
 shutdown; shared-stack immunity without the env), per-package
 `lifeline.test.ts` unit suites, and the port-0 e2e in
 `launcher/test/component/services.test.ts`.
+
+### 8a. A daemon a test started dies with the test (2026-10-21)
+
+**The incident.** `mandu status --verbose` listed 13 arbiters and 3
+dashboards on the dev host; 12 of the arbiters were test stacks started
+from agent worktrees four days earlier and still serving, each under its
+test's temp runtime dir (`/tmp/mdu-rf-*`, `/tmp/mdu-rm-*`,
+`/tmp/mdu-claude-key-*`, `/tmp/mdu-*/rt`). Two shapes:
+
+- a launcher test that runs a launch in-process (`main()`:
+  `runtime-fallback.test.ts`, `runtime-dir-mode.test.ts`,
+  `claude-env-key.test.ts`) autostarts the resident stack, the supervisor
+  dashboard and its arbiter, which have no owner and no lifeline on purpose
+  (§8, §10: they outlive the launch). Its `finally` stops them; a test
+  process killed before it (a runner or tool timeout, an interrupted run, a
+  SIGKILL) left them for good;
+- an arbiter suite that spawns `server-main` itself (`store-flags`,
+  `policy-file`, `cache-seals`, … with `MANDU_LIFELINE` cleared) and is
+  killed the same way: the child is reparented and keeps serving.
+
+`mandu reap` never saw either: it scans the account's runtime base, and
+these registered under the test's own.
+
+**The rule** (`arbiter/ipc/test-owner.ts`, mirrored in
+`dashboard/src/test-owner.ts`), read once when the daemon starts:
+
+1. `MANDU_TEST_OWNER_PID=<pid>` names the owner (a harness outside node's
+   test runner); `0` or `none` turns the rule off;
+2. else, when `NODE_TEST_CONTEXT` is set (node's test runner sets it in each
+   test file's process, and everything that file spawns inherits it), the
+   owner is the **topmost** ancestor whose environment carries it too: the
+   test file, not a launcher CLI or dashboard in between that may exit
+   first. Every launcher start waits for its daemon to answer, so the chain
+   is whole when the daemon reads it;
+3. else no owner: every production start.
+
+The daemon writes the owner back into its own environment, so what it
+spawns (the dashboard's arbiter, a self-restart's successor) inherits it
+explicitly. It then checks once a second that the owner runs (on Linux the
+same process: its `/proc/<pid>/stat` start time unchanged) and runs its
+graceful SIGTERM shutdown when it does not: the arbiter closes and removes
+its instance dir, the dashboard removes its registry entry and stops its
+supervised arbiter. Linux reads the ancestry from /proc; elsewhere only rule
+1 applies. The registry's `ownerPid` (§10) is unchanged: a test's resident
+stack still reads as ownerless, the semantics the autostart tests pin.
+
+Not covered: a daemon started by a test that is not run by node's test
+runner and names no owner (a bash suite's: those use the FIFO lifeline,
+§8, or `scripts/dev-arbiter.sh`'s owner), and the per-session services
+(the context proxy, net-proxy, fs-sync), which are lifeline-bound to their
+launcher already.
+
+**Tests.** `arbiter/test/unit/test-owner.test.ts` (the rule over a fake
+process table: topmost context ancestor, broken chains, the explicit pid
+and its off values, a reused pid, an owner already gone, the real /proc
+reads); `dashboard/test/unit/test-owner.test.ts` (the copy matches, and
+hands the owner on); `arbiter/test/component/test-owner-exit.test.ts` (the
+real daemon, spawned detached by a stand-in test process that is SIGKILLed,
+exits through its graceful shutdown with its instance dir removed; without
+the context it outlives its spawner); and
+`launcher/test/component/test-owner-cleanup.test.ts` (the incident's shape:
+a stand-in test runs the real launch in-process, the autostarted dashboard
+and arbiter name it as their owner, and once it is SIGKILLed neither is
+left, nor their registry entries).
 
 ## 9. Symbol-DB single-writer lock
 
@@ -1788,6 +1989,45 @@ the agent of ANOTHER session while this one runs (§2). Tests:
 link inside, then runs the real `main()`: refused, nothing written through
 either; `--id instances`, `--id instances/x` and a linked named scope
 refused).
+
+### 10.5 Another stack's services whose code is gone (2026-10-21)
+
+`mandu reap` walks the registry of one runtime folder, the caller's. A stack
+started under another folder is invisible to it, and a resident one is
+ownerless by design (§10). Found 2026-10-21: a dashboard and its arbiter of
+`/run/user/1007/mrel-npmtest`, started by hand from a scratch npm install
+deleted since, serving with nothing left that could restart, upgrade or
+reach them; the test stacks of removed agent worktrees looked the same
+(their folder `… (deleted)`).
+
+`launcher/src/abandoned-stacks.ts` names such a daemon **abandoned** when
+all hold: it is this user's, titled as a resident daemon (`mandu-arbiter`,
+`mandu-dashboard`, a `mandu-*-proxy`), not a container's; its environment
+selects a stack other than the walked one (that one's are its registry's
+to judge, and an upgrade that replaced the account's install leaves them in
+a deleted folder for a while, still in use); its working folder is gone
+(`/proc/<pid>/cwd` reads `… (deleted)`); nobody owns it (`MANDU_OWNER_PID`
+`none`/`0`, or a dead pid, or unset with its parent gone or another daemon
+of that stack); and no `mandu` session runs on that stack.
+
+- `mandu reap --dry-run` lists each ("would stop (with --other-stacks) pid …
+  of the stack at …: its code folder … is gone, nobody owns it and no mandu
+  session uses it");
+- a plain `mandu reap` stops none, and says how many there are and how;
+- `mandu reap --other-stacks` stops each with SIGTERM, after checking its
+  title and its deleted folder again (a reused pid is skipped);
+- `mandu status` adds one line ("abandoned: n services of other stacks
+  whose code folder is gone").
+
+Stopping them is opt-in because they are another stack's: a plain reap, a
+test running the real CLI or a script never stops a stack it was not
+pointed at. Linux only (/proc).
+
+Tests: `launcher/test/unit/reap-abandoned.test.ts` (the rule over a fake
+process table, every case it keeps; the three modes of `runReap`; the
+re-check) and `launcher/test/component/reap-abandoned-real.test.ts` (the
+real CLI's dry run lists a real stand-in whose folder the test removed, and
+not one whose folder is there).
 
 ## 11. One server, four quadrants — the sharing contract
 
@@ -2640,3 +2880,555 @@ swapped mid-open) and the guard e2e suites (`tests/sandbox/guard/
 guard-provenance.test.ts`, `forged-reports.test.ts`, `call-tree.test.ts`,
 `agent-flow.test.ts`, `high-session-command.test.ts`, `tar-secret.test.ts`,
 and `launcher/test/secret-readers-live.test.sh`) are unchanged and pass.
+
+### 14.10 The launch's git calls, each question once (2026-10-21)
+
+Decision note, BUILT. Measured on the developer host (mode `secrets`, warm
+stack, load average 15-28): `mandu claude --version` from an empty
+directory ran 59-63 git calls (`strace -f -e trace=execve`). Every launch
+reads every repository of the home that holds a protected file, here four
+work trees in three object stores: the prefetch's reads at launch start,
+the history step's (its facts and config read again to check a prefetched
+state, the tips when the prefetch could not stand in, the index entries
+and working copies of the protected files), the placeholder watch's two,
+the twin index stat's one, and two per work tree after the agent exits.
+
+A skip-if-unchanged cache (serve a repository's answers from a sealed
+record while a stat fingerprint of its `.git` matches) was designed and
+dropped: a change the fingerprint missed would leave a protected version
+out of the twins, readable through `git show`. What was built instead
+removes only exact duplicates asked at the same point of the launch:
+the history step and the placeholder watch, which run at once after the
+twins are planned and before the agent starts, asked each watched work
+tree the same `rev-list --all --no-walk` and the same `ls-files -s -z --
+<files>`; they now share one runner that asks an identical call once
+(`git-shared-answers.ts`; the rules, each caller's failure handling and
+deadline kept, in confidentiality.md §7.2a "The same question once").
+The prefetch's reads and the check after the agent exits are not merged
+with anything: the first are checked against fresh reads, the second
+must see what the session did.
+
+Result: 63 git calls to 55 (two per watched work tree). The wall time did
+not move beyond the host's noise (medians of nine, 1.52 and 1.80 s before,
+1.66 and 1.81 s after, interleaved): the watch's calls ran in the launch's
+one git sandbox beside the step's, off its critical path, and every other
+per-repository call there already runs at once. What bounds the step is
+its own order (facts, then the store's reads), the main thread's
+synchronous work in a store with many worktrees (the prefetch's
+fingerprint and the reflog read, 50-80 ms for this checkout's 180
+worktrees), and the check after the agent exits, which runs one sandbox
+per call since the launch's session is closed before the agent starts.
+§14.12 takes up both.
+
+### 14.11 Launch timings and the budget check (2026-10-21)
+
+Decision note, BUILT. A warm `mandu claude --version` from an empty
+directory took 1.17 s on 2026-10-16 (§14.7) and about 2.04 s on 2026-10-21
+(raw `claude --version`: 0.02 s), and nothing said so until the maintainer
+felt it. Each pass (§14.7 to §14.10) first re-instrumented `launch()` by
+hand to learn where the time went. Two things close that gap: every launch
+times its own steps, and a nightly check compares those times with a
+recorded baseline.
+
+**The timer** (`launcher/src/launch-timings.ts` `LaunchTimer`). `main()`
+makes one per launch and `launch()` marks the start of each step; a step
+ends where the next starts. A part of a step (`secrets.*`, timed inside
+`applySecretTwins` through the narrow `StepSpans` face) is recorded under
+it, and its time is included in the step's. It is always on and best
+effort: a mark is one `performance.now()` and one array slot (a launch
+makes about 30; the unit test holds a mark well under 0.05 ms), no call
+throws (a broken clock, an end with nothing running, a part outside a
+step are all ignored), and the record is capped at 128 entries. It reads
+the clock only and decides nothing. For the `mandu` command (its process
+is named `mandu` before `main()`, by `bin/mandu.mjs` and by run.ts's own
+entry) the total counts from the process start and a `node` step holds
+the time to `main()`; a launch called in-process (the tests) counts from
+`main()` and has no `node` step.
+
+The steps, a fixed set (`LAUNCH_STEPS`, in launch order; a unit test holds
+every name in this table):
+
+| Step | What it covers |
+|---|---|
+| `node` | the node process start and the launcher's module load, to `main()` (the `mandu` command only) |
+| `plan` | the parse, the plan, the agent's version probe, the refusals before anything starts |
+| `arbiter` | attach to (or start) the arbiter, the release, tenant and mode checks, the policy reads, the session's model binding |
+| `services` | `startServices`: the model proxy, the network proxy, the shims (the secret walk starts inside it, §14.2 change 3) |
+| `confine` | the command box, the agent's environment, the network layers |
+| `key-grants` | the agents' API keys bound to their model hosts |
+| `secrets` | `applySecretTwins`: the placeholder copies, the git history step, the twins' index stat |
+| `secrets.discovery` | the wait for the secret walk (what is left of the prefetch) |
+| `secrets.history` | the git history step (`hideGitHistory`) |
+| `secrets.watch` | the wait for the placeholder watch |
+| `secrets.twin-index` | the twins' index stat |
+| `placeholder-check` | earlier sessions' placeholder records |
+| `env-secrets` | the environment's secrets as placeholders |
+| `compose` | the guard settings, the write protection, the composed command and environment |
+| `record` | the TLS word, the MCP servers, the launch on the arbiter's record, the human-plane watch |
+| `banner` | the mode and dashboard lines, the sign-in link, the key-suggestion notice |
+| `posture` | the session's `launch.log` and the `launch_posture` event |
+| `agent-start` | the early reply filter handed the agent |
+| `agent` | the agent's own run, from its start to its exit, under Mandu's wrappers (net-guard, Landlock, the reply filter's PTY relay) |
+| `teardown.index` | the twins' index stat put back |
+| `teardown.services` | the session's services stopped |
+| `teardown.notices` | the guard's refused repositories, the moved files |
+| `teardown.placeholder` | the placeholder-commit checks |
+| `teardown.exit` | the written-copies notice, the `session_exit` event, the scope folder |
+| `teardown.summary` | the session's last line (what Mandu kept from the AI), asked of the dashboard (packaging.md §5, *The session's last line*) |
+| `teardown.records` | the TLS word withdrawn, the launch's record ended |
+
+A new step goes in `LAUNCH_STEPS` and in this table together.
+
+**Where the times land.** The record is `{ v: 1, totalMs, steps: [{ step,
+ms, cpuMs?, git?, sandboxes? }], cost? }` (integer ms, the steps in the
+order they started; a top-level step's cost and the whole record's `cost`
+below, "What a step costs, counted"; the dashboard's `LaunchTimingsDetail`
+in `dashboard/src/event-model.ts`, field `timings`):
+
+- the `launch_posture` event: the steps finished before it, `node` to
+  `banner`;
+- the `session_exit` event: `agent` to `teardown.placeholder` (the steps
+  after it end after the event is sent);
+- the session's `<scopeRunDir>/launch.log`: its last line, the posture
+  event's record (gone with the scope folder at a clean end);
+- the launch's own log (`launch-logs/`, read by `mandu log`): a line
+  `mandu: launch timings {…}` before the agent starts, and the whole
+  launch's at its end, the log's last line;
+- a `--verbose` launch prints the whole breakdown on stderr after
+  everything else it said (not when it stopped with an error, whose error
+  is its last line). A normal launch never prints it.
+
+**How to read them.** `mandu log --timings` prints the last five launches
+that kept their timings side by side, newest first, after their median;
+`mandu log <session id> --timings` prints one launch's. A part is indented
+under its step. `total` runs from the launcher's process start to its end;
+the time a person waits adds the shim and the process exit (20 to 40 ms),
+which the budget check measures as the wall time. For a `--version`
+launch the `agent` step is nearly all Mandu's wrappers: the agent itself
+answers in 0.02 s. The dashboard's session page says the same in plain
+words, under its title: "Mandu took 1.7 s to start this session: checking
+git history for secrets 0.38 s, …", the slowest steps first, and how long
+the clean-up after the AI took (`dashboard.md` §4.25ag).
+
+**The budget check** (`tests/env/launch-budget.test.ts`, manifest entry
+`integration.launch-budget`; its arithmetic in `tests/lib/launch-budget.ts`).
+It starts its own arbiter (`scripts/dev-arbiter.sh`, `secrets`, the test
+tenant) and a small made-up home (four credential files and a project
+whose history holds a `.env`, so every launch walks it and runs the
+history step for it), then launches `<agent> --version` through the real
+`mandu` (`MANDU_BIN`, else `launcher/mandu-run.sh`, the checkout's bundle)
+for each cell: claude and codex (`MANDU_LAUNCH_BUDGET_AGENTS`), each from
+three places: an empty directory and a two-commit repository whose history
+holds a `.env`, both under the small home, and `devhome`, a developer-sized
+home (added 2026-10-21, below). One warm-up launch per cell (the bundle's build, the per-boot
+caches, a workspace's first scan), then seven measured launches per cell
+(`MANDU_LAUNCH_BUDGET_RUNS`), interleaved. Per cell it takes the median
+wall time (measured around the process) and the median of each step (read
+from each launch's own log) and prints them against the baseline, step by
+step, whether it passes or fails.
+
+- **The developer home** (`devhome`). The small home leaves out what grows
+  with a real one: on the developer host the history step alone took
+  about 378 ms over seven repositories, several with linked worktrees, of
+  a 1.7 s launch, where the small home's took 24 ms. The `devhome` cells
+  launch from a project in a made-up home of that scale: 14 projects each
+  with a `.env` in their history (2 to 5 commits), the launch's own project
+  (`src/big`) with 30 commits and 24 linked worktrees in the home, the four
+  credential files, and a folder tree of about 2,900 folders for the
+  secret walk (12 x 8 x 6 x 4). It takes about 1.2 s to make, and its two
+  cells add about 20 s to the check. Its history step is 375 to 395 ms in
+  the guest, where the developer host's real home spent 378 ms.
+- **The threshold.** A cell fails when its median wall time is more than
+  50% AND more than 300 ms over its baseline. A step is marked `over` past
+  50% and 50 ms, but a step alone never fails the check. Why these
+  numbers: one build's medians differed by 18% on the developer host from
+  one set of runs to the next (§14.10), a shared runner adds its
+  neighbors' load, and a single step is noisier than the whole, so 30%
+  would go red on noise; the regression this exists for was +74% (1.17 s
+  to 2.04 s), which 50% catches. The 300 ms floor keeps a short launch
+  (0.6 s) from failing on one slow moment.
+- **Creep.** A cell more than 20% AND more than 150 ms over its baseline,
+  but within the budget, gets one `WARN` line in the log (and as a test
+  diagnostic), naming the two steps that grew the most:
+  `WARN claude devhome: 1250 ms against a baseline of 1000 ms (+25%, over
+  +20% and +150 ms; not a failure); grew most: secrets +200 ms, services
+  +20 ms`. It never fails the night. Why 20% and 150 ms: the guest's own
+  spread is about -22% to +13% (below), so a lower line would warn on
+  noise. A check of three nights in a row (the same step over each time)
+  is not built: each night runs in a fresh guest that holds no earlier
+  run's results, and those live only on the runner host (`ci-out/`, the
+  dashboard's CI section). The `WARN` lines there are what a person reads
+  for a trend.
+- **The lane.** Kind `env` (the host decides the result: the need
+  `timing-baseline`, one of `scripts/suites.mjs` `ENV_NEEDS`), so it runs
+  in the nightly (`continuous-integration.md` §9), never per push. It
+  needs no login, so it runs in the subscription lane's guest, and it is
+  `parallel: false`, so nothing runs beside it. A red night blocks nothing
+  and shows in the pipeline list and the dashboard's CI section like any
+  nightly entry (§9.5 there). The entry sets the gate
+  `MANDU_LAUNCH_BUDGET=1`; a plain `npx tsx --test env/launch-budget.test.ts`
+  skips.
+- **What it does not see.** A home far larger than `devhome` (§14.1: tens
+  of thousands of folders, a Linux kernel checkout, 180 worktrees of one
+  store), and the first launch after the stack starts or after an
+  unprotected launch (§14.7), which is the warm-up, not measured. A change
+  that slows those shows in `mandu log --timings` and on the session page
+  on a real machine, not here.
+
+**The baseline** (`tests/env/launch-budget-baseline.json`): each cell's
+median wall time, launch total and steps, with when, where and from which
+commit it was measured. It is recorded in the CI guest, never on a
+developer host (whose load average runs 15 to 90). The current one,
+2026-10-21 (with the `devhome` cells), measured at commit `36ae108cf400`
+(the tree this baseline was committed with, before its last amend), the
+per-push guest image (32 vCPUs, Linux 6.8, Node 22.13, `--network`),
+medians of seven (the main steps; the file holds them all):
+
+| Step (ms) | claude empty | claude repo | claude devhome | codex empty | codex repo | codex devhome |
+|---|---:|---:|---:|---:|---:|---:|
+| wall | 614 | 611 | 1110 | 509 | 551 | 1042 |
+| total | 596 | 593 | 1097 | 495 | 535 | 1025 |
+| `node` | 102 | 106 | 100 | 101 | 98 | 92 |
+| `plan` | 22 | 20 | 20 | 21 | 21 | 22 |
+| `arbiter` | 28 | 28 | 34 | 28 | 28 | 34 |
+| `services` | 139 | 135 | 134 | 130 | 134 | 133 |
+| `secrets` | 53 | 76 | 488 | 50 | 81 | 509 |
+| `secrets.history` | 23 | 36 | 375 | 21 | 40 | 395 |
+| `compose` | 18 | 16 | 19 | 15 | 16 | 16 |
+| `agent` | 152 | 149 | 168 | 91 | 93 | 114 |
+| `teardown.placeholder` | 15 | 19 | 86 | 13 | 17 | 92 |
+
+The first baseline (commit `a37ff4edf04b`, the four small-home cells) and
+the four guest runs around it gave each small-home cell's median wall time
+within -22% to +13% of one another (`claude empty`: 526 to 691 ms): the
+guest is steadier than the developer host, but not steadier than the 50%
+the check allows. The small home's cells are well under the developer
+host's 1.2 to 2 s (§14.7) because its walk and its history step have
+almost nothing to read; the `devhome` cells are the ones near a real
+launch (1.0 to 1.1 s in the guest, where the developer host's own launch
+took about 1.7 s, its node and services slower on a loaded host).
+
+**Re-baselining.** After a change that makes a launch slower on purpose
+(or faster, so the budget stays tight), run the check in the CI guest and
+keep its numbers:
+
+```sh
+scripts/ci/vm-run.sh --kind env --only integration.launch-budget --network --out /tmp/lb
+grep -o 'LAUNCH_BUDGET_MEASURED .*' /tmp/lb/logs/integration.launch-budget.log | tail -1 | cut -d' ' -f2- \
+  | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d}).on("end",()=>{process.stdout.write(JSON.stringify(JSON.parse(s),null,2)+"\n")})' \
+  > tests/env/launch-budget-baseline.json
+```
+
+`--worktree` measures uncommitted changes. Every run prints that line, so
+a nightly's log serves too. On a host of your own, `MANDU_LAUNCH_BUDGET=1
+MANDU_LAUNCH_BUDGET_WRITE=<file>` writes the file directly; a baseline from
+a developer host is not committed. The commit that changes the baseline
+says why the launch got slower.
+
+**What a step costs, counted** (2026-10-22, BUILT). The wall time is what
+a person waits, but a loaded host moves it more than one step's regression
+does (the developer host's load average ran 60 to 170 while this was
+measured; the nightly allows 50%). The regression of 2026-10-21 was made
+of work, not of a slow host: git calls asked of every repository of the
+home that holds a protected file, and a sandbox per call after the agent.
+So every launch now also counts, per top-level step:
+
+- `cpuMs`: the launcher process's own CPU time in the step
+  (`process.cpuUsage()`, user and system, every thread of it), not its
+  children's;
+- `git`: the git processes the launcher started in the step: every call of
+  the production git runners (git-session.ts: one per call, in the
+  launch's session or one sandbox each) and the launch's single hardened
+  probes (`fs-view`'s `rev-parse --show-toplevel`, the network guard's
+  remote list, the arbiter's release check);
+- `sandboxes`: the sandboxes made for them (a per-call bubblewrap or
+  Seatbelt, or the session's one runner).
+
+The runners bump two process-wide counters (`countGitCall`,
+`countGitSandbox` in `launch-timings.ts`) and the timer reads them, and the
+CPU clock, at each step's start and end, as it reads the wall clock; a
+part (`secrets.*`) carries no cost, since its window overlaps its
+siblings'. The whole record's `cost` runs from the timer's origin (the
+process start for the `mandu` command); `snapshot({ from })`, the
+`session_exit` event's part, has none. A reading that throws costs the
+record its costs, never the record. Not counted: the git sandbox probe's
+own `git --version` (once per boot, probe-cache.ts), and git that the
+services or the arbiter start. The `--verbose` breakdown prints the cost
+beside each step (`secrets 150 ms   cpu 250 ms, 38 git, 0 sandboxes`) and
+the whole launch's after the total; `mandu log --timings` adds the rows
+`cpu`, `git calls` and `sandboxes` (the whole launch's, medians first).
+
+Where the prefetch's reads land is a matter of timing: it starts in
+`arbiter` (with the session's warm-up) and runs through `services` into
+`secrets`. A budget per step would flake on that, so the check below holds
+the launch's prep (every step before `agent`) as one, and a step where no
+git belongs at zero.
+
+**The git budget, per push** (`tests/sandbox/launch-git-budget.test.ts`,
+kind `sandbox`, manifest entry `integration.kernel`). The REAL launcher
+(`main()`, `secrets`) against a REAL ArbiterServer, the host's bwrap and
+git, in a made-up home of six work trees in four object stores (three
+repositories with a tracked `.env`, one of them with two linked
+worktrees, and the workspace). Two warm-up launches (the first scans each
+store and leaves the prefetch its first record; the second's prefetch
+still reads less than a steady one: 63 to 69 calls against 69), then two
+measured launches, each held to:
+
+- before the agent: at most 8 git calls per work tree, 2 per store, 1, and
+  a slack of 3 (a rare call asked again after a shared answer failed under
+  load; never a call per work tree), in at most ONE sandbox (the launch's
+  session; not held where Yama forbids the session);
+- no git call after `secrets` until the agent has exited, nor in any
+  teardown step but `teardown.placeholder`;
+- `teardown.placeholder`: at most two calls per watched work tree when the
+  session changed nothing, at most one sandbox per call.
+
+The CPU time is printed, never held: a loaded guest's varies by a third,
+and a budget loose enough for that would catch nothing the counts do not.
+What the budget's numbers are, a steady warm launch of the fixture
+(2026-10-22, identical at every steady launch on the developer host):
+
+| Call | Calls | Who asks |
+|---|---:|---|
+| `rev-parse` (a work tree's facts) | 12 | the prefetch, then the history step again (a prefetched state is checked against fresh reads): 2 per work tree |
+| `config -z --get-regexp` | 10 | the prefetch once per store, the step once per work tree |
+| `hash-object --no-filters`, `hash-object` | 12 | the step: both hashes of each protected working copy, per work tree |
+| `rev-list --all --no-walk` (the tips) | 11 | the prefetch (but the workspace's), then the step and the watch, shared (§14.10) |
+| `ls-files -s -z` (the index entries) | 6 | the step and the watch, shared: 1 per work tree |
+| `rev-list --no-walk --stdin` (the reflog tips' check) | 4 | the prefetch, 1 per store |
+| `git version` | 2 | the session's runners |
+| **before the agent** | **57** | in 1 sandbox: about 8 per work tree and 2 per store |
+| `ls-files -z -s`, `rev-list --all --no-walk` after the agent | 12 | the placeholder check: 2 per work tree, each in its own sandbox |
+
+A real launch from an empty directory with a home of eleven work trees in
+five stores (the developer host, 2026-10-22, `mandu claude --version`):
+100 git calls before the agent in one sandbox (`arbiter` 12, `services`
+22, `secrets` 66), 22 after it in 22 sandboxes (`teardown.placeholder`
+156 ms of wall time at a load average of about 100). In the per-push
+guest the check passes with the same counts (57 in one sandbox, then 12
+in 12). The counting costs nothing measurable: the nightly check's
+`claude` cells in the guest, this change and its master interleaved
+(two runs each, medians of seven, the runner host's load 20 to 140 and
+the guest's about 2), wall time `empty` 576 and 592 ms against 644 and
+760, `repo` 670 and 622 against 663 and 647, `devhome` 1065 and 1136
+against 1187 and 1250.
+
+**Tests.**
+
+- `launcher/test/unit/launch-timings.test.ts`: steps in order, each until
+  the next; the `node` step and the process-start total; parts nested in
+  their step and closed by the next; `snapshot({ from })`; a misuse, a
+  throwing clock and a runaway loop never throw or grow the record; the
+  cost of a mark; the log line round-trips and the last one wins; medians;
+  the `--verbose` and `mandu log --timings` forms; both events carry the
+  record; every step is named in this section. The costs: each top-level
+  step's CPU time, git calls and sandboxes from the counters, none on a
+  part, the whole record's from its origin (none on a `from` snapshot),
+  the `mandu` command's from zero, a throwing reading dropping the costs
+  and keeping the record, a bad cost value read back left out, their
+  medians, the printed forms.
+- `launcher/test/unit/git-runner.test.ts`: a per-call git is one git and,
+  in a sandbox, one sandbox; a session's calls are one git each and one
+  sandbox in all.
+- `tests/sandbox/launch-git-budget.test.ts`: the per-push git budget above.
+- `launcher/test/unit/launch-log.test.ts`: `mandu log --timings` (the
+  median and the newest launches, one session by prefix, logs without
+  timings passed over).
+- `launcher/test/component/launch-timings.test.ts`: a launch through
+  `main()` against a mock arbiter: the posture event's steps (documented,
+  in order, all before the agent), the session-exit event's (the agent
+  first, then the teardown), the launch log's two lines, nothing printed
+  by default, the breakdown last under `--verbose`.
+- `tests/stack/launch-budget-verdict.test.ts`: the medians, the threshold
+  at its edges, the creep WARN at its edges (and never beside a failure),
+  steps marked and never failed, a missing baseline or cell, the committed
+  baseline parses, holds all six cells and names only documented steps.
+- `tests/env/launch-budget.test.ts`: the check itself (nightly).
+- The session page's line: `dashboard.md` §4.25ag lists its tests.
+
+### 14.12 The git reads on the main thread; the check after the agent (2026-10-21)
+
+Decision note. The first part BUILT, the second MEASURED AND NOT BUILT.
+The two costs §14.10 left open.
+
+**The reflog read and the prefetch's fingerprint, paced.** In a store
+with many linked worktrees both are thousands of synchronous file-system
+calls on the launcher's main thread: the reflog read
+(`reflog-tips.ts`, every file under `logs/` and `worktrees/*/logs/`) and
+the fingerprint of the prefetched state (`twin-prefetch.ts`
+`fingerprintEntries`, confidentiality.md §7.2a "The prefetch"). The
+prefetch runs both while the services come up, whose starts the same
+event loop serves, and the history step takes the fingerprint again while
+the other stores' git answers wait behind it. Measured on the developer
+host (medians of nine, load average 20 to 60), in this repository's store
+(135 linked worktrees that day, 3151 entries under `logs/`, 4744 names in
+the reflogs) and in a fixture store with 200 linked worktrees and 600
+branches:
+
+| | held in one go | paced: wall | paced: longest hold |
+|---|---:|---:|---:|
+| reflog read, this store | 32-40 ms | 35-41 ms | 5.6-6.4 ms |
+| fingerprint, this store | 27-28 ms | 25-26 ms | 4.8-5.0 ms |
+| reflog read, 200-worktree fixture | 14 ms | 14 ms | 4.2 ms |
+| fingerprint, 200-worktree fixture | 23-29 ms | 28 ms | 5.1-5.3 ms |
+
+Tried first and dropped: the promise API (`fs/promises`, 16 operations in
+flight). The reflog read then held the loop at most 7 ms but took 155-160
+ms: each file is four thread-pool round trips (open, fstat, read, close),
+five times the synchronous calls, on a read the history step waits for
+when there is no prefetch.
+
+Built: the same synchronous calls, in the same order, with the event loop
+handed back every 4 ms (`reflog-tips.ts` `Pacer`: after an operation,
+once the slice is spent, one `setImmediate`; the clock read once every 16
+operations; `twin-prefetch.ts` uses the same one). Both functions are
+async now; what they read is unchanged: the same entries in the same
+order (the fingerprint's digest is identical to the unpaced one on both
+stores), the same doubts, caps and fallbacks. The reflog read also drops
+`readFileSync`'s second fstat (it reads up to the size its own fstat
+gave, as `readFileSync` reads a regular file). The arbiter's copy of
+`reflog-tips.ts` (byte-identical) is paced too, so a history scan no
+longer holds the arbiter's loop either. Not made cheaper: every input
+needs its own lstat (a reflog append changes its file's size and times,
+not its directory's), so the fingerprint still stats each one; a unit
+test pins the covered set. A launch's wall time did not move beyond the
+host's noise: in a made-up home holding the 200-worktree fixture and four
+small projects, `mandu claude --version` from an empty directory and from
+the fixture's main work tree, seven launches per build and place, five
+interleaved before/after pairs at load average 70 to 140, the wall
+medians ran 1186-1328 ms before and 1188-1304 ms after, `services`
+342-367 ms either way, `secrets.history` 97-131 ms before and 101-128 ms
+after (a third build, the history step's own fingerprint left unpaced,
+fell in the same ranges). What changed is that nothing else waits 30-40
+ms behind them.
+
+**The check after the agent: one sandbox per call, kept.** After the
+agent exits, the placeholder checks (placeholder-commits.ts) ask each
+watched work tree two git calls in the common case, more when the session
+committed, each in a bubblewrap of its own (`teardown.placeholder`, 93 ms
+median for four work trees). The idea was one fresh git session
+(git-session.ts) for them, opened after the agent exits and closed after
+the checks. Measured, four small work trees, medians of seven
+(`checkPlaceholderRecord` through each runner, the same answers):
+
+| Case (calls, rounds) | one sandbox per call | a fresh session | a session started 0.4 s ahead |
+|---|---:|---:|---:|
+| nothing new (8, 1) | 69 ms | 183 ms | 32 ms |
+| a new commit in each (16, 3) | 140 ms | 175 ms | 55 ms |
+| a placeholder committed in each (32, 6) | 241 ms | 227 ms | 91 ms |
+
+A session costs its runner's node start: `node -e 0` takes 80-90 ms on
+this host, in the sandbox or out of it (V8 flags do not shorten it),
+against 18 ms for one bubblewrap and 54-57 ms for eight at once. The
+launch hides that start behind the services (it warms its session when it
+starts); after the agent there is nothing to hide it behind (the three
+teardown steps before the checks take 2 ms together), and starting it
+before is excluded: a runner alive while the agent runs is a process of
+the agent's user, which the agent could kill or, where it sees its pid,
+reach through `/proc/<pid>/fd` (Yama's `ptrace_scope` 1 refuses an
+attach, not a read-mode open), and write the checks' answers in git's
+place. A hybrid (calls run per call until the runner is ready) would help
+only the six-round case, which already prints a WARNING. So the check
+keeps one sandbox per call, and reads fresh state as before; what would
+change the answer is a runner that starts in a few milliseconds (a native
+one).
+
+**Re-examined 2026-10-22: still one sandbox per call.** The question was
+whether the check's calls (two per watched work tree when the session
+changed nothing: 12 for the six work trees of the per-push fixture, 22 for
+the developer host's eleven, 156 ms of `teardown.placeholder` there at a
+load average of about 100; in the CI guest 14 to 20 ms for the small
+home's cells and 82 to 98 ms for `devhome`) could share fewer sandboxes with exactly the
+same coverage, fail closed. What a batch keeps and what it changes:
+
+- The coverage would be the same: the same calls (arguments, environment,
+  work tree, stdin), answered by git, read afresh after the agent. Only
+  where the git processes run would change.
+- The isolation would not. In a sandbox of its own, a program git started
+  despite the hardening (write-protection.md §8.3; no vector known) sees
+  its own call only. In a shared one it can reach a sibling call on
+  another repository: kill it (that call fails, the check says it could
+  not check: fail closed), or, where it can open the sibling's
+  descriptors, write into its answer and make a repository that holds a
+  placeholder commit read as clean. The launch's session accepts sharing
+  only with an empty read-only `/proc` and Yama's `ptrace_scope` at 1 or
+  more (write-protection.md §8.5.3); any batch would need the same two,
+  which makes it that session, not something cheaper.
+- The two ways to run that session after the agent are measured above: a
+  fresh one costs its node start (80-90 ms) with nothing to hide it
+  behind, more than the eight per-call sandboxes it would replace, and one
+  started before the agent exits is a process the agent could reach.
+- The way without node, one bubblewrap per round running the round's
+  calls through a shell, is a second runner. It would have to do in `sh`
+  what the session's runner does per call and the check relies on: a
+  process group and a deadline of its own, the output cap (never a
+  truncated answer read as whole), stdout and stderr kept apart per call
+  through extra pipes passed through bubblewrap, the exit code or signal,
+  byte-exact answers. A slip in any of these is a check that says "clean"
+  when it is not, the one failure the check exists to prevent. Grouping
+  per work tree (two calls a sandbox, the same repository on both sides)
+  narrows the reach but needs the same runner.
+
+Not clearly safe for at most about 100 ms after the agent, so not built.
+What changed instead: the check's cost is counted and held per push
+(§14.11, "The git budget, per push": at most two calls per work tree, at
+most one sandbox per call), so it cannot grow unnoticed; a native runner
+that starts in a few milliseconds, with the session's isolation, remains
+the way to revisit it.
+
+**Tests.**
+
+- `launcher/test/unit/twin-prefetch.test.ts`: the fingerprint covers
+  exactly the listed inputs (each kind present in the fixture, the set
+  enumerated independently of the walk; one dropped fails it); paced, over
+  120 worktrees, it yields to the event loop, its digest equals the
+  unpaced one, and a change in the last worktree's log still changes it.
+- `launcher/test/unit/reflog-tips.test.ts`: paced, over 600 branch logs
+  and 200 worktrees, the read yields, answers the same names, and a line
+  that is not an entry in the last worktree's log still falls back; the
+  existing set-equality, superset and fallback tests run on the async
+  reader.
+
+### 14.13 The store scan's cost (2026-10-21)
+
+Decision note, BUILT. The history step now also checks every object a
+repository stores once, reachable or not (confidentiality.md §7.2a "Every
+stored object is checked once", `launcher/src/store-scan.ts`). The
+constraint it was built under: no slower warm launch. A scan of the whole
+store at every launch (on this repository, 115k objects in 39 packs:
+listing them 0.12 s, reading every tree 0.38 s, plus the work on them)
+would have added 2 to 3 s, so the scan is incremental per object store and
+its steady state reads nothing:
+
+- **Nothing new** (the common case): a stat of each object directory, its
+  `pack/` and its fan-out directories, the sealed `state.json` read (one
+  seal lookup, beside the walks), the kept answer taken. No git call, no
+  object read. In process: 1.4 ms (median) for this repository's store.
+- **After a commit**: its objects are loose, read and inflated in the
+  launcher, no git call; the kept ids and records merged and written. In
+  process: 24 ms (median of seven) for this store.
+- **A repack**: the new `.idx` read and merged with the ids seen; no git
+  call when no id is new.
+- **The first scan of a store** (and after a new seal epoch, as the
+  sanitized packs are rebuilt then too): 2.6 to 2.9 s in process for this
+  store, 3.2 to 3.4 s inside a launch beside its other work, said once
+  before the work (the rebuild notice, cause `store-scan`). Tree bodies are
+  read in bounded batches (four calls of 8 MiB at once, the next batch
+  read while this one is walked), so the memory does not grow with the
+  store.
+
+Measured end to end (2026-10-21, the developer host at a load average of
+about 20; `mandu claude --version` from a plain directory with the real
+HOME, its two Mandu repositories scanned: this one and a 3.3k-object
+export; a dev arbiter; the base commit and this branch alternated in one
+worktree, three rounds of nine warm launches each, medians): the history
+step 116, 115 and 116 ms before, 129, 129 and 122 ms after; the wall time
+1430, 1358 and 1422 ms before, 1460, 1398 and 1382 ms after (within the
+host's noise). Inside the launch each store's steady scan finished in 16 to
+26 ms of wall time, almost all of it the seal lookup's round trip, before
+its walks did; a run with that lookup skipped (an experiment, not shipped)
+moved the history step by 3 ms at most. The first launch after the change,
+every cache cold in a scratch Mandu home: 17.8 to 18.6 s against 13.2 to
+14.5 s, the store's first scan inside it 3.2 to 3.4 s. The nightly
+`integration.launch-budget` measures warm launches after a warm-up launch
+per cell, which takes each store's first scan.

@@ -560,8 +560,9 @@ view-model code* (a daemon started before a `dual-lanes.ts` fix once kept
 rendering the away-recap as the delivered reply while the repo tests were
 green). Fetching with `limit=0` makes both sides derive over the same
 full event set, so a diff is attributable to code, not a truncated slice.
-The daemon gates every route behind HTTP Basic auth since 2026-09-15
-(dashboard.md §6.z), so the fetch carries the credentials from
+The daemon gates every route behind its sign-in since 2026-09-15
+(dashboard.md §6.z; since 2026-10-22 the dashboard account, which still
+accepts its credentials as a Basic header), so the fetch carries the credentials from
 `DASHBOARD_BASIC_AUTH` (inherited automatically when the dashboard's own
 test-runner spawns the suite) or, for a hand run from a shell, from the unit's
 env file `~/.mandu/dashboard.env` (`tests/lib/dashboard-auth.ts`). A 401 still degrades to a WARN whose reason

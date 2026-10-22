@@ -37,12 +37,20 @@ export interface SessionLogins {
   ullmBinary?: string;
   otherLoginsRaw?: boolean;
   loginEnv?: Record<string, string>;
+  /** The project MCP configs the session's agent reads (secret-discovery.md
+   *  §2.10, a Claude Code `.mcp.json`): absolute paths; the arbiter keeps
+   *  only a config a kept agent reads. */
+  mcpConfigs?: string[];
 }
+
+/** How many `mcpConfigs` are carried (the arbiter's own bound). */
+const MAX_MCP_CONFIGS = 16;
 
 /** The value of SESSION_LOGINS_ENV as a SessionLogins, or null (absent,
  *  not JSON, or no absolute `home`), with the reason for a malformed one.
  *  Unknown fields are dropped; `loginEnv` keeps string values only (the
- *  arbiter keeps its known names with absolute values). Pure. */
+ *  arbiter keeps its known names with absolute values); `mcpConfigs` keeps
+ *  absolute paths only. Pure. */
 export function parseSessionLogins(raw: string | undefined): { logins: SessionLogins | null; error?: string } {
   if (raw === undefined || raw.trim() === "") return { logins: null };
   let v: unknown;
@@ -54,6 +62,9 @@ export function parseSessionLogins(raw: string | undefined): { logins: SessionLo
   if (o["loginEnv"] !== null && typeof o["loginEnv"] === "object" && !Array.isArray(o["loginEnv"])) {
     for (const [k, val] of Object.entries(o["loginEnv"] as Record<string, unknown>)) if (typeof val === "string") env[k] = val;
   }
+  const mcp = Array.isArray(o["mcpConfigs"])
+    ? (o["mcpConfigs"] as unknown[]).filter((p): p is string => typeof p === "string" && p.startsWith("/")).slice(0, MAX_MCP_CONFIGS)
+    : [];
   return {
     logins: {
       home: o["home"],
@@ -61,6 +72,7 @@ export function parseSessionLogins(raw: string | undefined): { logins: SessionLo
       ...(typeof o["ullmBinary"] === "string" && o["ullmBinary"] !== "" ? { ullmBinary: o["ullmBinary"] } : {}),
       ...(o["otherLoginsRaw"] === true ? { otherLoginsRaw: true } : {}),
       ...(Object.keys(env).length > 0 ? { loginEnv: env } : {}),
+      ...(mcp.length > 0 ? { mcpConfigs: mcp } : {}),
     },
   };
 }

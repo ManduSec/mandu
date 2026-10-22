@@ -279,7 +279,11 @@ bindings, so the inference failed in both directions:
 
 The registration now records each grant it gives (`wire_grants` in
 mandu.db, field row → host, symbol-table.ts `recordWireGrant`; the launch
-HOME's own `.npmrc` / pip.conf only, `isHomeWireFile`, and only for a
+HOME's own `.npmrc` / pip.conf only, `isHomeWireFile`, and since
+2026-10-21 an editor's MCP config in that HOME, whose HTTP server's
+Authorization credential goes to its entry's own host
+([`secret-discovery.md`](./secret-discovery.md) §2.10; never
+`~/.claude.json`, Codex's `config.toml` or a workspace config), and only for a
 registration on the human plane, below), and rule 1 adds a
 field's wire host when, and only when, the record names it and the field's
 own text still names that host. The precedence is explicit:
@@ -710,7 +714,12 @@ destination allowed to receive it); no card is filed. The decision carries
 formats it receives without asking, and the switch. `mandu why <file> --to
 <host>` and Test a flow ask with the file's real placeholders: a key field
 is released at its issuer, the whole file still asks, so the file's answer
-reads "asks". Not built: a row for the table on the product Rules page.
+reads "asks". The product Rules page lists it under **Built-in
+protections** in the `secrets` and `full` modes (dashboard.md §4.25z): the
+sentence, a *Which companies* fold with each company and its hosts, what is
+off (`issuers_off`, `values_off`) or that the switch is off, and the
+policy.yaml text that changes it; a state the page could not read says so,
+never "on".
 
 **Still asking, by design.** The other questions of the fresh-install run
 name a host no value's format can: the real accountant for a bank statement
@@ -3459,8 +3468,9 @@ reading three pack indexes whole). Three measures:
   `~/.mandu/state/object-walks/<key>.json`, with the tips it started from
   (every ref and every reflog entry: what `git rev-list --all --reflog
   --no-walk` answers, read as the next item says) and a base key: the git
-  version, the walk's arguments, and what rewrites history as git sees it
-  (the shallow file, `info/grafts`, replace refs). The same base and tips
+  version, the walk's arguments and rule, and the shallow boundary the walk
+  honours (since 2026-10-21; grafts and replace refs are off, "What the
+  walk does not let a repository hide" below). The same base and tips
   reuse the cached names; a tip gone away reuses them too (a superset only
   hides more); new tips walk only the commits the old tips cannot reach
   (`git log --stdin` with the old tips as `^` exclusions). Anything else,
@@ -3496,6 +3506,12 @@ reading three pack indexes whole). Three measures:
   a pruned entry and a tag in a reflog; the superset where git skips a
   deleted branch's surviving log; and each fallback. On this repository:
   2.9 s to 0.2 s, the same 1611 tips.
+  **Paced (2026-10-21).** The read is the same synchronous calls in the
+  same order, but hands the event loop back every 4 ms (`Pacer`): in a
+  store with many worktrees and branches it held the main thread 30-40 ms
+  in one go (runtime-instances.md §14.12). What it reads, its doubts and
+  its caps are unchanged; a unit test reads 800 logs over 200 worktrees
+  paced and in one go and gets the same names.
 - **The arbiter's history readers read the reflogs the same way**
   (2026-10-04, `arbiter/policy/history-tips.ts` over
   `arbiter/src/reflog-tips.ts`, the launcher's reader, byte-identical:
@@ -3652,9 +3668,11 @@ reading three pack indexes whole). Three measures:
   (2) when the facts and the config the launch reads fresh equal the ones
   it was computed from, and (3) when a FINGERPRINT of every input of the
   tips is unchanged: each work tree's `.git` (its content when a file);
-  HEAD, `packed-refs`, `config`, `config.worktree`, the shallow and grafts
-  files; every directory and file under `refs/`, `logs/` and `reftable/`;
-  each linked worktree's HEAD, `commondir`, `gitdir`, `refs/` and `logs/`;
+  HEAD, `packed-refs`, `config`, `config.worktree`, the shallow file (no
+  grafts file since 2026-10-21: every hardened call reads an empty one);
+  every directory and file under `refs/`, `logs/` and `reftable/`;
+  each linked worktree's HEAD, `commondir`, `gitdir`, `config.worktree`,
+  `refs/`, `logs/` and `reftable/`;
   every object directory the store reads (alternates followed), its `pack/`,
   `info/`, `info/alternates` and each loose fan-out directory (whether a
   reflog's object exists is part of the tips). Each entry is (type, device,
@@ -3673,6 +3691,53 @@ reading three pack indexes whole). Three measures:
   writes nothing but the hint. Residual: a same-size rewrite in place,
   within one timestamp granule, on a filesystem whose clock runs more than
   two seconds behind the host's (git never writes a ref or a log so).
+  **Security fix (2026-10-21): a linked worktree's own `reftable/`.** A
+  reftable repository (`extensions.refStorage = reftable`) keeps each
+  linked worktree's HEAD, its own refs (`refs/bisect`, `refs/worktree`,
+  `refs/rewritten`) and their reflogs in `worktrees/<id>/reftable/`, its
+  HEAD file a stub. The fingerprint walked `reftable/` at the common level
+  only, so a worktree's HEAD moved between the prefetch and its use (`git
+  update-ref --no-deref HEAD`, or any move that writes no index) left it
+  unchanged: the stale tips were used, the walk cache answered for them,
+  and a protected version reachable only from that HEAD stayed out of the
+  twins, readable through `git show <commit>:<file>`. Now each linked
+  worktree's `reftable/` is walked as its `refs/` and `logs/` are. Audited
+  with it, against what the tips are read from (each work tree's `rev-list
+  --all --no-walk`, the reflogs, `for-each-ref refs/replace/`, the base):
+  HEAD and the refs of both levels in either backend (files: `HEAD`,
+  `refs/**`, `packed-refs`; reftable: `reftable/**` of the common dir and
+  now of each worktree), the stash (`refs/stash` and its log), the reflogs
+  of both levels, which worktrees count (`worktrees/<id>/gitdir`,
+  `commondir`), the object directories with their alternates (whether an
+  object exists decides a reflog tip and a peel), `shallow`,
+  `info/grafts`, replace refs (refs), and the config (its files by stat,
+  its effective `extensions.refStorage` read fresh and compared).
+  Pseudo-refs (`ORIG_HEAD`, `FETCH_HEAD`, `MERGE_HEAD`) and the index are
+  not tips (`--all` names `refs/` and the HEADs). Residual: a setting from
+  an included or the user's global config file is not fingerprinted; of
+  those only `core.useReplaceRefs` can change a tip (a peel through a
+  replaced tag), and only between the prefetch and its use. Tests:
+  `launcher/test/unit/twin-prefetch.test.ts` (the worktree's HEAD, a
+  `refs/bisect` and a `refs/worktree` ref written in its reftable each
+  change the fingerprint) and
+  `launcher/test/component/prefetch-reftable-worktree.test.ts` (a real
+  reftable repository: after the prefetch read the tips, the worktree's
+  HEAD moves to a commit nothing else reaches, holding a protected version;
+  the version is locked and its loose copy unreadable, as without the
+  prefetch). Both fail without the fix (the second: the prefetched state
+  is used and the version is not locked); both skip on a git older than
+  2.45, which cannot make a reftable repository.
+  **Paced, and its inputs pinned (2026-10-21).** The fingerprint is the
+  same lstat and readdir calls in the same order, handing the event loop
+  back every 4 ms (reflog-tips.ts `Pacer`; runtime-instances.md §14.12):
+  over this repository's worktrees it held the main thread 25-35 ms in one
+  go. The pacing leaves its digest unchanged, and a unit test pins the
+  covered set: on a fixture holding every input above (a linked worktree
+  with its own `config.worktree`, refs, logs and `reftable/`; the common
+  dir's `config.worktree`, `shallow` and `reftable/`; an alternate object
+  directory; a loose fan-out directory) the entries are exactly that set,
+  enumerated by the test independently of the walk, so an input dropped
+  from the walk fails it.
   Tests: `launcher/test/unit/twin-prefetch.test.ts` (a secret committed
   between the prefetch and the use, only in the history, is found and
   excluded; a new loose object, a config change, a worktree added, a racy
@@ -3711,7 +3776,19 @@ reading three pack indexes whole). Three measures:
   each; a runner that never started ran nothing, and its calls run one
   sandbox each. The session is closed with the prefetch, on every path,
   right after the secret setup; a forgotten one holds no reference on the
-  event loop and dies with the launcher (`--die-with-parent`). Tests: the
+  event loop and dies with the launcher (`--die-with-parent`). The
+  placeholder check after the agent exits keeps one sandbox per call: a
+  fresh session there cost more than it saved (its runner's node start,
+  with nothing left to hide it behind), and one kept alive through the
+  agent's run is excluded (runtime-instances.md §14.12). Re-examined
+  2026-10-22 (same section): any sharing there needs the session's
+  isolation, so its runner, and a shell-run batch would be a second
+  runner whose slip reads as "clean"; kept. What a launch asks of git is
+  counted per step instead (each step's `git` and `sandboxes` on the
+  launch's events) and held per push: at most about eight calls per work
+  tree before the agent, in the one session sandbox, and two per work
+  tree after it (runtime-instances.md §14.11, "The git budget, per
+  push"). Tests: the
   session's protocol and every failure path with no privilege
   (`launcher/test/unit/git-runner.test.ts`), one sandbox (one pid and net
   namespace for all calls), byte-identical answers and nothing left behind
@@ -3728,6 +3805,284 @@ reading three pack indexes whole). Three measures:
   265 ms with a sandbox per call, 96 ms in a session, 149 ms with no
   sandbox at all (the session's small runner forks git faster than the
   launcher's large process does).
+- **The same question once** (2026-10-21, `launcher/src/git-shared-answers.ts`,
+  `secret-setup.ts`). The history step and the placeholder watch ("A
+  placeholder in your repository" below) run at the same point of the
+  launch, at once, after the twins are planned and before the agent
+  starts, and both asked each watched work tree `rev-list --all --no-walk`
+  (its tips) and `ls-files -s -z -- <its protected files>` (their index
+  entries). Now the two go through one runner, scoped to them and closed
+  when both are done, that starts an identical call (the same arguments,
+  work tree, stdin and environment) once and hands both the answer; the
+  watch spells its index call as the step does. Nothing is skipped and
+  nothing is kept: every check still runs on git's answer at that point;
+  the prefetch keeps its own runner (the step reads its facts and config
+  again to check a prefetched state, and those reads stay apart), and the
+  placeholder check after the agent exits asks git afresh, since the agent
+  may have committed by then. Each caller keeps its failure handling and
+  its deadline: the answer is the call's, a failure included, so a failed
+  call still refuses the step (`GitObjectTwinError`) and still costs the
+  watch the tips (or, for the index, the repository); a caller joining a
+  call with a deadline as long as its own or longer waits at most its own
+  deadline (the watch's 5 s) and then gets the runner's cut-off answer; one
+  joining a call with a shorter deadline (the step, 120 s, joining the
+  watch's 5 s call) takes only a success, and a failure is asked again
+  under its own. A call that writes (the pack build) is never shared.
+  Tests: `launcher/test/unit/git-shared-answers.test.ts` (one call per
+  identical question, a difference of any kind its own, the deadlines both
+  ways, a failure to every caller, nothing shared after close) and
+  `launcher/test/component/launch-git-shared.test.ts` (real repositories:
+  two calls become one per work tree with the same twins, locked ids and
+  watch; a failing `rev-list` or `ls-files` refuses the step and costs the
+  watch exactly what it did; the check after the session finds a
+  placeholder committed in it). A work tree whose read fails waits for its
+  other reads before the step gives up (2026-10-21): before, its history
+  walk went on after the refusal and wrote its cache entry later (unsealed,
+  so never trusted, but outside the step's lifetime; the component test
+  pins that no call of the step outlives it). On the developer host, `mandu claude
+  --version` from a plain directory (four watched work trees in three
+  stores): 63 git calls to 55; the launch time does not move measurably
+  (the watch's calls ran beside the step's, off its critical path).
+
+**What the walk does not let a repository hide (security fix,
+2026-10-21).** The walk found a file's protected versions by `git log`,
+which sees history as the repository rewrites it: a graft (`info/grafts`),
+a replace ref (`refs/replace/*`) or a shallow file (`shallow`) cuts commits
+out of the walk while their objects stay in the store. An agent can write
+all three into `.git` in a confined session; the next launch's walk then
+started anew (each was in the walk's base key) and missed every version
+only the cut-off commits held, which `git show <commit>:<file>` still read
+(reproduced on the code before the fix: a graft and a replace ref each left
+the older versions out of the locked set). Now:
+
+- **Grafts and replace refs are off for every hardened git call**
+  (`hardened-git.ts`, all four copies: `GIT_NO_REPLACE_OBJECTS=1`,
+  `-c core.useReplaceRefs=false`, `GIT_GRAFT_FILE=/dev/null` with its
+  deprecation hint off). That covers the walk, the tips (a tag is peeled
+  to the object it names), the placeholder watch and its check after the
+  session, the arbiter's resolver (`lock-resolution.ts`) and its history
+  scan, the prepared copies. A replace ref is still a ref: `--all` names
+  its target, so a protected version reachable only through a
+  replacement is walked and locked like any other. The pack plan, the
+  loose-object scan and the blob locks go by object name and never
+  depended on either. A repository that grafts away history it does not
+  have (the long-deprecated way to fake a shallow clone) now fails the
+  walk on the missing parents, which refuses the launch unless
+  `--best-effort`.
+- **The shallow file is honoured only where it is true**
+  (`history-labels.ts` `walkShallowRule`, in both mirrors). A `git clone
+  --depth` keeps nothing past its boundary, so a walk that ignored the
+  file would fail on the missing parents; an agent-written file, though,
+  lists commits whose parents ARE in the store. So the walk reads the
+  parents of every commit the file names (`rev-list --no-walk --parents`
+  past the file, then `cat-file --batch-check`): when none is in the
+  store the file is honoured; otherwise (a forged entry, a line that is
+  not an object name, a git call that fails) the whole file is ignored
+  (`--shallow-file ""`) and the walk goes through every present parent.
+  A forged entry beside a true boundary makes that walk fail on the true
+  boundary's missing parents, which refuses the launch: fail-closed, never
+  a shorter walk. The rule cannot be defeated by writing `.git/shallow`;
+  it is decided again at every launch (the parents' presence is in the
+  prefetch fingerprint: the object directories), and an empty or absent
+  file costs no git call. The rule is chosen over a store-wide scan of
+  every tree present (the alternative that needs no reachability) for its
+  cost: two cheap calls on a shallow clone, none elsewhere. The
+  placeholder check after the session applies the same rule before its
+  walk, so a shallow file written in the session cannot cut a placeholder
+  commit out of it.
+- **The caches of the old rule are never used.** The walk's base key now
+  holds the rule (`HISTORY_WALK_REWRITES`) and only the shallow boundary
+  honoured (no grafts or replace refs, which no longer change the walk;
+  the step's `for-each-ref refs/replace/` call is gone), so every cached
+  walk and every arbiter resolution keyed by the old base misses once and
+  is walked anew: a one-time full walk per repository after the upgrade
+  (the arbiter's resolutions too). A launcher and an arbiter of different
+  versions compute different resolution keys, so the launcher walks
+  itself rather than use the arbiter's answer. The prefetch fingerprint
+  no longer stats the grafts file: `--git-path info/grafts` now names
+  `/dev/null`. The history scan's cache (`secret-discovery.md` §3) no
+  longer refuses a repository for an `info/grafts` file; a shallow clone
+  is still not cached there. Since a follow-up the same day the scan's
+  listing and its traces apply the same shallow rule
+  (`secret-history-scan.ts`, one `rev-parse` more per repository), so a
+  shallow file written over a full history hides no key from its
+  suggestions either (`arbiter/test/unit/secret-history-scan.test.ts`).
+- **Said when it refuses.** A walk that fails on a missing parent where a
+  rewrite explains it refuses the launch in plain words
+  (`historyWalkFailure`): a `.git/info/grafts` file over history the
+  repository does not have ("a git feature git has deprecated"; the fix:
+  turn the cut into a shallow boundary, `cut -d' ' -f1 .git/info/grafts >>
+  .git/shallow && rm .git/info/grafts`, or fetch the history; `git replace
+  --convert-graft-file` would not help, replace refs are off too), or a
+  shallow file naming a commit whose parent IS in the repository beside a
+  true boundary (restore it with `git fetch --depth=<n>`, or `git fetch
+  --unshallow`). The first launch after a change of the walk's base key
+  says why it is slower, the plan 14 §11.2.1 "rebuild notice" with the
+  cause `walk-changed`. Tests: `launcher/test/component/history-rewrites.test.ts`.
+
+Tests: `launcher/test/component/history-rewrites.test.ts` (a graft, a
+replace ref and a forged shallow file each leave every version locked and
+unreadable in the agent's world, the twins applied to a copy of the
+repository and git run there with every rewrite off; a version reachable
+only through a replacement is locked; a `clone --depth 2` launches with
+its versions locked, and a forged entry beside its boundary refuses the
+step; the placeholder check finds a placeholder commit a session's shallow
+file would have hidden; the base key is never one of the old rule's), the
+rule's unit tests (`launcher/test/unit/history-labels.test.ts`), the
+hardened environment's (`launcher/test/unit/hardened-git.test.ts`), and
+the arbiter's resolver against the launcher over the same four
+repositories (`tests/stack/lock-resolution-parity.test.ts`: the same
+versions and key). Each behavioural test fails on the code before the fix.
+
+**A version once locked stays locked (security fix, 2026-10-21).** The walk
+finds what git can REACH, and an agent can write `.git`: it can make a
+protected version unreachable while its objects stay in the store, and so
+readable to `git cat-file -p <name>` once the twins stop hiding it (the
+name read from a tree that survives, or seen in the session's own `git log
+--raw`). Two ways were open. A loose commit deleted under a forged shallow
+boundary makes the boundary look true to the shallow rule above, which
+then honours it. And with no shallow file at all, an orphan branch with
+the old branch deleted and the reflogs expired leaves the old commits
+reachable from nothing: the walk cache kept their versions (a tip gone
+away keeps its names) only until it was walked anew, which a new seal
+epoch, a new walk rule or a new git all cause; then the versions left the
+twins. Both were reproduced (`launcher/test/component/locked-memory.test.ts`
+on the code before: version 2, then version 1, not locked).
+
+So each object store has a **locked memory** (`launcher/src/locked-memory.ts`,
+`<state>/object-walks/locked-memory/<key>.json`, where the agent can
+neither read nor write): every (version, path) a launch found protected, by
+path or by label, in the history, the index or a working copy. At every
+launch each remembered version whose path is protected NOW (a protected
+file of a work tree of the store, or a path a label above `public`
+decides) joins what the walk found: excluded from the sanitized packs, its
+loose copy unreadable, its id in the guard's locked set, reachable or not.
+A path no longer protected (the human took its label or its registration
+away) brings nothing back. The memory is only ever added to and a name in
+it only hides more, so it carries no seal: a record something outside
+Mandu removed or garbled reads as empty, which leaves the walk's own
+answer, never less. The walk rule's marker moved (`rewrites:v2`), so every
+repository is walked once more and its memory filled from a full walk.
+The arbiter's background resolution keeps the same rule: a resolution
+walked anew for the same labels and pathspecs keeps every version the one
+before it held (`lock-resolution.ts`; `arbiter/test/unit/lock-resolution.test.ts`).
+
+This answers the class this section long accepted, "objects reachable from
+nothing are not walked", for every version a launch has seen protected.
+It left open a version NO launch ever found protected: history cut before
+Mandu first walked that repository with that path protected (an agent
+session in another workspace that reached the repository's `.git`, before
+the human labelled the file), a tree in no ref (`git write-tree`), and a
+blob written and abandoned by plumbing (`git hash-object -w`). Each was
+readable by name through the object twins. The store scan below closes
+them.
+
+**Every stored object is checked once (security fix, 2026-10-21).** The
+history step also reads the OBJECT STORE, not only what git reaches
+(`launcher/src/store-scan.ts`, from `prepareGitObjectTwins`, beside the
+walks of each store):
+
+- **What is new.** Each object directory the store reads (alternates
+  followed) is listed: every pack's `.idx` and every loose fan-out
+  directory. An id this store's scan has not seen is new. A new loose
+  object is read in the launcher (inflated, its header, and its body unless
+  it is a blob; anything it cannot read with certainty, git is asked); the
+  rest are asked of git (`cat-file --batch-check`, then `--batch` for
+  trees, commits and tags, in bounded batches through the launch's git
+  session, a `binary` call so a tree's raw ids arrive byte for byte).
+- **Where each blob lies.** A commit's (or a tag's) tree is a root. A tree
+  a new tree names is at that tree's place plus the entry's name; an OLD
+  tree named at a place it was never recorded at (a renamed folder, a
+  subtree reused) is read again there. A new tree that no root reaches and
+  no other such tree names (`git write-tree`, the trees `git stash` and a
+  merge write, a subtree whose parent is gone) has no known place: it is
+  read as a root AND under every folder above a protected path or a
+  label's pathspec, so `config/`'s orphaned content is found for
+  `config/.env`. Every (blob, path) a tree names is recorded, for every
+  path, not only the protected ones: a path protected later (a new label, a
+  new protected file) finds its versions among the records with no new
+  scan. The versions at the paths protected now join the walk's: excluded
+  from the sanitized packs, their loose copies unreadable, their ids in the
+  guard's locked set, and remembered (the locked memory above).
+- **A blob no tree names** (no path to decide it by) is hidden when its
+  content shares a credential-like token with a protected version of the
+  store: a run of 12 or more of `[A-Za-z0-9+/_.~-]` holding a letter and a
+  digit (a key, a token, a digest, a PEM line), or a `KEY=value` line whose
+  value is 8 or more characters, compared with every protected version
+  known (the walk's, the index's, the working copies, the memory's, the
+  scan's). A name alone (`ANTHROPIC_API_KEY`) is not a token, so code that
+  names a variable shares nothing with the file that sets it. A blob an
+  index of the store holds (a staged file, its path in that index) is not
+  hidden this way; once no index holds it, it is checked again. A hidden
+  blob is remembered as a version of that protected path, for good: a tree
+  written later naming it (the agent can write one, `git mktree --missing`,
+  without reading it) does not bring it back, and the path no longer
+  protected does. Blobs over 4 MiB are not read for this.
+
+**The cost is paid once per object.** Per object store the scan keeps,
+under `<state>/object-walks/store-scan/<key>/` (where the agent can neither
+read nor write), the ids it has seen, the (object, place) records and the
+path table, and a `state.json` that names them by identity (device, inode,
+size, mtime, ctime), holds each directory's fingerprint and the answer for
+each set of protected paths (one per set; launches from different work
+trees of one store may differ). `state.json` is SEALED like the walk cache
+(kind `store-scan`, plan 14 §11.2): only a seal of the current epoch is
+trusted, else the store is scanned anew, and so is anything a sealed state
+does not vouch for (a data file not as recorded, a torn file, a new rule).
+A launch with nothing new stats each object directory, its `pack/` and its
+fan-out directories, finds them unchanged, takes the answer and asks git
+nothing; a directory changed within two seconds of a scan is never trusted
+unchanged at the next (git's "racily clean"). A repack costs reading the
+new `.idx` and merging it with the ids seen (no id is new: git is asked
+nothing). A commit's objects are loose: read in the launcher, git asked
+nothing. Measured in process on this repository's store (115k objects,
+39 packs; a loaded host, load average above 30, medians; end to end in
+runtime-instances.md §14.13): a launch with nothing new 1.4 ms; after a
+commit 24 ms; the first scan 2.6 to 2.9 s, said once before
+the work by the rebuild notice with the cause `store-scan` ("Mandu checks
+every object a repository stores once, history no branch reaches
+included"), for a store of 20,000 objects or more. A new seal epoch scans
+every store anew, as it rebuilds the sanitized packs.
+
+**Fail-closed.** A git call that fails, an index file that cannot be read,
+a malformed tree or answer fails the store (the launch refuses unless
+`--best-effort`, which names the repository). A store holding more than
+4,000,000 objects (`MANDU_GIT_STORE_SCAN_MAX_OBJECTS`), or more than a
+million distinct paths, is not scanned, and the launch says so in a
+WARNING: there, the residual above stays.
+
+**What stays open.** A pathless blob that shares no token with any
+protected version (an older `.env` whose every value was rotated and every
+line changed) is not hidden: nothing ties it to a protected file. Nor is
+one over 4 MiB. A tree with no known place under a label whose pattern has
+a wildcard folder (`deploy/*/key`, the tree being `prod/`) is read only at
+the folders the pattern names literally. The arbiter's background
+resolution (plan 14 §11.1 R2) and its prepared copies still go by what git
+reaches and by the global locked set, so a repository no launch prepares
+(the guard's backstop) gets the scan's finds only once a launch prepares
+it. Objects written after the launch are the next launch's, as before.
+
+Tests: `launcher/test/unit/store-scan.test.ts` (the sorted sets, git's
+answers, tree entries, loose objects, the token rule, the places of a tree
+nothing names, the kept state's shape; and over real repositories: a
+second scan with nothing new asks git nothing and reads nothing, a repack
+asks git nothing, a commit's loose objects are read here, a racy directory
+is listed again, history no ref reaches, a renamed folder, a tree no
+commit names, a parentless subtree, a new set of protected paths answered
+from the records, a new epoch, a changed data file and a garbled state
+scanned anew, the pathless blob rule with its index exception and its "for
+good", the cap) and `launcher/test/component/store-scan.test.ts` (through
+the step with the production git session: a cut history, packed and
+loose; a tree in no ref; a plumbing blob sharing a credential, and one
+sharing nothing left readable; each hidden version locked, in no served
+pack and unreadable by `git cat-file -p <id>` in the agent's world, the
+rest read as before; a second launch with nothing new asks git nothing and
+reads no object), and `launcher/test/kernel/git-object-twins.test.ts` (the
+three together, read by id and by `cat-file --batch-all-objects` through
+the real wrap). The component test fails with the scan off. An id git
+cannot answer when asked (gone, unreadable at that moment) is not taken as
+seen: where it was listed is listed again, and it is asked again, at the
+next launch (unit-tested).
 
 The walk cache is security-relevant: an entry with a version left out would
 leave that version readable at the next launch. It sits in the Mandu home's
@@ -3797,7 +4152,10 @@ where the host can bind, a wrap started for them). Oracle:
 `tests/sandbox/git-history-locks.test.ts` (C17 closed and the inline key,
 through the real launch, the admin channel and the model proxy, with the
 bind, K1 to K3, and with the guard alone, K4 and K5). Objects reachable
-from nothing are not walked.
+from nothing are not walked, but the store scan finds a labelled path's
+versions among them ("Every stored object is checked once" above), and a
+version a launch once found stays locked while its path is protected,
+reachable or not ("A version once locked stays locked" above).
 
 **The lock's reach (plan 14 §11.1 R1/R2).** The arbiter keeps a registry of
 known repositories (mandu.db `known_repos`: every launch's workspace, every
@@ -4251,7 +4609,7 @@ bind: a reader that sizes its read by the path reads the real file cut at
 the twin's size in both postures (none of the consumer table's readers
 does: `ssh` and `curl` read to the end). A tracked file that is twinned
 shows the twin's stat and bytes to git in both postures, so git there would
-call it modified; since 2026-10-17, where the guard serves the twins, the launcher writes the twin's stat into
+call it modified; since 2026-10-17, where the guard serves the twins and in the launch's own repositories, the launcher writes the twin's stat into
 its index entry, and git in the session sees it unmodified until the agent
 edits it ("A twinned file git tracks looks clean", below). Tests:
 `stat_twin` and `guard_filter` units (`stat_probe`), `secret_open`'s
@@ -4362,7 +4720,8 @@ must not drop the twins of every other, which would leave a labeled file
 readable through `git diff`).
 
 **What it does not cover.** A protected version stored under an **earlier
-path** (a rename) or copied into another file is not found by path; objects
+path** (a rename) or copied into another file is not found by path (a blob
+no tree names is found by the store scan's token rule only, above); objects
 written **after** the launch (a `git fetch` bringing an old version back, a
 commit of the file in the session: the twin's content is what would be
 committed, said after the session as the next paragraph describes) are not
@@ -4596,7 +4955,8 @@ still-tracked `.env` from the work tree).
 *The mechanism* (`launcher/src/twin-index-stat.ts`, after the placeholder
 watch, which already lists each twinned file's index blobs), ONLY WHERE THE
 GUARD SERVES THE TWINS (the confined posture, bind or guard-only; never
-bind-only, see the trade-off below). For each
+bind-only, see the trade-off below), and ONLY IN THE LAUNCH'S OWN
+REPOSITORIES (the scope, below). For each
 twinned file git tracks whose index entry is its path's only one (stage 0),
 a plain file (100644, neither assume-unchanged nor skip-worktree), and
 whose real bytes hash to that entry's blob (`git hash-object
@@ -4623,10 +4983,26 @@ changed before the launch stays modified, as it is):
    its entries live in a shared file named by its hash) or a required
    extension other than `sdir` is left alone;
 4. BEFORE that rename, the crash record: the index path, each entry's
-   path, blob and stat words before and after, written 0600 to
-   `state/object-walks/twin-index/` in the Mandu home (on-disk-layout.md
-   §3; the agent can neither read nor write it), fsynced with its folder.
-   A record that cannot be written and synced leaves that index alone.
+   path, blob and stat words before and after (the restore matches the
+   "after" words; it never writes the "before" ones back, see *At the
+   end*), written 0600 to
+   `state/object-walks/twin-index/` in the HOME's own Mandu home
+   (`~/.mandu`, on-disk-layout.md §3) WHATEVER MANDU_HOME SAYS
+   (`twinIndexWriteStore`, 2026-10-21): a launch run with its own
+   MANDU_HOME (the demo battery's sides, a scratch home removed after the
+   run) patches the user's repositories all the same, and a record kept in
+   that home went with it. Every launch hides the HOME's own Mandu home from
+   the agent (`manduHomes`), so the agent can neither read nor write the
+   record, and it is never in the agent-writable `.git`. Fsynced with its
+   folder. A record that cannot be written and synced leaves that index
+   alone.
+
+   The index file itself is the history step's (`--git-path index`, read in
+   the same `rev-parse` as the step's other facts of that work tree at this
+   launch, RepoFacts `index`), so the patch asks no `rev-parse` of its own;
+   a work tree the step did not read (nothing to hide there, a failed read,
+   a git before 2.27 that takes the old split) is asked as before, and a
+   failure of that call still leaves the index alone and says so.
 
 git in the agent's world then finds the stat equal and does not read the
 file: unmodified. An edit (even a `touch`) of the twin changes its stat, so
@@ -4668,14 +5044,35 @@ the user's `git stash` during a session is harmless: it stashes nothing
 and rewrites the file with the same bytes. The patch lasts only as long as
 the session:
 
-- *At the end* (`restoreTwinIndexes`; also when the launch aborts before
-  the agent starts, and when the secret setup itself throws after the
-  patch, `applySecretTwins`'s wrapper), each entry that still holds exactly
-  the stat written at launch and the same blob gets its launch stat back,
-  under the same lock protocol (waiting up to 2 s for a lock another git
-  holds); an entry git has changed since (the user's `git add`, the agent's
-  staging or commit, a `filter-branch` that dropped it) is left as git left
-  it. The record is removed once every index is done. Only a lock held
+- *At the end* (`restoreTwinIndexes`, the first step after the agent exits,
+  before the services stop: the rest of the teardown can take seconds, and
+  a SIGTERM or SIGHUP there keeps its default action and ends the launcher;
+  also when the launch aborts before the agent starts, and when the secret
+  setup itself throws after the patch, `applySecretTwins`'s wrapper), each
+  entry that still holds exactly the stat written at launch and the same
+  blob gets a TRUE stat, under the same lock protocol (waiting up to 2 s
+  for a lock another git holds): the real file's stat as it is then
+  (`realFileNow`: `lstat`, the bytes read `O_NOFOLLOW` from the same file
+  and hashed to the entry's blob, what a `git add` would cache), or, where
+  the bytes are no longer the blob (the user edited, removed or replaced
+  the real file during the session), a zero stat, which git reads as "never
+  stat'ed" and answers by reading the file (`ie_modified`), so the change
+  shows as it is. An entry git has changed since (the user's `git add`, the
+  agent's staging or commit, a `filter-branch` that dropped it, a later
+  session's patch) is left as git left it. The record is removed once every
+  index is done.
+
+  *Never the launch stat (2026-10-21).* Until then the restore wrote back
+  the stat the entry held at launch, which can be ANOTHER session's twin
+  stat. The demo battery runs six sides at once, each with its own Mandu
+  home, so no side saw another's record: side A patched the main
+  checkout's `scripts/ci/pins.env` (its walk covers the real home), side B
+  then took A's twin stat as its launch stat, A ended first and left B's
+  stat alone, and B's end wrote A's twin stat back. Both sessions had ended
+  cleanly, so no record was left anywhere, `mandu reap` found nothing, and
+  the user's git showed ` M` with no diff for days (refusing a
+  fast-forward that changed the file) until a `git add`. The real file's
+  stat, taken at the end, does not depend on what any session saw at launch. Only a lock held
   throughout keeps it for a later try (the one transient failure; a record
   older than 30 days goes after one more try whatever it finds). Any other
   failure (the index gone, made a symlink, split, or not reading back since:
@@ -4688,15 +5085,55 @@ the session:
 - *After a crash* (the launcher killed: no end runs), the record's
   launcher is gone (its pid, that process's start time and the boot, as for
   the placeholder records), and the next launch restores it BEFORE its own
-  patch, so its launch stat is never a dead session's twin stat, and says
-  so (`put back the index stat of a protected file an earlier session
-  left`); `mandu reap` does the same. Until then the user's git shows the
-  file modified as during the session.
-- *Two sessions on one repository*: the second's launch stat would be the
-  first's twin stat, so an entry that holds a live session's recorded stat
-  takes that record's launch stat as its own (`inheritBefore`): whichever
-  session ends last puts the real one back. Only the later session's agent
-  sees the file clean while both run.
+  patch, and says so (`put back the index stat of a protected file an
+  earlier session left`); `mandu reap` does the same. Until then the user's
+  git shows the file modified as during the session. The record is in the
+  HOME's own store whatever Mandu home the launch ran with, so a launcher
+  killed in a scratch home that is removed after it (the demo battery's
+  sides) is still repaired: every launch and every `mandu reap` reads the
+  HOME's store and, when MANDU_HOME names another home, that home's too
+  (records an older launcher left there; `twinIndexReadStores`). Should a
+  record still be lost (the HOME's own home removed), the next session on
+  that repository patches over the stale stat and its end writes the real
+  file's; the user's `git add` of the file does the same.
+- *Two sessions on one repository*, in one Mandu home or two: the second
+  patches over the first's twin stat, the first's end then finds the
+  second's and leaves it, and whichever ends last writes the real file's
+  stat. Only the later session's agent sees the file clean while both run;
+  if the later one ends first, the earlier one's git sees the file modified
+  for the rest of its session.
+
+*The scope: the launch's own repositories (2026-10-21).* The walk twins a
+protected file anywhere under the home, so the placeholder watch lists every
+repository that tracks one (on a dev host the Mandu checkout, its worktrees
+and others: 4 to 7). Patching them all cost 160 to 225 ms at launch and 70
+to 84 ms at exit, and, by the trade-off above, showed the user's git ` M` in
+repositories the session never touches (the user's main checkout while a
+session ran in an unrelated directory). Now only the repositories the
+launch's workspace is in are patched (`reposInWorkspace`): the work tree
+that holds the launch directory (the NEAREST one, so a launch from a linked
+worktree placed inside its main checkout's directory, `.claude/worktrees/x`,
+patches that worktree, never the main checkout) and every work tree the
+launch directory holds (a launch from above several repositories patches
+each; a launch from the home itself, all of them, as before). Both sides by
+their real spellings, so a symlinked launch directory counts. A launch from
+a plain directory patches nothing.
+
+Every other repository is as it was before the patch existed: git in the
+agent's world finds its twinned file modified (a clean-tree command there
+refuses; a `git commit -a` there records the placeholder), its index is
+never written, and the user's git there never shows the spurious ` M`.
+That is the trade-off of the scope: an agent that `cd`s into another
+repository works there with the twin modified. The placeholder watch is NOT
+scoped: it still checks every repository it found after the session, so a
+placeholder committed in an unpatched repository is still named with its
+repair ("A placeholder in your repository", above). What the agent can read
+is unchanged: the twins, the git object twins and the history step cover
+every repository as before. Measured with `mandu claude --version`, 5 runs
+each: from an empty directory 0 of 4 repositories patched (the patch's
+~160 ms and the restore's ~70 ms gone; median wall 1.79 s to 1.51 s); from
+inside a Mandu worktree 1 of 4 (patch ~165 ms to ~54 ms, restore ~70 ms to
+~21 ms).
 
 *Why not the alternatives.* (a) A twin as long as the real file, its mtime
 the real file's, and `core.checkStat=minimal` for the agent's git only
@@ -4745,15 +5182,37 @@ restore); a corrupt index throws; the record written before the index
 lands, a crash restored by the next launch and a live one left, a record
 that cannot be written leaving the index alone, two sessions in both
 orders, a lock held through the end, a final failure dropping the record,
-the age limit, the record's exact shape; an untracked file named unless
+the age limit, the record's exact shape; R10 the 2026-10-21 incident (two
+sessions in two Mandu homes, the first ending first: the real file's stat,
+never the first's twin stat), R11 a launcher killed in a home removed with
+it (the next session's end leaves the real stat), R12 a real file edited,
+removed or made a link during the session (a zero stat: git shows the
+change), R13 `realFileNow`, S1 the scope (a workspace inside a
+repository, one holding several, a plain directory, symlinked spellings, a
+worktree inside its main checkout's directory and one beside it), W1 the
+record store's paths, W2 a record that outlived a removed scratch home
+restored from another MANDU_HOME (and one an older launcher left in
+MANDU_HOME's home), X1 the index file from the step's facts (no rev-parse;
+each fallback asks once; a failed call still leaves the index alone), X2
+the facts name each work tree's own index; an untracked file named unless
 ignored; a required extension refused),
 `launcher/test/unit/secret-setup.test.ts` (the wiring; a failing patch never
 refuses; bind-only never patched; a setup that throws after the patch puts
-the index back), and `tests/sandbox/launcher/twin-git-clean.test.ts` (the
+the index back; only the workspace's repositories reach the patch while the
+placeholder watch keeps every one; the index file taken from the step's facts
+with no rev-parse, and the record in the HOME's store under another MANDU_HOME), and `tests/sandbox/launcher/twin-git-clean.test.ts` (the
 real launcher, both confined postures: T1 demo-c4 without untracking first
 and its untracked-file line, T2 the `commit -a` cases and the exit warning,
 T3 the trade-off and the restore, T4 a launcher SIGKILLed mid-session
-repaired by the next launch, T5 bind-only not patched).
+repaired by the next launch, T5 bind-only not patched, T6 the 2026-10-21
+incident: two overlapping launches with their own Mandu homes, the first
+ending first, and the user's git clean after both; red before the fix,
+T7 the scope: another repository under the home keeps its index, the
+user's git there clean during the session, the agent's git there sees the
+twin modified, the launch's own repository clean in the agent's world, T8
+a launcher SIGKILLed in a scratch MANDU_HOME that is then removed,
+repaired by `mandu reap` and, separately, by the next launch, each from yet
+another MANDU_HOME; red with the record in the launch's own home).
 
 ### 7.3 macOS — **deny, not twin** (and why the accepted asymmetry becomes a hole)
 

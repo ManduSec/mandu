@@ -15,7 +15,10 @@ import {
   RESERVE_CACHE_MAX,
   RESERVE_MAX_ROWS_DEFAULT,
   ReserveValueCache,
+  CONTENT_TAB_COL,
+  TAB_ORIGIN_ENV,
   WRAP_RULE_ENV,
+  tabOrigin,
   wrapLayoutKnown,
   wrapRule,
   blockIndent,
@@ -344,6 +347,60 @@ test("TAB stops (§11.2): a v2 row's TAB reaches the terminal's stop from the co
   assert.equal(blockRowText(tsv, 1, { n: 2, w: 118, f: 118 }), "name    port    owner");
   // The terminal rule: W is the full width, so the indent is 0.
   assert.equal(blockIndent({ n: 2, w: 80, f: 80, cols: 80, rule: "terminal" }), 0);
+});
+
+test("TAB origin (§19.7): MANDU_REPLY_TAB_ORIGIN=content, and nothing else, says the TUI counts its stops from its text", () => {
+  assert.equal(TAB_ORIGIN_ENV, "MANDU_REPLY_TAB_ORIGIN");
+  assert.equal(tabOrigin({}), "screen");
+  assert.equal(tabOrigin({ MANDU_REPLY_TAB_ORIGIN: "content" }), "content");
+  assert.equal(tabOrigin({ MANDU_REPLY_TAB_ORIGIN: " content\n" }), "content");
+  for (const v of ["", "screen", "CONTENT", "2", "text"]) assert.equal(tabOrigin({ MANDU_REPLY_TAB_ORIGIN: v }), "screen", v);
+});
+
+test("TAB origin (§19.7): under `content` a v2 row's stops count from the content area itself, as Claude Code's renderer expands them", () => {
+  // The differential capture (differential-interactive.md §19, Claude Code
+  // 2.1.305, 80 columns): the reply at column 2, `DIFFTAB_HOST\tport` puts
+  // `port` at 2 + 16 = 18 and `db1\t5432` puts `5432` at 2 + 8 = 10.
+  const tsv = "DIFFTAB_HOST\tport\towner\ndb1\t5432\tDIFFTAB_OPS\n";
+  const head = { n: 2, w: 78, f: 78, cols: 80, tabs: "content" as const };
+  assert.equal(blockIndent(head), 0, "the proxy sends no indent under `content`");
+  assert.equal(blockRowText(tsv, 1, head, 80), "DIFFTAB_HOST    port    owner");
+  assert.equal(blockRowText(tsv, 2, head, 80), "db1     5432    DIFFTAB_OPS");
+  assert.deepEqual([1, 2].map((i) => blockRowText(tsv, i, head, 80)), layoutRows(tsv, 78, 78, "ink", 0).map((r) => r.text),
+    "the rows the arbiter counted with the proxy's indent 0");
+  // The same block under `screen` (Codex): the stops 2 columns to the left.
+  assert.equal(blockRowText(tsv, 1, { ...head, tabs: undefined }, 80), "DIFFTAB_HOST  port    owner");
+  // A list item (W = cols − 4): the stops count from the item's text, as the
+  // live list capture showed (`port` at 4 + 16 = 20).
+  assert.equal(blockRowText(tsv, 1, { n: 2, w: 76, f: 76, cols: 80, tabs: "content" }, 80), "DIFFTAB_HOST    port    owner");
+  // A mid-line head 10 columns into the content area: line 1 counts from
+  // there (a@10, its TAB to 16), line 2 from the content area's column 0.
+  const mid = { n: 2, w: 78, f: 68, cols: 80, tabs: "content" as const };
+  assert.equal(blockRowText("a\tb\nc\td", 1, mid, 80), "a     b");
+  assert.equal(blockRowText("a\tb\nc\td", 2, mid, 80), "c       d");
+  // A narrowing keeps the origin: the same stops.
+  assert.equal(blockRowText(tsv, 1, head, 70), "DIFFTAB_HOST    port    owner");
+});
+
+test("TAB origin (§19.7): the cache stamps the session's origin on every head; a splice counts from CONTENT_TAB_COL under `content`", () => {
+  const c = new ReserveValueCache(RESERVE_CACHE_MAX, "ink", "content");
+  c.noteHead("464e", T, 2, 78, 78, 80);
+  assert.equal(c.headFor("464e")!.tabs, "content");
+  assert.equal(c.spliceTabOrigin, CONTENT_TAB_COL);
+  assert.equal(CONTENT_TAB_COL, 2, "Claude Code's reply indent (§11.1)");
+  const s = new ReserveValueCache();
+  s.noteHead("464e", T, 2, 78, 78, 80);
+  assert.equal("tabs" in s.headFor("464e")!, false, "`screen`: nothing stamped, the head as before");
+  assert.equal(s.spliceTabOrigin, 0);
+});
+
+test("§19.7 relay report: `tabs: content` rides with `reserve`, never alone; absent for `screen`", () => {
+  const claude = { MANDU_REPLY_TAB_ORIGIN: "content" };
+  assert.deepEqual(sessionRelay("s", "pty", { cols: 80, rows: 24 }, claude),
+    { sessionKey: "s", mode: "pty", reserve: true, wrap: true, tabs: "content", cols: 80, rows: 24 });
+  assert.equal("tabs" in sessionRelay("s", "pty", {}, {}), false, "screen: no tabs key (an older arbiter refuses nothing)");
+  assert.equal("tabs" in sessionRelay("s", "pty", {}, { ...claude, MANDU_REPLY_RESERVE: "0" }), false, "the kill switch");
+  assert.equal("tabs" in sessionRelay("s", "pipe", {}, claude), false, "no PTY relay, no reserve");
 });
 
 test("value cache (§13): a block keeps the width it was first seen at; a different block takes the width now", () => {

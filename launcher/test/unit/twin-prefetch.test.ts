@@ -19,14 +19,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { defaultGitRunner, idxObjectNames, prepareGitObjectTwins, RepoReads, type GitObjectTwinResult, type GitRunner } from "../../src/git-object-twins.js";
 import { GIT_SESSION_RUNNER_SOURCE, openGitSession, perCallGitRunner } from "../../src/git-session.js";
 import { HINT_MAX_BYTES, launchHintFile, parseLaunchHint, readLaunchHint, writeLaunchHint } from "../../src/launch-hint.js";
-import { RACY_WINDOW_NS, stateFingerprint, TwinPrefetch } from "../../src/twin-prefetch.js";
+import { fingerprintEntries, RACY_WINDOW_NS, stateFingerprint, TwinPrefetch } from "../../src/twin-prefetch.js";
+import { Pacer } from "../../src/reflog-tips.js";
 import { stateAxes } from "../axes.js";
 import { memorySeals } from "../lib/memory-seals.js";
 
@@ -221,9 +222,9 @@ test("stateFingerprint: unchanged when nothing changes; changed by a commit, a r
   const f = fixture();
   try {
     const facts = await new RepoReads(defaultGitRunner).factsOf(f.ws);
-    const fp = (): string => stateFingerprint([f.ws], facts)!.digest;
-    const a = fp();
-    assert.equal(fp(), a, "stable");
+    const fp = async (): Promise<string> => (await stateFingerprint([f.ws], facts))!.digest;
+    const a = await fp();
+    assert.equal(await fp(), a, "stable");
     const steps: Array<[string, () => void]> = [
       ["a commit", () => git(f.ws, "commit", "-q", "--allow-empty", "-m", "x")],
       ["a reflog entry (reset to the same commit)", () => git(f.ws, "reset", "-q", "HEAD")],
@@ -234,13 +235,105 @@ test("stateFingerprint: unchanged when nothing changes; changed by a commit, a r
     let last = a;
     for (const [what, step] of steps) {
       step();
-      const now = fp();
+      const now = await fp();
       assert.notEqual(now, last, what);
       last = now;
     }
     mkdirSync(join(f.ws, ".git", "refs", "linked"), { recursive: true });
     symlinkSync("/tmp", join(f.ws, ".git", "refs", "linked", "away"));
-    assert.equal(stateFingerprint([f.ws], facts), null, "a symlink in refs/ is a doubt");
+    assert.equal(await stateFingerprint([f.ws], facts), null, "a symlink in refs/ is a doubt");
+  } finally { f.done(); }
+});
+
+test("fingerprintEntries covers EXACTLY the listed inputs (confidentiality.md §7.2a \"The prefetch\"): every one present, nothing else", async () => {
+  const f = fixture();
+  try {
+    // Every kind of input present: a linked worktree (its .git a file) with
+    // its own config.worktree, refs, logs and reftable; the common dir's
+    // config.worktree, shallow and reftable/; an alternate object directory.
+    const wt = join(f.tmp, "wt");
+    git(f.ws, "worktree", "add", "-q", "-b", "side", wt);
+    git(wt, "commit", "-q", "--allow-empty", "-m", "side");
+    git(f.ws, "tag", "-a", "-m", "t", "v1");
+    const c = join(f.ws, ".git");
+    const id = readdirSync(join(c, "worktrees"))[0]!;
+    const wd = join(c, "worktrees", id);
+    writeFileSync(join(c, "config.worktree"), "");
+    writeFileSync(join(wd, "config.worktree"), "");
+    writeFileSync(join(c, "shallow"), "");
+    for (const d of [c, wd]) { mkdirSync(join(d, "reftable"), { recursive: true }); writeFileSync(join(d, "reftable", "tables.list"), ""); }
+    mkdirSync(join(wd, "refs", "bisect"), { recursive: true });
+    writeFileSync(join(wd, "refs", "bisect", "good"), `${git(f.ws, "rev-parse", "HEAD").trim()}\n`);
+    const alt = join(f.tmp, "alt-objects");
+    mkdirSync(join(alt, "pack"), { recursive: true });
+    mkdirSync(join(alt, "ab"), { recursive: true });
+    writeFileSync(join(c, "objects", "info", "alternates"), `${alt}\n`);
+    git(f.ws, "commit", "-q", "--allow-empty", "-m", "loose");
+
+    const facts = await new RepoReads(defaultGitRunner).factsOf(f.ws);
+    const got = await fingerprintEntries([f.ws, wt], facts);
+    assert.ok(got !== null);
+    const paths = got.lines.map((l) => l.split("\0")[0]!);
+    assert.equal(new Set(paths).size, paths.length, "each entry once");
+
+    // The listed inputs, enumerated here independently of the walk: a new
+    // input is added in both places, and one dropped from the walk fails.
+    const want = new Set<string>();
+    const walk = (p: string): void => {
+      want.add(p);
+      let st;
+      try { st = lstatSync(p); } catch { return; }
+      if (st.isDirectory()) for (const n of readdirSync(p)) walk(join(p, n));
+    };
+    want.add(join(f.ws, ".git"));
+    want.add(join(wt, ".git"));
+    for (const n of ["HEAD", "packed-refs", "config", "config.worktree", "shallow", "worktrees"]) want.add(join(c, n));
+    for (const t of ["refs", "logs", "reftable"]) walk(join(c, t));
+    want.add(wd);
+    for (const n of ["HEAD", "commondir", "gitdir", "config.worktree"]) want.add(join(wd, n));
+    for (const t of ["refs", "logs", "reftable"]) walk(join(wd, t));
+    for (const d of [join(c, "objects"), alt]) {
+      for (const n of ["", "pack", "info", join("info", "alternates")]) want.add(join(d, n));
+      for (const n of readdirSync(d)) if (/^[0-9a-f]{2}$/.test(n)) want.add(join(d, n));
+    }
+    assert.deepEqual([...new Set(paths)].sort(), [...want].sort());
+    // The fixture holds each kind for real (the set above is not vacuous).
+    for (const p of [
+      join(c, "refs", "tags", "v1"), join(c, "logs", "refs", "heads", "side"), join(wd, "logs", "HEAD"), join(wd, "refs", "bisect", "good"),
+      join(wd, "reftable", "tables.list"), join(c, "reftable", "tables.list"), join(alt, "ab"), join(c, "objects", "info", "alternates"),
+      join(c, "config.worktree"), join(wd, "config.worktree"), join(c, "shallow"),
+    ]) {
+      assert.ok(existsSync(p) && paths.includes(p), `${p} is there and fingerprinted`);
+    }
+    assert.ok(paths.some((p) => /\/objects\/[0-9a-f]{2}$/.test(p) && existsSync(p)), "a loose fan-out directory is fingerprinted");
+  } finally { f.done(); }
+});
+
+test("paced (2026-10-21): in a store with many worktrees the fingerprint hands the event loop back and answers the same; a change in the last worktree still shows", async () => {
+  const f = fixture();
+  try {
+    const c = join(f.ws, ".git");
+    // Many linked worktrees' admin folders (what the fingerprint stats).
+    for (let i = 0; i < 120; i++) {
+      const d = join(c, "worktrees", `w${String(i).padStart(3, "0")}`);
+      mkdirSync(join(d, "logs"), { recursive: true });
+      for (const n of ["HEAD", "commondir", "gitdir"]) writeFileSync(join(d, n), `${n}\n`);
+      writeFileSync(join(d, "logs", "HEAD"), "x\n");
+    }
+    const facts = await new RepoReads(defaultGitRunner).factsOf(f.ws);
+    const whole = await stateFingerprint([f.ws], facts, undefined, new Pacer(Infinity));
+    let ran = 0;
+    const tick = setInterval(() => { ran++; }, 0);
+    const pace = new Pacer(0);
+    let paced;
+    try {
+      paced = await stateFingerprint([f.ws], facts, undefined, pace);
+    } finally { clearInterval(tick); }
+    assert.ok(whole !== null && paced !== null);
+    assert.equal(paced.digest, whole.digest, "the same fingerprint, paced or in one go");
+    assert.ok(pace.yields > 0 && ran > 0, `the event loop ran during it (${pace.yields} yields, ${ran} timer turns)`);
+    appendFileSync(join(c, "worktrees", "w119", "logs", "HEAD"), "y\n");
+    assert.notEqual((await stateFingerprint([f.ws], facts, undefined, new Pacer(0)))!.digest, whole.digest, "the last worktree's log is still covered");
   } finally { f.done(); }
 });
 

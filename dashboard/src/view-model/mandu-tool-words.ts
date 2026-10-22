@@ -141,27 +141,52 @@ function envelopeOf(kind: ManduPolicyTool, result: string | null): Record<string
   return env["tool"] === BASENAMES[kind] ? env : null;
 }
 
+/** One part of the step's note: words, and on "Approvals" the id of the
+ *  rule change it names (`ask`, as a stop's link names its row): the page
+ *  draws it as a link to `/approvals/<id>`, which marks that change
+ *  (dashboard.md §4.25b *Mandu's own tools*). An id, never a value. */
+export interface PolicyAnswerPart {
+  kind: "text";
+  text: string;
+  ask?: string;
+}
+
+/** The shapes of the policy server's ids (policy-proposal-routes.ts
+ *  PROPOSAL_ID, CHANGE_ID): any other leaves the words without a link. */
+const CHANGE_ID = /^pc-\d+$/;
+const PROPOSAL_ID = /^pp-\d+$/;
+
+/** "… in Approvals." with "Approvals" linking `id`, or, with no id of the
+ *  right shape, today's words (`plain`). */
+function inApprovals(head: string, id: string, shape: RegExp, plain: string): PolicyAnswerPart[] {
+  if (!shape.test(id)) return [{ kind: "text", text: plain }];
+  return [{ kind: "text", text: head }, { kind: "text", text: "Approvals", ask: id }, { kind: "text", text: "." }];
+}
+
 /** "Mandu answered …" for the step's note, from the recorded envelope only:
  *  null when the result is not one (masked, missing, an error, another
- *  shape), so the page says nothing it cannot back. */
-export function policyToolAnswer(kind: ManduPolicyTool, result: string | null): string | null {
+ *  shape), so the page says nothing it cannot back. A propose call's note
+ *  links the change it made, or the request waiting for you, in Approvals. */
+export function policyToolAnswerParts(kind: ManduPolicyTool, result: string | null): PolicyAnswerPart[] | null {
   const env = envelopeOf(kind, result);
   if (!env) return null;
+  const words = (text: string): PolicyAnswerPart[] => [{ kind: "text", text }];
   if (kind === "propose") {
     const applied = env["applied"];
     if (applied === true) {
-      if (typeof env["changeId"] !== "string") return "Nothing changed: your rules already said this.";
+      const changeId = env["changeId"];
+      if (typeof changeId !== "string") return words("Nothing changed: your rules already said this.");
       // Only a tightening is applied at once; the envelope lists what it tightened.
       const tightens = Array.isArray(env["tightens"]) && env["tightens"].length > 0;
-      return (tightens ? "Mandu applied it at once, because it only adds protection." : "Mandu applied it at once.") +
-        " You can undo it under Rule changes in Approvals.";
+      const head = tightens ? "Mandu applied it at once, because it only adds protection." : "Mandu applied it at once.";
+      return inApprovals(head + " You can undo it in ", changeId, CHANGE_ID, head + " You can undo it under Rule changes in Approvals.");
     }
     if (applied !== false) return null;
-    if (typeof env["proposalId"] !== "string") return "Mandu did not apply it, so nothing changed.";
+    const proposalId = env["proposalId"];
+    if (typeof proposalId !== "string") return words("Mandu did not apply it, so nothing changed.");
     const loosens = Array.isArray(env["relaxes"]) && env["relaxes"].length > 0;
-    return loosens
-      ? "Not applied: it would loosen protection, so Mandu asked for your OK in Approvals."
-      : "Not applied: Mandu asked for your OK in Approvals.";
+    const head = loosens ? "Not applied: it would loosen protection, so Mandu asked for your OK in " : "Not applied: Mandu asked for your OK in ";
+    return inApprovals(head, proposalId, PROPOSAL_ID, head + "Approvals.");
   }
   if (kind === "test") {
     const egress = env["egress"];
@@ -169,7 +194,13 @@ export function policyToolAnswer(kind: ManduPolicyTool, result: string | null): 
       : egress === "ask" ? " Mandu answered that it would ask you first."
       : egress === "block" ? " Mandu answered that it would be blocked."
       : "";
-    return "Only a question: nothing was sent or changed." + answer;
+    return words("Only a question: nothing was sent or changed." + answer);
   }
   return null;
+}
+
+/** policyToolAnswerParts' words, joined: the step's `note`. */
+export function policyToolAnswer(kind: ManduPolicyTool, result: string | null): string | null {
+  const parts = policyToolAnswerParts(kind, result);
+  return parts ? parts.map((p) => p.text).join("") : null;
 }

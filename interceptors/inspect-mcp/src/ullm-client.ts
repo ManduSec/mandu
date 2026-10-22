@@ -39,7 +39,7 @@
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 
 /** One quarantined model call. Stateless: each call is a fresh, isolated context. */
 export interface UllmCall {
@@ -646,6 +646,21 @@ export interface CliUllmClientOptions {
    *  child's provider points at it (`codexForwarderProvider`); claude reaches
    *  it through `baseUrl`. */
   forwarderUrl?: string;
+  /** The CLI's absolute path (MANDU_ULLM_BINARY_PATH), spawned in place of
+   *  the bare name when its file name is the binary the call runs. The
+   *  launcher resolves it past the session's `claude` PATH shim, which
+   *  routes a `claude` started by name to the model proxy: the instrumented
+   *  T-LLM path, and a port the inspect server's network confine refuses
+   *  (docs/design/agents/agent-sdks.md §3.5). */
+  binaryPath?: string;
+}
+
+/** The CLI an absolute path names ("claude" | "codex"), or null: its file
+ *  name without a Windows `.exe`. */
+export function cliBinaryOfPath(p: string): "claude" | "codex" | null {
+  if (!isAbsolute(p)) return null;
+  const name = basename(p).replace(/\.exe$/i, "");
+  return name === "claude" || name === "codex" ? name : null;
 }
 
 const REAL_ANTHROPIC_BASE = "https://api.anthropic.com";
@@ -912,6 +927,7 @@ export class CliUllmClient implements UllmClient {
   private readonly rmTempDir: (dir: string) => void;
   private readonly writeTempFile: (path: string, content: string) => void;
   private readonly forwarderUrl: string | undefined;
+  private readonly binaryPath: string | undefined;
 
   constructor(opts: CliUllmClientOptions = {}) {
     this.binary = opts.binary ?? "auto";
@@ -923,6 +939,7 @@ export class CliUllmClient implements UllmClient {
     this.rmTempDir = opts.rmTempDir ?? defaultRmTempDir;
     this.writeTempFile = opts.writeTempFile ?? ((p, c) => writeFileSync(p, c, { mode: 0o600 }));
     this.forwarderUrl = opts.forwarderUrl || undefined;
+    this.binaryPath = opts.binaryPath || undefined;
   }
 
   async complete(call: UllmCall): Promise<UllmResult> {
@@ -940,7 +957,7 @@ export class CliUllmClient implements UllmClient {
       );
       for (const f of files) this.writeTempFile(join(cwd, f.name), f.content);
       const result = await this.exec({
-        file: resolved,
+        file: this.binaryPath !== undefined && cliBinaryOfPath(this.binaryPath) === resolved ? this.binaryPath : resolved,
         args,
         input: useStdin ? input : "",
         cwd,

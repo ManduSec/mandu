@@ -155,6 +155,7 @@ import type { BlockedExecKind } from "../policy/blocked-exec.js";
 import type { RuleRef, UsageRule, UsageGate } from "../policy/rule-ref.js";
 import type { PolicyLawSource } from "../policy/load-policy.js";
 import type { SecretHistoryScan } from "../policy/secret-history-scan.js";
+import type { TranscriptScanRun } from "../policy/transcript-scan.js";
 export type { WhySymbolOpResult, WhySymbolFindingWire, WhySymbolVerdictWire, WhySymbolPolicyWire } from "../prompt-filter/why-symbol.js";
 import type { CoveredSecret, Suggestion, SuggestionEdit } from "../policy/policy-suggestions.js";
 import type { SecretWorkspaceScanSummary } from "../policy/secret-workspace-scan.js";
@@ -1170,10 +1171,11 @@ export interface SetSessionSpecRequest extends BaseRequest {
  * ⌈width/2⌉..width, and requires `width`. Anything else is refused
  * (`ok:false`), never clamped. `rule` (§17) is the TUI's wrap rule the rows
  * are counted by: `ink` (the default) or `terminal`; it requires `width`.
- * `indent` (§11.2) is the terminal column the content area starts at (the
- * relay's columns minus `width`), an integer 0..10000 that requires
- * `width`: a TAB in the value reaches the terminal's own tab stop, as on
- * the screen. Absent: 0. */
+ * `indent` (§11.2) is the column the content area starts at in the count a
+ * TAB's stops follow (the relay's columns minus `width` for a TUI whose
+ * stops are the screen's; 0 for one that counts from its text, §19.7), an
+ * integer 0..10000 that requires `width`: a TAB in the value reaches the
+ * stop the TUI's does. Absent: 0. */
 export interface SymbolShapeRequest extends BaseRequest {
   op: "symbolShape";
   token: string;
@@ -1188,6 +1190,12 @@ export interface SymbolShapeRequest extends BaseRequest {
  * `terminal`, the terminal's own autowrap at the full width (Goose). */
 export type ReplyLayoutRule = "ink" | "terminal";
 
+/** Where a TUI counts a reply TAB's stops from (reply-row-reservation.md
+ * §19.7; reply-filter reserve-block.ts TabOrigin): `screen`, the terminal's
+ * column 0 (Codex; the default), or `content`, the left edge of the text the
+ * TAB is in (Claude Code expands each TAB itself from there). */
+export type ReplyTabOrigin = "screen" | "content";
+
 /** How the reply filter relays the session's output (reply-filter `relay_mode`). */
 export type SessionRelayMode = "pty" | "pipe" | "passthrough";
 
@@ -1200,7 +1208,10 @@ export type SessionRelayMode = "pty" | "pipe" | "passthrough";
  * PLANE ONLY (§11.5): an agent that could set `cols` could replay a secret at
  * widths of its choosing and read its line lengths off the row counts.
  * `rule` (§17): the agent's TUI wraps its reply by the terminal's autowrap
- * (`terminal`, Goose) or by word wrap (`ink`, the default when absent). */
+ * (`terminal`, Goose) or by word wrap (`ink`, the default when absent).
+ * `tabs` (§19.7): where the TUI counts a reply TAB's stops from (`content`,
+ * Claude Code; `screen`, the default when absent); the proxy sends
+ * `symbolShape` the `indent` it implies. */
 export interface SetSessionRelayRequest extends BaseRequest {
   op: "setSessionRelay";
   sessionKey: string;
@@ -1210,6 +1221,7 @@ export interface SetSessionRelayRequest extends BaseRequest {
   rows?: number;
   wrap?: boolean;
   rule?: ReplyLayoutRule;
+  tabs?: ReplyTabOrigin;
 }
 
 /** Read a session's relay state (null when never reported). Human plane only. */
@@ -2560,7 +2572,7 @@ export interface DiscoverSecretsOpRequest extends BaseRequest {
  *  `agentLogin` names the agent whose login file it is, for one this launch
  *  does not run on (secret-discovery.md §1.10). */
 export interface DiscoverSecretsResultWire {
-  files: Array<{ path: string; level: string; rule: string; agentLogin?: string }>;
+  files: Array<{ path: string; level: string; rule: string; agentLogin?: string; agentConfig?: string }>;
   /** Candidates the walk left out, with the reason (capped list). */
   skipped: Array<{ path: string; reason: string }>;
   /** Complete per-reason counts (never capped). */
@@ -2606,6 +2618,59 @@ export interface ScanSecretHistoryOpRequest extends BaseRequest {
 /** The `scanSecretHistory` reply: the scan, and whether the axis is on (OFF:
  *  nothing was scanned). */
 export type ScanSecretHistoryResultWire = SecretHistoryScan & { axis: boolean };
+
+/** Scan the agents' own transcripts for secrets that already reached a model
+ *  (docs/design/confidentiality/confidentiality-plan-17-past-sessions-scan.md).
+ *  DATA plane, read-only, like `scanSecretHistory`: the arbiter reads the
+ *  transcripts and the credential files, and answers with findings that
+ *  carry no value, length or hash, only a kind, a fixed mask, a name and a
+ *  path. The values it looks for come only from its own discovery and its
+ *  own environment, never from the caller (a caller's value would make the
+ *  op an oracle for "was this ever sent"). Asynchronous; one scan at a
+ *  time. With the confidentiality axis OFF the answer is empty. */
+export interface ScanAgentTranscriptsOpRequest extends BaseRequest {
+  op: "scanAgentTranscripts";
+  /** The person's HOME: the transcripts under it and its credential files. */
+  home?: string;
+  /** Mandu's event store, for the sessions Mandu ran (plan 17 §3 item 6). */
+  eventsDir?: string;
+  /** Skip transcript files last written before this (ms since the epoch). */
+  since?: number;
+}
+
+/** The `scanAgentTranscripts` reply. */
+export type ScanAgentTranscriptsResultWire = TranscriptScanRun & { axis: boolean };
+
+/** Plan 17 §3 item 13: the files `mandu scan`'s "your secrets" findings came
+ *  from, named to the RUNNING arbiter so each one no rule covers becomes a
+ *  plan 14 suggestion (source `past-sessions`). DATA plane, synchronous.
+ *  The caller sends paths and key NAMES only, never a value; the arbiter
+ *  reads each file itself and files one only when its own extractor finds a
+ *  credential under a named key there (transcript-suggestions.ts), and
+ *  never for an agent's own login or data, Mandu's own state or a path
+ *  outside `home`. With the confidentiality axis OFF it files nothing. */
+export interface SuggestFromScanOpRequest extends BaseRequest {
+  op: "suggestFromScan";
+  /** The person's HOME (absolute): only files under it are considered. */
+  home: string;
+  /** At most 64. `sessions`/`last`: the scan's count and last date, shown
+   *  on the suggestion as the scan said them. */
+  files: Array<{ path: string; names: string[]; sessions?: number; last?: string | null }>;
+}
+
+/** The `suggestFromScan` reply: counts, the files refused and why, and the
+ *  pending suggestions on the named files. Paths, names and counts only. */
+export interface SuggestFromScanResultWire {
+  axis: boolean;
+  filed: string[];
+  /** Files the law or the catalog already protects. */
+  covered: number;
+  alreadyPending: number;
+  dismissed: number;
+  overCap: number;
+  refused: Array<{ path: string; why: "not-under-home" | "not-a-file" | "agent-own" | "mandu-state" | "no-credential" }>;
+  suggestions: SuggestionView[];
+}
 
 // ── policy suggestions (confidentiality-plan-14-policy-suggestions.md §4, §5) ──
 // Mandu's scan turns its findings into typed edits (lock-path / lock-blob at
@@ -2963,7 +3028,9 @@ export interface SecretRegistryResultWire {
 }
 
 export interface DiscoverSecretsResultWire {
-  files: Array<{ path: string; level: string; rule: string; agentLogin?: string }>;
+  /** `agentConfig`: the launched agent's own MCP config (secret-discovery.md
+   *  §2.10), registered and left readable to it. */
+  files: Array<{ path: string; level: string; rule: string; agentLogin?: string; agentConfig?: string }>;
 }
 
 /** The confidentiality axis's state for the dashboard (plan 5): the switch +
@@ -3256,6 +3323,10 @@ export interface SessionLoginsWire {
   ullmBinary?: string;
   otherLoginsRaw?: boolean;
   loginEnv?: Record<string, string>;
+  /** The MCP configs the session's agent reads outside HOME (a project's
+   *  `.mcp.json`, secret-discovery.md §2.10); kept only when a kept agent
+   *  reads that kind. */
+  mcpConfigs?: string[];
 }
 
 /** A placeholder the agent's shell emptied (confidentiality.md §7, "A
@@ -3487,6 +3558,8 @@ export type ArbiterRequest =
   | SecretRegistryOpRequest
   | DiscoverSecretsOpRequest
   | ScanSecretHistoryOpRequest
+  | ScanAgentTranscriptsOpRequest
+  | SuggestFromScanOpRequest
   | SuggestPolicyOpRequest
   | PolicySuggestionsOpRequest
   | ApplySuggestionOpRequest
@@ -4559,6 +4632,8 @@ export interface SessionRelayWire {
   wrap?: boolean;
   /** The TUI's wrap rule (§17); absent: `ink`. */
   rule?: ReplyLayoutRule;
+  /** Where the TUI counts a reply TAB's stops from (§19.7); absent: `screen`. */
+  tabs?: ReplyTabOrigin;
   updatedAt: number;
 }
 

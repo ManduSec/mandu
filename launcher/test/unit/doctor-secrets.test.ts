@@ -564,3 +564,18 @@ test("render, macOS: the arbiter prepares no copies there (preparedCopiesOff), s
   assert.match(linux.join("\n"), /2 prepared \(a launch anywhere serves their sanitized copies: git works there/);
   assert.ok(!linux.join("\n").includes("macOS"));
 });
+
+test("runDoctorSecrets: the launched agent's own MCP config (agentConfig, secret-discovery.md §2.10) is listed as left readable, not among the masked files", async () => {
+  const d = deps({
+    discover: async () => disc({ files: [...disc().files, { path: `${HOME}/.claude.json`, level: "no-model", rule: "prefix:~/.claude.json", agentConfig: "claude" }] }),
+  });
+  const outs: string[] = [];
+  assert.equal(await runDoctorSecrets(["--secrets", "--target", "claude", "--no-history"], { HOME }, layout, d, { out: (s) => outs.push(s), cwd: `${HOME}/ws` }), 0);
+  const out = outs.join("");
+  assert.ok(!/✓ ~\/\.claude\.json/.test(out), out);
+  assert.match(out, /· ~\/\.claude\.json\s+left readable: Claude Code's MCP config \(its servers start with their real values\), its values masked in what reaches the AI/);
+  const json: string[] = [];
+  await runDoctorSecrets(["--secrets", "--json", "--target", "claude", "--no-history"], { HOME }, layout, d, { out: (x) => json.push(x), cwd: `${HOME}/ws` });
+  const row = (JSON.parse(json.join("")) as { files: Array<{ path: string; agentConfig?: string; readable?: boolean }> }).files.find((f) => f.path.endsWith("/.claude.json"));
+  assert.deepEqual([row?.agentConfig, row?.readable], ["claude", true]);
+});

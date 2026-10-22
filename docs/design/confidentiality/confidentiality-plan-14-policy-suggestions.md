@@ -66,7 +66,8 @@ suggestions through a mapping the person or the organization declares
 | Detectors (shared by every scan), their fingerprint | `arbiter/policy/secret-detectors.ts` (re-exported by secret-history-scan.ts) | §3.1, §13.2; secret-discovery.md §3.2 item 5 |
 | Workspace scan (S2) | `arbiter/policy/secret-workspace-scan.ts` (`scanSecretWorkspace`), op `suggestPolicy` (`sources`, `includeHome`) | §13 |
 | Sensitivity labels (S4) | `arbiter/policy/sensitivity-labels.ts` (`readOfficeLabels`, `effectiveLabelMapping`), `readOfficeFileLabels` in the S2 walk, `sensitivity_labels:` (validator, admin layer, `policyDelta`, edit ops), Settings › Sensitivity labels | §14.1, §14.9; dashboard.md §4.25s |
-| Generator | `arbiter/policy/policy-suggestions.ts` (`suggestEdits`; `suggestWorkspaceEdits` for S2; `suggestLabelEdits` for S4) | §4, §13.4, §14.9 |
+| Generator | `arbiter/policy/policy-suggestions.ts` (`suggestEdits`; `suggestWorkspaceEdits` for S2; `suggestLabelEdits` for S4; `suggestPastSessionEdits` for S5, the past sessions) | §4, §13.4, §14.9; S5: plan 17 §3 item 13 |
+| Past sessions (S5): `mandu scan`'s files | `arbiter/policy/transcript-suggestions.ts` (the files checked), op `suggestFromScan`, `launcher/src/scan-kept.ts` | §3; [plan 17](./confidentiality-plan-17-past-sessions-scan.md) §3 item 13 |
 | Suggestions store and ops | `arbiter/policy/policy-proposals.ts`, `arbiter/ipc/policy-suggestion-ops.ts` | §5.1, §5.2, §5.6; [`policy-surface.md §8`](../ui/policy-surface.md) §4.2, §4.5 |
 | `lock-blob`, `blobs:` | `arbiter/policy/policy-edit.ts`, the validator, `policyDelta` | §8.2; policy-surface.md §8.4.1 |
 | History enforcement | `launcher/src/git-object-twins.ts`, `launcher/src/history-labels.ts`, op `gitHistoryLocks` | §8.1, §8.3; [`confidentiality.md`](./confidentiality.md) §7.2a |
@@ -122,6 +123,7 @@ All sources are local. A model sees nothing but what §6 allows.
 | S2 | **Workspace and HOME** | files the catalog misses whose content is secret-shaped (`deploy/staging.tfvars`, a key pasted into `notes/deploy.md`; a `deploy/staging.conf` or a `config.toml` with a token until the content tier read them, secret-discovery.md §2.6, §2.9) | 3 |
 | S3 | **Model** | sensitive documents no detector can recognize (a contract, an HR file, a customer list), and rules shaped from the findings (§6, §14.2 to §14.4) | 4b (names), 4c (contents) |
 | S4 | **Import** | MIP / Purview sensitivity labels mapped to levels (§14.1) | 4a |
+| S5 | **Past sessions** | a file whose key `mandu scan` found in what the agents already sent to the AI, that no rule covers; source `past-sessions`, `rotate: true` (the key did leave). The scan names the files and key names to the running arbiter, which reads each file itself before filing (plan 17 §3 item 13) | plan 17 phase 2 |
 
 S1 is `scanSecretHistory {roots, home?}` on the data plane, capped by blob
 size, total bytes and one deadline, with a `capped` report of what it did not
@@ -446,6 +448,7 @@ default.
 | `policySuggestions {status?}` | data | the suggestions (`SuggestionView[]`), newest first |
 | `applySuggestion {suggestionId}` | data (and admin) | re-evaluated against the law in force; applies only a pure tightening (`via: "agent-tighten"` on the data socket, the agent's channel; `via: "tighten"` with the named person on the admin socket, §14.14; the change's `proposalId` is the suggestion, so History shows `proposedBy: mandu:scan`), closes it `approved`. Refusals, the suggestion kept pending: `relaxes`, `invalid`, `stale`, `unsupported`. `covered` closes it `superseded`. While a relaxing hand edit of policy.yaml waits in Approvals it still applies, to the law and to the held edit alike, which stays held (2026-10-09, [policy-surface.md](../ui/policy-surface.md) §8.4.6); `stale` then only when the suggestion names something the held edit removed |
 | `dismissSuggestion {suggestionId}` | **admin** (`ADMIN_ONLY_OPS`) | "Not a secret": denied, its key never filed again |
+| `suggestFromScan {home, files: [{path, names, sessions?, last?}]}` | data | S5 (plan 17 §3 item 13): at most 64 files under `home`, by path and key name, never a value. Each is read by the arbiter (a regular file, no link followed, at most 4 MiB) and kept only when its own extractor finds a credential under a named key; an agent's own login or data and Mandu's folder are refused (`refused`, each with its reason). Then `suggestPastSessionEdits` (covered when the catalog or a label protects it) and the filing path the model's suggestions take (`fileModelSuggestions`: dedup, dismissals, the cap). Answers `filed`, `covered`, `alreadyPending`, `dismissed`, `overCap`, `refused` and the pending suggestions on those files. Axis OFF: files nothing. The log line holds counts only |
 | `resolvePolicyProposal` | admin | on a suggestion: approved = apply (`via: "proposal"`; a refusal is an error and it stays pending), denied = dismiss |
 
 A pending suggestion the law now covers is closed `superseded` on every scan,
@@ -1136,6 +1139,17 @@ gated, so agents testing from worktrees voided the cache for everyone.
     or abrupt stop"; `first-start` or none (an older arbiter, a rotation by
     hand), "Mandu's earlier checks could not be vouched for". Display only:
     the launcher keeps a known value and drops anything else.
+  - *A walk changed (2026-10-21).* A cached walk can be sealed and still be
+    walked whole: its base key is no longer the one the launch computes (a
+    new git version, a new walk rule such as the 2026-10-21 security fixes
+    of confidentiality.md §7.2a, a shallow boundary honoured or not). That
+    cost the same wait and said nothing. Now the same one line names it
+    (`SealSession.noteWalkChanged`, cause `walk-changed`): "how Mandu reads
+    git history changed since the last launch (a new git, a new Mandu, or a
+    moved shallow boundary), so Mandu is re-checking the git history of N
+    repositories (slower this once)". Pinned by
+    `launcher/test/component/history-rewrites.test.ts` (another git
+    version: said once; the same one: not).
   - *The count* is the repositories the step covers (its object stores: a
     worktree and its main checkout are one), each walked again; never a line
     per pack.

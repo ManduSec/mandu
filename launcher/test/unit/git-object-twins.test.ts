@@ -234,14 +234,14 @@ test("parseWalkCache: a torn, foreign or malformed file is no entry (the caller 
   assert.equal(parseWalkCache("null"), null);
 });
 
-test("walkCacheFile is per (repository, paths), path order aside; walkBaseKey moves with what rewrites history", () => {
+test("walkCacheFile is per (repository, paths), path order aside; walkBaseKey moves with the git version and the shallow boundary honoured", () => {
   assert.equal(walkCacheFile("/c", "/w", ["a", "b"]), walkCacheFile("/c", "/w", ["b", "a"]));
   assert.notEqual(walkCacheFile("/c", "/w", ["a"]), walkCacheFile("/c", "/w", ["a", "b"]));
   assert.notEqual(walkCacheFile("/c", "/w", ["a"]), walkCacheFile("/c", "/v", ["a"]));
-  const k = { gitVersion: "git version 2.43.0\n", shallow: "", grafts: "", replaceRefs: "" };
+  const k = { gitVersion: "git version 2.43.0\n", shallow: "" };
   const base = walkBaseKey(k);
   assert.equal(walkBaseKey({ ...k, gitVersion: "git version 2.43.0" }), base);
-  for (const f of ["gitVersion", "shallow", "grafts", "replaceRefs"] as const) {
+  for (const f of ["gitVersion", "shallow"] as const) {
     assert.notEqual(walkBaseKey({ ...k, [f]: `${k[f]}x` }), base, `${f} is part of the base`);
   }
 });

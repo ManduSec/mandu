@@ -10,12 +10,144 @@ lives in `docs/design/`.
 Beta builds of this release are numbered `0.2.0-beta.N`. (0.1.0 was an
 internal pilot and was never published.)
 
+### New in 0.2.0-beta.8
+
+- The dashboard has an account: one username and password for every page,
+  wherever it runs. Set it with `mandu dashboard --set-password` (asked in
+  your terminal; only a password hash is kept, in
+  `~/.mandu/state/dashboard-account.json`). With an account, the dashboard
+  shows a sign-in page with Username and Password instead of the browser's
+  own password prompt, which was easy to miss and missing in some browsers,
+  so you never put a password in the address. You stay signed in for up to
+  7 days; Settings › Dashboard account has Sign out. Repeated wrong tries
+  make the page wait before it checks again. Scripts can still send the
+  username and password as HTTP Basic credentials. An existing
+  `DASHBOARD_BASIC_AUTH` becomes the account the first time the dashboard
+  starts, and the launch line, `mandu dashboard` and `mandu scan` say "sign
+  in with your Mandu dashboard account".
+- The dashboard account is now the only way into the dashboard. Until you
+  make one, the dashboard shows nothing but a page that says how (`mandu
+  dashboard --set-password`), and the launch line says "no account yet; set
+  one". `mandu dashboard` and `mandu setup` offer to make it on the spot.
+  The one-time sign-in links and `DASHBOARD_PASSWORD` are gone (a
+  `DASHBOARD_PASSWORD` still set is ignored, and the log says so), and the
+  dashboard prints no admin link any more.
+- `mandu scan`: which of your secrets your AI agents already sent to the
+  AI. It reads the transcripts Claude Code, Codex, OpenCode, Goose and
+  OpenClaw keep on your computer (their SQLite stores too, read-only and
+  without holding a running agent up), only the parts that went to the
+  model, and lists each of your secrets it
+  finds there with the file it lives in, how it got there and when, then
+  the values that look like keys but are in no file now. No value is shown,
+  nothing leaves the computer, and it needs no Mandu session: `npx
+  @mandusec/mandu scan`. `--share` prints the counts alone. It also lists
+  which of those secrets the agents' commands sent on the network (`curl`,
+  `wget`, a web fetch), to the key's own service or to a host it cannot
+  tie to the key, with the URLs there (the path shown, any password in
+  the URL and every query value masked), and counts the riskier sessions: those that ran with the
+  agent's permission prompts off, and those that printed your whole
+  environment to the AI. A session that ran under Mandu is known exactly:
+  Mandu's model proxies now record the id of each answer the AI gives
+  (the same id Claude Code, Codex, OpenClaw and Goose keep in their
+  transcripts, and OpenCode 2 on OpenAI's Responses API or Gemini; nothing
+  else of the answer), so a session at the same time outside Mandu is no
+  longer counted as under it. The join is per request: in a session you
+  started outside Mandu and resumed under it, what it sent before the
+  resume is reported as sent without Mandu, and only what went after counts
+  as under it. Where OpenCode keeps no such id (1.x, and 2.x on Anthropic
+  or Chat Completions), Mandu records the session id OpenCode sends with
+  each request and keeps in its own store, and joins on it with the
+  request's time. Sessions from before this release are still told by
+  their time. Each finding is told step by step,
+  from the record: the command the agent ran or the file it read, with the
+  date, the project and the agent (for a web fetch, the URL it fetched,
+  masked); that the output left your computer in the agent's next request
+  to its provider (Anthropic or OpenAI, or "the model provider" when the
+  agent's own settings, such as Claude Code's `settings.json` on Bedrock
+  or Codex's `config.toml` on another provider, send it elsewhere, a
+  trusted project's own `.codex/config.toml` included); what
+  came next; and what Mandu would have done. A command is shown with every value it holds
+  masked (`PGPASSWORD=‹DB_PASSWORD› psql …`), on one line. The findings
+  are numbered, and `mandu scan --show <n>` prints one in full, every way
+  it got there with up to ten examples.
+- `mandu scan` also reads Gemini CLI's and Copilot CLI's sessions, agents
+  Mandu does not run yet, and counts Cursor's chats without reading them
+  (`3 Cursor chats not read`: Cursor's chat store has no format a reader
+  can rely on). For those agents the report says Mandu does not run them
+  instead of what it would have done, and names the agents it runs.
+- `mandu scan` keeps its last report (names, files, hosts and counts, never
+  a value) in `~/.mandu/state/last-scan.json`. The dashboard's Home shows
+  how many of your secrets left the computer in your agents' requests
+  before Mandu, and a new Scan page (*Scan* in the top bar, which on a
+  phone is now two rows of three links; also linked from Home and History)
+  tells each one's story: where it lives, what the agent ran or read, when
+  and in which project, that it went to the AI provider, and what Mandu
+  would have done instead. `mandu doctor` prints one line from it. With
+  Mandu running, each file of yours whose key reached the AI and that no
+  rule protects becomes a suggestion under Rules (Files and folders,
+  Suggested); nothing changes until you save it.
+- `mandu scan`'s report now ends with where to see it in the dashboard:
+  the Scan page's address when your dashboard runs, else the command that
+  opens it (`npx @mandusec/mandu dashboard` when you ran the scan through
+  npx). `mandu dashboard` now opens even where Mandu never ran (it said
+  "start a session first"); it starts the dashboard alone, and Home says
+  "Protection is off: no agent runs with Mandu." with the command that
+  starts it, instead of "Not connected.", whenever nothing of Mandu's
+  runs. The top bar says "Protection off" then.
+- `mandu scan --open` opens the dashboard's Scan page in your browser
+  after the report, starting the dashboard first when none of yours runs
+  (`Started the dashboard and opened its Scan page: <address>`). It uses
+  the browser `BROWSER` names, else `open`, `wslview` or `xdg-open`, and
+  gives it the plain address only, never a password or sign-in link. With
+  no browser to open (an SSH session, no screen) it prints the address,
+  and over SSH the `ssh -L` line that forwards the dashboard's port.
+- `mandu scan` now knows more of your own secrets as yours ("rotate
+  this"), where it used to list some only as values that "look like keys
+  but are not in your files now": the GitHub CLI's and glab's tokens for
+  every host they hold, your agents' own logins, and any credential store
+  Mandu knows of, even on a computer with so many key files that Mandu's
+  launch check stops before reaching them; a password or key in your
+  systemd user services (`~/.config/systemd/user`, such as a proxy's
+  `Environment=HTTPS_PROXY=http://user:password@…`) and in the
+  `EnvironmentFile=` they name; and a key whose random letters happen to
+  hold `xxxx` or `dummy`. A newer GitLab token (`glpat-….01.…`) is now
+  found whole, past its dots: Mandu used to stop at the first dot, which
+  left the rest of the token unmasked and made the scan list a piece of
+  your own token as a second key.
+- `mandu scan`'s report is now short and in colour on a terminal: `✗ 3 of
+  your secrets leaked to the AI`, then one entry each (its name and file,
+  sessions, how it got there in a few words, the command when one was all
+  it took, and the hosts a command sent it to), the values that look like
+  keys in one line by prefix (`sk-… ×190 · ghp_… ×24 · …`), the riskier
+  sessions, and what to run next (`mandu claude`, `mandu scan --show 1`,
+  `mandu scan --all`, the dashboard). `mandu scan --all` prints the long
+  report with every finding's story and every send, under the same
+  numbers. Colour only on a terminal: `NO_COLOR` turns it off,
+  `FORCE_COLOR=1` on; never in `--json` or `--share`.
+- A `mandu <agent>` session now ends with one line on stderr that says
+  what Mandu kept from the AI, with the dashboard's own counts: ``mandu: in
+  this session: 2 secrets masked before the AI saw them (DB_PASSWORD in
+  ~/proj/.env and the file ~/.aws/credentials) · 1 send with a real value
+  filled in (api.stripe.com) · details: `mandu dashboard` ``. Names, files
+  and hosts only, never a value; printed after the agent's screen is gone,
+  so `claude -p --output-format json` output stays clean.
+  `--no-session-summary` or `MANDU_SESSION_SUMMARY=0` turns it off.
+- Your MCP servers' tokens are protected with no label of yours: an MCP or
+  editor config whose servers hold a credential (`.mcp.json`,
+  `~/.claude.json`, Codex's `~/.codex/config.toml`, `~/.cursor/mcp.json`,
+  `.vscode/mcp.json`, Claude Desktop's and Windsurf's configs) reaches the
+  AI only with placeholders for those values, however it reads the file.
+  The agent you launch keeps reading its own config as it is, so its MCP
+  servers still start and log in; the programs it runs get a placeholder
+  copy of every other MCP config, and an HTTP server's `Authorization`
+  credential goes only to the host its own entry names. A config whose values only name variables
+  (`"${GITHUB_TOKEN}"`) is left as it is.
+
 ### New in 0.2.0-beta.7
 
 - npm-installed Mandu recommends the matching npm version when an update
   is available, keeping updates in the same install channel. The npm
   quickstart now documents supported Codex login and protection modes.
-
 - Fewer questions on a fresh install: a key whose format names the
   service that issued it (a Stripe `sk_live_…`/`sk_test_…` key, a GitHub
   `ghp_…` token, a Notion `ntn_…` token, an OpenAI `sk-proj-…` key, Slack,

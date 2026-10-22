@@ -153,9 +153,15 @@ fn write_all(fd: RawFd, data: &[u8]) -> isize {
     unsafe { libc::write(fd, data.as_ptr() as *const libc::c_void, data.len()) }
 }
 
-/// Read until EOF or the canary (bounded by SO_RCVTIMEO 3 s).
+/// Read until EOF or the canary, each read bounded by the run's wait limit
+/// (SO_RCVTIMEO, `wait_limit`). Every peer here answers and closes, or has
+/// its connection reset by the guard, so a read returns when it does. It
+/// was 3 s until 2026-10-21: a server whose secret read took longer under
+/// load (CI job 18285) answered an agent that had already given up and
+/// closed, and the sweep then rightly refused the server's raw open (its
+/// connection's agent end gone: an exit).
 fn read_some(fd: RawFd) -> String {
-    let tv = libc::timeval { tv_sec: 3, tv_usec: 0 };
+    let tv = libc::timeval { tv_sec: wait_limit().as_secs() as libc::time_t, tv_usec: 0 };
     unsafe { libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVTIMEO, &tv as *const _ as *const libc::c_void, std::mem::size_of_val(&tv) as u32) };
     let mut out = Vec::new();
     let mut buf = [0u8; 512];
@@ -191,14 +197,25 @@ fn fork_run(f: impl FnOnce() -> i32) -> i32 {
     pid
 }
 
+/// Whether `p` appears within the run's wait limit (`wait_limit`). A fixed
+/// 5 s here failed tests whose peer was only slow: under load a holder's
+/// first secret read took over 7 s (docs/design/testing/
+/// continuous-integration.md §11, CI job 18268).
 fn wait_for(p: &Path) -> bool {
-    for _ in 0..500 {
+    wait_for_within(p, wait_limit())
+}
+
+fn wait_for_within(p: &Path, limit: Duration) -> bool {
+    let end = std::time::Instant::now() + limit;
+    loop {
         if p.exists() {
             return true;
         }
+        if std::time::Instant::now() >= end {
+            return false;
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
-    false
 }
 
 fn close_all_but(keep: &[RawFd]) {
@@ -251,17 +268,48 @@ impl Drop for Secret {
     }
 }
 
+/// The file a test's mock arbiter creates when it is told a channel closed
+/// (`recordAgentFlow` with `closed`, [`recording_arbiter_marking`]): the
+/// agent waits for it before it exits ([`wait_close_reported`]). Each mock
+/// has its own: a guard's thread that reports a close after its test ended
+/// (its last 200 ms look) reaches only its own test's mock, so it can never
+/// stand for the next test's report (a marker shared by the file did, in
+/// the kernel lane: four tests in a row each saw the one before's).
+fn close_mark(secret: &Secret) -> PathBuf {
+    secret.file("closed-reported")
+}
+
+/// In the agent, after it dropped a channel it read the holder's bytes from
+/// (so an agent flow was recorded open): wait until the guard's look (every
+/// 200 ms) has reported the close, so the agent is still alive when it does.
+/// A fixed 800 ms sleep missed it under load; the test asserts
+/// the report after the run, so a close never reported still fails there
+/// (this wait gives up at half the run's wait limit, before the harness's).
+fn wait_close_reported(mark: &Path) {
+    let _ = wait_for_within(mark, wait_limit() / 2);
+}
+
 /// What the mock arbiter was told: `(op, channel or procKey, flowsFrom, closed)`.
 type Told = Arc<Mutex<Vec<(String, String, Vec<String>, bool)>>>;
 
 /// Every opener a reader (raw); a holder bound to 127.0.0.2; the agent
 /// flows recorded (or refused, `record_fails`).
 fn recording_arbiter(record_fails: bool) -> (&'static MockArbiter, Told) {
-    recording_arbiter_bound(record_fails, &["127.0.0.2"])
+    recording_arbiter_with(record_fails, &["127.0.0.2"], None)
+}
+
+/// As `recording_arbiter`, and it creates `mark` when it is told a channel
+/// closed ([`close_mark`]).
+fn recording_arbiter_marking(record_fails: bool, mark: &Path) -> (&'static MockArbiter, Told) {
+    recording_arbiter_with(record_fails, &["127.0.0.2"], Some(mark.to_path_buf()))
 }
 
 /// As `recording_arbiter`, the holder bound to `bindings`.
 fn recording_arbiter_bound(record_fails: bool, bindings: &[&str]) -> (&'static MockArbiter, Told) {
+    recording_arbiter_with(record_fails, bindings, None)
+}
+
+fn recording_arbiter_with(record_fails: bool, bindings: &[&str], mark: Option<PathBuf>) -> (&'static MockArbiter, Told) {
     let bindings: Vec<String> = bindings.iter().map(|b| b.to_string()).collect();
     let told: Told = Arc::new(Mutex::new(Vec::new()));
     let t = told.clone();
@@ -273,7 +321,10 @@ fn recording_arbiter_bound(record_fails: bool, bindings: &[&str]) -> (&'static M
             "recordAgentFlow" => {
                 let ch = req.get("channel").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let closed = req.get("closed").and_then(|v| v.as_bool()).unwrap_or(false);
-                t.lock().unwrap().push((op.to_string(), ch, strs("flowsFrom"), closed));
+                t.lock().unwrap_or_else(|e| e.into_inner()).push((op.to_string(), ch, strs("flowsFrom"), closed));
+                if let (true, Some(m)) = (closed, mark.as_ref()) {
+                    let _ = std::fs::write(m, "c");
+                }
                 if record_fails && !closed {
                     return Err("mock: the arbiter cannot record it".into());
                 }
@@ -281,7 +332,7 @@ fn recording_arbiter_bound(record_fails: bool, bindings: &[&str]) -> (&'static M
             }
             "recordProcessFlow" => {
                 let key = req.get("procKey").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                t.lock().unwrap().push((op.to_string(), key, strs("flowsFrom"), false));
+                t.lock().unwrap_or_else(|e| e.into_inner()).push((op.to_string(), key, strs("flowsFrom"), false));
                 Ok(serde_json::json!({ "ok": true }))
             }
             _ => Ok(serde_json::Value::Null),
@@ -378,7 +429,8 @@ fn run_after_taint_with(unix: bool, traps: FilterTraps) {
     let _g = serial();
     let (sink, sink_got) = tcp_sink([127, 0, 0, 3]);
     let secret = Secret::new(if unix { "after-unix" } else if traps.no_sends { "after-tcp-untrapped" } else { "after-tcp" });
-    let (arbiter, told) = recording_arbiter(false);
+    let mark = close_mark(&secret);
+    let (arbiter, told) = recording_arbiter_marking(false, &mark);
     let mut cfg = secret_cfg(&secret, arbiter);
     cfg.accepts_untrapped = traps.no_sends;
     let (path, ready, hrp, rp, sock) = (secret.path.clone(), secret.file("ready"), secret.file("h.txt"), secret.file("report.txt"), secret.file("srv.sock"));
@@ -426,7 +478,9 @@ fn run_after_taint_with(unix: bool, traps: FilterTraps) {
             Err(e) => format!("connect={e}"),
         };
         // The guard's look reports the dropped channel (every 200 ms).
-        std::thread::sleep(Duration::from_millis(800));
+        if got.contains(CANARY) {
+            wait_close_reported(&mark);
+        }
         // Never a holder: its own connection to an unbound host still goes.
         let out = send_to([127, 0, 0, 3], sink, b"AGENT-LIVE");
         reap(h);
@@ -870,13 +924,24 @@ fn open_path(p: &Path, flags: i32) -> Result<RawFd, i32> {
     if fd >= 0 { Ok(fd) } else { Err(errno()) }
 }
 
-/// Read until EOF after some data, or the canary, or 5 s (a non-blocking
-/// FIFO with no writer yet answers EOF at once: waited through).
-fn drain(fd: RawFd) -> String {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+/// Read until EOF after some data, or the canary, or until `writer_done()`
+/// held before a read that found nothing (the writer is finished: whatever
+/// it wrote was in the pipe by then), within the run's wait limit. A
+/// non-blocking FIFO with no writer yet answers EOF at once: waited through.
+///
+/// The reader keeps its end open until the writer is done. With a fixed
+/// 5 s instead (until 2026-10-21), a holder slower than that under load
+/// (CI job 18268: its secret read alone took over 7 s) made its blocking
+/// `O_WRONLY` open after the agent had closed the FIFO's only read end; the
+/// open then waits for a reader forever, as it does with no guard (the
+/// guard performs it in a worker, `wait_for_partner`), and the test hung
+/// until the 240 s limit killed it.
+fn drain(fd: RawFd, writer_done: impl Fn() -> bool) -> String {
+    let deadline = std::time::Instant::now() + wait_limit();
     let mut out = Vec::new();
     let mut buf = [0u8; 512];
-    while std::time::Instant::now() < deadline {
+    loop {
+        let done = writer_done();
         let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
         if n > 0 {
             out.extend_from_slice(&buf[..n as usize]);
@@ -885,7 +950,7 @@ fn drain(fd: RawFd) -> String {
             }
             continue;
         }
-        if n == 0 && !out.is_empty() {
+        if (n == 0 && !out.is_empty()) || done || std::time::Instant::now() >= deadline {
             break;
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -909,12 +974,15 @@ enum FifoOrder {
 fn run_fifo(order: FifoOrder, record_fails: bool) {
     let _g = serial();
     let secret = Secret::new(&format!("fifo-{order:?}-{record_fails}").to_lowercase());
-    let (arbiter, told) = recording_arbiter(record_fails);
+    let mark = close_mark(&secret);
+    let (arbiter, told) = recording_arbiter_marking(record_fails, &mark);
     let cfg = secret_cfg(&secret, arbiter);
     let fifo = secret.file("pipe.fifo");
     mkfifo(&fifo);
     let (path, ready, opened, hrp, rp, ff) = (secret.path.clone(), secret.file("ready"), secret.file("opened"), secret.file("h.txt"), secret.file("report.txt"), fifo.clone());
     let Some(code) = guarded(cfg, move || {
+        // The holder is done (it wrote its report): the agent stops reading.
+        let h_done = { let hrp = hrp.clone(); move || hrp.exists() };
         let agent_fd = if order == FifoOrder::HolderFirst { None } else { Some(open_path(&ff, libc::O_RDONLY | libc::O_NONBLOCK)) };
         let inherited = agent_fd.as_ref().and_then(|r| r.as_ref().ok().copied());
         let f2 = ff.clone();
@@ -959,7 +1027,7 @@ fn run_fifo(order: FifoOrder, record_fails: bool) {
                 }
                 match open_path(&ff, libc::O_RDONLY) {
                     Ok(fd) => {
-                        let g = drain(fd);
+                        let g = drain(fd, &h_done);
                         unsafe { libc::close(fd) };
                         g
                     }
@@ -967,14 +1035,16 @@ fn run_fifo(order: FifoOrder, record_fails: bool) {
                 }
             }
             Some(Ok(fd)) => {
-                let g = drain(fd);
+                let g = drain(fd, &h_done);
                 unsafe { libc::close(fd) };
                 g
             }
             Some(Err(e)) => format!("open={e}"),
         };
         // The guard's look reports the dropped channel (every 200 ms).
-        std::thread::sleep(Duration::from_millis(800));
+        if got.contains(CANARY) {
+            wait_close_reported(&mark);
+        }
         reap(h);
         let _ = std::fs::write(&rp, format!("got={} h={h} out={got}", got.contains(CANARY)));
         0
@@ -1092,7 +1162,8 @@ fn where_the_accept_is_not_judged_an_agent_flow_the_arbiter_cannot_record_refuse
 fn run_held_file(at_taint: bool, record_fails: bool) {
     let _g = serial();
     let secret = Secret::new(&format!("held-file-{at_taint}-{record_fails}"));
-    let (arbiter, told) = recording_arbiter(record_fails);
+    let mark = close_mark(&secret);
+    let (arbiter, told) = recording_arbiter_marking(record_fails, &mark);
     let cfg = secret_cfg(&secret, arbiter);
     let file = secret.file("app.log");
     std::fs::write(&file, "start\n").unwrap();
@@ -1133,10 +1204,13 @@ fn run_held_file(at_taint: bool, record_fails: bool) {
             0
         });
         reap(h);
-        let got = drain(afd);
+        // The holder was reaped: what it wrote is in the file.
+        let got = drain(afd, || true);
         // The guard's look reports the dropped channel (every 200 ms).
         unsafe { libc::close(afd) };
-        std::thread::sleep(Duration::from_millis(800));
+        if got.contains(CANARY) {
+            wait_close_reported(&mark);
+        }
         let _ = std::fs::write(&rp, format!("got={} h={h}", got.contains(CANARY)));
         0
     }) else {

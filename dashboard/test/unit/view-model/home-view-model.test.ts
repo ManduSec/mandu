@@ -16,6 +16,11 @@
  *      `secrets` mode it says untrusted content is NOT masked.
  *   6. The Rules page's built-in protections follow the running mode: the
  *      masking sentence only where masking is on (§4.25z).
+ *   7. Settings › About Mandu: the release and three https help links
+ *      (§4.25 *About Mandu*).
+ *
+ * docs-lane-exempt: docs/usage.md is only a path in About Mandu's expected
+ * URLs; this file reads no doc.
  */
 
 import { test } from "node:test";
@@ -24,7 +29,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { ANSWERED_PAGE, ANSWERED_PAGE_MAX, answeredPage, buildHomeViewModel, isAgentSession, askedBy, buildFirstRun, builtInProtections, describeAsk, agentName, oneLine, promptLabel, POLICY_FILE_WORDS, type HomeInput } from "../../../src/view-model/home.js";
+import { ANSWERED_PAGE, ANSWERED_PAGE_MAX, aboutUpdate, agentNotice, agentNoticeParts, answeredPage, buildHomeViewModel, homeAbout, isAgentSession, askedBy, buildFirstRun, builtInProtections, describeAsk, agentName, oneLine, promptLabel, POLICY_FILE_WORDS, secretsPostureNote, type HomeInput } from "../../../src/view-model/home.js";
+import { deriveHealth, SECRETS_FIX, SECRETS_PARTIAL_NOTE, SECRETS_SENTENCE, type SessionHealth } from "../../../src/session-health.js";
+import type { ManduEvent } from "../../../src/event-model.js";
 import { manduPath } from "../../../src/generated/mandu-paths.js";
 import { toPolicyPanelViewModel } from "../../../src/view-model/policy-panel.js";
 import type { PolicySnapshot, VerdictEntry } from "../../../src/policy-model.js";
@@ -33,6 +40,9 @@ import type { SessionFlowStats } from "../../../src/view-model/lineage.js";
 import { toSessionViewModel } from "../../../src/view-model.js";
 import { buildStory, pageSecrets, storyCounts, untrustedMasked } from "../../../src/view-model/agent-page.js";
 import { firstSessionEvents, FIRST_SESSION } from "./first-session-fixture.js";
+import { DOCS_BASE_URL } from "../../../src/release-version.js";
+import { ISSUES_URL } from "../../../src/agent-versions.js";
+import type { UpdateCache } from "../../../src/update-notice.js";
 
 const PUB = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "public");
 
@@ -92,6 +102,42 @@ test("no arbiter → unknown: nothing is claimed, the inbox is unknown too", () 
   // Its next step is a link to Settings (§4.25, *The hero links where it points*).
   assert.equal(vm.sentence, "The protection service is not reachable, so nothing can be checked. Start an agent with Mandu, or open Settings.");
   assert.deepEqual(vm.sentenceParts.filter((p) => p.kind === "link"), [{ kind: "link", text: "open Settings", to: "settings" }]);
+});
+
+test("nothing of Mandu's runs (§4.25, *Protection is off when nothing runs*): protection is off, said plainly with the command that starts it; never Not connected, never protected", () => {
+  // The scan-only person: no arbiter, no session, Mandu never ran.
+  const vm = buildHomeViewModel(input({ panel: toPolicyPanelViewModel(null), sessions: [], facts: new Map(), historyTotal: 0, configuredMode: "secrets", notRunning: { everRan: false } }));
+  assert.equal(vm.verdict, "off");
+  assert.equal(vm.headline, "Protection is off: no agent runs with Mandu.");
+  assert.equal(vm.sentence, "Your agents send what they read to the AI as it is, secrets included. To protect one, start it with mandu claude (or mandu codex).");
+  assert.deepEqual(vm.sentenceParts.filter((p) => p.kind === "code").map((p) => p.text), ["mandu claude", "mandu codex"], "the commands drawn as code");
+  assert.deepEqual(vm.protection, { level: "unknown", configured: "secrets", connected: false, notRunning: true }, "the level stays unknown: nothing answered");
+  assert.equal(vm.waitingKnown, false);
+  assert.deepEqual(vm.agents, []);
+  // Never ran: the setup card says Mandu starts with the first agent.
+  assert.match(vm.firstRun?.protects ?? "", /^Mandu starts with your first agent, in the Secrets mode\./);
+  for (const words of [vm.headline, vm.sentence]) {
+    assert.doesNotMatch(words, FORBIDDEN);
+    assert.doesNotMatch(words, /Not connected|protected\.|are guarded/);
+  }
+  // Mandu ran here before (a session on record) and was stopped: the same
+  // hero, and no setup card.
+  const stopped = buildHomeViewModel(input({ panel: toPolicyPanelViewModel(null), sessions: [], facts: new Map(), historyTotal: 0, notRunning: { everRan: true } }));
+  assert.equal(stopped.headline, "Protection is off: no agent runs with Mandu.");
+  assert.equal(stopped.firstRun, null);
+  // An arbiter that answers decides, whatever the route passed: a stale
+  // "not running" never hides what runs.
+  const up = buildHomeViewModel(input({ notRunning: { everRan: true } }));
+  assert.notEqual(up.verdict, "off");
+  assert.equal(up.protection.notRunning, undefined);
+  // Not known to be not running (the route found something of Mandu's, or
+  // asked nothing): the fault it is, "Not connected.".
+  for (const notRunning of [null, undefined]) {
+    const fault = buildHomeViewModel(input({ panel: toPolicyPanelViewModel(null), ...(notRunning === null ? { notRunning } : {}) }));
+    assert.equal(fault.verdict, "unknown");
+    assert.equal(fault.headline, "Not connected.");
+    assert.equal(fault.protection.notRunning, undefined);
+  }
 });
 
 test("a violation in the window wins over everything, including pending asks", () => {
@@ -672,7 +718,8 @@ test("counts cover only sessions inside the window; older sessions still count t
     ]),
     historyTotal: 2,
   }));
-  assert.deepEqual(vm.window, { hours: 24, sessions: 1, counted: 1, masked: 3, secretsMasked: 1, secretsEarly: 0, untrusted: 2, blocked: 2, sent: 3, waiting: 0 });
+  assert.deepEqual(vm.window, { hours: 24, sessions: 1, counted: 1, masked: 3, secretsMasked: 1, secretsEarly: 0, untrusted: 2, blocked: 2, sent: 3, waiting: 0,
+    only: { secretsMasked: "s-claude", secretsEarly: null, blocked: "s-claude", sent: "s-claude" } });
   assert.equal(vm.agents.length, 1);
   assert.equal(vm.history.total, 2);
 });
@@ -701,6 +748,36 @@ test("the window says how many of its sessions the counts add up: those with fac
   // row keeps the listing's verdict, as below).
   const none = buildHomeViewModel(input({ sessions: sessions.slice(0, 2), facts: new Map() }));
   assert.deepEqual([none.window.sessions, none.window.counted], [2, 0]);
+});
+
+test("the window names the one session holding each count, so the hero links to it; null for none, for two, and when only partly counted (§4.25 *The counts link where they point*)", () => {
+  const fact = (o: { masked?: number; early?: number; blocked?: number; sent?: number }) => ({ stats: stats({ flows: 1 }), secrets: { masked: o.masked ?? 0, early: o.early ?? 0 }, untrusted: 0, blocked: o.blocked ?? 0, sent: o.sent ?? 0, holds: true, violations: 0, cwd: null });
+  // One session holds the block and the early read; two hold masked secrets; none sent.
+  const vm = buildHomeViewModel(input({
+    sessions: [session({ id: "s1" }), session({ id: "s2" }), session({ id: "s3" })],
+    facts: new Map([["s1", fact({ masked: 1, blocked: 2, early: 1 })], ["s2", fact({ masked: 3 })], ["s3", fact({})]]),
+  }));
+  assert.deepEqual(vm.window.only, { secretsMasked: null, secretsEarly: "s1", blocked: "s1", sent: null });
+  assert.equal(vm.window.blocked, 2, "the counts are as before");
+  // A second session's block: no one session holds it any more.
+  const two = buildHomeViewModel(input({
+    sessions: [session({ id: "s1" }), session({ id: "s2" })],
+    facts: new Map([["s1", fact({ blocked: 1 })], ["s2", fact({ blocked: 1, sent: 1 })]]),
+  }));
+  assert.deepEqual(two.window.only, { secretsMasked: null, secretsEarly: null, blocked: null, sent: "s2" });
+  // Partly counted (s2 could not be read): a session left out may hold it too.
+  const partly = buildHomeViewModel(input({
+    sessions: [session({ id: "s1" }), session({ id: "s2" })],
+    facts: new Map([["s1", fact({ blocked: 1, masked: 1 })]]),
+  }));
+  assert.deepEqual([partly.window.counted, partly.window.sessions], [1, 2]);
+  assert.deepEqual(partly.window.only, { secretsMasked: null, secretsEarly: null, blocked: null, sent: null });
+  // A session outside the window never holds one.
+  const old = buildHomeViewModel(input({
+    sessions: [session({ id: "s1" }), session({ id: "s-old", lastTs: new Date(NOW - 30 * 3_600_000).toISOString(), status: undefined })],
+    facts: new Map([["s1", fact({ blocked: 1 })], ["s-old", fact({ blocked: 4 })]]),
+  }));
+  assert.equal(old.window.only.blocked, "s1");
 });
 
 test("a row counts its secrets as its page's tiles do, and the window adds them up; never the lineage's masked tokens (§4.25)", () => {
@@ -1003,7 +1080,8 @@ test("a session that only read .env: one secret masked before the AI saw it, and
     facts: new Map([[FIRST_SESSION, { stats: vm0.lineage.stats, secrets, untrusted, blocked, sent, holds: true, violations: 0, cwd: null }]]),
     historyTotal: 1,
   }));
-  assert.deepEqual(vm.window, { hours: 24, sessions: 1, counted: 1, masked: 1, secretsMasked: 1, secretsEarly: 0, untrusted: 0, blocked: 0, sent: 0, waiting: 0 });
+  assert.deepEqual(vm.window, { hours: 24, sessions: 1, counted: 1, masked: 1, secretsMasked: 1, secretsEarly: 0, untrusted: 0, blocked: 0, sent: 0, waiting: 0,
+    only: { secretsMasked: FIRST_SESSION, secretsEarly: null, blocked: null, sent: null } });
 });
 
 // ── 5. The first-run card (§4.25, "First-run card") ───────────────────────────
@@ -1190,6 +1268,29 @@ test("built-in protections: the copy uses the product vocabulary only, in every 
   }
 });
 
+test("built-in protections: the issuer item is there in Secrets and Full, absent in Off, Injection and unknown (§4.25z)", () => {
+  const read = { read: true as const, raw: { issuers_off: ["stripe"] } };
+  for (const level of ["secrets", "full"] as const) {
+    const it = builtInProtections(level, read).issuers;
+    assert.ok(it, level);
+    assert.equal(it.state, "partly");
+    assert.match(it.text, /Off for: Stripe\.$/);
+    assert.equal(builtInProtections(level).issuers?.state, "unknown", `${level}: not read is never on`);
+    const copy = [it.text, it.change!.text, ...it.companies.map((c) => c.name)].join("\n");
+    assert.doesNotMatch(copy, FORBIDDEN, copy);
+    assert.doesNotMatch(copy, RETIRED, copy);
+    // The sentence beside it stays.
+    assert.ok(builtInProtections(level, read).items.includes("Keys and secret files leave this computer only where a rule or your OK allows."));
+  }
+  for (const level of ["off", "injection", "unknown"] as const) assert.equal(builtInProtections(level, read).issuers, null, level);
+  // the home carries what the route read
+  const vm = buildHomeViewModel(input({ panel: toPolicyPanelViewModel(snapshot({ integrity: false, confidentiality: true })), issuerBindings: { read: true, raw: false } }));
+  assert.equal(vm.builtIn.issuers?.state, "off");
+  assert.deepEqual(vm.builtIn, builtInProtections("secrets", { read: true, raw: false }));
+  const offVm = buildHomeViewModel(input({ panel: toPolicyPanelViewModel(snapshot({ integrity: false, confidentiality: false })), issuerBindings: { read: true, raw: undefined } }));
+  assert.equal(offVm.builtIn.issuers, null);
+});
+
 // ── Where the front-ends are found (source checkout vs installed bundle) ──────
 
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -1314,6 +1415,69 @@ test("§4.34 After you answer: a question from an agent that has ended is marked
   assert.equal(agent("s-claude").state, "waiting");
 });
 
+// Until 2026-10-22 the hero said "Protection is holding while you decide"
+// over a card that said nothing waits on its question now: a question left
+// unanswered when its session ended (questions never expire) held Home amber
+// with an agent "held up" every day after.
+test("§4.25 A question from a session that has ended: the hero says so when every asker ended, counts them when some did, and is as before with none or with a rule change waiting (Secrets and the frozen Full, stated)", () => {
+  const SECRETS = { integrity: false, confidentiality: true };
+  const FULL = { integrity: true, confidentiality: true };
+  const fact = (exited: boolean) => ({ stats: stats(), blocked: 0, sent: 0, holds: true, violations: 0, cwd: null, ...(exited ? { exited: true as const } : {}) });
+  // `ended`, `live`, `unlisted`: how many questions each kind of session raised.
+  const vm = (o: { integrity: boolean; confidentiality: boolean }, n: { ended?: number; live?: number; unlisted?: number }, changes = 0) => {
+    const rows: Partial<VerdictEntry>[] = [];
+    for (const [kind, sid] of [["ended", "s-ended"], ["live", "s-claude"], ["unlisted", "s-not-listed"]] as const) {
+      for (let i = 0; i < (n[kind] ?? 0); i++) rows.push({ id: `${kind}-${i}`, destination: `${kind}${i}.example`, sessions: [sid] });
+    }
+    return buildHomeViewModel(input({
+      sessions: [session({ id: "s-claude" }), session({ id: "s-ended", lastTs: new Date(NOW - 2 * 3_600_000).toISOString() })],
+      facts: new Map([["s-claude", fact(false)], ["s-ended", fact(true)]]),
+      panel: toPolicyPanelViewModel(snapshot({ ...o, verdicts: rows.map((r) => verdict(r)) })),
+      ...(changes ? { proposalsWaiting: changes } : {}),
+    }));
+  };
+  const HOLD1 = "Protection is holding while you decide: what it asks for happens only if you allow it.";
+  const HOLD2 = "Protection is holding while you decide: what each one asks for happens only if you allow it.";
+  for (const [o, level, tail] of [[SECRETS, "secrets", " Untrusted content is not masked in this mode."], [FULL, "full", ""]] as const) {
+    const cases: Array<[{ ended?: number; live?: number; unlisted?: number }, number, string, string]> = [
+      // Every asker ended: what is true, in the card's words.
+      [{ ended: 1 }, 0, "One question from a session that has ended is waiting for you.",
+        "No agent is waiting on it now. Your answer decides what happens the next time an agent asks the same."],
+      [{ ended: 3 }, 0, "3 questions from sessions that have ended are waiting for you.",
+        "No agent is waiting on them now. Your answers decide what happens the next time an agent asks the same."],
+      // Some ended: today's headline, and how many of them ended.
+      [{ ended: 1, live: 1 }, 0, "2 questions are waiting for you.", `${HOLD2} (1 of them is from a session that has ended.)`],
+      [{ ended: 2, live: 1 }, 0, "3 questions are waiting for you.", `${HOLD2} (2 of them are from sessions that have ended.)`],
+      // None ended: today's words, byte for byte.
+      [{ live: 1 }, 0, "One question is waiting for you.", HOLD1],
+      [{ live: 2 }, 0, "2 questions are waiting for you.", HOLD2],
+      // A session not on record is not ended, as its card claims nothing.
+      [{ unlisted: 1 }, 0, "One question is waiting for you.", HOLD1],
+      [{ ended: 1, unlisted: 1 }, 0, "2 questions are waiting for you.", `${HOLD2} (1 of them is from a session that has ended.)`],
+      // A rule change waiting holds the rules: today's combined words.
+      [{ ended: 1 }, 1, "One question and one rule change are waiting for you.", HOLD1],
+      [{ ended: 2 }, 1, "2 questions and 1 rule change are waiting for you.", HOLD2],
+      [{ ended: 1, live: 1 }, 2, "2 questions and 2 rule changes are waiting for you.", HOLD2],
+    ];
+    for (const [n, changes, headline, sentence] of cases) {
+      const h = vm(o, n, changes);
+      const at = `${level}, ${JSON.stringify(n)}, ${changes} rule changes`;
+      const asks = (n.ended ?? 0) + (n.live ?? 0) + (n.unlisted ?? 0);
+      assert.equal(h.protection.level, level, at);
+      assert.equal(h.verdict, "waiting", `${at}: the verdict, its clock and its badge stay`);
+      assert.equal(h.headline, headline, at);
+      assert.equal(h.sentence, sentence + tail, `${at}: the mode's disclosure still follows`);
+      assert.deepEqual(h.sentenceParts, [{ kind: "text", text: sentence + tail }], at);
+      assert.equal(h.window.waiting, asks, `${at}: every question still counts`);
+      assert.equal(h.waiting.filter((a) => a.askerEnded).length, n.ended ?? 0, at);
+      assert.doesNotMatch(`${h.headline}\n${h.sentence}`, FORBIDDEN, at);
+      assert.doesNotMatch(h.sentence, /[Nn]othing leaves|leaves? your machine|cannot leave/, at);
+    }
+  }
+  // Nothing waiting at all: the level's own hero, unchanged.
+  assert.equal(vm(SECRETS, {}).verdict, "secrets-only");
+});
+
 test("§4.25u A question says which session asked: the folder of the session that asked last, its agent, and how many sessions asked; nothing without a known folder", () => {
   const fact = (cwd: string | null) => ({ stats: stats(), blocked: 0, sent: 0, holds: true, violations: 0, cwd });
   const rows = [
@@ -1400,4 +1564,290 @@ test("§4.34 Answers that no longer apply: the arbiter's mark reads as why, with
   assert.equal(row("name").staleNote, q("name").staleNote);
   assert.deepEqual(row("name").actions, []);
   assert.ok(!("staleNote" in row("live")));
+});
+
+// ── Settings › About Mandu (§4.25 *About Mandu*) ─────────────────────────────
+
+test("about: the home carries the release it was given and the three help links, each https", () => {
+  const vm = buildHomeViewModel(input({ version: "0.2.0-beta.7" }));
+  assert.deepEqual(vm.about, {
+    version: "0.2.0-beta.7",
+    guideUrl: DOCS_BASE_URL + "docs/usage.md",
+    troubleshootingUrl: DOCS_BASE_URL + "docs/usage.md#troubleshooting",
+    issuesUrl: ISSUES_URL,
+    // The route read no update cache (a test seam): nothing said of updates.
+    update: null,
+  });
+  for (const k of ["guideUrl", "troubleshootingUrl", "issuesUrl"] as const) assert.match(vm.about[k], /^https:\/\//, k);
+  // The same on every rung of the ladder: not connected too, since the
+  // release and the links do not depend on the service.
+  assert.deepEqual(buildHomeViewModel(input({ version: "0.2.0-beta.7", panel: toPolicyPanelViewModel(null) })).about, vm.about);
+});
+
+test("about: no version, a blank one or \"unknown\" reads \"unknown\", never empty; the links stay", () => {
+  for (const version of [undefined, "", "   ", "unknown"]) {
+    const about = buildHomeViewModel(input(version === undefined ? {} : { version })).about;
+    assert.equal(about.version, "unknown", JSON.stringify(version));
+    assert.match(about.issuesUrl, /^https:\/\//);
+  }
+  assert.equal(homeAbout(" 1.0.0 ").version, "1.0.0", "trimmed");
+});
+
+// ── About Mandu: a newer release (dashboard.md §4.25 *A newer release*) ────────
+
+/** An update-check cache as the launcher writes it, fetched an hour before NOW. */
+const cache = (releases: UpdateCache["releases"], over: Partial<UpdateCache> = {}): UpdateCache => ({
+  v: 1, checkedAt: NOW - 3_600_000, ok: true, releases, releasesAt: NOW - 3_600_000, ...over,
+});
+
+test("about update: newer, newer with security fixes, newest, and no answer, each its own form", () => {
+  const releases = [{ version: "0.2.0-beta.8", security: true }, { version: "0.2.0-beta.9", security: false }, { version: "0.2.0-beta.6", security: true }];
+  // Newer, plain: the newest, its npm line pinned to it, and when the list came.
+  assert.deepEqual(aboutUpdate("0.2.0-beta.7", cache(releases.map((r) => ({ ...r, security: false }))), "npm", NOW), {
+    state: "newer", at: NOW - 3_600_000, newest: "0.2.0-beta.9", security: false, install: "npm install -g @mandusec/mandu@0.2.0-beta.9",
+  });
+  // With security fixes: a release in between carries the marker; the
+  // installer's channel gives the release's install.sh line.
+  assert.deepEqual(aboutUpdate("0.2.0-beta.7", cache(releases), "release", NOW), {
+    state: "newer", at: NOW - 3_600_000, newest: "0.2.0-beta.9", security: true,
+    install: "curl -fsSL https://github.com/ManduSec/mandu/releases/download/v0.2.0-beta.9/install.sh | sh",
+  });
+  // A security release older than the running one says nothing.
+  assert.deepEqual(aboutUpdate("0.2.0-beta.9", cache(releases), "npm", NOW), { state: "current", at: NOW - 3_600_000 });
+  // No cache, or one no check ever filled: no answer, and the page says when Mandu checks.
+  assert.deepEqual(aboutUpdate("0.2.0-beta.7", null, "npm", NOW), { state: "unknown" });
+  assert.deepEqual(aboutUpdate("0.2.0-beta.7", cache([], { ok: false, releasesAt: null }), "npm", NOW), { state: "unknown" });
+  // A version that is not semver: nothing to compare.
+  assert.equal(aboutUpdate("unknown", cache(releases), "npm", NOW), null);
+});
+
+test("about update: a list fetched in the future gives no time; a failed later check keeps the list and its own time", () => {
+  assert.deepEqual(aboutUpdate("1.0.0", cache([{ version: "1.0.1", security: false }], { releasesAt: NOW + 86_400_000 }), "npm", NOW),
+    { state: "newer", at: null, newest: "1.0.1", security: false, install: "npm install -g @mandusec/mandu@1.0.1" });
+  const kept = cache([{ version: "1.0.0", security: false }], { ok: false, checkedAt: NOW - 1000, releasesAt: NOW - 5 * 86_400_000 });
+  assert.deepEqual(aboutUpdate("1.0.0", kept, "npm", NOW), { state: "current", at: NOW - 5 * 86_400_000 });
+});
+
+test("about update: the install line holds only the semver version, trimmed, never other text from the file", () => {
+  const up = aboutUpdate("1.0.0", cache([{ version: " 1.0.1\n", security: true }]), "npm", NOW);
+  assert.deepEqual(up, { state: "newer", at: NOW - 3_600_000, newest: "1.0.1", security: true, install: "npm install -g @mandusec/mandu@1.0.1" });
+});
+
+test("about update: the home carries the answer when the route read the cache, and none when it did not", () => {
+  const read = buildHomeViewModel(input({ version: "0.2.0-beta.7", update: { cache: cache([{ version: "0.2.0-beta.8", security: true }]), channel: "npm" } }));
+  assert.deepEqual(read.about.update, { state: "newer", at: NOW - 3_600_000, newest: "0.2.0-beta.8", security: true, install: "npm install -g @mandusec/mandu@0.2.0-beta.8" });
+  assert.deepEqual(buildHomeViewModel(input({ version: "0.2.0-beta.7", update: { cache: null, channel: "npm" } })).about.update, { state: "unknown" });
+  assert.equal(buildHomeViewModel(input({ version: "unknown", update: { cache: null, channel: "npm" } })).about.update, null);
+  assert.equal(buildHomeViewModel(input({ version: "0.2.0-beta.7" })).about.update, null);
+});
+
+// ── The secret posture card (dashboard.md §4.23 *Product page*) ───────────────
+
+/** A launcher session's health with the given secret posture (`null`: the
+ *  launch recorded none), as session-health.ts lifts it. */
+function launched(posture: "confined" | "read-blocked" | "gated" | null, gap?: string): SessionHealth {
+  return {
+    verdict: posture === "gated" ? "degraded" : "ok", live: [], dropped: [], relay: null, clientVersion: null, unknownTools: [],
+    agentVersion: null, turns: 1, toolFailures: 0, exitCode: null, reasons: [],
+    ...(posture ? { secrets: { posture, sentence: SECRETS_SENTENCE[posture], ...(gap ? { gap } : {}), ...(gap && SECRETS_FIX[gap] ? { fix: SECRETS_FIX[gap] } : {}) } } : {}),
+  };
+}
+const at = (minutesAgo: number): string => new Date(NOW - minutesAgo * 60_000).toISOString();
+
+test("secret posture: the newest launch decides; a gated one with gap apparmor-userns carries its sentence and `mandu setup` as code", () => {
+  const vm = buildHomeViewModel(input({
+    sessions: [
+      session({ id: "s-new", status: undefined, firstTs: at(20), lastTs: at(10), health: launched("gated", "apparmor-userns") }),
+      session({ id: "s-old", status: undefined, firstTs: at(120), lastTs: at(100), health: launched("confined") }),
+    ],
+    facts: new Map(),
+  }));
+  assert.deepEqual(vm.secretsPosture, {
+    gap: "apparmor-userns",
+    session: "s-new",
+    headline: "Programs your agent runs can still read your credential files.",
+    sentence: SECRETS_SENTENCE.gated,
+    note: null,
+    fix: "mandu setup",
+    fixParts: [
+      { kind: "text", text: "Run " },
+      { kind: "code", text: "mandu setup" },
+      { kind: "text", text: " in a terminal once, then start your agent again." },
+    ],
+  });
+  // The confined launch is the newer one: no card, the gated one is history.
+  const after = buildHomeViewModel(input({
+    sessions: [
+      session({ id: "s-old", status: undefined, firstTs: at(120), lastTs: at(100), health: launched("gated", "apparmor-userns") }),
+      session({ id: "s-new", status: undefined, firstTs: at(20), lastTs: at(10), health: launched("confined") }),
+    ],
+    facts: new Map(),
+  }));
+  assert.equal(after.secretsPosture, null, "once a new agent starts confined, the card goes");
+  // The headline stays as the level makes it.
+  assert.equal(vm.headline, buildHomeViewModel(input({ sessions: [session({ id: "s-new", status: undefined, firstTs: at(20), lastTs: at(10) })], facts: new Map() })).headline);
+});
+
+test("secret posture: a running launch wins over a newer ended one; a running agent with a recorded exit has ended", () => {
+  const sessions = [
+    session({ id: "s-ended", status: undefined, firstTs: at(5), lastTs: at(2), health: launched("confined") }),
+    session({ id: "s-running", status: "running", firstTs: at(60), lastTs: at(1), health: launched("gated", "no-bwrap") }),
+  ];
+  const vm = buildHomeViewModel(input({ sessions, facts: new Map() }));
+  assert.equal(vm.secretsPosture?.session, "s-running");
+  assert.equal(vm.secretsPosture?.fix, "sudo apt install bubblewrap");
+  const exited = buildHomeViewModel(input({ sessions, facts: new Map([["s-running", { stats: stats(), blocked: 0, sent: 0, holds: true, violations: 0, cwd: null, exited: true }]]) }));
+  assert.equal(exited.secretsPosture, null, "its exit makes the newer confined launch the one that decides");
+  // A session no launcher recorded (no health) never decides.
+  const plain = buildHomeViewModel(input({ sessions: [session({ id: "s-proxy", status: "running", firstTs: at(1) }), ...sessions.slice(1)], facts: new Map() }));
+  assert.equal(plain.secretsPosture?.session, "s-running");
+});
+
+test("secret posture: confined, read-blocked and no posture on record give no card; nor a launch outside the window", () => {
+  for (const h of [launched("confined"), launched("read-blocked"), launched(null), undefined]) {
+    const vm = buildHomeViewModel(input({ sessions: [session({ id: "s-claude", ...(h ? { health: h } : {}) })] }));
+    assert.equal(vm.secretsPosture, null, JSON.stringify(h?.secrets ?? null));
+  }
+  const old = buildHomeViewModel(input({ sessions: [session({ id: "s-old", status: undefined, firstTs: at(48 * 60), lastTs: at(47 * 60), health: launched("gated", "apparmor-userns") })], facts: new Map() }));
+  assert.equal(old.secretsPosture, null, "only Home's window");
+});
+
+test("secret posture: a bind-only gap carries its partial note and no command; a gap with no fix, neither", () => {
+  for (const gap of ["no-guard", "guard-off"] as const) {
+    const p = secretsPostureNote(launched("gated", gap).secrets, "home")!;
+    assert.equal(p.note, SECRETS_PARTIAL_NOTE[gap]);
+    assert.equal(p.fix, null);
+    assert.equal(p.fixParts, null);
+  }
+  const off = secretsPostureNote(launched("gated", "userns-off").secrets, "home")!;
+  assert.deepEqual([off.note, off.fix, off.fixParts], [null, null, null]);
+  const bare = secretsPostureNote(launched("gated").secrets, "home")!;
+  assert.equal(bare.gap, null);
+  // The session page speaks of the agent it shows.
+  assert.equal(secretsPostureNote(launched("gated", "apparmor-userns").secrets, "session")!.headline, "Programs this agent ran could read your credential files.");
+  assert.equal(secretsPostureNote(launched("confined").secrets, "session"), null);
+});
+
+test("secret posture: the card's words use the product vocabulary, never borrow the confined claim, and its fix is its parts joined", () => {
+  for (const gap of ["apparmor-userns", "no-bwrap", "bwrap-nesting", "userns-off", "no-guard", "guard-off", "arbiter"]) {
+    for (const of of ["home", "session"] as const) {
+      const p = secretsPostureNote(launched("gated", gap).secrets, of)!;
+      const copy = [p.headline, p.sentence, p.note ?? "", ...(p.fixParts ?? []).map((x) => x.text)].join("\n");
+      assert.doesNotMatch(copy, FORBIDDEN, copy);
+      assert.doesNotMatch(copy, /placeholder copy of each credential file, never the real one|cannot open your credential files/, "never the confined or read-blocked claim");
+      if (p.fixParts) assert.equal(p.fixParts.filter((x) => x.kind === "code").map((x) => x.text).join(""), p.fix);
+    }
+  }
+});
+
+// ── The session's own troubles on the product page (dashboard.md §4.21) ─────
+
+let hn = 0;
+function hev(kind: string, extra: Record<string, unknown> = {}): ManduEvent {
+  hn++;
+  return {
+    id: `h${hn}`, sessionId: "s-claude", turn: hn, ts: new Date(1700000000000 + hn * 1000).toISOString(), seq: hn,
+    callId: null, parentId: null, kind: kind as ManduEvent["kind"], view: "HumanView", boundary: "shell",
+    emitter: "launcher", input: null, output: null, invariant: { violatedInvariant: false },
+    ...extra,
+  } as ManduEvent;
+}
+const claudeLaunch = () => hev("launch_posture", { target: "claude", live: ["fs"], dropped: [] });
+const aTurn = () => hev("tllm_call", { callShape: { toolCount: 12 }, output: { symbolized: "Done.", original: null, differs: false, symbols: [] } });
+const aSideCall = () => hev("tllm_call", { callShape: { toolCount: 0 }, output: { symbolized: "title", original: null, differs: false, symbols: [] } });
+/** One Bash call through the exec gate whose result says `text`. */
+const command = (id: string, text: string) => [
+  hev("tool_use", { callId: id, input: { symbolized: `Bash({"command":"run ${id}"})`, original: null, differs: false, symbols: [] } }),
+  hev("exec_action", { callId: id }),
+  hev("tool_result", { tool: "Bash", callId: id, output: { symbolized: text, original: text, differs: false, symbols: [] } }),
+];
+const NOT_FOUND = "Exit code 127\n/bin/bash: line 1: python3: command not found";
+const noticeOf = (events: ManduEvent[], masking = false) => agentNotice(deriveHealth(events)!, masking, "s-claude");
+const RELAY = "Your terminal showed masked values instead of your real ones: Mandu's reply filter was not working in this session. The AI's side was not affected. Start the agent again; if it happens again, run mandu doctor.";
+const LOG = "Run mandu log s-claude for this launch's notices.";
+
+test("a session that could not do its job, or some of whose commands could not run, says so in the product's words, from its health (dashboard.md §4.21 On the product page)", () => {
+  // The reply filter in passthrough, or its LAST record says its lookups fail.
+  assert.equal(noticeOf([claudeLaunch(), hev("relay_mode", { mode: "passthrough" }), aTurn()]), RELAY);
+  assert.equal(noticeOf([claudeLaunch(), hev("relay_mode", { mode: "pty" }), hev("relay_mode", { mode: "pty", resolveFailure: "arbiter: ECONNREFUSED" }), aTurn()]), RELAY);
+  // A failure it recovered from says nothing: the last record is plain.
+  assert.equal(noticeOf([claudeLaunch(), hev("relay_mode", { mode: "pty", resolveFailure: "timeout" }), hev("relay_mode", { mode: "pty" }), aTurn()]), null);
+  // Every command failed: how many, and the launch log of this session.
+  assert.equal(noticeOf([claudeLaunch(), ...command("c1", NOT_FOUND), ...command("c2", "Exit code 126\nbwrap: Can't mount proc"), aTurn()]),
+    `None of the 2 commands the agent ran could start: a sandbox or a missing program stopped them. ${LOG}`);
+  assert.equal(noticeOf([claudeLaunch(), ...command("c1", NOT_FOUND), aTurn()]),
+    `The one command the agent ran could not start: a sandbox or a missing program stopped it. ${LOG}`);
+  // Some failed.
+  assert.equal(noticeOf([claudeLaunch(), ...command("c1", NOT_FOUND), ...command("c2", "README.md"), ...command("c3", NOT_FOUND), aTurn()]),
+    "2 of the commands the agent ran could not start.");
+  // Model calls but no turn; an exit before any model call, with its code.
+  assert.equal(noticeOf([claudeLaunch(), aSideCall(), hev("session_exit", { code: 0 })]), "The agent stopped before it finished a single turn.");
+  assert.equal(noticeOf([claudeLaunch(), hev("session_exit", { code: 3 })]),
+    "The agent stopped before it finished a single turn: it exited with code 3 before its first request to the AI model.");
+  // A quit at the prompt (exit 0, no call) and a healthy session: nothing.
+  assert.equal(noticeOf([claudeLaunch(), hev("session_exit", { code: 0 })]), null);
+  assert.equal(noticeOf([claudeLaunch(), hev("relay_mode", { mode: "pty" }), aTurn(), ...command("c1", "ok"), hev("session_exit", { code: 0 })]), null);
+  assert.equal(deriveHealth([claudeLaunch(), aTurn()])!.verdict, "ok");
+  // No launch_posture: no health, no notice.
+  assert.equal(deriveHealth([aTurn()]), null);
+  assert.equal(agentNotice(undefined, false), null);
+});
+
+test("several troubles: the most serious first, the version last; the parts carry each command as code and read as the line", () => {
+  const events = [
+    claudeLaunch(), hev("relay_mode", { mode: "passthrough" }), hev("client_info", { clientVersion: "9.0.0" }),
+    ...command("c1", NOT_FOUND), aSideCall(), hev("session_exit", { code: 1 }),
+  ];
+  const health = deriveHealth(events)!;
+  assert.equal(health.verdict, "broken");
+  assert.deepEqual(health.broken, ["relay", "no-turn", "commands"], "deriveHealth's own order");
+  const notice = agentNotice(health, false, "s-claude")!;
+  const order = [RELAY, "The one command the agent ran could not start", "The agent stopped before it finished a single turn.", "Claude Code 9.0.0 is newer than the versions Mandu was tested with"];
+  const at = order.map((x) => notice.indexOf(x));
+  assert.ok(at.every((i) => i >= 0), notice);
+  assert.deepEqual([...at].sort((a, b) => a - b), at, `the most serious first: ${notice}`);
+  const parts = agentNoticeParts(health, false, "s-claude")!;
+  assert.equal(parts.map((p) => p.text).join(""), notice);
+  assert.deepEqual(parts.filter((p) => p.kind === "code").map((p) => p.text), ["mandu doctor", "mandu log s-claude"]);
+  // Some failed (degraded) comes after a broken cause.
+  const mixed = agentNotice(deriveHealth([claudeLaunch(), hev("relay_mode", { mode: "passthrough" }), ...command("c1", NOT_FOUND), ...command("c2", "ok"), aTurn()])!, false)!;
+  assert.ok(mixed.indexOf(RELAY) === 0 && mixed.endsWith("1 of the commands the agent ran could not start."), mixed);
+  // Without a session id the log command is the plain one.
+  assert.match(agentNotice(deriveHealth([claudeLaunch(), ...command("c1", NOT_FOUND), aTurn()])!, false)!, /Run mandu log for this launch's notices\.$/);
+  // Its Home row carries both forms.
+  const vm = buildHomeViewModel(input({ sessions: [session({ id: "s-claude", health })] }));
+  const row = vm.agents.find((a) => a.id === "s-claude")!;
+  const masking = row.notice !== notice; // worded for the level the input runs
+  assert.equal(row.notice, agentNotice(health, masking, "s-claude"));
+  assert.deepEqual(row.noticeParts, agentNoticeParts(health, masking, "s-claude"));
+  assert.ok(row.notice!.startsWith(RELAY), row.notice!);
+});
+
+test("the trouble notices use the product's words: no developer term, no retired word, no token, and never a leak", () => {
+  const cases: ManduEvent[][] = [
+    [claudeLaunch(), hev("relay_mode", { mode: "passthrough" }), aTurn()],
+    [claudeLaunch(), hev("relay_mode", { mode: "pipe", resolveFailure: "arbiter: refused" }), aTurn()],
+    [claudeLaunch(), ...command("c1", NOT_FOUND), ...command("c2", NOT_FOUND), aTurn()],
+    [claudeLaunch(), ...command("c1", NOT_FOUND), ...command("c2", "ok"), aTurn()],
+    [claudeLaunch(), aSideCall(), hev("session_exit", { code: 0 })],
+    [claudeLaunch(), hev("session_exit", { code: 2 })],
+  ];
+  for (const events of cases) {
+    for (const masking of [false, true]) {
+      const notice = noticeOf(events, masking);
+      assert.ok(notice, JSON.stringify(events.map((e) => e.kind)));
+      assert.doesNotMatch(notice, /PASSTHROUGH|passthrough|\brungs?\b|\bsymbols?\b|reply-filter|exit 12[67]|resolveFailure|arbiter|ECONN|refused/i, notice);
+      assert.doesNotMatch(notice, FORBIDDEN, notice);
+      assert.doesNotMatch(notice, RETIRED, notice);
+      assert.doesNotMatch(notice, /leak|exposed|protection failed|not protected/i, "a failure of display and use, never a leak");
+    }
+  }
+});
+
+test("built-in protections, protection off: Turn it on in Settings is a link part to Settings › Protection; joined, the same words", () => {
+  const off = builtInProtections("off");
+  assert.equal(off.itemsParts!.length, off.items.length);
+  off.items.forEach((text, i) => assert.equal(off.itemsParts![i]!.map((x) => x.text).join(""), text));
+  assert.deepEqual(off.itemsParts![0]!.filter((x) => x.kind === "link"), [{ kind: "link", text: "Turn it on in Settings", to: "protection" }]);
+  for (const level of ["secrets", "full", "injection", "unknown"] as const) assert.equal(builtInProtections(level).itemsParts, undefined, level);
 });

@@ -17,9 +17,13 @@ export interface RouteSamples {
   queries: Record<string, string>;
 }
 
-/** The product's: READ_ROUTES has string paths only, some with a query. */
+/** The product's: READ_ROUTES' string paths, some with a query, and the
+ *  Scan page's paged reads (dashboard.md §4.25ai *A long scan, in pages*). */
 export const PRODUCT_SAMPLES: RouteSamples = {
-  patterns: {},
+  patterns: {
+    [String(/^\/api\/scan\/section\/[^/]+$/)]: "/api/scan/section/looks?after=0&q=a",
+    [String(/^\/api\/scan\/item\/[^/]+$/)]: "/api/scan/item/f0",
+  },
   queries: {
     "/api/events": "?session=${S}", "/api/stream": "?session=${S}&sinceSeq=0", "/api/home/agent": "?session=${S}",
     "/api/home/original": "?session=${S}&step=tool%3Ac1",

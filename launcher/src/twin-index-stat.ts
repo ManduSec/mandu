@@ -23,7 +23,8 @@
  * the real blob id was in it already; the cached size, the real file's
  * before, is now the twin's.
  *
- * Only where it is TRUE: the entry is the only one of its path (stage 0),
+ * Only in the launch's own repositories (`reposInWorkspace`, the caller
+ * filters), and only where it is TRUE: the entry is the only one of its path (stage 0),
  * a plain file (100644, neither assume-unchanged nor skip-worktree), and
  * the real file's bytes hash to its blob (`git hash-object --no-filters`,
  * computed here, never by git). A file the user changed before the launch
@@ -46,14 +47,28 @@
  * replaced file detaches the bind, so the caller patches only where the
  * guard serves the twins (its by-path open covers a replace;
  * secret-setup.ts). The patch lasts only as long as the session: at its end each
- * entry that still holds exactly the stat written here (same blob) gets its
- * launch stat back, and an entry git has changed since (a `git add`, the
- * agent's staging) is left as it is. The CRASH RECORD (`TwinIndexRecorder`,
- * in the Mandu home, written before the patched index lands) lets the next
- * launch, before its own patch, or `mandu reap` do the same for a session
- * whose launcher died. A second session on the same repository takes the
- * first's launch stat as its own (`inheritBefore`), so whichever ends last
- * puts the real one back.
+ * entry that still holds exactly the stat written here (same blob) gets the
+ * REAL FILE'S stat as it is then (`realFileNow`: lstat, read, the bytes
+ * hashed to the entry's blob; a file that changed or cannot be read gets a
+ * zero stat instead, which makes git read it and decide), and an entry git
+ * has changed since (a `git add`, the agent's staging, a later session's
+ * patch) is left as it is. The CRASH RECORD (`TwinIndexRecorder`, in the
+ * HOME's own Mandu home whatever MANDU_HOME says, `twinIndexWriteStore`,
+ * written before the patched index lands) lets the next launch,
+ * before its own patch, or `mandu reap` do the same for a session whose
+ * launcher died.
+ *
+ * Never the recorded launch stat (2026-10-21): what the entry held at launch
+ * may be ANOTHER session's twin stat. Two sessions overlap on one repository
+ * (the demo battery runs six sides at once, each with its own Mandu home, so
+ * neither sees the other's record), the first ends first and leaves the
+ * second's stat alone, the second then put back its launch stat, the first's
+ * twin stat: the human's git showed ` M` with no diff for days, with no crash
+ * record anywhere (both sessions had ended cleanly). A launcher killed in a
+ * Mandu home that is removed with it (that battery's sides) leaves no record
+ * either; the next session on the repository patches over the stale stat and
+ * its end writes the real one, so nothing is left stale past it. The
+ * recorded launch stat (`before`) stays in the record, for a reader.
  *
  * The write follows git's own lock protocol: `index.lock` created with
  * O_EXCL (a git holding it wins, nothing is written), the index re-read
@@ -66,14 +81,15 @@
  */
 import { createHash } from "node:crypto";
 import {
-  closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, readdirSync, readSync, renameSync, rmSync, unlinkSync, utimesSync, writeSync,
+  closeSync, constants, existsSync, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, readdirSync, readSync, realpathSync, renameSync, rmSync, unlinkSync, utimesSync, writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { defaultGitRunner, type GitRunner } from "./git-object-twins.js";
+import { defaultGitRunner, repoRootAt, type GitRunner } from "./git-object-twins.js";
 import {
   bootIdNow, ensureRecordDir, gitBlobId, processStartTicks, RECORD_NAME, recordDirSafe, recordOwnerLive,
   WATCH_GIT_TIMEOUT_MS, WATCH_MAX_PATHS, WATCH_MAX_REPOS, type WatchedRepo,
 } from "./placeholder-commits.js";
+import { manduPath } from "./generated/mandu-paths.js";
 import { dirProblem, publishFile } from "./safe-file.js";
 
 /** The ten 32-bit stat words of an index entry, in their on-disk order. */
@@ -403,7 +419,8 @@ export interface CleanedIndex {
 
 /**
  * The crash record: what one launch wrote into which index, written BEFORE
- * the patched index replaces the old one, in the Mandu home (where the agent
+ * the patched index replaces the old one, in the HOME's own Mandu home
+ * (`twinIndexWriteStore`: whatever MANDU_HOME says; where the agent
  * can neither read nor write), removed once the session's end has put every
  * entry back. A record whose launcher is gone (its pid, that process's start
  * time and the boot: placeholder-commits.ts `recordOwnerLive`) is restored
@@ -424,6 +441,34 @@ export interface TwinIndexRecord {
  *  `object-walks`). Pure. */
 export function twinIndexRecordDir(walkCacheDir: string): string {
   return join(walkCacheDir, "twin-index");
+}
+
+/** A folder of crash records and the Mandu home it must lie in. */
+export interface TwinRecordStore { dir: string; home: string }
+
+/**
+ * Where a launch writes its crash record: the records' folder of the HOME's
+ * own Mandu home (`~/.mandu`), WHATEVER MANDU_HOME says (2026-10-21). A
+ * launch with its own MANDU_HOME (the demo battery's sides, a scratch home
+ * removed after the run) patches the user's repositories all the same, and
+ * a record kept in that home went with it: a launcher killed there left the
+ * twin's stat in an index no later launch or `mandu reap` could find. One
+ * store per HOME is read by every launch and reap of that HOME, whichever
+ * Mandu home they run with. The agent can neither read nor write it: the
+ * HOME's own Mandu home is one of the homes every launch hides
+ * (secret-setup.ts `manduHomes`), never the agent-writable `.git`. Pure.
+ */
+export function twinIndexWriteStore(home: string): TwinRecordStore {
+  return { dir: twinIndexRecordDir(manduPath("object-walks", {}, home)), home: manduPath("mandu-home", {}, home) };
+}
+
+/** The stores a launch and `mandu reap` restore from: the HOME's store and,
+ *  when MANDU_HOME names another home, that home's (records an earlier
+ *  launcher wrote there). Pure. */
+export function twinIndexReadStores(env: Readonly<Record<string, string | undefined>>, home: string): TwinRecordStore[] {
+  const own = twinIndexWriteStore(home);
+  const set = { dir: twinIndexRecordDir(manduPath("object-walks", env, home)), home: manduPath("mandu-home", env, home) };
+  return set.dir === own.dir ? [own] : [own, set];
 }
 
 /** A record at most (16 repositories of 256 paths fit many times over). */
@@ -581,11 +626,11 @@ export interface CleanTwinsOpts {
   /** The crash record (production: always). Without it nothing is recorded
    *  (unit tests of the patch itself). */
   recorder?: TwinIndexRecorder;
-  /** The records of OTHER live sessions (a second session on the same
-   *  repository): an entry that holds one's stat takes that one's launch
-   *  stat as its own, so whichever session ends last puts the real one
-   *  back. */
-  peers?: () => readonly TwinIndexRecord[];
+  /** A work tree's index file as the history step read it at this launch
+   *  (git-object-twins.ts RepoFacts `index`), so no rev-parse is asked for
+   *  it here; undefined (a work tree the step did not read, a failed read,
+   *  an old git) asks `rev-parse --git-path index` as before. */
+  indexPathOf?: (root: string) => string | undefined;
 }
 
 /** The real file's bytes, or null when it is not a plain file of at most
@@ -604,16 +649,90 @@ export function readRealFile(path: string): Buffer | null {
   }
 }
 
-/** `e` with the launch stat of a peer session whose patch it holds. Pure. */
-export function inheritBefore(e: PatchedEntry, indexPath: string, peers: readonly TwinIndexRecord[]): PatchedEntry {
-  for (const r of peers) {
-    for (const c of r.indexes) {
-      if (c.indexPath !== indexPath) continue;
-      const p = c.entries.find((x) => x.rel === e.rel && x.oid === e.oid && sameStat(x.after, e.before));
-      if (p !== undefined) return { ...e, before: p.before };
-    }
+/** A real file as the restore finds it: its bytes and the stat git would
+ *  cache for it. */
+export interface RealFile { bytes: Buffer; stat: IndexStat }
+
+/**
+ * The real file at `path` now, or null when it is not a plain file of at
+ * most REAL_MAX_BYTES (gone, a link, unreadable). Its stat is the path's
+ * lstat (what git caches); the bytes are read O_NOFOLLOW from the same file
+ * (device, inode, size, mtime and ctime equal before and after the read), so
+ * the stat is the stat of exactly the bytes returned. Never throws.
+ */
+export function realFileNow(path: string): RealFile | null {
+  let fd: number;
+  try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch { return null; }
+  try {
+    const before = lstatSync(path, { bigint: true });
+    const opened = fstatSync(fd, { bigint: true });
+    if (!before.isFile() || before.size > BigInt(REAL_MAX_BYTES)) return null;
+    const same = (a: typeof before, b: typeof before): boolean =>
+      a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+    if (!same(before, opened)) return null;
+    const bytes = readWhole(fd, Number(opened.size));
+    if (!same(opened, fstatSync(fd, { bigint: true }))) return null;
+    return { bytes, stat: indexStatOf(before) };
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
   }
-  return e;
+}
+
+/** The stat git caches for an entry it never stat'ed (`update-index
+ *  --cacheinfo`, a fresh `read-tree`): with a zero size git reads the file
+ *  and compares its content, whatever the other words say (`ie_modified`). */
+export const UNSTATED: IndexStat = { ctimeSec: 0, ctimeNsec: 0, mtimeSec: 0, mtimeNsec: 0, dev: 0, ino: 0, mode: 0, uid: 0, gid: 0, size: 0 };
+
+/** What the restore writes into the entry of `rel`: the real file's stat
+ *  when its bytes are the entry's blob, else UNSTATED (git reads the file:
+ *  a change shows modified, as it is). Never the recorded launch stat, which
+ *  may be another session's twin stat. Pure but for `readReal`. */
+export function restoreStatFor(root: string, e: Pick<PatchedEntry, "rel" | "oid">, readReal: (path: string) => RealFile | null): IndexStat {
+  const real = readReal(join(root, e.rel));
+  const algo = e.oid.length === 64 ? "sha256" : "sha1";
+  return real !== null && gitBlobId(real.bytes, algo) === e.oid ? real.stat : UNSTATED;
+}
+
+function realOr(p: string): string {
+  try { return realpathSync(p); } catch { return resolve(p); }
+}
+
+/** `a` is `b` or inside it (both absolute, normalized). Pure. */
+function within(a: string, b: string): boolean {
+  return a === b || a.startsWith(b === "/" ? "/" : `${b}/`);
+}
+
+/**
+ * The repositories of `repos` the launch's own workspace is in: the work
+ * tree that holds one of `workspaceRoots` (the NEAREST one: the launch from
+ * inside a repository) or one that a workspace root holds (a workspace
+ * above several). Both sides are compared by their real spellings, so a
+ * symlinked cwd counts. A linked worktree is its own work tree: a launch
+ * from one placed inside its main checkout's directory
+ * (`.claude/worktrees/x`) is in that worktree, not in the main checkout,
+ * and a launch from the main checkout does not reach a worktree beside it
+ * unless the workspace holds the worktree's directory. Only these get the twin's stat in their index
+ * (`cleanTwinsInIndex`): every other repository the walk found keeps
+ * showing the twinned file modified to git in the agent's world, as before
+ * the patch existed, and its index is never written, so the human's git
+ * there never shows the spurious ` M` (confidentiality.md §7.2a "A twinned
+ * file git tracks looks clean", the scope). The placeholder watch still
+ * covers them all. Pure but for `real`.
+ */
+export function reposInWorkspace<T extends { root: string }>(
+  repos: readonly T[], workspaceRoots: readonly string[],
+  fs: { real?: (p: string) => string; exists?: (p: string) => boolean } = {},
+): T[] {
+  const real = fs.real ?? realOr;
+  const exists = fs.exists ?? existsSync;
+  const ws = workspaceRoots.filter((w) => w !== "").map(real);
+  const holders = new Set(ws.map((w) => repoRootAt(w, exists)).filter((r): r is string => r !== null));
+  return repos.filter((r) => {
+    const root = real(r.root);
+    return holders.has(root) || ws.some((w) => within(root, w));
+  });
 }
 
 /**
@@ -655,19 +774,20 @@ export async function cleanTwinsInIndex(repos: readonly WatchedRepo[], opts: Cle
     if (patches.length === 0 || hashBytes === null) continue;
     const hb = hashBytes;
     try {
-      const r = await git(["rev-parse", "--path-format=absolute", "--git-path", "index"], { cwd: repo.root, timeoutMs: opts.timeoutMs ?? WATCH_GIT_TIMEOUT_MS });
-      const p = r.stdout.trim();
-      if (r.code !== 0 || p === "" || p.includes("\n")) throw new Error(r.stderr.trim().split("\n").slice(-1)[0] || `exit ${r.code}`);
-      const indexPath = isAbsolute(p) ? p : resolve(repo.root, p);
+      let indexPath = opts.indexPathOf?.(repo.root);
+      if (indexPath === undefined || !isAbsolute(indexPath)) {
+        const r = await git(["rev-parse", "--path-format=absolute", "--git-path", "index"], { cwd: repo.root, timeoutMs: opts.timeoutMs ?? WATCH_GIT_TIMEOUT_MS });
+        const p = r.stdout.trim();
+        if (r.code !== 0 || p === "" || p.includes("\n")) throw new Error(r.stderr.trim().split("\n").slice(-1)[0] || `exit ${r.code}`);
+        indexPath = isAbsolute(p) ? p : resolve(repo.root, p);
+      }
       let recordFailed = false;
       const entries = patchIndexFile(indexPath, hb, patches, undefined, {
         ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
         beforeCommit: (done) => {
-          const peers = opts.peers?.() ?? [];
-          const kept = done.map((e) => inheritBefore(e, indexPath, peers));
-          if (opts.recorder === undefined) return kept;
-          opts.recorder.rec.indexes.push({ root: repo.root, indexPath, hashBytes: hb, entries: kept });
-          if (opts.recorder.save()) return kept;
+          if (opts.recorder === undefined) return done;
+          opts.recorder.rec.indexes.push({ root: repo.root, indexPath, hashBytes: hb, entries: done });
+          if (opts.recorder.save()) return done;
           opts.recorder.rec.indexes.pop();
           recordFailed = true;
           return null;
@@ -689,11 +809,22 @@ function pause(ms: number): void {
   try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* no wait */ }
 }
 
+/** What a restore may be handed (tests); production reads the files. */
+export interface RestoreOpts {
+  log?: (m: string) => void;
+  uid?: number;
+  lockWaitMs?: number;
+  /** The real file now (default `realFileNow`). */
+  readReal?: (path: string) => RealFile | null;
+}
+
 /**
- * Put the launch stat back into each entry that still holds exactly the
- * stat the launch wrote (same blob); an entry git has since changed (a
- * human's `git add`, the agent's staging, another session's patch) is left
- * as it is. Waits up to RESTORE_LOCK_WAIT_MS for a lock another git holds.
+ * Put a true stat into each entry that still holds exactly the stat the
+ * launch wrote (same blob): the real file's stat as it is now, or UNSTATED
+ * where its bytes are no longer the blob (`restoreStatFor`); an entry git
+ * has since changed (a human's `git add`, the agent's staging, another
+ * session's patch) is left as it is. Waits up to RESTORE_LOCK_WAIT_MS for a
+ * lock another git holds.
  * `complete` is false only when such a lock was held throughout (the one
  * TRANSIENT failure: the caller keeps the record for a later try). Every
  * other failure (an index that is gone, split since, symlinked, not the
@@ -704,14 +835,17 @@ function pause(ms: number): void {
  * them, e.g. a history rewrite). Never throws.
  */
 export function restoreTwinIndexes(
-  cleaned: readonly CleanedIndex[], opts: { log?: (m: string) => void; uid?: number; lockWaitMs?: number } = {},
+  cleaned: readonly CleanedIndex[], opts: RestoreOpts = {},
 ): { back: string[]; complete: boolean; untracked: Array<{ root: string; rel: string }> } {
   const back: string[] = [];
   const untracked: Array<{ root: string; rel: string }> = [];
+  const readReal = opts.readReal ?? realFileNow;
   let complete = true;
   for (const c of cleaned) {
     const onlyIf = new Map(c.entries.map((e) => [e.rel, e.after]));
-    const patches = c.entries.map((e) => ({ rel: e.rel, oid: e.oid, stat: e.before }));
+    // Read outside the index lock (a git waiting on it is never held up by
+    // a hash); the entry is still matched against `after` under the lock.
+    const patches = c.entries.map((e) => ({ rel: e.rel, oid: e.oid, stat: restoreStatFor(c.root, e, readReal) }));
     const deadline = Date.now() + (opts.lockWaitMs ?? RESTORE_LOCK_WAIT_MS);
     // An index gone (the repository removed or moved) has nothing to put back.
     try { lstatSync(c.indexPath); } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT" || (e as NodeJS.ErrnoException).code === "ENOTDIR") continue; }
@@ -745,12 +879,12 @@ export const TWIN_RECORD_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
 /**
  * The records in `dir` whose launcher is gone (a crash, a kill): each
  * restored now (restoreTwinIndexes) and removed once complete. Run by a
- * launch BEFORE its own patch (so its launch stat is never a dead session's
- * twin stat) and by `mandu reap`. Returns the work trees put back. Never
- * throws.
+ * launch BEFORE its own patch (so git outside is clean again at once, not
+ * only when this session ends) and by `mandu reap`. Returns the work trees
+ * put back. Never throws.
  */
 export function restorePendingTwinIndexes(
-  dir: string, home: string, opts: { live?: (rec: TwinIndexRecord) => boolean; log?: (m: string) => void; uid?: number; lockWaitMs?: number; now?: number } = {},
+  dir: string, home: string, opts: RestoreOpts & { live?: (rec: TwinIndexRecord) => boolean; now?: number } = {},
 ): string[] {
   const live = opts.live ?? ((r: TwinIndexRecord) => recordOwnerLive(r));
   const roots: string[] = [];
@@ -766,10 +900,14 @@ export function restorePendingTwinIndexes(
   return roots;
 }
 
-/** The records of OTHER sessions still running (peers for
- *  cleanTwinsInIndex). Never throws. */
-export function livePeerRecords(dir: string, home: string, live: (rec: TwinIndexRecord) => boolean = (r) => recordOwnerLive(r)): TwinIndexRecord[] {
-  return readTwinIndexRecords(dir, home).map((x) => x.rec).filter((r) => r.pid !== process.pid && live(r));
+/** restorePendingTwinIndexes over each of `stores` (twinIndexReadStores);
+ *  the work trees put back, each once. Never throws. */
+export function restorePendingFromStores(
+  stores: readonly TwinRecordStore[], opts: Parameters<typeof restorePendingTwinIndexes>[2] = {},
+): string[] {
+  const roots: string[] = [];
+  for (const s of stores) for (const r of restorePendingTwinIndexes(s.dir, s.home, opts)) if (!roots.includes(r)) roots.push(r);
+  return roots;
 }
 
 /**
@@ -779,7 +917,7 @@ export function livePeerRecords(dir: string, home: string, live: (rec: TwinIndex
  */
 export function endTwinIndexSession(
   cleaned: readonly CleanedIndex[] | undefined, recorder: TwinIndexRecorder | undefined,
-  opts: { log?: (m: string) => void; uid?: number; lockWaitMs?: number } = {},
+  opts: RestoreOpts = {},
 ): { back: string[]; complete: boolean; untracked: Array<{ root: string; rel: string }> } {
   const r = cleaned !== undefined ? restoreTwinIndexes(cleaned, opts) : { back: [], complete: true, untracked: [] };
   if (r.complete) recorder?.remove();

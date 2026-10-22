@@ -744,11 +744,18 @@ confined and is not in this table.
   `protocol.allow=never`, `gc.auto=0`, `maintenance.auto=false`,
   `submodule.recurse=false`, and `hook.<event>.enabled=false` for each
   event of `GIT_HOOK_EVENTS` (the 28 githooks(5) lists; config-based
-  hooks, §8.6); `hardenedGitArgs(args, {literalPathspecs})`
+  hooks, §8.6), and, since 2026-10-21, `core.useReplaceRefs=false` and
+  `advice.graftFileDeprecated=false` (history as the objects record it,
+  below); `hardenedGitArgs(args, {literalPathspecs})`
   puts them, as `-c` pairs, behind `--no-pager`.
 - `hardenedGitEnv(base, extra)`: `base` with every `GIT_*` removed, then
   `GIT_CONFIG_NOSYSTEM=1`, `GIT_NO_LAZY_FETCH=1`, `GIT_TERMINAL_PROMPT=0`,
-  `GIT_ASKPASS=`, `GIT_EDITOR=:`, `GIT_SEQUENCE_EDITOR=:`, then `extra`.
+  `GIT_ASKPASS=`, `GIT_EDITOR=:`, `GIT_SEQUENCE_EDITOR=:`,
+  `GIT_NO_REPLACE_OBJECTS=1`, `GIT_GRAFT_FILE=/dev/null`, then `extra`.
+  The last two (a security fix, 2026-10-21; confidentiality.md §7.2a "What
+  the walk does not let a repository hide"): a graft or a replace ref the
+  agent writes into `.git` can no longer cut commits out of a walk that
+  decides what is protected.
 - The sandbox (§8.5): `gitSandbox()`, `gitCommand(args, sandbox, writable)`.
 
 No flag an older git refuses is used (a `-c` key an older git does not know
@@ -937,6 +944,27 @@ arbiter's async git calls (the preparer's `prepGit`, the resolver's
   sandbox child, which calls `setsid` (`--new-session`) only after that
   eventfd read, so the orphan above is always still in the group (none left
   in hundreds of runs);
+- and to every descendant the runner reads just before the kill
+  (`descendants`: `/proc/<pid>/task/<tid>/children`, Linux; none where
+  there is no `/proc`, as on macOS, whose Seatbelt sandbox execs git in
+  place). The second window (found 2026-10-21, CI jobs 18255 to 18296):
+  after that setsid the sandbox child, the sandbox's pid 1, leads a session
+  of its own, out of the group kill's reach, and arms `--die-with-parent`
+  only in its init loop, after it forked the command, with no check that
+  bubblewrap is still alive. A kill between the two left the sandbox running
+  the command to its natural end, bound to nothing, holding the pipes: 2 of
+  8192 kills within 3 ms of the spawn on an idle host left a `sleep 3`
+  sandbox running its 3 s, and once the CI guest's suites shared one cpu
+  cgroup (continuous-integration.md §11: nice 19 then weighs against every
+  other suite) a starved `git --version` sandbox held the output past the
+  test's 5 s grace in 10 of 22 runs. In
+  production that is a killed call (a deadline, a `stop()`) whose git runs
+  on to its end, a build's `pack-objects` included, and costs the kill
+  grace. Killing the sandbox's pid 1 ends its PID namespace, the command
+  with it. Each descendant is read while its parent lives, so it has not
+  been reaped nor its pid reused at the read, and only microseconds pass
+  between the read and the kill. Not read once node has reaped the child
+  (its exit reported): its pid may be another process's by then;
 - a killed call settles within a second whatever still holds its pipes
   (they are destroyed); an exit whose output does not close within ten
   seconds (a process it started, outside the group, holds it) settles as a
@@ -1344,11 +1372,17 @@ session (no launch passed one) pays it.
   resolver.
 - `arbiter/test/unit/child-run.test.ts` (§8.5.1): exit codes, output, input;
   the deadline kills the whole process group (a background process dies
-  too); a straggler outside the group costs the grace and fails the call;
+  too); a descendant that left the group (setsid) dies with the kill; a
+  straggler that is neither in the group nor a descendant costs the grace
+  and fails the call; `descendants` lists a tree parents first;
   an owner's kill; the output cap; a program that cannot start; and,
   where the git sandbox works, 256 kills of `nice -n 19 bwrap … git` in
   its start-up with no output left to the grace (without the group kill
-  this fails).
+  this fails), and 512 such kills of a sandbox that would run `sleep 300`,
+  so a sandbox that outlives the kill holds the output on any host (without
+  the descendant kill this fails: 3 of 512 on an idle host). Their kill
+  grace is 120 s, since at nice 19 on a CPU-bound host killed processes
+  can wait a minute to exit (continuous-integration.md §11).
 - `arbiter/test/component/prepared-copies.test.ts` (§8.5.1): a real
   `ArbiterServer` closed right after `registerRepository`, twelve times,
   each close returns.

@@ -44,3 +44,15 @@ export declare function agentOfLine(id: string): string;
 export declare function isAgent(s: unknown): s is Agent;
 export declare function isLine(s: unknown): s is AgentLine;
 export declare function tableProblems(lines?: readonly AgentLineRow[]): string[];
+
+/** An agent only the past-sessions scan knows (Mandu does not run it). */
+export type ScanOnlyAgent = "gemini" | "copilot" | "cursor";
+export interface ScanOnlyAgentRow {
+  id: ScanOnlyAgent;
+  name: string;
+  read: boolean;
+}
+export declare const SCAN_ONLY_AGENTS: readonly ScanOnlyAgentRow[];
+export declare const SCAN_ONLY_IDS: readonly ["gemini", "copilot", "cursor"];
+export declare const SCAN_ONLY_NAMES: Readonly<Record<ScanOnlyAgent, string>>;
+export declare const SCAN_READ_IDS: readonly ["gemini", "copilot"];

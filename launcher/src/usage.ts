@@ -39,6 +39,8 @@ export function usageText(): string {
     "                would mask and what it would leave raw, without starting an agent)",
     "  policy suggest  keys in this project (its git history and its files) your policy does not protect:",
     "                review the rule for each and apply it (--dry-run, --json, --apply-all, --home)",
+    "  scan          which of your secrets your agents already sent to the AI, from their transcripts on this",
+    "                computer (read-only, offline; --share for counts to post, --json)",
     "  why           why a file or host is treated as it is: mandu why ~/.pgpass, mandu why .env --to api.example.com,",
     "                mandu why api.example.com, mandu why '$MDU:…' (where a placeholder came from;",
     "                --json for the raw answer)",

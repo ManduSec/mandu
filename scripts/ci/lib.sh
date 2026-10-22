@@ -164,12 +164,16 @@ ci_append_costs() {
 # (tracked files only); --worktree is the
 # tracked files as they are on disk plus untracked files that are not ignored
 # (never ignored files: no node_modules, no target/, no secrets.local.json).
+# A symbolic link travels as the link with its target as written: the
+# transform's `S` flag keeps GNU tar from prefixing the target too, which
+# turned the inspector's `fixtures -> ../../dashboard/fixtures` into
+# a dangling `src/../../dashboard/fixtures` (continuous-integration.md §11).
 ci_source_tar() {
   local src="$1" out="$2"
   if [[ "$src" == --worktree ]]; then
     ( cd "$CI_REPO_ROOT" && git ls-files -z -co --exclude-standard \
         | while IFS= read -r -d '' p; do [[ -e "$p" || -L "$p" ]] && printf '%s\0' "$p"; done \
-        | tar --no-recursion --transform 's,^,src/,' --owner=0 --group=0 --numeric-owner \
+        | tar --no-recursion --transform 's,^,src/,S' --owner=0 --group=0 --numeric-owner \
               -cf "$out" --null -T - )
   else
     git -C "$CI_REPO_ROOT" archive --format=tar --prefix=src/ -o "$out" "$src"

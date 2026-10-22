@@ -38,18 +38,21 @@ import type { SessionViewModel } from "../view-model.js";
 import { netHost, osSubject, stepIdOfEvent, type DualOsStep, type DualResponseStep, type DualStep, type DualToolStep, type FileGuard } from "./dual-lanes.js";
 import { isSecretFlow, type SessionFlowStats } from "./lineage.js";
 import { sessionExited } from "./session-exit.js";
+import { launchTimeOf } from "./launch-time.js";
 import type { BackgroundCategory, BackgroundGroup, PairedToolRow, ProtectionMode } from "./paired-rows.js";
-import { agentName, agentNotice, agentPreview, oneLine, promptLabel, type HomeAnswered, type HomeAsk } from "./home.js";
-import { manduPolicyTool, policyToolAnswer, policyToolSentence } from "./mandu-tool-words.js";
+import { agentName, agentNotice, agentNoticeParts, agentPreview, oneLine, secretsPostureNote, promptLabel, type HomeAnswered, type HomeAsk } from "./home.js";
+import { manduPolicyTool, policyToolAnswerParts, policyToolSentence } from "./mandu-tool-words.js";
 import { declassifyAnswer, isManduDeclassify } from "./declassify-words.js";
 import { inspectAnswer } from "./inspect-answer.js";
 import { promptNotes, type PromptLocks } from "./prompt-notes.js";
 import { causeFiles, causePrograms, earlyReads, FINDING_POINTER, SECRET_ALL_CAP, secretsStory, secretShortName, traceLink, type LaterLabelInput, type SecretsStory, type StoryOptions } from "./secret-story.js";
 import { laterByStep, laterLabels, plainReads, type LabelTime, type LaterLabel } from "./later-labels.js";
 import { secretRef } from "./secret-ref.js";
+import { ISSUES_URL } from "../agent-versions.js";
 // The kept-or-echoed rule both views share (held-tokens.ts).
 import { heldTokens, SYM_RE, tokensIn, trailingDots } from "./held-tokens.js";
 import { blockWhy } from "./block-why.js";
+import { issuerOfHost, type IssuerReading } from "./issuer-words.js";
 import { browserStory } from "./browser-story.js";
 import { gateRewrite, noticeWhy, rewriteCheckKind } from "./gate-rewrite.js";
 import { pathArg, toolFamily } from "./tool-family.js";
@@ -107,6 +110,8 @@ export const ORIGINAL_ALL_CAP = 1_000_000;
 export const BACKGROUND_ALL_CAP = 1000;
 /** The places What the leak check found lists. */
 export const FINDING_CAP = 20;
+/** The secrets its *What to do now* names, one line each; the rest counted. */
+export const TODO_NAMES_CAP = 5;
 
 /** `$MDU:tool[hash]` without its field path: symbol rows and tokens spell
  *  the same item with and without a field. */
@@ -425,13 +430,17 @@ function itemsParts(names: readonly string[], label: ItemLabel): StoryPart[] {
  *  uncorrelated file action, a send that carried a masked item), in plain
  *  words. `label` names what a send carried; without it, an item is "a
  *  masked item". A block or a wait also says why, when the event recorded
- *  a rule this page words (block-why.ts); otherwise no `why`. */
+ *  a rule this page words (block-why.ts); otherwise no `why`. `issuers`:
+ *  policy.yaml's `issuer_bindings` as the route read it, so a send to a
+ *  company's own API says why it did not ask (§4.25b); absent: no such
+ *  sentence. */
 export function osSentence(
   s: Pick<DualOsStep, "kind" | "title" | "action" | "usage" | "target" | "violated" | "carried"> & Partial<Pick<DualOsStep, "ruleRef" | "askId" | "fileGuard">>,
   label: ItemLabel = () => ({ secret: false, name: null }),
   dev = true,
+  issuers?: IssuerReading,
 ): { icon: Icon; sentence: StoryPart[]; outcome: StoryOutcome; note: string | null; noteParts?: StoryPart[]; why?: StoryPart[]; askId?: string } {
-  const o = osWords(s, label, dev);
+  const o = osWords(s, label, dev, issuers);
   if (o.outcome !== "blocked" && o.outcome !== "waiting") return o;
   const net = s.kind === "net_action" && !s.fileGuard;
   const why = blockWhy(s.ruleRef, { outcome: o.outcome, host: net ? netHost(s) || null : null, ...(net && s.carried ? { carried: s.carried.length } : {}) });
@@ -498,10 +507,31 @@ function fileGuardWords(g: FileGuard): { icon: Icon; sentence: StoryPart[]; outc
  *  server, docker or the desktop bus can start a program outside Mandu). */
 const LOCAL_SOCKET_NOTE = "A program that runs outside Mandu listens there, so a command sent through it would run outside Mandu's protection.";
 
+const SENT_NOTE = "The real value left this machine, to a destination allowed to receive it.";
+
+/** A send's note, and when `host` is a company's own API while its keys go
+ *  there without asking, why nobody asked (dashboard.md §4.25b, *A send to
+ *  its company's own API says why it did not ask*). "May": the page knows
+ *  the host, not the rule that let the send through (net-proxy records a
+ *  rule only on a block), so a rule or an answer of yours may be the reason
+ *  instead, and the sentence stays true then too. */
+function sentNote(host: string, issuers: IssuerReading | undefined): { note: string; noteParts?: StoryPart[] } {
+  const issuer = issuerOfHost(host, issuers);
+  if (!issuer) return { note: SENT_NOTE };
+  const noteParts = [
+    t(`${SENT_NOTE} `), c(host),
+    t(` is ${issuer.name}'s own API: a key ${issuer.name} issued may go there without asking you. `),
+    { kind: "text" as const, text: "Built-in protections", rules: "built-in" as const },
+    t(" in Rules lists these, and says how to have them ask."),
+  ];
+  return { note: said(noteParts), noteParts };
+}
+
 function osWords(
   s: Pick<DualOsStep, "kind" | "title" | "action" | "usage" | "target" | "violated" | "carried"> & Partial<Pick<DualOsStep, "fileGuard">>,
   label: ItemLabel,
   dev: boolean,
+  issuers?: IssuerReading,
 ): { icon: Icon; sentence: StoryPart[]; outcome: StoryOutcome; note: string | null; noteParts?: StoryPart[] } {
   const { act, subject } = osSubject(s);
   const blocked = s.usage === "deny" || BLOCK_RE.test(act);
@@ -520,7 +550,7 @@ function osWords(
       const items = itemsParts(carried, label);
       if (blocked) return { icon: "web", sentence: [t("Mandu blocked a request to "), c(host), t(" that carried "), ...items], outcome: "blocked", note: "The request never left this machine." };
       if (waiting) return { icon: "web", sentence: [t("Wants to send "), ...items, t(" to "), c(host)], outcome: "waiting", note: "Waiting for your OK." };
-      return { icon: "web", sentence: [t("Sent a request to "), c(host), t(" with "), ...items, t(" filled in")], outcome: "sent", note: "The real value left this machine, to a destination allowed to receive it." };
+      return { icon: "web", sentence: [t("Sent a request to "), c(host), t(" with "), ...items, t(" filled in")], outcome: "sent", ...sentNote(host, issuers) };
     }
     if (blocked) return { icon: "web", sentence: [t("Mandu blocked a connection to "), c(host)], outcome: "blocked", note: "The request never left this machine." };
     if (waiting) return { icon: "web", sentence: [t("Wants to connect to "), c(host)], outcome: "waiting", note: "Waiting for your OK." };
@@ -890,9 +920,14 @@ function toolStep(step: DualToolStep, row: PairedToolRow, scope: ValueScope, lab
     later = [t("Masked from "), at(step.maskedLater.ts), t(secret ? " on, after it was marked a secret." : " on.")];
   }
   // A call to Mandu's own rule tools: what Mandu answered, from its recorded
-  // envelope only (a masked or other result says nothing).
+  // envelope only (a masked or other result says nothing). A change it made
+  // or a request it filed is linked in Approvals (`ask` on "Approvals").
   const policy = manduPolicyTool(step.tool);
-  if (policy && outcome === "plain") note ??= policyToolAnswer(policy, step.resultAgent);
+  const answer = policy && outcome === "plain" && note === null ? policyToolAnswerParts(policy, step.resultAgent) : null;
+  if (answer) {
+    note = answer.map((p) => p.text).join("");
+    noteParts = answer.some((p) => p.ask) ? answer : undefined;
+  }
   // Mandu's in-context read: what Mandu answered, from the relay's own
   // text only (a masked or other result says nothing).
   const declassify = isManduDeclassify(step.tool);
@@ -1203,6 +1238,7 @@ export function leakFinding(vm: SessionViewModel, turns: readonly StoryTurn[], s
   for (const turn of turns) for (const s of turn.steps) if (s.kind === "action") story.set(s.id, s);
   const seen = new Set<string>();
   const items: LeakFindingItem[] = [];
+  const named: string[][] = [];
   for (const row of vm.timeline) {
     if (!row.violated) continue;
     const stepId = stepIdOfEvent({ id: row.id, callId: row.callId }, ids);
@@ -1214,9 +1250,10 @@ export function leakFinding(vm: SessionViewModel, turns: readonly StoryTurn[], s
     const step = stepId ? story.get(stepId) : undefined;
     const tool = stepId ? dual.get(stepId) : undefined;
     let parts: StoryPart[];
+    let names: string[] = [];
     if (step && tool?.step === "tool") {
       parts = [t("At "), when, t(", the result of this step reached the AI without a mask: "), ...step.sentence, t(".")];
-      const names = [...new Set(tool.upSyms.map((b) => b.name).filter((n) => isSecretName(n, scope)).map((n) => secretShortName(n, origins.get(n) ?? origins.get(baseOf(n)) ?? null)).filter((n): n is string => !!n))];
+      names = [...new Set(tool.upSyms.map((b) => b.name).filter((n) => isSecretName(n, scope)).map((n) => secretShortName(n, origins.get(n) ?? origins.get(baseOf(n)) ?? null)).filter((n): n is string => !!n))];
       if (names.length) parts.push(t(" It held "), ...namedParts(names), t("."));
     } else if (row.kind === "tllm_call") {
       parts = [t("At "), when, t(", a request to the AI carried an item as it was, though Mandu had masked it.")];
@@ -1224,8 +1261,39 @@ export function leakFinding(vm: SessionViewModel, turns: readonly StoryTurn[], s
       parts = [t("At "), when, t(", a step reached the AI without a mask.")];
     }
     items.push({ ts: row.ts ?? null, ...(opens ? { step: opens } : {}), parts });
+    named.push(names);
   }
-  return { count: vm.invariant.violationCount, items: items.slice(0, FINDING_CAP), more: Math.max(0, items.length - FINDING_CAP) };
+  // What to do now names only what the lines drawn above it name.
+  const shownNames = named.slice(0, FINDING_CAP);
+  const todo = findingTodo([...new Set(shownNames.flat())], items.length === 0 || shownNames.some((n) => n.length === 0));
+  return { count: vm.invariant.violationCount, items: items.slice(0, FINDING_CAP), more: Math.max(0, items.length - FINDING_CAP), todo };
+}
+
+/**
+ * The leak check's *What to do now* (dashboard.md §4.25ae), one line each:
+ * change each secret the lines name (`names`, in their order, at most
+ * TODO_NAMES_CAP, the rest counted), since the AI's provider received it and
+ * nothing Mandu does now takes it back; when a line names none (`unnamed`),
+ * the same for whatever it was; and always, that this is a fault in Mandu
+ * to report, linked to the issue tracker. Names only, never a value. Pure.
+ */
+export function findingTodo(names: readonly string[], unnamed: boolean): StoryPart[][] {
+  const out: StoryPart[][] = names.slice(0, TODO_NAMES_CAP).map((n) => [
+    t("Change "), c(n), t(" where it was issued, and turn the old one off: the AI's provider received it as it was."),
+  ]);
+  const rest = names.length - TODO_NAMES_CAP;
+  if (rest > 0) out.push([t(`And ${rest} more: change each the same way.`)]);
+  if (unnamed) {
+    out.push([t(names.length
+      ? "If what reached the AI held a key or a password, change it the same way. Open the step to see what it was."
+      : "If what reached the AI held a key or a password, change it where it was issued, and turn the old one off. Open the step to see what it was.")]);
+  }
+  out.push([
+    t("This is a fault in Mandu, not in your rules. "),
+    { kind: "text", text: "Report a problem", href: ISSUES_URL },
+    t(", with this session's time. Never paste the key itself."),
+  ]);
+  return out;
 }
 
 export interface AgentPageInput {
@@ -1276,6 +1344,11 @@ export interface AgentPageInput {
    *  §4.25ac): the page's words may point to the detailed trace. False: no
    *  sentence does. Absent = true. */
   dev?: boolean;
+  /** policy.yaml's `issuer_bindings` as the route read it, given while the
+   *  level running now lists the companies under Rules › Built-in
+   *  protections (`secrets`, `full`): a send to a company's own API says
+   *  why it did not ask (§4.25b). Absent, or not read: no such sentence. */
+  issuerBindings?: IssuerReading;
 }
 
 /** What the agent page asked to see past its caps (its *Show them*). */
@@ -1462,8 +1535,10 @@ export function storyReply(ts: string, raw: string, scope: ValueScope, label: It
  *  `opts.dev`: the build serves the developer view (absent: true);
  *  `opts.background`: the turns, by id, whose background steps are listed
  *  (`routine.items`); `opts.hiddenCap`: where a revealed original is cut
- *  (absent: HIDDEN_CAP). */
-export function buildStory(vm: SessionViewModel, values?: Map<string, string>, early?: ReadonlyMap<string, string>, home = "", after?: ReadonlyMap<string, LaterLabel>, opts: { stepCap?: number; dev?: boolean; background?: ReadonlySet<string>; hiddenCap?: number } = {}): StoryTurn[] {
+ *  (absent: HIDDEN_CAP); `opts.issuers`: policy.yaml's `issuer_bindings`
+ *  as the route read it, for a send to a company's own API (`osSentence`;
+ *  absent: no such sentence). */
+export function buildStory(vm: SessionViewModel, values?: Map<string, string>, early?: ReadonlyMap<string, string>, home = "", after?: ReadonlyMap<string, LaterLabel>, opts: { stepCap?: number; dev?: boolean; background?: ReadonlySet<string>; hiddenCap?: number; issuers?: IssuerReading } = {}): StoryTurn[] {
   const dev = opts.dev !== false;
   const scope: ValueScope = { ...valueScope(vm, values), ...(early ? { early } : {}), ...(opts.hiddenCap !== undefined ? { hiddenCap: opts.hiddenCap } : {}) };
   const origins = new Map(vm.symbols.map((r) => [r.name, r.origin ?? null]));
@@ -1494,7 +1569,7 @@ export function buildStory(vm: SessionViewModel, values?: Map<string, string>, e
         const file = step.outcome === "raw" && labelled && !s.maskedLater ? baseName(labelled.path) : null;
         items.set(s.id, { held: !held.length && s.maskedLater ? s.maskedLater.symbols : held, ...(reads ? { reads } : {}), ...(file ? { laterFile: file } : {}) });
       } else if (r.row === "action" && s.step === "os") {
-        const o = osSentence(s, label, dev);
+        const o = osSentence(s, label, dev, opts.issuers);
         steps.push({ kind: "action", id: s.id, ts: s.ts, icon: o.icon, sentence: o.sentence, outcome: o.outcome, note: o.note, ...(o.noteParts ? { noteParts: o.noteParts } : {}), split: null, ...(o.why ? { why: o.why } : {}), ...(o.askId ? { askId: o.askId } : {}) });
         if (s.carried?.length) items.set(s.id, { carried: s.carried });
       } else if (r.row === "setup") steps.push({ kind: "setup", id: s.id, ts: s.ts, files: r.files.map((f) => maskTokens(f)) });
@@ -1617,6 +1692,7 @@ export function buildAgentPage(input: AgentPageInput): AgentPageVM {
       stepCap: Infinity, dev,
       ...(show.background ? { background: show.background } : {}),
       ...(show.original !== undefined ? { hiddenCap: ORIGINAL_ALL_CAP } : {}),
+      ...(input.issuerBindings ? { issuers: input.issuerBindings } : {}),
     })
     : [];
   // A step that asked says how its question was answered, as Approvals does
@@ -1668,12 +1744,16 @@ export function buildAgentPage(input: AgentPageInput): AgentPageVM {
     const hidden = step?.kind === "action" ? step.split?.hidden ?? null : null;
     original = hidden && hidden.text !== null && !hidden.secret ? hidden : null;
   }
+  const notice = agentNotice(session?.health, input.masking === true, input.id);
   return {
     found: !!(session || vm),
     id: input.id,
     agent: agentName(session?.agent, session?.health),
     preview: agentPreview(session?.health),
-    notice: agentNotice(session?.health, input.masking === true),
+    notice,
+    noticeParts: agentNoticeParts(session?.health, input.masking === true, input.id),
+    noticeShown: notice !== null && session?.health?.verdict === "broken",
+    secretsPosture: secretsPostureNote(session?.health?.secrets, "session"),
     title: titleOf(promptLabel(session), all),
     cwd: input.cwd,
     startedAt: session?.firstTs ?? null,
@@ -1699,6 +1779,7 @@ export function buildAgentPage(input: AgentPageInput): AgentPageVM {
     ...(show.secrets ? { allSecrets: true as const } : {}),
     finding: vm ? leakFinding(vm, all, shown) : null,
     browser: browserStory(input.events ?? []),
+    launchTime: launchTimeOf(input.events ?? []),
     ...(original !== undefined ? { original } : {}),
     valuesShown: input.valuesShown !== false,
   };

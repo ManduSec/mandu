@@ -782,10 +782,12 @@ export class ScreenReconciler {
           // The value's first glyph lands where desired(row) has grown to
           // (NOT the token's TUI column: an earlier, wider value on the row
           // shifts it). The cell model knows that column exactly, so a TAB in
-          // the value expands to the terminal's next 8-column tab stop, which
-          // is what the vanilla screen shows (frameSafeValue's startCol form).
+          // the value expands to the next 8-column tab stop counted from the
+          // session's TAB origin (the screen's column 0, or the TUI's text
+          // column, reply-row-reservation.md §19.7), which is what the
+          // vanilla screen shows (frameSafeValue's startCol form).
           const valueCol = desired.reduce((a, c) => a + c.width, 0);
-          const vCells = textCells(frameSafeValue(rendered, valueCol));
+          const vCells = textCells(frameSafeValue(rendered, valueCol, this.reserve.spliceTabOrigin));
           const vCols = vCells.reduce((a, c) => a + c.width, 0);
           // CLOSE UP (2026-10-05): a value narrower than its unit is NOT
           // padded to the unit's width; the cells the TUI painted after the

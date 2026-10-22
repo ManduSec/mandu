@@ -69,8 +69,10 @@ test("W2: the page's own sentences (words) keep their command whole: the sign-in
   const { doc } = load({ url: SETTINGS_URL, routes: { "GET policy/prompt-filters": { status: 403, body: { error: "admin session required: open the login link" } } } });
   await tick();
   const kinds = doc.getElementById("settings-prompt-kinds");
-  assert.equal(kinds.textContent, "Sign in first: in your own terminal, run mandu dashboard and open the sign-in link it prints (each link works once), or sign in with the dashboard's password if it has one.");
-  assert.deepEqual(codes(kinds), ["[mandu dashboard]"]);
+  assert.equal(kinds.textContent, "Sign in first: reload this page and sign in with your dashboard account (if there isn't one yet, run mandu dashboard --set-password in your own terminal).");
+  // Longer than WHOLE_MAX: a plain code, which may wrap at its spaces in
+  // the narrowest column (dashboard.md §4.25u, §6.z).
+  assert.deepEqual(codes(kinds), ["mandu dashboard --set-password"]);
 });
 
 test("W3: textParts keeps a short command whole and leaves a file or a flag plain: the exposure notice, the hero (§4.25u)", async () => {
@@ -134,12 +136,12 @@ test("W4: every command the page writes itself is code and kept whole, History's
   assert.equal(failed.textContent, "The list could not be loaded. Run mandu paths in a terminal to see it.");
   assert.deepEqual(codes(failed), ["[mandu paths]"]);
 
-  // History with no session: the same words, its commands now code.
+  // History with no session: Home's Get started step, its commands code.
   const hist = load({ extensions: "", url: HISTORY_URL, homeVm: home(), routes: { "GET home/history": { total: 0, rows: [], next: null } } });
   await tick();
   const empty = hist.doc.querySelector("#history-list .empty");
   assert.ok(empty, "History draws its empty state");
-  assert.equal(empty.textContent, "No session has been recorded yet. Start one with mandu claude or mandu codex.");
+  assert.equal(empty.textContent, "No session has been recorded yet. Start your agent through Mandu, mandu claude or mandu codex, and it shows up here.");
   assert.deepEqual(codes(empty), ["[mandu claude]", "[mandu codex]"]);
 
   // Every literal command in home.js goes through ownCode, and each is whole.
@@ -147,7 +149,11 @@ test("W4: every command the page writes itself is code and kept whole, History's
   const literals = [...JS.matchAll(/ownCode\('([^']*)'\)/g)].map((m) => m[1]!);
   const owned = [...JS.matchAll(/ownWords\([^;]*?\['([^']*)'\]/g)].map((m) => m[1]!);
   assert.ok(literals.length >= 7 && owned.length >= 2, `found the page's commands: ${JSON.stringify([...literals, ...owned])}`);
-  for (const text of [...literals, ...owned]) assert.equal(h.window.ownCode(text).className, "code-whole", `${text} is kept whole`);
+  // Each one that fits the narrowest column (WHOLE_MAX, 24) is whole; the
+  // one longer command, `mandu dashboard --set-password`, wraps as a plain code.
+  for (const text of [...literals, ...owned]) {
+    assert.equal(h.window.ownCode(text).className, text.length <= 24 ? "code-whole" : "", `${text} is kept whole only when it fits`);
+  }
 });
 
 test("W5: data is drawn as written: the AI's commands, its reply and the person's command carry no class (§4.25u)", async () => {

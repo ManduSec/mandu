@@ -4,17 +4,24 @@
  *   - with no DASHBOARD_HOST the server binds LOOPBACK (the launcher's stack
  *     autostart passes no host, so this default is what every first launch
  *     gets), and the start-up line says so;
- *   - a non-loopback bind with no authenticator is a start-up REFUSAL (exit 2,
- *     never listened) — the allowlist alone is not authentication;
- *   - the same bind WITH DASHBOARD_PASSWORD, DASHBOARD_BASIC_AUTH or
- *     DASHBOARD_TRUST_FRONT=1 comes up, and the default remote allowlist is
- *     EMPTY (no lab peer baked in).
+ *   - with no dashboard account it FAILS CLOSED (dashboard.md §6.z): every
+ *     route is 401, a page says "no account yet" and what to run, the log
+ *     says so; the account's credentials serve it; a pinned
+ *     DASHBOARD_ADMIN_TOKEN (the suites' seam) gets through by its link;
+ *   - a non-loopback bind with no account is a start-up REFUSAL (exit 2,
+ *     never listened) — the allowlist alone is not authentication, and
+ *     neither DASHBOARD_PASSWORD (no longer used: a NOTICE says it is
+ *     ignored) nor DASHBOARD_TRUST_FRONT=1 is an account;
+ *   - the same bind WITH the account (a file, or DASHBOARD_BASIC_AUTH moved
+ *     into one) comes up, and the default remote allowlist is EMPTY (no lab
+ *     peer baked in).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:net";
 import { existsSync, rmSync } from "node:fs";
+import { makeAccount, writeAccount } from "../../src/account.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
@@ -96,8 +103,19 @@ test("no DASHBOARD_HOST → the server binds loopback and says so", { timeout: S
       // The notice would print right after the registry line: wait for that
       // line so this absence is not checked before the notice could appear.
       assert.doesNotMatch(await waitFor(stderr, /\[dashboard\] registry/), /non-loopback bind/, "no remote-bind notice on the default");
+      // No account yet: fail closed.
       const res = await fetch(`http://127.0.0.1:${port}/api/tenants`);
-      assert.equal(res.status, 200, "served on loopback");
+      assert.equal(res.status, 401, "no account: nothing is served");
+      assert.match(((await res.json()) as { error: string }).error, /no account yet; run `mandu dashboard --set-password`/);
+      const page = await fetch(`http://127.0.0.1:${port}/`, { headers: { Accept: "text/html" } });
+      assert.equal(page.status, 401);
+      assert.match(await page.text(), /No account yet\. To make one, run <code>mandu dashboard --set-password<\/code>/);
+      assert.match(await waitFor(stderr, /no dashboard account yet/), /NOTICE: no dashboard account yet/);
+      assert.doesNotMatch(stderr(), /login\?token=|admin link/, "no admin link is printed");
+      // Made while it runs (`mandu dashboard --set-password`): served at once.
+      writeAccount(join(dir, "home", "state", "dashboard-account.json"), await makeAccount("alice", "a long enough password"));
+      const auth = { Authorization: `Basic ${Buffer.from("alice:a long enough password").toString("base64")}` };
+      assert.equal((await fetch(`http://127.0.0.1:${port}/api/tenants`, { headers: auth })).status, 200, "served on loopback with the account");
     } finally {
       child.kill("SIGTERM");
       await exited(child);
@@ -111,7 +129,7 @@ test("DASHBOARD_HOST=0.0.0.0 with no authenticator refuses to start (exit 2, nev
     try {
       await exited(child, START_DEADLINE_MS); // a deadline: returns at the exit
       assert.equal(child.exitCode, 2, `exit 2 (stderr: ${stderr()})`);
-      assert.match(stderr(), /refusing to bind 0\.0\.0\.0: a non-loopback bind needs authentication/);
+      assert.match(stderr(), /refusing to bind 0\.0\.0\.0: a non-loopback bind needs the dashboard account/);
       assert.ok(!existsSync(join(dir, "port")), "it never listened");
     } finally {
       child.kill("SIGKILL");
@@ -121,12 +139,50 @@ test("DASHBOARD_HOST=0.0.0.0 with no authenticator refuses to start (exit 2, nev
 });
 
 for (const [label, extra] of [
-  ["DASHBOARD_PASSWORD", { DASHBOARD_PASSWORD: "pw" }],
-  ['DASHBOARD_BASIC_AUTH="u:p"', { DASHBOARD_BASIC_AUTH: "u:p" }],
-  ["DASHBOARD_TRUST_FRONT=1", { DASHBOARD_TRUST_FRONT: "1" }],
+  ["DASHBOARD_PASSWORD (no longer an authenticator)", { DASHBOARD_PASSWORD: "pw" }],
+  ["DASHBOARD_TRUST_FRONT=1 and no account", { DASHBOARD_TRUST_FRONT: "1" }],
+] as const) {
+  test(`DASHBOARD_HOST=0.0.0.0 with ${label} refuses to start`, { timeout: SERVER_TEST_TIMEOUT_MS }, async () => {
+    await withArbiter(async (dir, arbSock) => {
+      const { child, stderr } = launch(dir, arbSock, { DASHBOARD_HOST: "0.0.0.0", ...extra });
+      try {
+        await exited(child, START_DEADLINE_MS);
+        assert.equal(child.exitCode, 2, `exit 2 (stderr: ${stderr()})`);
+        assert.match(stderr(), /needs the dashboard account/);
+        if ("DASHBOARD_PASSWORD" in extra) assert.match(stderr(), /NOTICE: DASHBOARD_PASSWORD is no longer used and is ignored/);
+      } finally {
+        child.kill("SIGKILL");
+        await exited(child);
+      }
+    });
+  });
+}
+
+test("a pinned DASHBOARD_ADMIN_TOKEN (the suites' seam) gets through the fail-closed gate by its link", { timeout: SERVER_TEST_TIMEOUT_MS }, async () => {
+  await withArbiter(async (dir, arbSock) => {
+    const { child, stderr } = launch(dir, arbSock, { DASHBOARD_ADMIN_TOKEN: "f".repeat(32) });
+    try {
+      const port = await waitUp(dir, child, stderr);
+      const link = await fetch(`http://127.0.0.1:${port}/login?token=${"f".repeat(32)}`, { redirect: "manual" });
+      assert.equal(link.status, 302);
+      const cookie = (link.headers.get("set-cookie") ?? "").split(";")[0]!;
+      assert.equal((await fetch(`http://127.0.0.1:${port}/api/tenants`, { headers: { Cookie: cookie } })).status, 200);
+      assert.equal((await fetch(`http://127.0.0.1:${port}/api/tenants`)).status, 401, "without it, still closed");
+      assert.match(await waitFor(stderr, /DASHBOARD_ADMIN_TOKEN is pinned/), /a test seam/);
+    } finally {
+      child.kill("SIGTERM");
+      await exited(child);
+    }
+  });
+});
+
+for (const [label, extra, account] of [
+  ["the dashboard account", {}, true],
+  ['DASHBOARD_BASIC_AUTH="u:p" (moved into the account)', { DASHBOARD_BASIC_AUTH: "u:p" }, false],
 ] as const) {
   test(`DASHBOARD_HOST=0.0.0.0 with ${label} comes up; the default remote allowlist is empty`, { timeout: SERVER_TEST_TIMEOUT_MS }, async () => {
     await withArbiter(async (dir, arbSock) => {
+      if (account) writeAccount(join(dir, "home", "state", "dashboard-account.json"), await makeAccount("alice", "a long enough password"));
       const { child, stderr } = launch(dir, arbSock, { DASHBOARD_HOST: "0.0.0.0", ...extra });
       try {
         const port = await waitUp(dir, child, stderr);

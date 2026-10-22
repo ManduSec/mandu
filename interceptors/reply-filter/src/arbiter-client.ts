@@ -56,9 +56,11 @@ export function humanSockFromEnv(env: NodeJS.ProcessEnv = process.env): string |
 export function childEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = { ...env };
   delete out[HUMAN_SOCK_ENV];
-  // The filter's own layout hint (reserve-block.ts WRAP_RULE_ENV): the
-  // launcher sets it for the filter, the agent has no use for it.
+  // The filter's own layout hints (reserve-block.ts WRAP_RULE_ENV,
+  // TAB_ORIGIN_ENV): the launcher sets them for the filter, the agent has no
+  // use for them.
   delete out["MANDU_REPLY_WRAP_RULE"];
+  delete out["MANDU_REPLY_TAB_ORIGIN"];
   return out;
 }
 
@@ -105,6 +107,10 @@ export interface SessionRelay {
   /** The agent's TUI wraps its reply by this rule (§17; reserve-layout.ts
    *  LayoutRule). Sent only for `terminal`; absent means `ink`. */
   rule?: "ink" | "terminal";
+  /** Where the agent's TUI counts a reply TAB's stops from (§19.7; reserve-
+   *  block.ts TabOrigin). Sent only for `content`; absent means the screen's
+   *  column 0. */
+  tabs?: "content" | "screen";
 }
 
 /**

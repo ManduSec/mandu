@@ -130,6 +130,10 @@ export interface ChangeRowVM {
   createdAt: number;
   undone: boolean;
   undoable: boolean;
+  /** The request the change answered, when it answered one: a link to that
+   *  request (`/approvals/<pp-…>`) marks this row once it was approved
+   *  (dashboard.md §4.25 *Details*). Absent otherwise. */
+  proposalId?: string;
 }
 
 const t = (text: string): Part => ({ kind: "text", text });
@@ -620,7 +624,10 @@ export function toChangeRow(ch: PolicyChangeRow, view: PatternView = {}): Change
     : (view.patterns === false ? hidePromptPatterns(ch.edits).edits : ch.edits).map((e) => editWords(e, view.home ?? ""));
   const agent = who === "agent" || who === "agent-approved";
   const session = agent && typeof ch.sessionKey === "string" && ch.sessionKey !== "" ? ch.sessionKey : null;
-  return { id: ch.id, sentence, session, rows, createdAt: ch.createdAt, undone: ch.undoneAt !== null, undoable: ch.undoable === true };
+  return {
+    id: ch.id, sentence, session, rows, createdAt: ch.createdAt, undone: ch.undoneAt !== null, undoable: ch.undoable === true,
+    ...(typeof ch.proposalId === "string" && ch.proposalId !== "" ? { proposalId: ch.proposalId } : {}),
+  };
 }
 
 // ── Where each rule came from (dashboard.md §4.25i) ──────────────────────────

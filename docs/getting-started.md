@@ -202,25 +202,26 @@ alias claude="mandu claude"
 
 ## 6. Open the dashboard
 
-Every `mandu claude` prints the dashboard's address before the agent starts,
-as a sign-in link in its launch line:
-
-```text
-mandu: secrets mode · 14 credential files masked · dashboard http://127.0.0.1:41234/login?ticket=… (the link signs this browser in, once)
-```
-
-Open that link to sign in; the browser stays signed in until the dashboard
-restarts. Each link works once. For a new one, run this in your own terminal:
+The dashboard asks for your **dashboard account**, one username and
+password. Make it once, in your own terminal:
 
 ```sh
-mandu dashboard
+mandu dashboard --set-password
 ```
 
-It prints the address and a `sign in (this link works once): …` line. Only
-your own terminal can get a link: the agent, and anything it runs, cannot (see
-[the dashboard](usage.md#the-dashboard-on-the-network) for why). Without
-signing in you can look around, but Allow, Block and rule changes answer
-"Sign in first".
+(`mandu dashboard` offers to make it, too.) Every `mandu claude` then prints
+the dashboard's address before the agent starts, in its launch line:
+
+```text
+mandu: secrets mode · 14 credential files masked · dashboard http://127.0.0.1:41234/ (sign in with your Mandu dashboard account)
+```
+
+Open it and sign in with that username and password; the browser stays
+signed in for up to 7 days. Until you make the account, the dashboard shows
+nothing but how to make it, and the launch line says "no account yet; set
+one". `mandu dashboard` prints the address any time. The agent, and anything
+it runs under Mandu, can neither read nor change your account (see
+[the dashboard](usage.md#the-dashboard-on-the-network) for why).
 
 The dashboard (local only, on `127.0.0.1`) shows:
 

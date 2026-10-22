@@ -30,7 +30,7 @@ import {
   defaultGitRunner, historyStateOf, historyStateOfRoots, idxObjectNames, parseRepoConfig, parseRepoFacts, prepareGitObjectTwins,
   RepoReads, repoFactsOf, REPO_FACTS_ARGS, type GitRunner,
 } from "../../src/git-object-twins.js";
-import { parseReflog, readReflogOids } from "../../src/reflog-tips.js";
+import { Pacer, parseReflog, readReflogOids } from "../../src/reflog-tips.js";
 import { probeGitSandbox } from "../../src/hardened-git.js";
 import { stateAxes } from "../axes.js";
 import { memorySeals } from "../lib/memory-seals.js";
@@ -234,11 +234,11 @@ test("fallback: a symlink, a FIFO or a line that is not an entry in the reflogs,
     assert.ok(calls.some((a) => a.join(" ") === "rev-list --all --reflog --no-walk"));
     assert.deepEqual(mine, [...await gitTips(r.main)].sort());
     mkdirSync(join(r.main, ".git", "reftable"));
-    assert.deepEqual(readReflogOids(join(r.main, ".git"), 40), { fallback: "a reftable directory" });
+    assert.deepEqual(await readReflogOids(join(r.main, ".git"), 40), { fallback: "a reftable directory" });
   } finally { r.done(); }
 });
 
-test("readReflogOids: every name of every log under logs/ and worktrees/*/logs/, read once; nothing there is no tip", () => {
+test("readReflogOids: every name of every log under logs/ and worktrees/*/logs/, read once; nothing there is no tip", async () => {
   const tmp = realpathSync(mkdtempSync(join(tmpdir(), "mandu-tips-raw-")));
   try {
     const entry = (o: string, n: string) => `${o} ${n} t <t@x> 1700000000 +0000\tm\n`;
@@ -248,14 +248,40 @@ test("readReflogOids: every name of every log under logs/ and worktrees/*/logs/,
     writeFileSync(join(tmp, "logs", "refs", "heads", "deep", "er", "x"), entry(A, B));
     writeFileSync(join(tmp, "worktrees", "w", "logs", "HEAD"), entry(B, "c".repeat(40)));
     writeFileSync(join(tmp, "worktrees", "w", "logs", "refs", "worktree", "y"), entry(Z, "d".repeat(40)));
-    assert.deepEqual(readReflogOids(tmp, 40), { oids: [A, B, "c".repeat(40), "d".repeat(40)] });
+    assert.deepEqual(await readReflogOids(tmp, 40), { oids: [A, B, "c".repeat(40), "d".repeat(40)] });
     const empty = realpathSync(mkdtempSync(join(tmpdir(), "mandu-tips-none-")));
-    try { assert.deepEqual(readReflogOids(empty, 40), { oids: [] }); } finally { rmSync(empty, { recursive: true, force: true }); }
+    try { assert.deepEqual(await readReflogOids(empty, 40), { oids: [] }); } finally { rmSync(empty, { recursive: true, force: true }); }
     // An unreadable log is a doubt, never skipped.
     chmodSync(join(tmp, "logs", "HEAD"), 0o000);
     let readable = true;
     try { readFileSync(join(tmp, "logs", "HEAD")); } catch { readable = false; }
-    if (!readable) assert.ok("fallback" in readReflogOids(tmp, 40));
+    if (!readable) assert.ok("fallback" in await readReflogOids(tmp, 40));
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test("readReflogOids is paced (2026-10-21): thousands of logs over many worktrees read with the event loop handed back, the same names, every log still read", async () => {
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), "mandu-tips-paced-")));
+  try {
+    const entry = (o: string, n: string) => `${o} ${n} t <t@x> 1700000000 +0000\tm\n`;
+    const name = (i: number) => i.toString(16).padStart(40, "0");
+    mkdirSync(join(tmp, "logs", "refs", "heads"), { recursive: true });
+    for (let i = 1; i <= 600; i++) writeFileSync(join(tmp, "logs", "refs", "heads", `b${i}`), entry(Z, name(i)));
+    for (let w = 0; w < 200; w++) {
+      mkdirSync(join(tmp, "worktrees", `w${w}`, "logs"), { recursive: true });
+      writeFileSync(join(tmp, "worktrees", `w${w}`, "logs", "HEAD"), entry(name(1), name(1000 + w)));
+    }
+    const whole = await readReflogOids(tmp, 40, new Pacer(Infinity));
+    let ran = 0;
+    const tick = setInterval(() => { ran++; }, 0);
+    const pace = new Pacer(0);
+    let paced;
+    try { paced = await readReflogOids(tmp, 40, pace); } finally { clearInterval(tick); }
+    assert.ok("oids" in whole && whole.oids.length === 800, JSON.stringify(whole).slice(0, 200));
+    assert.deepEqual(paced, whole, "the same names, paced or in one go");
+    assert.ok(pace.yields > 0 && ran > 0, `the event loop ran during the read (${pace.yields} yields, ${ran} timer turns)`);
+    // The last worktree's log is read: a doubt planted there still falls back.
+    appendFileSync(join(tmp, "worktrees", "w199", "logs", "HEAD"), "not a reflog line\n");
+    assert.ok("fallback" in await readReflogOids(tmp, 40, new Pacer(0)));
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 });
 
@@ -295,7 +321,7 @@ test("one object store, two work trees: the tips, the base and each walk once; O
     assert.equal(n("rev-list --all --reflog"), 0, "git never enumerates the reflogs");
     assert.equal(n("rev-list --all --no-walk"), 2, "each work tree's own refs, once each");
     assert.equal(n("rev-list --no-walk --ignore-missing --stdin"), 1, "the reflogs' commits once for the store");
-    assert.equal(n("for-each-ref"), 1, "the replace refs once for the store");
+    assert.equal(n("for-each-ref"), 0, "no replace-ref listing: replace refs are off, and a replace ref is a tip like any ref");
     assert.equal(n("rev-parse"), 2, "one rev-parse per work tree");
     assert.equal(n("config"), 2, "one config read per work tree");
     assert.equal(n("ls-files"), 2, "each work tree's own index");

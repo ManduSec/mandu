@@ -184,3 +184,52 @@ test("production wiring: the launcher names its workspace, reads the resolution 
     await s.close();
   }
 });
+
+test("rewrites (security fix 2026-10-21): with a graft, a replace ref or a forged shallow file in the repository, and in a real shallow clone, the resolver and the launcher find the same versions and key, every committed version included", async () => {
+  const d = tmp();
+  const make = (name: string): { root: string; versions: string[]; head: string } => {
+    const root = join(d, name);
+    mkdirSync(root, { recursive: true });
+    git(root, "init", "-q", "-b", "main");
+    put(root, "README", "readme\n");
+    for (const v of [1, 2, 3]) { put(root, "deploy/id_rsa", `${KEY}-${v}\n`); git(root, "add", "."); git(root, "commit", "-qm", `v${v}`); }
+    git(root, "reflog", "expire", "--expire=now", "--all");
+    git(root, "repack", "-adq");
+    const versions = [1, 2, 3].map((v) => execFileSync("git", ["hash-object", "--stdin"], { cwd: root, input: `${KEY}-${v}\n`, encoding: "utf8" }).trim());
+    return { root, versions, head: git(root, "rev-parse", "HEAD").trim() };
+  };
+  const graft = make("graft");
+  mkdirSync(join(graft.root, ".git", "info"), { recursive: true });
+  writeFileSync(join(graft.root, ".git", "info", "grafts"), `${graft.head}\n`);
+  const replace = make("replace");
+  const lone = execFileSync("git", ["commit-tree", `${replace.head}^{tree}`, "-m", "lone"], { cwd: replace.root, encoding: "utf8", env: ENV }).trim();
+  git(replace.root, "replace", replace.head, lone);
+  const shallow = make("shallow");
+  writeFileSync(join(shallow.root, ".git", "shallow"), `${shallow.head}\n`);
+  const source = make("source");
+  const clone = join(d, "clone");
+  git(d, "clone", "-q", "--depth", "2", `file://${source.root}`, clone);
+  const cases: Array<[string, string, string[]]> = [
+    ["a graft", graft.root, graft.versions],
+    ["a replace ref", replace.root, replace.versions],
+    ["a forged shallow file", shallow.root, shallow.versions],
+    ["a real shallow clone (depth 2: its two versions)", clone, source.versions.slice(1)],
+  ];
+  for (const [what, root, want] of cases) {
+    const wire: HistoryLabel[] = [{ path: join(root, "deploy", "id_rsa"), level: "no-model", recursive: true }];
+    const compiled = compileHistoryLabels(wire);
+    const labelKey = labelWalkKey(wire, null);
+    const launcher = await labelledBlobsOf(defaultGitRunner, root, compiled, labelKey);
+    for (const v of want) assert.ok(launcher.includes(v), `${what}: the launcher finds ${v.slice(0, 7)}`);
+    const res = new LockResolver({ labels: () => wire, blobLocks: () => [], home: d });
+    try {
+      res.note([root], "launch");
+      await res.runCycle(); await res.idle();
+      const entry = res.snapshot([root]).repos.find((x) => x.root === root);
+      assert.ok(entry !== undefined, `${what}: resolved`);
+      assert.deepEqual(entry.blobs, launcher, `${what}: the same versions`);
+      const state = await historyStateOf(defaultGitRunner, root);
+      assert.equal(entry.key, resolutionKey(root, labelFilterKey(labelKey, historyPathspecs(root, compiled)), state.base, state.tips), `${what}: the same key`);
+    } finally { await res.stop(); }
+  }
+});

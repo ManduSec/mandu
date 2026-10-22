@@ -112,6 +112,14 @@ export const SECRET_PREFIXES: readonly string[] = [
   "~/.ngrok2", "~/.circleci/cli.yml", "~/.sentryclirc", "~/.kaggle", "~/.huggingface",
   "~/.cache/huggingface/token", "~/.cache/huggingface/stored_tokens",
   "~/.config/github-copilot", "~/.config/op", "~/.op",
+  // Mandu's own dashboard account (2026-10-22, dashboard.md §6.z): a
+  // username and a scrypt hash of the dashboard's password. Inside the
+  // Mandu home, which every confined launch already hides and
+  // write-protects whole (on-disk-layout.md §4) and which the walk prunes
+  // (no twin is made); listed so a read by any path the home's mask does
+  // not cover still reaches a model only as a placeholder. A moved
+  // MANDU_HOME is covered by the home's own mask.
+  "~/.mandu/state/dashboard-account.json",
   // (OpenCode's own data directory, `~/.local/share/opencode`, comes in with
   // SENSITIVE_PATHS, as `~/.claude` and `~/.codex` do; a custom
   // XDG_DATA_HOME is covered by OPENCODE_DATA_SHAPE_RE below; Goose's

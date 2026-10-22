@@ -47,7 +47,7 @@
  *
  * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code (no reference origin).
  */
-import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync, lstatSync, type Dirent } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 
 /** Caps past which the reader stops and the caller asks git (MiB of reflog
@@ -55,6 +55,8 @@ import { join } from "node:path";
 export const REFLOG_MAX_BYTES = 128 * 1024 * 1024;
 export const REFLOG_MAX_FILES = 200_000;
 export const REFLOG_MAX_DEPTH = 64;
+/** The longest the reads hold the main thread at a time (Pacer). */
+export const REFLOG_SLICE_MS = 4;
 
 /**
  * The object names of one reflog's text: the old and the new name of every
@@ -84,14 +86,31 @@ export function parseReflog(text: string, hexLen: number): string[] | null {
 /** Why the reader gave up (a test and log aid), or the names it read. */
 export type ReflogRead = { oids: string[] } | { fallback: string };
 
-interface Budget { bytes: number; files: number }
+/**
+ * Hands the event loop back between slices of synchronous work: `tick()`
+ * after each file-system operation yields (setImmediate) once the slice
+ * has run `sliceMs`. The reads stay synchronous system calls (each a few
+ * microseconds; the promise API's thread-pool round trip made the same
+ * reads five times slower), but none holds the main thread longer than a
+ * slice. `yields` counts the hand-backs (a test aid).
+ */
+export class Pacer {
+  yields = 0;
+  private ops = 0;
+  private since = performance.now();
+  constructor(private readonly sliceMs: number = REFLOG_SLICE_MS) {}
+  tick(): Promise<void> | null {
+    // The clock read once every 16 operations.
+    if ((++this.ops & 15) !== 0 || performance.now() - this.since < this.sliceMs) return null;
+    this.yields++;
+    return new Promise<void>((go) => setImmediate(() => { this.since = performance.now(); go(); }));
+  }
+}
+
+interface Walk { hexLen: number; bytes: number; files: number; into: Set<string>; pace: Pacer }
 
 function isMissing(e: unknown): boolean {
   return (e as NodeJS.ErrnoException)?.code === "ENOENT";
-}
-
-function entriesOf(dir: string): Dirent[] {
-  return readdirSync(dir, { withFileTypes: true });
 }
 
 /** The kind of a directory entry, by its dirent type or, where the
@@ -104,35 +123,46 @@ function kindOf(dir: string, d: Dirent): "dir" | "file" | "other" {
   return s.isDirectory() ? "dir" : s.isFile() ? "file" : "other";
 }
 
-/** Read one reflog file without following a link or blocking on a FIFO. */
-function readLog(path: string, budget: Budget): string {
+/** Read one reflog file without following a link or blocking on a FIFO:
+ *  checked regular on the descriptor, then its bytes up to the size fstat
+ *  gave (as readFileSync reads a regular file, without its second fstat). */
+function readLog(path: string, w: Walk): string {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) throw new Error(`${path} is not a regular file`);
-    budget.bytes += st.size;
-    budget.files++;
-    if (budget.bytes > REFLOG_MAX_BYTES) throw new Error(`the reflogs exceed ${REFLOG_MAX_BYTES} bytes`);
-    if (budget.files > REFLOG_MAX_FILES) throw new Error(`more than ${REFLOG_MAX_FILES} reflogs`);
-    return readFileSync(fd, "latin1");
+    w.bytes += st.size;
+    w.files++;
+    if (w.bytes > REFLOG_MAX_BYTES) throw new Error(`the reflogs exceed ${REFLOG_MAX_BYTES} bytes`);
+    if (w.files > REFLOG_MAX_FILES) throw new Error(`more than ${REFLOG_MAX_FILES} reflogs`);
+    const buf = Buffer.allocUnsafe(st.size);
+    let got = 0;
+    while (got < buf.length) {
+      const n = readSync(fd, buf, got, buf.length - got, got);
+      if (n === 0) break;
+      got += n;
+    }
+    return buf.toString("latin1", 0, got);
   } finally {
     closeSync(fd);
   }
 }
 
-/** Every reflog under `dir` (recursively), parsed into `into`. Throws on
+/** Every reflog under `dir` (recursively), parsed into `w.into`. Throws on
  *  any doubt (the caller falls back). */
-function readTree(dir: string, hexLen: number, depth: number, budget: Budget, into: Set<string>): void {
+async function readTree(dir: string, depth: number, w: Walk): Promise<void> {
   if (depth > REFLOG_MAX_DEPTH) throw new Error(`the reflogs nest deeper than ${REFLOG_MAX_DEPTH}`);
-  for (const d of entriesOf(dir)) {
+  for (const d of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, d.name);
     const k = kindOf(dir, d);
-    if (k === "dir") readTree(p, hexLen, depth + 1, budget, into);
+    if (k === "dir") await readTree(p, depth + 1, w);
     else if (k === "file") {
-      const oids = parseReflog(readLog(p, budget), hexLen);
+      const oids = parseReflog(readLog(p, w), w.hexLen);
       if (oids === null) throw new Error(`${p}: a line that is not a reflog entry`);
-      for (const o of oids) into.add(o);
+      for (const o of oids) w.into.add(o);
     } else throw new Error(`${p} is not a plain directory or file`);
+    const y = w.pace.tick();
+    if (y !== null) await y;
   }
 }
 
@@ -152,28 +182,36 @@ function plainDir(p: string): boolean {
  * on any doubt: the caller asks git (`rev-list --all --reflog`) instead.
  * The caller has already ruled out a reftable repository by its config;
  * a `reftable` directory is ruled out here too.
+ *
+ * PACED (2026-10-21): in a store with many worktrees and branches
+ * (thousands of logs) the reads held the main thread 30-80 ms in one go;
+ * now they hand it back every REFLOG_SLICE_MS (Pacer), so the launch's
+ * other work (the services' start, the git calls' answers) runs between
+ * slices. What is read, in what order, the doubts and the caps are
+ * unchanged. `pace`: a test knob.
  */
-export function readReflogOids(commonDir: string, hexLen: number): ReflogRead {
+export async function readReflogOids(commonDir: string, hexLen: number, pace: Pacer = new Pacer()): Promise<ReflogRead> {
   try {
     if (hexLen !== 40 && hexLen !== 64) return { fallback: `an object name length of ${hexLen}` };
     if (!plainDir(commonDir)) return { fallback: `${commonDir} is not a directory` };
     try { lstatSync(join(commonDir, "reftable")); return { fallback: "a reftable directory" }; } catch (e) { if (!isMissing(e)) throw e; }
-    const into = new Set<string>();
-    const budget: Budget = { bytes: 0, files: 0 };
+    const w: Walk = { hexLen, bytes: 0, files: 0, into: new Set(), pace };
     const logs = join(commonDir, "logs");
-    if (plainDir(logs)) readTree(logs, hexLen, 0, budget, into);
+    if (plainDir(logs)) await readTree(logs, 0, w);
     const wts = join(commonDir, "worktrees");
     if (plainDir(wts)) {
-      for (const d of entriesOf(wts)) {
+      for (const d of readdirSync(wts, { withFileTypes: true })) {
         const k = kindOf(wts, d);
         // git lists a worktree by `worktrees/<id>/gitdir`; a file or a link
         // here is a doubt, never skipped.
         if (k !== "dir") throw new Error(`${join(wts, d.name)} is not a plain directory`);
         const wl = join(wts, d.name, "logs");
-        if (plainDir(wl)) readTree(wl, hexLen, 0, budget, into);
+        if (plainDir(wl)) await readTree(wl, 0, w);
+        const y = pace.tick();
+        if (y !== null) await y;
       }
     }
-    return { oids: [...into].sort() };
+    return { oids: [...w.into].sort() };
   } catch (e) {
     return { fallback: (e as Error).message };
   }

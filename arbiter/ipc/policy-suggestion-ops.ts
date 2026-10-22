@@ -52,7 +52,7 @@ import { getCurrentPolicy } from "../policy/compiled-policy.js";
 import { StalePolicyError, type PolicyDocumentStore } from "../policy/policy-document-store.js";
 import { POLICY_EDIT_OPS, canonicalJson, diffItems, evaluateEdits, type PolicyEdit } from "../policy/policy-edit.js";
 import { SCAN_REQUESTER, suggestionSubject, type PolicyProposal, type PolicyProposalStore, type ProposalStatus } from "../policy/policy-proposals.js";
-import { editCovered, judgeHumanLabelLock, suggestEdits, suggestLabelEdits, suggestWorkspaceEdits, type LockPathEdit, type Suggestion, type SuggestLaw, type SuggestionEdit } from "../policy/policy-suggestions.js";
+import { editCovered, judgeHumanLabelLock, literalLabelPath, suggestEdits, suggestLabelEdits, suggestPastSessionEdits, suggestWorkspaceEdits, type LockPathEdit, type PastSessionsFile, type Suggestion, type SuggestLaw, type SuggestionEdit } from "../policy/policy-suggestions.js";
 import { labelLevelRank, type LabelMappingEntry } from "../policy/sensitivity-labels.js";
 import type { PathLabel } from "../policy/path-labels.js";
 import type { SecretHistoryScan } from "../policy/secret-history-scan.js";
@@ -336,9 +336,11 @@ export class PolicySuggestionOps {
    * already locked by a pending or dismissed suggestion of any source, is
    * not filed; the per-repository cap is shared, and the scans' suggestions
    * were filed first (the model runs after them, on a preview the person
-   * consented to).
+   * consented to). `from` names the run in the arbiter's log: "a model
+   * run", or "mandu scan's past sessions" for plan 17 §3 item 13's
+   * suggestions, which take the same path.
    */
-  fileModelSuggestions(suggestions: readonly Suggestion[]): { filed: string[]; counts: Pick<SuggestPolicyCounts, "filed" | "alreadyPending" | "dismissed" | "overCap" | "superseded"> } {
+  fileModelSuggestions(suggestions: readonly Suggestion[], from = "a model run"): { filed: string[]; counts: Pick<SuggestPolicyCounts, "filed" | "alreadyPending" | "dismissed" | "overCap" | "superseded"> } {
     const counts = { filed: 0, alreadyPending: 0, dismissed: 0, overCap: 0, superseded: this.refresh().length };
     const law = this.law();
     const lawHash = hashOf(law.document ?? {});
@@ -372,7 +374,7 @@ export class PolicySuggestionOps {
     counts.filed = filed.length;
     counts.superseded += replaced.length;
     if (filed.length > 0) {
-      this.deps.docs.log(`policy suggestions filed from a model run: ${filed.join(", ")} (they wait for the person)`);
+      this.deps.docs.log(`policy suggestions filed from ${from}: ${filed.join(", ")} (they wait for the person)`);
       this.emit({ action: "filed", ids: filed });
     }
     if (replaced.length > 0) {
@@ -444,6 +446,31 @@ export class PolicySuggestionOps {
       this.deps.docs.log(`policy suggestions ${closed.join(", ")}: covered by ${p.id}, which was applied (superseded)`);
       this.emit({ action: "superseded", ids: closed });
     }
+  }
+
+  /**
+   * Plan 17 §3 item 13: the files `mandu scan` found a key of in the agents'
+   * past sessions, already verified by the arbiter (transcript-suggestions.ts
+   * `verifyScanFile`), through the generator (`suggestPastSessionEdits`:
+   * what the law or the catalog covers is listed covered) and the filing
+   * path the model's suggestions take (the same dedup, dismissals and cap).
+   * Answers the counts and the pending suggestions on those files.
+   */
+  fileFromPastSessions(files: readonly PastSessionsFile[], opts: { home?: string; isCovered?: (absPath: string) => boolean } = {}): {
+    filed: string[];
+    covered: number;
+    dropped: number;
+    counts: Pick<SuggestPolicyCounts, "filed" | "alreadyPending" | "dismissed" | "overCap" | "superseded">;
+    suggestions: SuggestionView[];
+  } {
+    const gen = suggestPastSessionEdits(files, this.labelled(), {
+      ...(opts.home ? { home: opts.home } : {}), now: this.now(), ...(opts.isCovered ? { isCovered: opts.isCovered } : {}),
+    });
+    for (const d of gen.dropped) this.deps.docs.log(`policy suggestion for ${d.repoRoot} dropped by the tightening check (${d.why})`);
+    const { filed, counts } = this.fileModelSuggestions(gen.suggestions, "mandu scan's past sessions");
+    const subjects = new Set(files.map((f) => `path:${literalLabelPath(f.path)}`));
+    const suggestions = this.pending().filter((v) => v.edits.some((e) => e.op === "lock-path" && subjects.has(`path:${e.path}`)));
+    return { filed, covered: gen.covered.length, dropped: gen.dropped.length, counts, suggestions };
   }
 
   /** Every pending suggestion (the answer while a scan still runs). */

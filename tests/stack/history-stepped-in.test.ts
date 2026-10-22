@@ -45,7 +45,6 @@ import { ArbiterClientAdapter as NetArbiterClientAdapter, type RealArbiterClient
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import { serveSignInChannel, signInDepsFor, signInSockPath } from "../../dashboard/src/sign-in.js";
-import { requestSignInLink } from "../../launcher/src/dashboard-sign-in.js";
 import type { HistoryVM } from "../../dashboard/src/view-model/home.js";
 import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
@@ -101,7 +100,7 @@ test("History's switch lists only the sessions where Mandu stepped in, signed ou
   const dashboard = new DashboardServer({ source, configEnv: { MANDU_HOME: join(tmp, "home") }, log: () => {} });
   const port = await dashboard.listen(0);
   const base = `http://127.0.0.1:${port}`;
-  const signIn = await serveSignInChannel(signInSockPath(tmp), signInDepsFor(dashboard, source, join(tmp, "human")));
+  const signIn = await serveSignInChannel(signInSockPath(tmp), signInDepsFor(dashboard));
   const seen: string[] = [];
   let script: string[] = [];
   const upstream: UpstreamFetcher = async ({ body }) => {
@@ -223,11 +222,10 @@ test("History's switch lists only the sessions where Mandu stepped in, signed ou
     });
 
     // ── S3: signed out, the same rows as signed in ──
-    const got = await requestSignInLink({ host: "127.0.0.1", port, signInSock: signIn.path }, tmp);
-    assert.equal(got.kind, "link", JSON.stringify(got));
-    const opened = await pageFetch((got as { url: string }).url, { redirect: "manual" });
-    const cookie = (opened.headers.get("set-cookie") ?? "").split(";")[0]!;
-    assert.match(cookie, /^mandu_session=[0-9a-f]{64}$/);
+    // The human's admin session: a TEST SEAM (this server is built without
+    // the account's sign-in gate, so the layer under it is what is tested;
+    // dashboard-account-sign-in.test.ts signs in through the page).
+    const cookie = dashboard.adminCookie();
     const signedIn = await read("?only=stepped-in", { Cookie: cookie, "X-Mandu-Control": "1" });
     const signedOut = await read("?only=stepped-in");
     assert.deepEqual(signedOut, signedIn, "the switch serves nothing a signed-out reader could not read");

@@ -753,7 +753,7 @@ test("ptraceScopeRow: ok at 1 or more; a warning at 0 and with no Yama, naming w
   assert.match(ptraceScopeRow({ value: 3 })!, /^ {2}✓ Yama ptrace_scope 3: no program can read another's memory/);
   const zero = ptraceScopeRow({ value: 0 })!;
   assert.match(zero, /^ {2}✗ Yama ptrace_scope is 0: any program running as you, the AI's included, can read the memory of your other programs/);
-  assert.match(zero, /dashboard and its sign-in links/);
+  assert.match(zero, /the dashboard's human-plane socket/);
   assert.match(zero, /A warning only\./);
   assert.match(zero, /fix: sudo sysctl kernel\.yama\.ptrace_scope=1/);
   const none = ptraceScopeRow({ value: null })!;

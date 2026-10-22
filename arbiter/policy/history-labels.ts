@@ -16,7 +16,8 @@
  * itself pinned against path-labels.ts `resolvePathLabel` there and in
  * git-history-locks-parity.test.ts. Change the launcher's file, copy it here.
  *
- * Pure: no filesystem, no git.
+ * Pure but for walkShallowRule, whose git calls go through the runner it is
+ * handed: no filesystem.
  *
  * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code, copied from
  * launcher/src/history-labels.ts (itself a mirror of path-glob.ts and
@@ -302,13 +303,107 @@ export function historyPathspecs(root: string, c: CompiledHistoryLabels): string
  *  base key: changing them re-walks every repository once. */
 export const HISTORY_WALK_ARGS: readonly string[] = ["-m", "--root", "--format=", "--raw", "-z", "--no-abbrev", "--no-renames"];
 
+/**
+ * What the walk honours of the state that rewrites history as git sees it
+ * (security fix 2026-10-21, confidentiality.md §7.2a "What the walk does
+ * not let a repository hide"). A graft (`info/grafts`), a replace ref
+ * (`refs/replace/*`) or a shallow file (`shallow`) written into a
+ * repository cut commits out of `git log` while their objects stay in the
+ * store, readable by `git show <commit>:<file>`; the agent can write `.git`.
+ * So every hardened git call runs with replace refs off and an empty graft
+ * file (hardened-git.ts: GIT_NO_REPLACE_OBJECTS, GIT_GRAFT_FILE=/dev/null),
+ * and the walk honours the shallow file only where it is TRUE: when no
+ * parent of any commit it names is in the store (walkShallowRule). Part of
+ * the base key, so a walk cached by the earlier rule is never used.
+ */
+export const HISTORY_WALK_REWRITES = "rewrites:v2 replace-refs=off grafts=off shallow=true-boundaries-only locked-memory";
+
 /** What besides the tips decides the walk's output: the git version, the
- *  walk's arguments, and what rewrites history as git sees it (the shallow
- *  boundary, grafts, replace refs). Pure. */
-export function walkBaseKey(parts: { gitVersion: string; shallow: string; grafts: string; replaceRefs: string }): string {
+ *  walk's arguments and rule (HISTORY_WALK_REWRITES), and the shallow
+ *  boundary it honours (walkShallowRule `honoured`). Pure. */
+export function walkBaseKey(parts: { gitVersion: string; shallow: string }): string {
   return createHash("sha256")
-    .update(JSON.stringify([HISTORY_WALK_ARGS, parts.gitVersion.trim(), parts.shallow, parts.grafts, parts.replaceRefs]))
+    .update(JSON.stringify([HISTORY_WALK_ARGS, HISTORY_WALK_REWRITES, parts.gitVersion.trim(), parts.shallow]))
     .digest("hex");
+}
+
+/** A git call of the shallow rule: `args` with `input` on stdin. */
+export type ShallowRuleGit = (args: string[], input: string) => Promise<{ code: number; stdout: string }>;
+
+/** How the walk treats the shallow file: the global options it runs with,
+ *  and the boundary it honours (the base key's part: "" for none). */
+export interface ShallowRule {
+  args: string[];
+  honoured: string;
+}
+
+/** The commits of a shallow file (sorted, unique), or null when a line is
+ *  not an object name of `hexLen` hex digits. Pure. */
+export function parseShallowEntries(text: string, hexLen: number): string[] | null {
+  const re = new RegExp(`^[0-9a-f]{${hexLen}}$`);
+  const out = new Set<string>();
+  for (const l of text.split("\n")) {
+    if (l === "") continue;
+    if (!re.test(l)) return null;
+    out.add(l);
+  }
+  return [...out].sort();
+}
+
+/** `rev-list --no-walk --parents` output: commit → its parents. Pure. */
+export function parseParentLines(out: string, hexLen: number): Map<string, string[]> {
+  const re = new RegExp(`^[0-9a-f]{${hexLen}}$`);
+  const m = new Map<string, string[]>();
+  for (const l of out.split("\n")) {
+    const w = l.trim().split(" ").filter((x) => x !== "");
+    if (w.length === 0 || !w.every((x) => re.test(x))) continue;
+    m.set(w[0]!, w.slice(1));
+  }
+  return m;
+}
+
+/** The objects `cat-file --batch-check=%(objectname) %(objecttype)` found
+ *  (a missing one reads `<name> missing`). Pure. */
+export function parsePresentObjects(out: string): Set<string> {
+  const s = new Set<string>();
+  for (const l of out.split("\n")) {
+    const [name, type] = l.trim().split(" ");
+    if (name !== undefined && name !== "" && type !== undefined && type !== "missing") s.add(name);
+  }
+  return s;
+}
+
+/** The global options that make a walk ignore the shallow file. */
+export const IGNORE_SHALLOW_ARGS: readonly string[] = ["--shallow-file", ""];
+
+/**
+ * The shallow rule (HISTORY_WALK_REWRITES). A shallow file is honoured only
+ * when every commit it names has no parent in the store: a true boundary
+ * (a `git clone --depth` keeps nothing beyond it, so walking past it would
+ * fail on the missing parents). Anything else (an entry whose parent is
+ * present: the shallow file cuts history the store holds; a line that is
+ * not an object name; a git call that fails) IGNORES the whole file
+ * (IGNORE_SHALLOW_ARGS): the walk goes on through every present parent, and
+ * where a forged entry sits beside a true boundary it fails on the missing
+ * parents, which refuses the launch (fail-closed). An empty or absent file
+ * costs no git call.
+ */
+export async function walkShallowRule(git: ShallowRuleGit, shallowText: string, hexLen: number): Promise<ShallowRule> {
+  const entries = parseShallowEntries(shallowText, hexLen);
+  const ignore: ShallowRule = { args: [...IGNORE_SHALLOW_ARGS], honoured: "" };
+  if (entries === null) return ignore;
+  if (entries.length === 0) return { args: [], honoured: "" };
+  const honour: ShallowRule = { args: [], honoured: entries.join("\n") };
+  // Each entry's parents, read past the shallow file itself (which hides
+  // them); an entry the store lacks names nothing to cut.
+  const p = await git([...IGNORE_SHALLOW_ARGS, "rev-list", "--no-walk", "--parents", "--ignore-missing", "--stdin"], `${entries.join("\n")}\n`);
+  if (p.code !== 0) return ignore;
+  const parents = [...new Set([...parseParentLines(p.stdout, hexLen).values()].flat())].sort();
+  if (parents.length === 0) return honour;
+  const c = await git(["cat-file", "--batch-check=%(objectname) %(objecttype)"], `${parents.join("\n")}\n`);
+  if (c.code !== 0) return ignore;
+  const present = parsePresentObjects(c.stdout);
+  return parents.some((x) => present.has(x)) ? ignore : honour;
 }
 
 /** The cache key of a label walk: every label (a `public` carve-out changes

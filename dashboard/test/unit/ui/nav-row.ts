@@ -6,18 +6,20 @@
  * served one).
  *
  * jsdom lays out nothing, so the room the links need is computed here. At
- * 640 px and narrower the nav is a row of its own under the brand and the
- * status (`order: 3; flex-basis: 100%`), as wide as the top bar's content
- * box: the window less `.top-inner`'s side padding. Each link is its word
- * and its side padding; the Approvals link adds its gap and the count's
- * pill (the digits and the pill's side padding); the links sit `#nav`'s
- * gap apart. A link never shrinks below its word (a flex item's automatic
- * minimum), so what does not fit runs past the row, which then scrolls.
- * A link the stylesheet hides there (`display: none`: Home, whose brand
- * stands in for it) takes no room, and a `min-width` makes a short link
- * as wide as it says.
+ * 719 px and narrower (640 until Scan joined, 2026-10-21) the nav is a row
+ * of its own under the brand and the status (`order: 3; flex-basis:
+ * 100%`), as wide as the top bar's content box: the window less
+ * `.top-inner`'s side padding. Each link is its word and its side padding;
+ * the Approvals link adds its gap and the count's pill (the digits and the
+ * pill's side padding). In a flex row the links sit `#nav`'s gap apart. A
+ * link never shrinks below its word (a flex item's automatic minimum), so
+ * what does not fit runs past the row, which then scrolls. In a grid of
+ * `repeat(N, auto)` columns (narrower than 500 px) each column is as wide
+ * as its widest link, the columns `#nav`'s gap apart, and `rows` counts
+ * the rows. A link the stylesheet hides (`display: none`) takes no room,
+ * and a `min-width` makes a short link as wide as it says.
  *
- * Wider than 640 px the links share one bar with the brand and the status
+ * Wider than that the links share one bar with the brand and the status
  * (`bar`): the bar's content box less the brand, the status and the two
  * gaps between them is what the links have.
  *
@@ -33,7 +35,15 @@
  * and Home hidden: 275/276 (Approvals or History current, where their
  * words are 500) at 320 px with a count of 1, 282/283 with 12; 324/325
  * and 331/332 at 375 px; and at 641 px with 99, 363 (Settings current) under the middle rule
- * beside the 66 px brand and the 94 px "Protection on".
+ * beside the 66 px brand and the 94 px "Protection on". With Scan
+ * (2026-10-21; its word 34 px at both weights) and Home shown again, as
+ * two rows of three below 500 px: 255.67 (Approvals current, 1 waiting),
+ * 261 (History current, 12), 262 (Approvals, 99) and 225 (Scan current,
+ * none) at 320, 375 and 499 px; one row at 500 px: 443.67, 450, 450 and
+ * 413 of its 460; in the bar at 720 px (each link at least 50 px),
+ * 409.67, 416, 416 (5.31 to spare beside "Protection unknown") and 379; at
+ * 840 px, 511.67, 518, 518 (6.53 to spare beside "Protection unknown") and
+ * 481.
  */
 import { fileNameRoom, px, sidePadding } from "./files-name-room.js";
 
@@ -44,6 +54,7 @@ export const WORD_PX: Readonly<Record<string, readonly [number, number]>> = {
   Rules: [38, 38],
   Settings: [55, 55],
   History: [48, 49],
+  Scan: [34, 34],
 };
 /** The brand "Mandu" at 21 px, 700, its letters 0.02em closer. */
 export const BRAND_PX = 66;
@@ -113,8 +124,15 @@ export function navRow(css: string) {
     const least = declares(w, "#nav a", "min-width");
     const min = least === null ? 0 : px(least, w);
     if (nav.pages.length !== nav.words.length) throw new Error("nav-row: a link without its page");
-    let sum = 0;
-    let shown = 0;
+    let pill = 0;
+    if (nav.count !== "") {
+      if (!/^\d+$/.test(nav.count)) throw new Error(`nav-row: the count "${nav.count}" is not digits`);
+      expect(w, ".count", "font-size", "12px");
+      expect(w, ".count", "font-weight", "600");
+      pill = px(at(w, "#nav a", "gap"), w) + nav.count.length * DIGIT_PX + sidePadding(at(w, ".count", "padding"), w);
+    }
+    // Each shown link's width: its word, its padding, the count in Approvals.
+    const widths: number[] = [];
     nav.words.forEach((word, i) => {
       const width = WORD_PX[word];
       if (!width) throw new Error(`nav-row: no width measured for the link "${word}"`);
@@ -122,18 +140,30 @@ export function navRow(css: string) {
         if (nav.pages[i] === "approvals") throw new Error("nav-row: the link that carries the count is hidden");
         return;
       }
-      shown++;
-      // The count sits in the Approvals link, wider than any min-width.
-      sum += Math.max(min, width[i === nav.current ? 1 : 0] + pad);
+      widths.push(Math.max(min, width[i === nav.current ? 1 : 0] + pad + (nav.pages[i] === "approvals" ? pill : 0)));
     });
-    sum += Math.max(0, shown - 1) * px(at(w, "#nav", "gap"), w);
-    if (nav.count !== "") {
-      if (!/^\d+$/.test(nav.count)) throw new Error(`nav-row: the count "${nav.count}" is not digits`);
-      expect(w, ".count", "font-size", "12px");
-      expect(w, ".count", "font-weight", "600");
-      sum += px(at(w, "#nav a", "gap"), w) + nav.count.length * DIGIT_PX + sidePadding(at(w, ".count", "padding"), w);
-    }
-    return sum;
+    const gap = px(at(w, "#nav", "gap"), w);
+    const cols = columns(w);
+    if (cols === null) return widths.reduce((a, b) => a + b, 0) + Math.max(0, widths.length - 1) * gap;
+    // A grid of `cols` auto columns: each as wide as its widest link.
+    const colWidth = Array.from({ length: cols }, (_, c) => Math.max(0, ...widths.filter((_, i) => i % cols === c)));
+    return colWidth.reduce((a, b) => a + b, 0) + (cols - 1) * gap;
+  };
+  /** The nav's columns when it is a grid in a window `w` px wide (null: a
+   *  flex row). Only `repeat(N, auto)` is modelled. */
+  const columns = (w: number): number | null => {
+    const display = declares(w, "#nav", "display");
+    if (display === "flex") return null;
+    if (display !== "grid") throw new Error(`nav-row: the nav is display: ${display} at ${w}px`);
+    const m = /^repeat\((\d+),\s*auto\)$/.exec(at(w, "#nav", "grid-template-columns"));
+    if (!m) throw new Error(`nav-row: the grid's columns are ${at(w, "#nav", "grid-template-columns")} at ${w}px; only repeat(N, auto) is modelled`);
+    return Number(m[1]);
+  };
+  /** The rows the links take in a window `w` px wide. */
+  const rows = (w: number, nav: DrawnNav): number => {
+    const cols = columns(w);
+    const shown = nav.pages.filter((p) => !hidden(w, p)).length;
+    return cols === null ? 1 : Math.ceil(shown / cols);
   };
   /** What the row has to spare (negative: the links run past it). */
   const spare = (w: number, nav: DrawnNav): number => row(w) - need(w, nav);
@@ -152,5 +182,5 @@ export function navRow(css: string) {
     const content = Math.min(w, px(at(w, ".top-inner", "max-width"), w)) - sidePadding(at(w, ".top-inner", "padding"), w);
     return content - BRAND_PX - said - 2 * px(at(w, ".top-inner", "gap"), w) - need(w, nav);
   };
-  return { at, declares, row, need, spare, bar, hidden };
+  return { at, declares, row, need, spare, bar, hidden, columns, rows };
 }

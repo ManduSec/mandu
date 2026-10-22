@@ -436,6 +436,22 @@ binary, read by every guard of the parallel kernel lane at once, it took 3 to
 4.4 s in CI while the question itself cost its one 300 ms deadline
 (2026-10-17).
 
+The deadline also counts the client's own time before the write: a client
+thread starved past the whole deadline before it wrote the request gives up
+with it unsent, the same `Timeout`, the same fail-closed branch
+(`a_deadline_that_passed_before_the_write_sends_nothing`). A test that
+wedges ONE op of a sequence gives that op alone the short deadline and the
+rest a long one (`ArbiterClient::with_op_deadline`, a seam the `mock`
+feature compiles in, never in a production build): with one 200 ms
+deadline for all, a mock thread starved on a loaded CI runner answered the
+`classifyExec` that `a_wedged_argv_gate_withholds_every_symbol` meant to be
+answered too late, the plan failed closed to AgentShell before it reached
+the wedged `resolveExecArgv`, and the test read 0 asks of it (2026-10-22;
+on one CPU beside eight busy loops, 22 of 30 runs failed so, the escalation
+sibling with them). Those tests prove the wedged op was the one reached
+from the plan's own reason (`resolveExecArgv timed out`), not from the
+mock's count alone.
+
 ---
 
 ## 3. Hook → chokepoint mapping

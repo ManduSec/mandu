@@ -431,14 +431,36 @@ test("sabotage: an egress proxy that cannot resolve the key releases nothing, an
 });
 
 test("sabotage: a guard whose reports the arbiter cannot believe (the data socket only) leaves Codex's read whole, and the run FAILS", { skip: !GUARD && "this host does not run Mandu's guard (not built, or no seccomp user notification)", timeout: 120_000 }, async () => {
-  // The guard still runs and serves the tree (its status file), but an
-  // explicit human socket that does not answer as the human plane makes it
-  // report on the data socket, where every report is a claim (plan 13 D9):
-  // no call is bound, so no twin release.
+  // The guard still runs and serves the tree (its status file), but its
+  // policy walls off no human-plane directory (no `unixDeny`), so it can
+  // believe no human socket, at its start or in any later look
+  // (report_channel.rs `judge`; the looker is not even started): it reports
+  // on the data socket for the whole session, where every report is a claim
+  // (plan 13 D9), no call is bound, so no twin release. Until 2026-10-21 the
+  // sabotage was an explicit MANDU_ARBITER_HUMAN_SOCK naming the data socket:
+  // the start refused it, but the guard's looker re-learns the human socket
+  // from the data socket's `hello` (rightly: it ignores the variable) and
+  // moved there 250 ms later, so on a slow host Codex's read came after the
+  // move, was believed, and the sabotaged run passed (CI job 18346).
+  const guardErr: string[] = [];
   const r = await sabotaged("guard-claims", "codex", (d) => ({
-    runCommand: (argv, cwd, env) => d.runCommand(argv, cwd, argv[0] === "sh" ? env : { ...env, MANDU_ARBITER_HUMAN_SOCK: env["MANDU_ARBITER_SOCK"]! }),
+    writeFile: (path, text) => {
+      if (!/guard-policy-codex\.json$/.test(path)) return d.writeFile(path, text);
+      const { unixDeny: walls, ...policy } = JSON.parse(text) as Record<string, unknown>;
+      assert.ok(Array.isArray(walls) && walls.length > 0, `the guard's policy walls off the human plane before the sabotage: ${text}`);
+      return d.writeFile(path, JSON.stringify(policy, null, 2));
+    },
+    runCommand: async (argv, cwd, env) => {
+      const res = await d.runCommand(argv, cwd, env);
+      if (argv[0] !== "sh") guardErr.push(res.stderr);
+      return res;
+    },
   }));
   assertFailed(r, /Codex step 1: the AI got the whole file, not each key, under Mandu's guard/);
+  // The run failed for the reason this sabotage gives, and for the session.
+  assert.match(guardErr.join("\n"), /reporting on the data socket/, `the guard said where it reports: ${guardErr.join("\n")}`);
+  assert.match(guardErr.join("\n"), /no human-plane directory is walled off here .*stay on the data socket for the session/, guardErr.join("\n"));
+  assert.doesNotMatch(guardErr.join("\n"), /the human plane is up: reporting on/, "no guard moved to the human plane");
 });
 
 test("sabotage: a policy that binds paste.example too lets the send through, and the run FAILS", { skip: !NETWORK_TOOLS && "curl or openssl is not installed", timeout: 120_000 }, async () => {

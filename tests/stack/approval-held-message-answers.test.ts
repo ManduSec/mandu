@@ -22,6 +22,14 @@
  *       `masked-session`, and the next message goes masked;
  *   H4  /api/home never carries the found text.
  *
+ * And a held message nobody answers (dashboard.md §4.34 *A held message's
+ * deadline*), over an arbiter holding 4 s, on the served Approvals page:
+ *
+ *   H5  the card first says the request waits "N more seconds";
+ *   H6  after the deadline, the page's own tick says the message went
+ *       masked, announced once (`role="status"`);
+ *   H7  the model got the message masked, never the code name.
+ *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON).
  */
 import { test, after } from "node:test";
@@ -39,7 +47,9 @@ import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import type { HomeVM } from "../../dashboard/src/view-model/home.js";
-import { ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { ADMIN_COOKIE, ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
+import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { startScriptedAnthropic } from "../lib/fake-anthropic.js";
 import { humanSockIn } from "../lib/human-plane.js";
 import { stateAxes } from "../lib/axes.js";
@@ -80,7 +90,11 @@ async function waitFor<T>(what: string, f: () => Promise<T | undefined>, ms = 10
   }
 }
 
-test("a held message's answer reads as what went to the AI, and its only reversal does what it says (secrets axes)", { timeout: 60_000 }, async () => {
+/** The production wiring: a real ArbiterServer (secrets axes, a prompt pack
+ *  asking about CODENAME after `up`), the REAL anthropic-proxy on its
+ *  production clients, a scripted fake model, and the real DashboardServer;
+ *  `holdMs` is the arbiter's hold deadline. */
+async function rig(holdMs: number) {
   const dir = mkdtempSync(join(tmpdir(), "mandu-held-answers-"));
   dirs.push(dir);
   const dataSock = join(dir, "arbiter.sock");
@@ -94,7 +108,7 @@ test("a held message's answer reads as what went to the AI, and its only reversa
   const arbiter = new ArbiterServer({
     socketPath: dataSock, adminSocketPath: adminSock, humanSocketPath: humanSock, dbPath: join(dir, "mandu.db"), eventDir: join(dir, "events"),
     policyPath, policyPollMs: 0, integrity: false, confidentiality: true, log: () => {},
-    promptPackDir: packs, adminPromptPackDir: null, adminPolicyDir: null, packDir: null, packKeysDir: join(dir, "keys"), promptHoldMs: 20_000,
+    promptPackDir: packs, adminPromptPackDir: null, adminPolicyDir: null, packDir: null, packKeysDir: join(dir, "keys"), promptHoldMs: holdMs,
   });
   await arbiter.listen();
   const data = new ArbiterClient(dataSock);
@@ -112,7 +126,7 @@ test("a held message's answer reads as what went to the AI, and its only reversa
   const server = new DashboardServer({ source, policyDocArbiter: wired.policyDoc, approvalsArbiter: wired.arbiter, log: () => {}, ...ADMIN_OPTS });
   const port = await server.listen(0);
   const call = async (method: "GET" | "POST", path: string, body?: unknown, headers: Record<string, string> = { ...CSRF_ADMIN, "Content-Type": "application/json" }) => {
-    const r = await fetch(`http://127.0.0.1:${port}/api/${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const r = await pageFetch(`http://127.0.0.1:${port}/api/${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
     return { status: r.status, body: (await r.json().catch(() => ({}))) as Record<string, any> };
   };
   const ask = (text: string) => post(proxyPort, {
@@ -121,7 +135,7 @@ test("a held message's answer reads as what went to the AI, and its only reversa
     messages: [{ role: "user", content: [{ type: "text", text }] }],
   }, session);
   const sent = () => fake.requests.filter((q) => q.url.includes("/v1/messages") && q.body.includes('"tools"')).map((q) => q.body);
-  const homeVm = async () => (await call("GET", "home", undefined, {})).body as unknown as HomeVM;
+  const seen = new Set<string>();
   const held = async (text: string) => {
     const pending = ask(text);
     const hold = await waitFor(`the hold of "${text}"`, async () => {
@@ -131,10 +145,27 @@ test("a held message's answer reads as what went to the AI, and its only reversa
     seen.add(hold.approvalId);
     return { pending, id: hold.approvalId };
   };
-  const seen = new Set<string>();
+  const up = async () => {
+    const r = await call("POST", "policy/prompt-filters/change", { edit: { op: "set-prompt-action", category: "acme.codename", action: "ask" } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+  };
+  const close = async () => {
+    await server.close?.();
+    wired.close();
+    await proxy.close();
+    await fake.close();
+    data.close();
+    human.close();
+    await arbiter.close();
+  };
+  return { base: `http://127.0.0.1:${port}`, call, ask, sent, held, up, close };
+}
+
+test("a held message's answer reads as what went to the AI, and its only reversal does what it says (secrets axes)", { timeout: 60_000 }, async () => {
+  const { call, ask, sent, held, up, close } = await rig(20_000);
+  const homeVm = async () => (await call("GET", "home", undefined, {})).body as unknown as HomeVM;
   try {
-    const up = await call("POST", "policy/prompt-filters/change", { edit: { op: "set-prompt-action", category: "acme.codename", action: "ask" } });
-    assert.equal(up.status, 200, JSON.stringify(up.body));
+    await up();
 
     // H1: Send masked. The row says the message went masked; no reversal.
     const h1 = await held(`plan for ${CODENAME} one`);
@@ -174,12 +205,37 @@ test("a held message's answer reads as what went to the AI, and its only reversa
     // H4: the found text never on the open route.
     assert.ok(!JSON.stringify(await homeVm()).includes(CODENAME), "/api/home never carries the found text");
   } finally {
-    await server.close?.();
-    wired.close();
-    await proxy.close();
-    await fake.close();
-    data.close();
-    human.close();
-    await arbiter.close();
+    await close();
+  }
+});
+
+test("a held message's Approvals card counts down its deadline, then says the message went masked; the model got it masked (secrets axes)", { timeout: 90_000 }, async () => {
+  const HOLD_MS = 4000;
+  const { base, held, sent, up, close } = await rig(HOLD_MS);
+  try {
+    await up();
+    // The page is opened before the message is sent, so the deadline is
+    // not spent on loading it; a poll then draws the card.
+    await servedProductPage(base, "/approvals", (doc: any) => !!doc.querySelector('#approvals-waiting [data-empty="questions"], #approvals-waiting .empty'), async (doc: any) => {
+      const h5 = await held(`plan for ${CODENAME} five`);
+      Object.defineProperty(doc, "visibilityState", { value: "visible", configurable: true });
+      doc.dispatchEvent(new doc.defaultView.Event("visibilitychange"));
+      const lineOf = () => doc.querySelector(`#approvals-waiting .ask[data-id="${h5.id}"] .ask-hold`);
+      const say = () => String(lineOf()?.textContent ?? "");
+      // H5: first it says it waits, and how long, from the route's time left.
+      await waitFor("the counting line", async () => (/waits \d+ more seconds?/.test(say()) || /^No answer/.test(say()) ? true : undefined));
+      assert.match(say(), /^The request to the AI waits [1-4] more seconds? for your answer, then goes with that part masked\.$/);
+      assert.equal(doc.querySelector(`#approvals-waiting .ask[data-id="${h5.id}"] .ask-found`).textContent, `It found: ${CODENAME}`);
+      // H6: after the deadline the page's own tick says it went, and when.
+      await waitFor("the past line", async () => (/^No answer/.test(say()) ? true : undefined), 15_000);
+      assert.match(say(), /^No answer came within 4 seconds, so your message went to the AI with that part masked at .+\. Your answer applies the next time the agent sends it\.$/);
+      assert.equal(lineOf().getAttribute("role"), "status", "the change is announced once");
+      // H7: the oracle, unchanged: the request went masked, never the span.
+      assert.equal((await h5.pending).status, 200);
+    }, { headers: { Cookie: ADMIN_COOKIE } });
+    assert.ok(sent().length > 0, "the request reached the model");
+    assert.ok(!sent().at(-1)!.includes(CODENAME), "CONFIDENTIALITY VIOLATION: the held message reached the model unmasked");
+  } finally {
+    await close();
   }
 });

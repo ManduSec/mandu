@@ -643,3 +643,52 @@ test("the step in ONE git sandbox (git-session.ts): the twins, sanitized packs a
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("a version no launch's walk found (history cut before the first walk, a tree in no ref, a blob written by plumbing) is unreadable by id through the real wrap (store-scan.ts)", async (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), "mandu-gitobj-scan-"));
+  try {
+    const ws = join(tmp, "ws");
+    git(tmp, "init", "-q", "-b", "main", ws);
+    writeFileSync(join(ws, "README"), "README-ONE\n");
+    const env = (text: string): void => { writeFileSync(join(ws, ".env"), text); git(ws, "add", "-A"); };
+    const plumb = (args: string[], input: string): string => execFileSync("git", args, { cwd: ws, input, encoding: "utf8", env: ENV }).trim();
+    env(`TOKEN=${canary(1)}\n`);
+    git(ws, "commit", "-qm", "one");
+    env(`TOKEN=${canary(2)}\n`);
+    git(ws, "commit", "-qm", "two");
+    // The history cut before any launch: an orphan branch, the old one and
+    // the reflogs gone, the old objects packed with the unreachable kept.
+    git(ws, "checkout", "-q", "--orphan", "fresh");
+    env(`TOKEN=${canary(3)}\nPASSWORD=${canary(9)}\n`);
+    git(ws, "commit", "-qm", "fresh");
+    git(ws, "branch", "-D", "main");
+    git(ws, "reflog", "expire", "--expire=now", "--all");
+    git(ws, "repack", "-adkq");
+    // A tree in no ref, and a blob written by plumbing sharing a credential.
+    const v4 = plumb(["hash-object", "-w", "--stdin"], `TOKEN=${canary(4)}\n`);
+    const readme = git(ws, "rev-parse", "HEAD:README").trim();
+    plumb(["mktree"], `100644 blob ${v4}\t.env\n100644 blob ${readme}\tREADME\n`);
+    const v5 = plumb(["hash-object", "-w", "--stdin"], `TOKEN=${canary(5)}\nPASSWORD=${canary(9)}\n`);
+    const hidden = [plumb(["hash-object", "--stdin"], `TOKEN=${canary(1)}\n`), plumb(["hash-object", "--stdin"], `TOKEN=${canary(2)}\n`), v4, v5];
+    for (const h of hidden) assert.equal(git(ws, "cat-file", "-t", h).trim(), "blob", "precondition: the store holds it");
+    const denyFile = join(tmp, "denied");
+    writeFileSync(denyFile, "");
+    chmodSync(denyFile, 0o000);
+    const got = await prepareGitObjectTwins([join(ws, ".env")], { cacheDir: join(tmp, "cache"), denyFile, walkCacheDir: join(tmp, "walks"), seals: memorySeals() });
+    for (const h of hidden) assert.ok(got.lockedIds!.includes(`sha1:${h}`), `${h} locked`);
+    if (!bwrapWorks()) {
+      t.diagnostic("SKIP the wrapped read: bwrap cannot start here");
+      return;
+    }
+    const wrap = withObjectTwins(["bwrap", "--dev-bind", "/", "/", "--cap-drop", "ALL", "--"], got.twins, []);
+    const inWrap = (...args: string[]) => spawnSync(wrap[0]!, [...wrap.slice(1), "git", ...args], { cwd: ws, encoding: "utf8", env: ENV, timeout: 60_000 });
+    const byId = hidden.map((h) => inWrap("cat-file", "-p", h));
+    const all = inWrap("cat-file", "--batch-all-objects", "--batch");
+    const everything = [...byId, all].map((r) => `${r.stdout}${r.stderr}`).join("\n");
+    for (const v of [1, 2, 4, 5]) assert.ok(!everything.includes(canary(v)), `version ${v} never reaches the wrapped git`);
+    for (const r of byId) assert.notEqual(r.status, 0, "a hidden version is a missing object");
+    assert.equal(inWrap("show", "HEAD:README").stdout, "README-ONE\n", "every other object reads as before");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

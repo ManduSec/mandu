@@ -19,7 +19,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  MODELS_UNKNOWN, NOT_OFFERED, NOT_OFFERED_LINE, NO_OWN_MODEL, destinationWhere, kbWords, modelErrorWords, modelPickerVM, modelPreviewVM, modelRunVM,
+  MODELS_UNKNOWN, NOT_OFFERED, NOT_OFFERED_LINE, NO_OWN_MODEL, NO_OWN_MODEL_PARTS, destinationWhere, kbWords, modelErrorWords, modelPickerVM, modelPreviewVM, modelRunVM,
   type ModelPreviewWire, type ModelRunWire,
 } from "../../../src/view-model/suggestion-model.js";
 import { LABEL_NOTE, MODEL_CONTENTS_NOTE, suggestionRows, type SuggestionWire } from "../../../src/view-model/suggestions.js";
@@ -156,4 +156,15 @@ test("every string the picker, the previews and the runs show uses the product v
     modelErrorWords("modelSuggestPreview: the model tier is not available in this install (the arbiter was started without a classifier)"),
   ].join(" ");
   assert.doesNotMatch(strings, FORBIDDEN, strings);
+});
+
+test("the picker: Contents without a model of your own says where to add one, Settings › Models a link part; joined, the same words", () => {
+  assert.equal(NO_OWN_MODEL_PARTS.map((x) => x.text).join(""), NO_OWN_MODEL);
+  assert.deepEqual(NO_OWN_MODEL_PARTS.filter((x) => x.kind === "link"), [{ kind: "link", text: "Settings › Models", to: "models" }]);
+  const none = modelPickerVM(true, []).options.find((o) => o.value === "contents")!;
+  assert.deepEqual(none.whyParts, [...NO_OWN_MODEL_PARTS]);
+  // Another reason names no place: no parts.
+  for (const vm of [modelPickerVM(true, null), modelPickerVM(false, [])]) {
+    for (const o of vm.options) assert.equal(o.whyParts, undefined, `${o.value}: ${o.why}`);
+  }
 });

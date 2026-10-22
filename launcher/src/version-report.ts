@@ -35,7 +35,7 @@ import { describeBuild, ownArbiterBuild, parseBuild, versionVerdict, type BuildI
 import { NODE_FLOOR, nodeMeetsFloor } from "./node-floor.js";
 import { ndjsonCall } from "./secret-setup.js";
 import { Layout } from "./services/layout.js";
-import { describeSupervisor, disableCommand, OWN_STACK_NOTE, ownStackCommand, stackSupervisor, type StackSupervisor } from "./stack-supervisor.js";
+import { describeSupervisor, disableCommand, OWN_STACK_NOTE, ownStackCommand, stackSupervisor, withStackFacts, type StackSupervisor } from "./stack-supervisor.js";
 // A cycle (subcommands dispatches here), used only at call time.
 import { residentPidsOn } from "./subcommands.js";
 import { launcherVersion } from "./update-check.js";
@@ -343,7 +343,18 @@ export function problemsOf(r: Omit<VersionReport, "problems">): Problem[] {
       ? `another build of Mandu ${s.version} (${describeBuild(s.build ?? { bundle: null, rev: null })}; this mandu's is ${describeBuild(s.ourBuild ?? { bundle: null, rev: null })})`
       : theirs;
     const from = s.codeDir ? `, running from ${s.codeDir}` : "";
-    if (s.supervisor) {
+    if (s.supervisor && s.supervisor.arbiterOutside === true) {
+      // Only the arbiter is old: the service's dashboard adopted an arbiter
+      // someone else started (runtime-instances.md §4.1b).
+      const ours = s.supervisor.runsOurCode === true;
+      out.push({
+        id: "services-adopted-other-build",
+        problem: `the Mandu arbiter running for you (pid ${s.pid ?? "?"}${from}) is ${what}. It is not ${describeSupervisor(s.supervisor)}'s own process: an earlier launch or another dashboard started it, and the service's dashboard adopted it.` +
+          (ours ? " The service runs this mandu's own code." : ` The service runs ${s.supervisor.workingDirectory ? `code from ${s.supervisor.workingDirectory}` : "other code"}, not this mandu's.`),
+        fix: `replace the old arbiter: mandu stop --stack ${s.base} (the service then starts its own), or press Replace on the arbiter in the dashboard's Services panel` +
+          (ours ? "" : `; if the service brings an old arbiter back, it is old too: ${disableCommand(s.supervisor)}`),
+      });
+    } else if (s.supervisor) {
       out.push({
         id: "services-supervised-other-build",
         problem: `the Mandu services running for you (arbiter pid ${s.pid ?? "?"}${from}) are ${what}, and ${describeSupervisor(s.supervisor)} starts them again whenever they stop. A launch of this mandu refuses to use them and cannot replace them.`,
@@ -561,7 +572,10 @@ export function realVersionDeps(env: Env, layout: Layout): VersionDeps {
     },
     hello: (sock) => ndjsonCall<unknown>(sock, "hello", {}, 3_000),
     arbiterSock: (e) => resolveArbiterSock(e),
-    supervisor: (base, arbiterPid) => stackSupervisor([...(arbiterPid !== null ? [arbiterPid] : []), ...residentPidsOn(base)]),
+    supervisor: (base, arbiterPid) => {
+      const s = stackSupervisor([...(arbiterPid !== null ? [arbiterPid] : []), ...residentPidsOn(base)]);
+      return s === null ? null : withStackFacts(s, arbiterPid, layout.mode === "installed" ? layout.pkgRoot : layout.repoRoot);
+    },
     cwdOf: (pid) => { try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return null; } },
     npmRoot: () => globalNpmRoot(env, process.execPath, (p) => { try { return readFileSync(p, "utf8"); } catch { return null; } }),
     ownBuild: () => ownArbiterBuild(layout, { revOf: arbiterRevOf }),

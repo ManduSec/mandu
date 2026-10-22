@@ -22,7 +22,13 @@
  *       AI got only a placeholder; the leak check found nothing, so no
  *       finding block; no link into `/dev/`, no word naming the trace;
  *   T3  the oracle: the model never got the value, and no answer or page
- *       carries it or a token; the whole-original route is refused signed out.
+ *       carries it or a token; the whole-original route is refused signed out;
+ *   T4  a session whose Read result the leak check flagged (its record over
+ *       the arbiter's IPC, `violatedInvariant`, as the fixtures record one):
+ *       the served agent page, signed in and out, shows *What the leak check
+ *       found* and then *What to do now*, which names the secret by its name
+ *       and links Report a problem; no rendered text carries the value or a
+ *       token.
  *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON).
  */
@@ -47,6 +53,8 @@ import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
 import { stateAxes } from "../lib/axes.js";
+import { ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { ISSUES_URL } from "../../dashboard/src/agent-versions.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the axis under test
 
@@ -62,10 +70,10 @@ function readTurn(path: string): string {
     + sseEvent("message_stop", { type: "message_stop" });
 }
 
-function post(port: number, messages: unknown[]): Promise<number> {
+function post(port: number, messages: unknown[], session = SESSION): Promise<number> {
   const body = JSON.stringify({ model: "claude-opus-4", stream: true, max_tokens: 512, tools: [{ name: "Read", input_schema: { type: "object" } }], messages });
   return new Promise((resolve, reject) => {
-    const r = httpRequest({ host: "127.0.0.1", port, method: "POST", path: "/v1/messages", headers: { "content-type": "application/json", "x-mandu-session-id": SESSION } },
+    const r = httpRequest({ host: "127.0.0.1", port, method: "POST", path: "/v1/messages", headers: { "content-type": "application/json", "x-mandu-session-id": session } },
       (res) => { res.resume(); res.on("end", () => resolve(res.statusCode ?? 0)); });
     r.on("error", reject);
     r.end(body);
@@ -170,6 +178,95 @@ test("a product-only dashboard shows a session's trace: History lists it, its ag
     const whole = await pageFetch(`${base}/api/home/original?session=${SESSION}&step=${encodeURIComponent("tool:toolu_ht_0")}`);
     assert.equal(whole.status, 403);
     noValue(await whole.text(), "/api/home/original signed out");
+  } finally {
+    await proxy.close();
+    await dashboard.close();
+    gate.close();
+    humanClient.close();
+    await arbiter.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("a session the leak check flagged: its agent page says what to do now, naming the secret by its name and linking Report a problem, signed in and out, with no value (secrets axes, explicit)", { timeout: 60_000 }, async () => {
+  const FLAGGED = `${SESSION}-flagged`;
+  const tmp = mkdtempSync(join(tmpdir(), "mandu-history-todo-"));
+  const ws = join(tmp, "ws");
+  mkdirSync(ws, { recursive: true });
+  const sock = join(tmp, "arbiter.sock");
+  const human = join(tmp, "human", "h.sock");
+  mkdirSync(join(tmp, "human"), { mode: 0o700 });
+  const arbiter = new ArbiterServer({ socketPath: sock, humanSocketPath: human, dbPath: join(tmp, "mandu.db"), eventDir: join(tmp, "events"), log: () => {}, confidentiality: true, integrity: false });
+  await arbiter.listen();
+  const gate = new ArbiterClient(sock); await gate.connect();
+  const humanClient = new ArbiterClient(human); await humanClient.connect();
+  const dashboard = new DashboardServer({ source: new ArbiterEventSource({ socketPath: sock, humanSocketPath: human }), log: () => {}, ...ADMIN_OPTS });
+  const base = `http://127.0.0.1:${await dashboard.listen(0)}`;
+  const env = join(ws, ".env");
+  writeFileSync(env, `STRIPE_KEY=${VALUE}\n`);
+  const seen: string[] = [];
+  const upstream: UpstreamFetcher = async ({ body }) => {
+    seen.push(body.toString("utf8"));
+    const sse = seen.length === 1 ? readTurn(env) : buildTextSse("Done.", { deltas: 1 });
+    return { status: 200, headers: { "content-type": "text/event-stream" }, body: Readable.from([Buffer.from(sse, "utf8")]) };
+  };
+  const proxy = new AnthropicProxy({ arbiter: new ArbiterClientAdapter(gate, humanClient), upstream, sessionKey: FLAGGED, log: () => {} });
+  const proxyPort = await proxy.listen(0);
+  const noValue = (text: string, where: string) => {
+    assert.ok(!text.includes(VALUE), `CONFIDENTIALITY VIOLATION: ${where} carries the secret value`);
+    assert.doesNotMatch(text, /\$MDU/, `${where} carries a token`);
+  };
+  try {
+    const ask = "Read the .env file.";
+    assert.equal(await post(proxyPort, [{ role: "user", content: ask }], FLAGGED), 200);
+    assert.equal(await post(proxyPort, [
+      { role: "user", content: ask },
+      { role: "assistant", content: [{ type: "tool_use", id: "toolu_ht_0", name: "Read", input: { file_path: env } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_ht_0", content: `     1\tSTRIPE_KEY=${VALUE}\n` }] },
+    ], FLAGGED), 200);
+    assert.ok(!seen.join("\n").includes(VALUE), "CONFIDENTIALITY VIOLATION: the model got the .env value");
+    // Wait for the proxy's record of the Read, then flag that result as
+    // the leak check records one (the detail quotes what it found).
+    let pageText = "";
+    for (let i = 0; i < 200; i++) {
+      pageText = await (await pageFetch(`${base}/api/home/agent?session=${FLAGGED}`)).text();
+      if (pageText.includes("toolu_ht_0") && /The result held your secret/.test(pageText)) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    await gate.emit({
+      id: `leak-${process.pid}`, sessionId: FLAGGED, turn: 1, ts: new Date().toISOString(), seq: 0, callId: "toolu_ht_0", parentId: null,
+      kind: "tool_result", view: "AgentView", boundary: "model_context", emitter: "anthropic-proxy",
+      input: null, output: null, invariant: { violatedInvariant: true, detail: `un-symbolized span survived: STRIPE_KEY=${VALUE}` },
+    } as never);
+    const read = async (signedIn: boolean): Promise<string> =>
+      (await pageFetch(`${base}/api/home/agent?session=${FLAGGED}`, signedIn ? { headers: CSRF_ADMIN } : {})).text();
+    let page: AgentPageVM | null = null;
+    for (let i = 0; i < 200; i++) {
+      page = JSON.parse(await read(false)) as AgentPageVM;
+      if (page.finding) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.ok(page?.finding, "the leak check's finding");
+    for (const signedIn of [true, false]) {
+      const who = signedIn ? "signed in" : "signed out";
+      const text = await read(signedIn);
+      const vm = JSON.parse(text) as AgentPageVM;
+      assert.equal(vm.valuesShown, signedIn, who);
+      const todo = vm.finding!.todo.map((l) => l.map((p) => p.text).join(""));
+      assert.equal(todo[0], "Change .env where it was issued, and turn the old one off: the AI's provider received it as it was.", `${who}: ${JSON.stringify(todo)}`);
+      noValue(text, `${who}: /api/home/agent`);
+      await servedProductPage(base, `/agents/${encodeURIComponent(FLAGGED)}`, (doc) => doc.querySelector("#agent-finding-todo li") !== null, (doc) => {
+        assert.equal(doc.getElementById("agent-finding-block").hidden, false, who);
+        assert.equal(doc.getElementById("agent-finding-todo-title").textContent, "What to do now");
+        const lines = [...doc.querySelectorAll("#agent-finding-todo li")].map((li) => (li as { textContent: string }).textContent);
+        assert.match(lines[0]!, /^Change \.env where it was issued/, who);
+        assert.equal(lines[lines.length - 1], "This is a fault in Mandu, not in your rules. Report a problem, with this session's time. Never paste the key itself.");
+        const link = doc.querySelector("#agent-finding-todo a") as { getAttribute(a: string): string };
+        assert.equal(link.getAttribute("href"), ISSUES_URL);
+        assert.equal(link.getAttribute("target"), "_blank");
+        noValue(doc.body.textContent, `${who}: the rendered agent page`);
+      }, signedIn ? { headers: CSRF_ADMIN } : {});
+    }
   } finally {
     await proxy.close();
     await dashboard.close();

@@ -63,7 +63,7 @@ const ADMIN = { status: 403, body: { error: ADMIN_SESSION_REQUIRED } };
 const NOT_CONNECTED = answered((res) => arbiterDisabled(res));
 const DOWN = { status: 503, body: unreachableBody("live", new Error("arbiter connection failed: connect ECONNREFUSED")) };
 
-const SIGN_IN = "Sign in first: in your own terminal, run mandu dashboard and open the sign-in link it prints (each link works once), or sign in with the dashboard's password if it has one.";
+const SIGN_IN = "Sign in first: reload this page and sign in with your dashboard account (if there isn't one yet, run mandu dashboard --set-password in your own terminal).";
 const NOT_CONNECTED_WORDS = "The protection service is not connected.";
 const UNREACHABLE_WORDS = "The protection service is not running. Start it under Settings, or try again in a moment.";
 /** What the server's own refusals say that the page must not. */
@@ -129,7 +129,7 @@ test("Settings: a block with no protection service says it is not connected; one
   await tick();
   assert.equal(doc.getElementById("settings-labels").textContent, NOT_CONNECTED_WORDS);
   assert.equal(doc.getElementById("settings-prompt-kinds").textContent, SIGN_IN);
-  assert.deepEqual(codes(doc.getElementById("settings-prompt-kinds")), ["mandu dashboard"], "the command is code");
+  assert.deepEqual(codes(doc.getElementById("settings-prompt-kinds")), ["mandu dashboard --set-password"], "the command is code");
   assert.deepEqual(codes(doc.getElementById("settings-labels")), [], "a sentence with no command has none");
   assert.equal(doc.getElementById("prompt-exception-form").hidden, true, "nothing to add to while refused");
   assert.doesNotMatch(doc.getElementById("page-settings").textContent, DEVELOPER);
@@ -137,7 +137,7 @@ test("Settings: a block with no protection service says it is not connected; one
   const swapped = load({ url: SETTINGS, routes: { "GET policy/sensitivity-labels": ADMIN, "GET policy/prompt-filters": DOWN } });
   await tick();
   assert.equal(swapped.doc.getElementById("settings-labels").textContent, SIGN_IN);
-  assert.deepEqual(codes(swapped.doc.getElementById("settings-labels")), ["mandu dashboard"]);
+  assert.deepEqual(codes(swapped.doc.getElementById("settings-labels")), ["mandu dashboard --set-password"]);
   assert.equal(swapped.doc.getElementById("settings-prompt-kinds").textContent, UNREACHABLE_WORDS);
   assert.deepEqual(links(swapped.doc.getElementById("settings-prompt-kinds")), [START], "Start is a link to Settings");
   assert.doesNotMatch(swapped.doc.getElementById("page-settings").textContent, DEVELOPER);
@@ -163,7 +163,7 @@ async function allowOnceLine(answer: unknown): Promise<any> {
 test("an answer the gate refuses, or one sent while the protection service is down, is said in the page's words on the card", async () => {
   const line = await allowOnceLine(ADMIN);
   assert.equal(line.textContent, SIGN_IN);
-  assert.deepEqual(codes(line), ["mandu dashboard"], "the command is code, as on the rest of the page");
+  assert.deepEqual(codes(line), ["mandu dashboard --set-password"], "the command is code, as on the rest of the page");
   assert.equal(await allowOnce(DOWN), UNREACHABLE_WORDS);
   assert.deepEqual(links(await allowOnceLine(DOWN)), [START], "Start is a link to Settings");
   assert.equal(await allowOnce(NOT_CONNECTED), NOT_CONNECTED_WORDS);
@@ -275,9 +275,9 @@ test("the sign-in sentence names its command as code, never quoted; a server's b
   const line = await allowOnceLine(ADMIN);
   assert.doesNotMatch(line.textContent, /["`]/);
   const code = line.querySelector("code");
-  assert.equal(code.textContent, "mandu dashboard");
-  assert.equal(code.previousSibling.textContent, "Sign in first: in your own terminal, run ");
-  assert.match(code.nextSibling.textContent, /^ and open the sign-in link it prints/);
+  assert.equal(code.textContent, "mandu dashboard --set-password");
+  assert.equal(code.previousSibling.textContent, "Sign in first: reload this page and sign in with your dashboard account (if there isn't one yet, run ");
+  assert.match(code.nextSibling.textContent, /^ in your own terminal\)\.$/);
   // A server's own text is not the page's: shown as written, one text node.
   const theirs = await allowOnceLine({ status: 409, body: { error: "Answer it with `mandu why` first." } });
   assert.equal(theirs.textContent, "Answer it with `mandu why` first.");
@@ -295,7 +295,7 @@ test("Files and folders: a folder the gate refuses, and a refused impact line, s
   const note = doc.getElementById("files-note");
   assert.equal(note.hidden, false);
   assert.equal(note.textContent, SIGN_IN);
-  assert.deepEqual(codes(note), ["mandu dashboard"]);
+  assert.deepEqual(codes(note), ["mandu dashboard --set-password"]);
   assert.ok(calls.some((c) => c.url.endsWith("/api/files/list?path=~")), "after the fallback too");
 
   // The impact line: a refusal the page words is a sentence of its own; a
@@ -312,6 +312,6 @@ test("Files and folders: a folder the gate refuses, and a refused impact line, s
     dot(page.doc, /^config\//, "public");
     await tick();
     assert.equal(page.doc.getElementById("files-impact").textContent, want);
-    assert.deepEqual(codes(page.doc.getElementById("files-impact")), answer === ADMIN ? ["mandu dashboard"] : []);
+    assert.deepEqual(codes(page.doc.getElementById("files-impact")), answer === ADMIN ? ["mandu dashboard --set-password"] : []);
   }
 });

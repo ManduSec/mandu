@@ -25,6 +25,12 @@
  * carve-outs, the refused create) is proven by net-supervisor's
  * guard_integration `the_whole_home_is_hidden_and_unwritable_but_its_carve_out_is_the_agents`.
  *
+ * The dashboard account (`state/dashboard-account.json`, dashboard.md §6.z:
+ * the hash every dashboard page's sign-in checks) is one of the probed
+ * stores: a confined agent can neither read it (an offline guess at the
+ * password) nor replace it (a password of its own), and its overwrite
+ * lands on the tmpfs.
+ *
  * Three launches: `secrets` mode (the whole home masked, nothing carved
  * out); the `full` canary (protection-modes.md §10: the home masked, the
  * AgentView and its repo.git bound back and writable); and a launch with no
@@ -64,6 +70,8 @@ interface Scenario {
   base: string;
   db: string;
   stray: string;
+  /** The dashboard account (dashboard.md §6.z). */
+  account: string;
   events: string;
   record: string;
   cred: string;
@@ -99,6 +107,10 @@ async function setUp(mode: ProtectionMode, bwrap: string, arbiters: ChildProcess
   // The pre-one-home DB location, left behind at the top of the home.
   const stray = join(base, "mandu.db");
   writeFileSync(stray, `SQLite format 3 ${CANARY}\n`, { mode: 0o600 });
+  // The dashboard account, as `mandu dashboard --set-password` writes it.
+  mkdirSync(join(base, "state"), { recursive: true });
+  const account = join(base, "state", "dashboard-account.json");
+  writeFileSync(account, JSON.stringify({ version: 1, user: "alice", kdf: "scrypt", salt: CANARY, hash: CANARY }) + "\n", { mode: 0o600 });
   // A workspace's AgentView and shadow repo (fs-sync layout.ts).
   const wsDir = join(base, "state", "workspaces", "ws-0123456789ab");
   const agentview = join(wsDir, "agentview");
@@ -134,7 +146,7 @@ async function setUp(mode: ProtectionMode, bwrap: string, arbiters: ChildProcess
   mkdirSync(twinCache, { recursive: true });
   const sanitized = join(twinCache, "pack-1.pack");
   writeFileSync(sanitized, "SANITIZED-PACK\n");
-  return { tmp, home, base, db, stray, events, record, cred, ws, pack, sanitized, agentview, repoGit, sock, bwrap };
+  return { tmp, home, base, db, stray, account, events, record, cred, ws, pack, sanitized, agentview, repoGit, sock, bwrap };
 }
 
 /** One launch's `applySecretTwins` as the launcher runs it without a guard
@@ -170,25 +182,28 @@ function assertCanaryOnDisk(sc: Scenario): void {
 }
 
 const NEW_TOP = "agent-new-top";
+/** What the agent tries to put in place of the dashboard account. */
+const FORGED = "AGENT-FORGED-ACCOUNT";
 const NEW_STATE = "agent-new-state";
 
 /** The agent's view: every way to the originals, and a create at the top of
  *  the home and under state/, run inside the prefix. */
 function probeInside(sc: Scenario, prefix: string[], extra: string[] = []): string {
   const probe = [
-    `for f in '${sc.db}' '${sc.db}-wal' '${sc.stray}' '${sc.record}' '${sc.sanitized}'; do if [ -e "$f" ]; then echo "PRESENT $f"; cat "$f" 2>/dev/null; else echo "ABSENT $f"; fi; done`,
+    `for f in '${sc.db}' '${sc.db}-wal' '${sc.stray}' '${sc.account}' '${sc.record}' '${sc.sanitized}'; do if [ -e "$f" ]; then echo "PRESENT $f"; cat "$f" 2>/dev/null; else echo "ABSENT $f"; fi; done`,
     `ls -a '${sc.base}' '${sc.events}' 2>&1`,
     `echo "PACK=$(cat '${sc.pack}')"`,
     `echo "CRED=$(cat '${sc.cred}' 2>&1)"`,
     `grep -ra '${CANARY}' '${sc.base}' '${sc.events}' 2>/dev/null && echo LEAK-GREP || true`,
     `(echo x > '${sc.base}/${NEW_TOP}') 2>/dev/null; (echo x > '${sc.base}/state/${NEW_STATE}') 2>/dev/null; true`,
+    `(echo '${FORGED}' > '${sc.account}') 2>/dev/null; true`,
     ...extra,
   ].join("; ");
   const inside = spawnSync("sh", ["-c", '"$@"', "sh", ...prefix, "sh", "-c", probe], { encoding: "utf8" });
   const out = `${inside.stdout}\n${inside.stderr}`;
   assert.equal(inside.status, 0, `the wrap ran: ${out}`);
   assert.ok(!out.includes(CANARY), `no original from Mandu's home reaches the agent:\n${out}`);
-  for (const f of [sc.db, sc.stray, sc.record, sc.sanitized]) {
+  for (const f of [sc.db, sc.stray, sc.account, sc.record, sc.sanitized]) {
     assert.match(out, new RegExp(`ABSENT ${esc(f)}\\n`), `${f} is not there:\n${out}`);
   }
   assert.match(out, /PACK=SANITIZED-PACK/, `the twin cached under the masked home still binds at the pack's own path:\n${out}`);
@@ -207,6 +222,8 @@ function assertDiskUntouched(sc: Scenario): void {
   assert.ok(readFileSync(sc.stray, "utf8").includes(CANARY));
   assert.ok(!existsSync(join(sc.base, NEW_TOP)), "no new file at the top of the real home");
   assert.ok(!existsSync(join(sc.base, "state", NEW_STATE)), "no new file under the real home's state/");
+  const account = readFileSync(sc.account, "utf8");
+  assert.ok(account.includes(CANARY) && !account.includes(FORGED), "the dashboard account was not replaced");
 }
 
 function preconditions(t: TestContext): string | null {
@@ -295,14 +312,15 @@ test("no secret found and no guard: the wrap still starts, for the home alone (t
     assert.match(r.status, /no secrets found to confine \(Mandu's own stores .* hidden\)/, logs.join(" | "));
     assert.equal(prefix[0], bwrap, `a wrap for the home alone: ${prefix.join(" ")}`);
     const probe = [
-      `for f in '${sc.db}' '${sc.stray}' '${sc.record}'; do if [ -e "$f" ]; then echo "PRESENT $f"; cat "$f" 2>/dev/null; else echo "ABSENT $f"; fi; done`,
+      `for f in '${sc.db}' '${sc.stray}' '${sc.account}' '${sc.record}'; do if [ -e "$f" ]; then echo "PRESENT $f"; cat "$f" 2>/dev/null; else echo "ABSENT $f"; fi; done`,
       `(echo x > '${sc.base}/${NEW_TOP}') 2>/dev/null; (echo x > '${sc.base}/state/${NEW_STATE}') 2>/dev/null; true`,
+      `(echo '${FORGED}' > '${sc.account}') 2>/dev/null; true`,
     ].join("; ");
     const inside = spawnSync("sh", ["-c", '"$@"', "sh", ...prefix, "sh", "-c", probe], { encoding: "utf8" });
     const out = `${inside.stdout}\n${inside.stderr}`;
     assert.equal(inside.status, 0, out);
     assert.ok(!out.includes(CANARY), out);
-    for (const f of [sc.db, sc.stray, sc.record]) assert.match(out, new RegExp(`ABSENT ${esc(f)}\\n`), `${f}:\n${out}`);
+    for (const f of [sc.db, sc.stray, sc.account, sc.record]) assert.match(out, new RegExp(`ABSENT ${esc(f)}\\n`), `${f}:\n${out}`);
     assertDiskUntouched(sc);
   } finally {
     await tearDown(arbiters, sc);

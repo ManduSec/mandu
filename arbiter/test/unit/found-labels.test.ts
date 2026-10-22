@@ -42,8 +42,10 @@ test("contentProbeCandidate: config files of a workspace, a tool's dot-directory
     "config.example.yaml", "secrets.sample.json", "app.template.yml",          // templates
     "refunds-svc/test/fixtures/refund.json", "tests/login.json", "spec/cassettes/login.yml", "__mocks__/api.json",
     "docs/config.yaml", "examples/settings.json", "src/__snapshots__/x.json",  // test data, examples, docs
+    // an agent's or editor's own (an MCP config among them is read by the
+    // MCP route instead, mcpConfigCandidate, §2.10)
     ".mcp.json", "mcp.json", ".vscode/settings.json", ".claude/settings.local.json", ".cursor/mcp.json", "opencode.json",
-    ".config/opencode/config.json", ".config/goose/config.yaml",               // an agent's or editor's own
+    ".config/opencode/config.json", ".config/goose/config.yaml",
   ]) {
     assert.ok(!ws(p), `${p} is not read`);
   }
@@ -227,10 +229,14 @@ test("the walk reads the candidates, lists a config file holding a credential (r
     const listed = new Map(r.files.map((f) => [f.path, f.rule]));
     assert.equal(listed.get(join(t.ws, "accounts/power.yaml")), CONTENT_RULE);
     assert.equal(listed.get(join(t.home, ".railway/config.json")), CONTENT_RULE, "a tool's dot-directory in HOME");
-    for (const p of [join(t.ws, "config/app.yaml"), join(t.ws, "test/fixtures/login.json"), join(t.ws, ".mcp.json"), join(t.home, "proj-elsewhere/config.yaml")]) {
+    for (const p of [join(t.ws, "config/app.yaml"), join(t.ws, "test/fixtures/login.json"), join(t.home, "proj-elsewhere/config.yaml")]) {
       assert.ok(!listed.has(p), `${p} is not listed`);
     }
-    assert.deepEqual(r.found!.map((f) => [f.path, f.field]).sort(), [[join(t.home, ".railway/config.json"), "token"], [join(t.ws, "accounts/power.yaml"), "password"]].sort());
+    // Since 2026-10-21 (secret-discovery.md §2.10) an MCP config holding a
+    // server's token is read and listed too (mcpConfigCandidate, not the
+    // generic candidates above).
+    assert.equal(listed.get(join(t.ws, ".mcp.json")), CONTENT_RULE, "a project's MCP config with a server's token");
+    assert.deepEqual(r.found!.map((f) => [f.path, f.field]).sort(), [[join(t.home, ".railway/config.json"), "token"], [join(t.ws, "accounts/power.yaml"), "password"], [join(t.ws, ".mcp.json"), "x.API_TOKEN"]].sort());
     assert.deepEqual(r.cleared, []);
     assert.ok(r.content!.read >= 3 && r.content!.capped === 0, JSON.stringify(r.content));
     // names only, on request

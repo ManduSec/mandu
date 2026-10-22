@@ -220,6 +220,15 @@ test("reply-filter: default ON; --no-reply-filter and MANDU_REPLY_FILTER=0 opt o
   assert.equal(parse(["--reply-filter", "claude"], { ...BASE_ENV, MANDU_REPLY_FILTER: "0" }).replyFilter, true);
 });
 
+test("session summary (the session's last line): default ON; --no-session-summary and MANDU_SESSION_SUMMARY=0 opt out; a flag wins", () => {
+  assert.equal(parse(["claude"], BASE_ENV).sessionSummary, undefined, "absent = on");
+  assert.equal(parse(["--no-session-summary", "claude"], BASE_ENV).sessionSummary, false);
+  for (const v of ["0", "false", "off", "no", "OFF"]) assert.equal(parse(["claude"], { ...BASE_ENV, MANDU_SESSION_SUMMARY: v }).sessionSummary, false, v);
+  for (const v of ["1", "", "yes"]) assert.equal(parse(["claude"], { ...BASE_ENV, MANDU_SESSION_SUMMARY: v }).sessionSummary, undefined, JSON.stringify(v));
+  assert.equal(parse(["--session-summary", "claude"], { ...BASE_ENV, MANDU_SESSION_SUMMARY: "0" }).sessionSummary, undefined);
+  assert.equal(parse(["--session-summary", "--no-session-summary", "claude"], BASE_ENV).sessionSummary, false, "the last flag wins");
+});
+
 test("auto-detects claude from argv[0], passes argv verbatim after --", () => {
   const p = parse(["--", "claude", "--dangerously-skip-permissions"], BASE_ENV);
   assert.equal(p.target, "claude");

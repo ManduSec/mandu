@@ -40,11 +40,11 @@ The current design keeps three properties:
 | hourly, on `master`'s head when it moved since its last finished test (the master check, §7.1) | the same per-push kinds, a run no newer commit cancels | a red master pipeline | the same VM |
 | a merge request whose diff is documentation only | the docs lane: the manifest's `docsLane` entries (§5.5) | yes | the same VM |
 | a merge request whose code paths are all in a declared scope (the drill machinery) | the scoped lane: the per-push entries that can reach it, plus the docs lane's (§5.8) | yes | the same VM |
-| release tag `v*` | the above, plus `install` (the VM matrix), `release-pack`; `release-publish` is a manual step | yes (publish: manual) | the VM, the matrix's own guests |
+| release tag `v*` | the above, plus `install` (the VM matrix); the release itself is built and published from the public snapshot by the public repository's release workflow once this pipeline passed (§12, packaging.md §11.3) | yes (the release waits for it) | the VM, the matrix's own guests |
 | nightly | `live-drill`, `env`, `eval`, in `secrets` mode only, plus every `flaky` entry | no | one VM with a network, the host's Ollama on one port and one credential kind per lane (§9); the only run that holds a credential |
-| nightly, release tag `v*`, and a merge request that changes a lockfile or the audit | the dependency audit: `deps.audit-npm`, `deps.audit-cargo` (§14.2) | yes (`release-pack` waits for it) | one VM like the per-push one with a network and no credential (§14.2) |
-| nightly, and release tag `v*` | the entries that need `kernel`, on Linux 7.0 | yes on a tag (`release-pack` waits for it); a red nightly run otherwise | one VM like the per-push one (no network, no credential), booted from the Ubuntu 26.04 image (§4.1) |
-| a pull request on the public repository, and a release check by hand (while it is private: manual runs only; never a push or a tag, §12) | `unit`, `component`, `stack` only (no macOS: a maintainer runs the darwin entries on a Mac by hand, §12), plus the dependency audit (§14.2) | yes | GitHub-hosted Linux runners (§12) |
+| nightly, release tag `v*`, and a merge request that changes a lockfile or the audit | the dependency audit: `deps.audit-npm`, `deps.audit-cargo` (§14.2) | yes (the release waits for it, packaging.md §11.3) | one VM like the per-push one with a network and no credential (§14.2) |
+| nightly, and release tag `v*` | the entries that need `kernel`, on Linux 7.0 | yes on a tag (the release waits for it, packaging.md §11.3); a red nightly run otherwise | one VM like the per-push one (no network, no credential), booted from the Ubuntu 26.04 image (§4.1) |
+| a pull request on the public repository, the release check (a `v*` tag there runs `ci.yml` through `release.yml`), and a check by hand (§12) | `unit`, `component`, `stack` only (no macOS: a maintainer runs the darwin entries on a Mac by hand, §12), plus the dependency audit (§14.2) | yes | GitHub-hosted Linux runners (§12) |
 | never automatic | the frozen lane (runs only when integrity is revived, `protection-modes.md §10` §5) | n/a | by hand |
 
 Every row but the GitHub one runs through `scripts/ci/vm-run.sh` on a host
@@ -170,6 +170,35 @@ disk, §9; nothing else runs with them):
 - Root is used only for that setup. Every suite runs as `ci`: the default
   suites must pass unprivileged ([`CONTRIBUTING.md`](../../../CONTRIBUTING.md)),
   and the `kernel`-need entries prove the *unprivileged* attachments.
+- **A cgroup delegated to `ci`.** No `user@UID.service` delegates one in
+  the guest, so `boot.sh` makes the shape a desktop terminal or tmux gives a
+  user (`delegate_cgroup`): `mandu-ci.service` has `Delegate=memory pids`;
+  `boot.sh` moves itself to `<unit>/boot`, switches on `memory` and `pids`
+  where the kernel offers them (no limit is set), and delegates
+  `<unit>/ci` to `ci` as cgroup-v2.rst "Delegation" documents (the
+  directory, `cgroup.procs`, `cgroup.threads`, `cgroup.subtree_control`);
+  `ci` makes `ci/run`, where the pipeline (and `--shell`'s login) runs, and
+  an empty `ci/spare` beside it. So the guard's cgroup rule
+  (rootless-confinement-ubuntu-2404.md §12.2, "The cgroup") is exercised
+  in every run: its kernel test in `net-supervisor/tests/guard_integration.rs`
+  finds a user-owned own cgroup, a user-owned parent and a user-owned
+  sibling. A step that fails leaves the suites in the unit's root-owned
+  cgroup and says so on the console; that test then skips, which
+  `rust.kernel`'s strict skips refuse. **Never `cpu`** (neither in the
+  unit's `Delegate=`, which would make systemd switch it on in the root
+  cgroup and `system.slice`, nor below it): a cgroup with `cpu` on is a
+  cpu task group of its own, and the kernel applies autogroups (each
+  session one fair share; `sched_autogroup_enabled` is 1 in the guest) only
+  in the root task group. With `cpu` on (2026-10-21, image
+  `mandu-ci-111e5ca9…`) every suite's processes shared one per-task pool:
+  a single-threaded TUI agent got a per-task slice beside the cargo builds
+  (a CPU-bound task beside 12 busy ones on 4 vCPUs took 3.2× its idle
+  time, against 1.5× in the root task group), the first OpenClaw replay
+  drill went from 43 s to 120-220 s and timed out at its 90 s composer
+  wait, and a `nice -n 19` call starved (§11, both). `boot.sh` says on the
+  console which cpu task group the suites are in (`cpu:`); `cpu.max` is
+  then absent from the suites' cgroup, which the guard's test lists only
+  where it exists.
 - The guest sets `kernel.apparmor_restrict_unprivileged_userns=0` (and the
   26.04 guest also disables `bwrap-userns-restrict`, §4.1), so the kernel
   lane's plain `unshare --user` and bwrap work as on an unrestricted host. The
@@ -223,7 +252,17 @@ lock for many minutes.
   the third-party baselines, §9.10), node at the pinned version (the nodejs.org tarball, checked
   against its `SHASUMS256.txt`), **bubblewrap `BWRAP_VERSION` from source**
   (sha256-pinned) into `/usr/local/lib/mandu-ci/bwrap`, off the PATH (§5
-  says why), the pinned agent CLIs installed globally (`claude`, `codex`, `opencode` and
+  says why), **git `GIT_REFTABLE_VERSION` from source** (2026-10-21;
+  kernel.org's release tarball, sha256-pinned, built without gettext,
+  Tcl/Tk, Perl, Python, curl or expat against `zlib1g-dev`, checked to make
+  a reftable repository) into `/usr/local/lib/mandu-ci/git`, off the PATH
+  too: 24.04's git is 2.43 and a reftable repository needs 2.45, so the
+  reftable tests (`launcher/test/unit/prefetch-reftable.test.ts`,
+  `launcher/test/component/prefetch-reftable-worktree.test.ts`) skipped in
+  CI; now they put it first on their own process's PATH
+  (`launcher/test/lib/reftable-git.ts`, which `scripts/test/ci-pins.test.mjs`
+  holds to the same path) and run, while every other suite and the product
+  under test keep the distro's git, the pinned agent CLIs installed globally (`claude`, `codex`, `opencode` and
   `openclaw` from npm; `goose` from its release tarball, sha256-pinned, by
   provision.sh's `install_release_bin`, the pattern for the next agent shipped
   as one binary), each checked to **run** (`--version`), not
@@ -364,7 +403,7 @@ up is a per-request rule on the same job (a ~50 s run). The job is the
 per-push boundary (no network, no credential, `--kind sandbox,replay-drill
 --need kernel`: the kernel lane), **not** `allow_failure`: its reds are code
 bugs on 7.0, so a red fails the scheduled pipeline, and on a tag
-`release-pack` waits for it. By hand, before merging a change to the guard,
+the release waits for it (packaging.md §11.3). By hand, before merging a change to the guard,
 the supervisors or the launcher's kernel paths:
 
 ```sh
@@ -1340,15 +1379,8 @@ request, §5.5; and the hourly master check, §7.1), `kernel-linux-7`
 (nightly and `v*` tags, §4.1), `install`
 (`scripts/matrix/run-matrix.sh --require ubuntu-2404 --require ubuntu-2604`
 on `v*` tags; a SKIP of either supported install target is a FAIL),
-`release-pack` (`vm-run.sh --exec "bash scripts/ci/release-pack.sh <tag>"`
-after `test`, `kernel-linux-7`, `audit` and `install`; packaging.md §11.3),
 `audit` (the dependency audit in a guest with a network: the schedule, `v*`
-tags and a merge request that changes a lockfile, §14.2), a manual
-`release-publish` (on the runner host, executing no code from the commit:
-`sha256sum -c` over the artifact, then `npm publish --ignore-scripts`;
-inactive: npm refuses the source repository's tarball, which is `private:
-true`, and no `NPM_TOKEN` is set until `release-pack` packs the public tree
-and the job passes `--tag`, packaging.md §11.4), `website-deploy` (a push to `master` that
+tags and a merge request that changes a lockfile, §14.2), `website-deploy` (a push to `master` that
 changes the company website's published files uploads them to Cloudflare
 Pages from the runner host; the other token, a Pages-only one in a masked,
 protected CI variable), and the nightly lane `nightly-subscription`
@@ -1564,6 +1596,16 @@ rehearsal of one suite is one command (§9.6).
 - **Internet entries.** `--include-internet` adds the nightly kinds'
   `internet` entries (`node scripts/suites.mjs list` names them); the
   per-push run never has them.
+- **The launch-time budget** (`integration.launch-budget`, built
+  2026-10-21, `runtime-instances.md` §14.11). Warm `mandu claude
+  --version` and `mandu codex --version` launches from a small home and
+  from a developer-sized one, medians against
+  `tests/env/launch-budget-baseline.json`, which is recorded in this guest
+  (`vm-run.sh --kind env --only integration.launch-budget --network`). It
+  needs no login, so the subscription lane runs it, alone (about a
+  minute). A launch more than 50% and 300 ms slower than its baseline
+  turns the night red; one more than 20% and 150 ms slower prints a `WARN`
+  line and stays green; every step's time is in its log either way.
 
 ### 9.2 The guest's network, and the one host port
 
@@ -2394,6 +2436,35 @@ each is a pattern that recurs):
     reported `sent`). Under load in the guest (4 vCPUs, 12 CPU burners) the
     immediate check failed 4 of 40 runs; it now polls for up to 5 s
     (`sink_received`), 0 of 40;
+  - fixed reader deadlines shorter than a loaded holder (2026-10-21, CI
+    jobs 18268 and 18285, and an earlier 240 s STUCK in the same file):
+    in `agent_flow_integration` the agent role gave up on its own clock
+    (the FIFO `drain` after 5 s, `read_some`'s 3 s `SO_RCVTIMEO`, `wait_for`'s
+    5 s) while a holder's first secret read took over 7 s on a busy host.
+    The agent then closed its end first. In the FIFO test the holder's
+    blocking `O_WRONLY` open met a FIFO with no reader and waited forever,
+    in the guard worker that performs it (`wait_for_partner`), as it would
+    with no guard: STUCK at 240 s. In the keep-alive test the server read
+    its secret with the agent's end of its connection already gone, and the
+    sweep rightly refused the raw open (`e13`). The same load also made the
+    fixed 800 ms wait for the guard's close report miss. Reproduced on a host
+    with 4 to 5 CPU burners per core: the FIFO test failed 7 of 20 runs (2
+    of them the job's exact STUCK, the agent's 5 s over before the holder
+    read its secret), and the whole file 3 of 6 (both reds of the jobs
+    among them). The agent now reads until
+    the holder reports it is done (FIFO) or the peer closes, under the run's
+    wait limit (`wait_limit`), and waits for the close report itself (the
+    mock arbiter marks it, each test's mock its own file: one marker for
+    the file let a guard's late report stand for the next test's); the same
+    load then gave 0 of 20 and 0 of 6, and the CI guest in the kernel
+    lane's namespaces (8 vCPUs, 8 CPU burners) 0 of 29. Not
+    a guard bug: the guard answers each of these calls as the kernel would.
+    Left open, found on the way: a guard worker that performs a FIFO open
+    still blocked for its peer stays blocked after its tracee is killed
+    (the call is gone), until some process opens the other end, which then
+    meets a writer that comes and goes; a probe that killed the writer saw
+    the worker in `wait_for_partner` after the supervisor returned. Each
+    such worker counts against the guard's 64 (`spawn_worker`);
   - two tmux races in the drill runner's pane tests (pipelines 7649, 8605,
     8825, "first program never showed"): a stand-in program that wrote and
     exited at once lost its output to tmux's pty close, and a
@@ -2468,6 +2539,127 @@ each is a pattern that recurs):
     thread write into the clean attempt's captured stdout. `mandu-exec-box`
     runs one exec per process, so the product was not exposed; a threaded
     caller of `supervise_exec` was.
+  - **a real runner gap behind a git sandbox kill that "did not close"**
+    (2026-10-21, CI jobs 18255 to 18296, 10 reds in the 22 runs after the
+    delegated cgroup of §3 landed, none in the 50 before): the arbiter's
+    `child-run.test.ts` "bubblewrap … killed in its start-up" found calls
+    whose output stayed open 5 s after the kill. bubblewrap's sandbox child
+    (the sandbox's pid 1) calls setsid and only later, after it forked the
+    command, arms `--die-with-parent`, with no check that bubblewrap still
+    lives; a kill in between reached bubblewrap's group but not the
+    sandbox, which ran the command to its end. An idle host showed it too:
+    with `sleep 3` in the sandbox, 2 of 8192 kills (the CI guest, bubblewrap
+    0.9.0: 3 of 2048) left it running its 3 s. `git --version` ends in
+    milliseconds, so the test saw it only once nice 19 starved it: with the
+    suites in one cpu cgroup the test's duration went from 2-4 s to 9-13 s.
+    In the product, a killed git call (a deadline, a `stop()`) ran on. The
+    runner now kills the descendants it reads just before the kill too
+    (write-protection.md §8.5.1), 0 of 2048 in the guest; a new test runs
+    `sleep 300` in the sandbox, which fails without it on an idle host (3
+    of 512). The start-up tests' kill grace is 120 s: at nice 19 in a guest
+    with four busy loops per vCPU, killed processes waited seconds for the
+    CPU to exit, and killed bubblewraps sat up to 64 s in the kernel (state
+    D, `rtnl_lock`, in the clone that makes the network namespace) with
+    nothing left running; neither window's process closes within it.
+  - **a CI environment change behind a replay drill timeout, not a
+    commit** (2026-10-21, `integration.replay-openclaw`'s `util-reasoning`
+    TIMEOUT, "launch 0: the TUI never showed its composer", in jobs 18289
+    to 18323, master's own included, and on branches cut before the day's
+    merges): the first drill of the suite runs in the run's busiest
+    minutes, and from the first run on the delegated-cgroup image (job
+    18248, image `mandu-ci-111e5ca9…`) it took 117-223 s instead of
+    35-50 s; the agent's screen arrived uniformly 2-4× later (its composer
+    at 76-92 s instead of 23 s, against the replay's 90 s boot wait for
+    OpenClaw, 45 s scaled ×2), so it passed or timed out by a few seconds.
+    The image had switched `cpu` on (`Delegate=yes`, and `boot.sh` asked for
+    it), so the suites left the root cpu task group and with it the
+    autogroups that had given each session its fair share (§3). The unit
+    now delegates `memory pids` and `boot.sh` never switches `cpu` on; the
+    guard's cgroup test still finds its user-owned cgroups. A replay that
+    passes only by luck of the clock is the pattern: compare its timings
+    before and after the image, not only its verdict.
+  - **five reds of one day's flake sweep** (2026-10-21; counted in the kept
+    runs of the CI runner host):
+    - `launcher.component3`'s `test-owner-cleanup.test.ts` failed
+      `ENOTEMPTY, rmdir '<tmp>/tsx-1000'` in its cleanup (jobs 18107 and
+      18368, master's; 2 of about 100 runs). The test SIGKILLs a launch
+      mid-way, and per-session services the launch had just spawned (the net
+      proxy, the exec shim of a `curl` probe) were still loading through tsx,
+      writing its cache under the launch's TMPDIR, after the sweep: they
+      carry no `MANDU_RUNTIME_DIR`, which is what the sweep finds, and see
+      their cut lifeline only once loaded. A snapshot in the guest showed
+      both alive after the sweep and the cache growing from 802 to 824
+      entries in the next 3 s. The retries added that morning
+      (`rmSync`'s `maxRetries`) retry only the failed `rmdir`, never the
+      walk, so an entry created after the walk fails every retry: job 18368
+      slept 47 s in them and failed anyway. The cleanup now waits (60 s,
+      then SIGKILL) for every process whose env names the test's TMPDIR,
+      and removes the tree walking it again on each pass. The test's own
+      claims (the dashboard and the arbiter gone, their registry entries
+      removed) are unchanged. 0 of 36 in the guest beside 8 CPU burners.
+    - `launcher.component3`'s `demo.test.ts` "sabotage: a guard whose
+      reports the arbiter cannot believe" passed the sabotaged run (job
+      18346; 1 of 122 runs). The sabotage was an explicit
+      `MANDU_ARBITER_HUMAN_SOCK` naming the data socket: the guard's start
+      refused it, but its looker (`report_channel::decide_upgrade`, first
+      after 250 ms) ignores the variable, re-learns the human socket from the
+      data socket's `hello` and moved there under every check, so a Codex
+      read after the move was believed. The upgrade is right: what the data
+      socket's `hello` names is fixed by the arbiter at its start
+      (`humanSockPath` of its base and instance id), no data-plane request
+      changes it, and the move still requires the walled directory, the
+      private place, `channel: human` for the same instance and the same
+      listening process outside the guard's tree. The sabotage is now a
+      guard policy with no `unixDeny`, which can believe no human socket at
+      its start or in any look (the looker is not started), and the test
+      checks the guard said so (mandu-demo.md §7). 0 of 18 in the guest.
+    - `integration`'s `nested-claude-route.test.ts` "mandu -- sh …" saw 0 of
+      2 starts of its stand-in claude (one local full run; 1 of about 245
+      runs), with no launch output: the starts were checked before the
+      launch's exit. Every check of the oracle now carries the launch's exit
+      and its output's tail. Not reproduced: 0 of 18 in the guest under load;
+      the next red names its cause. A second hunt (2026-10-22) did not
+      reproduce it either: 0 of 2,396 runs of the test in the guest, in five
+      shapes (a box per run, 12 and 32 at a time beside 8 and 48 CPU burners;
+      one shared box, as the entry's files share one, 24 and 40 at a time on
+      32 and 16 vCPUs, the slowest runs at 32 s against the red's 13.5 s;
+      10 at a time beside three whole passes of the entry's
+      `stack/*.test.ts`, all green). Ruled out by reading: the per-session
+      net proxy and the session's shims carry no `MANDU_RUNTIME_DIR`, but
+      inherit the launch's `XDG_RUNTIME_DIR` (the rig's own directory, so
+      the base they resolve is the launch's), and the `claude` shim reads no
+      runtime directory at all (its route is baked into it); no pids limit
+      (the guest's unit has TasksMax 77114); no arbiter deadline on the
+      shim's path (its route and refusals are pure, and the guard's exec
+      trap never refuses an exec). What the red does fix: the stand-in
+      wrote its record only when its request ended, so a start that threw
+      first (an unreadable file, a write refused) left no trace, the same
+      as one that never ran. It now writes a trace when it begins (its
+      arguments) and when a throw ends it (the stack), every oracle failure
+      prints the trace, both nested claudes run whatever the first one's
+      end, the shell prints both exits, and the refusals test checks that
+      the stand-in never began.
+    - the inspector's `sessions-scale.test.ts` (in `private/`) bounded the warm
+      `/api/sessions` by wall time, under 2000 ms, and one local full run
+      measured 2080 ms beside a cold listing of 54 s (local full runs 50-54
+      s; CI 20-36 s). Alone in a guest the same listing takes 1.5 s cold
+      (1.0-1.9 s of CPU) and under 0.1 s warm (60-90 ms of CPU, 16 runs
+      beside 12 CPU burners): the wall times
+      measured the share of the CPU the file got, which per-session fair
+      sharing (§3) gives the suite's session as a whole, not the code. The
+      absolute bound is now the warm request's CPU time (under 1000 ms, and
+      under a quarter of the cold pass's), the wall-time ratio stays; a warm
+      pass that re-read the store would cost the cold pass's CPU again. No
+      code change: nothing in the timings points at the listing, and a
+      process of its own (an entry for one file) would still share the CPU.
+    - `vm-run.sh --worktree` sent the inspector's relative links (in `private/`)
+      (`fixtures`, `test/fixtures`, `public`) dangling: GNU tar's
+      `--transform` rewrites link targets too, so `../../dashboard/fixtures`
+      arrived as `src/../../dashboard/fixtures`, and the suite's fixture
+      reads failed ENOENT (local run 20261021-105403; a commit's run, `git
+      archive`, was never affected). The transform takes the `S` flag
+      (lib.sh `ci_source_tar`); `ci-vm-run.test.sh` unpacks a relative link
+      and follows it.
 
 Three more per-push reds of the same weeks were already explained: the
 real-config `fidelity-permission-prompt` (`$MDU:nomodel_Read` on screen,
@@ -2495,24 +2687,27 @@ maintainers' CI, or `vm-run.sh` by hand), macOS on a maintainer's Mac.
 ### When GitHub runs (decided 2026-10-09)
 
 GitHub's minutes go only where GitHub is the only signal: the exported
-tree's own test and outside contributors' pull requests. Everything else the
-GitLab pipeline already ran, a superset, on the same commit (§12.3).
+tree's own test, the release, and outside contributors' pull requests.
+Everything else the GitLab pipeline already ran, a superset, on the same
+commit (§12.3).
 
-| Trigger | `CI` (`ci.yml`) | When |
-|---|---|---|
-| a snapshot push to `main` or `master` | never | no `push` trigger: GitLab ran a superset on the commit |
-| a `v*` tag | never | no tag trigger: GitHub makes the tag when the release is published, so a run there would come after the check |
-| by hand: the release check | yes | once per snapshot that will be published, before it is published: the exported tree's one test run |
-| a pull request, while the repository is private | skipped | every root job's `if` admits only `workflow_dispatch` there |
-| a pull request, once public | yes, unless it changes documentation only | a newer push cancels the older run (`cancel-in-progress`) |
+| Trigger | `CI` (`ci.yml`) | `Release` (`release.yml`) | When |
+|---|---|---|---|
+| a snapshot push to `main` or `master` | never | never | no `push` trigger: GitLab ran a superset on the commit |
+| a `v*` tag | yes, called by `release.yml` (`workflow_call`) | yes | the release check, then the pack and, after a maintainer's approval, the publish (§12.5) |
+| by hand | yes (`workflow_dispatch`) | never | a check of any snapshot |
+| a pull request, while the repository is private | skipped | never | every root job's `if` admits only a run that is not a pull request there |
+| a pull request, once public | yes, unless it changes documentation only | never | a newer push cancels the older run (`cancel-in-progress`) |
 
 **No macOS on GitHub (decided 2026-10-09).** A macOS runner's minutes count
 ten times against a private repository's quota (one run of the darwin
 entries, about 30 real minutes, was about 300 quota minutes), and the suite
 needs a Mac's judgment anyway (a Seatbelt or PTY failure is read on the
 machine). A maintainer runs the manifest's darwin entries on a Mac by hand
-before a release and after a change to the darwin code
-([`development.md`](../../development.md), "Developing and testing on macOS").
+after a change to the darwin code
+([`development.md`](../../development.md), "Developing and testing on macOS");
+since 2026-10-21 that run is not a release gate (a release neither runs nor
+waits for it; [`packaging.md §11.3`](../distribution/packaging.md)).
 The `macos-wrapper.yml` workflow and its path gate were removed;
 `scripts.suites-manifest` checks that no workflow job runs on a macOS runner.
 
@@ -2523,13 +2718,11 @@ times the rate), at about 93 billed minutes for `CI` per push. So every job
 without a `needs` carries `if: !github.event.repository.private ||
 github.event_name == 'workflow_dispatch'` (alone, or AND-ed with one further
 condition), and the jobs that need them skip with them; a skipped job bills
-nothing. Before it dispatches on a private repository, the maintainers'
-release helper reads the organization's Actions usage for the month (the
-billing usage summary,
-`GET /organizations/{org}/settings/billing/usage/summary?year=&month=&product=Actions`,
-which needs a token with `admin:org`; the older `/orgs/{org}/settings/billing/actions`
-answers 410 since GitHub's enhanced billing) and refuses when what is left is
-below the run's cost, about 93 quota minutes.
+nothing. The repository is public since 2026-10-19, where standard runners
+draw no quota, so the gate no longer skips anything; it stays for a fork or a
+return to private. The release workflow refuses to run on a private
+repository: its check is this workflow, whose jobs would all skip there, and
+a check of skipped jobs would pass.
 
 **A documentation-only pull request runs no `CI`.** The `pull_request`
 trigger has a `paths` filter, `**` then `!docs/**` and `!**/*.md`, then
@@ -2550,15 +2743,18 @@ for a started arbiter double on CI"): read the failing suite's log tail
 before rerunning.
 
 **Caches.** With no push trigger, the default branch's caches (the npm cache,
-`interceptors/target`) are written by the release check's manual runs on
-`main`; a pull request reads them. Once the repository is public, do not make
+`interceptors/target`) are written by manual runs on `main` (`gh workflow run
+ci.yml`); a pull request reads them. A release run caches under its tag,
+which no other run reads. Once the repository is public, do not make
 `CI`'s jobs required status checks: a documentation-only request never
 reports them and would wait forever.
 
 Once the repository is public, where standard runners are free, the
 pull-request rows start with no edit. `scripts.suites-manifest` checks the
-gate on every root job, that no `push`, tag or schedule trigger exists, the
-`CI` docs filter, and that no job runs on macOS.
+gate on every root job of `ci.yml`, that only `release.yml` has a tag
+trigger and no workflow a branch push or schedule trigger, the `CI` docs
+filter, and that no job runs on macOS; `scripts.release-workflow` checks the
+release workflow (§12.5).
 
 ### 12.1 What GitHub runs
 
@@ -2660,7 +2856,6 @@ await their confirming run on a Mac (development.md lists the pitfalls).
 | The `replay-drill` kind | It drives the real claude, codex, openclaw and opencode CLIs, pinned in the guest image, against a scripted model. Without those CLIs the suites self-SKIP. Porting them needs the pinned installs and a flake record on GitHub's runners first. Its entries are the maintainers' drills and are not in the public tree (§2). | the maintainers' per-push VM run |
 | The `live-drill`, `env` and `eval` kinds | A local model, a real model with a login and its quota, or the internet. The two dependency-audit entries are the exception: the `audit` job runs them by id (§14.2). | by hand; the nightly (§9) |
 | The `install` kind (the VM matrix) | Needs `/dev/kvm` and a VM image cache. | `v*` tags, or by hand ([`os-test-matrix.md`](./os-test-matrix.md)) |
-| `release-pack`, `release-publish` | Releases are cut on the canonical remote ([`packaging.md §11`](../distribution/packaging.md) §3). | `v*` tags; publish is manual |
 | `internet` entries (`wire-release-live`; `tls-compat` is an `env` entry) | They reach the public internet; the manifest runs them only when selected. | by hand (`--only <id>` or `--include-internet`) |
 | The darwin entries (macOS) | A macOS runner costs ten times a Linux one on a private repository, and a Seatbelt or PTY failure is read on the machine (above). | a maintainer's Mac, by hand ([`development.md`](../../development.md)) |
 | The frozen integrity lane | Runs only when the integrity axis is revived ([`protection-modes.md §10`](../architecture/protection-modes.md) §5). | by hand, on revival |
@@ -2702,6 +2897,29 @@ reporting, as `SECURITY.md` says), the pull request template (tests and the
 design-doc update in the same change, stated axes, the commit format), and
 `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1; conduct reports go to
 hello@mandusecurity.com, not the security channel).
+
+
+### 12.5 The release workflow (2026-10-21)
+
+`.github/workflows/release.yml` is where a release is built and published
+([`packaging.md §11.3`](../distribution/packaging.md)): a release is cut from
+the public tree so the artifact is provably the public snapshot. A
+maintainer pushes an annotated `v<version>` tag on a snapshot of `main`,
+after the development repository's own tag pipeline (the kernel lane, the
+audit, the install matrix: everything §12.2 lists as not on GitHub) has
+passed on the snapshot's source commit.
+
+| Job | What it does | Credential |
+|---|---|---|
+| `check` | `ci.yml` (`workflow_call`) on the tagged snapshot | none (`contents: read`) |
+| `pack` | refuses a private repository, a lightweight tag, a commit that is not a snapshot of `main`; runs `scripts/ci/release-pack.sh` (packaging.md §11.3) and `scripts/ci/release-assets.mjs`; keeps the `release` artifact | none |
+| `publish` | needs `check` and `pack`, runs in the `release` environment (a maintainer's approval); checks out no code; checks `SHA256SUMS`; creates the GitHub release; `npm publish --provenance --ignore-scripts` of the same tarball | `contents: write` and an OIDC identity (`id-token: write`) that npm's trusted publishing accepts only from this workflow in this environment; no stored token |
+
+`scripts.release-workflow` pins this shape: the trigger, the permissions per
+job, the approval, no `secrets.` reference and no npm token, the publish
+flags and their order, and the packages the pack installs against the
+launcher's bundle manifest; it also runs `release-pack.sh`'s refusals of a
+tree that is not the public one.
 
 ## 13. Test credentials: one secrets file
 
@@ -2970,7 +3188,7 @@ does not run them. Two jobs run them by id:
   audit script), so it runs in the guest, not on the runner host. It runs in
   the nightly's schedule (a new advisory against an unchanged tree makes the
   scheduled pipeline red: not `allow_failure`, an advisory is a finding, not
-  a flake), on `v*` tags (`release-pack` waits for it), and on a merge request
+  a flake), on `v*` tags (the release waits for it), and on a merge request
   that changes a lockfile or the audit itself. Not on every push: a new
   advisory is news about the tree, not about the change, and would turn every
   unrelated request red until someone fixed it.

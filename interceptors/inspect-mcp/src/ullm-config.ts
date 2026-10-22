@@ -33,6 +33,7 @@ import {
   OpenAiChatUllmClient,
   assertDeclaredEndpointUrl,
   assertNonProxyBaseUrl,
+  cliBinaryOfPath,
   sanctionedEndpointOrigins,
   type EndpointGuard,
   type UllmCliBinary,
@@ -50,6 +51,9 @@ export interface UllmEnv {
   ANTHROPIC_BASE_URL?: string;
   MANDU_ULLM_FORWARDER?: string;
   MANDU_ULLM_BINARY?: string;
+  /** The CLI's absolute path, resolved by the launcher past the session's
+   *  `claude` PATH shim (CliUllmClientOptions.binaryPath). */
+  MANDU_ULLM_BINARY_PATH?: string;
   MANDU_ULLM_MODEL?: string;
   /** Plan 11 D5: the model proxy's address(es), comma-separated, when the
    *  launcher pins them. NOT a declaration of anything: only the set of
@@ -69,6 +73,9 @@ export type UllmConfig =
   | {
       mode: "cli";
       binary: UllmCliBinary;
+      /** MANDU_ULLM_BINARY_PATH, validated; the client spawns it for the
+       *  binary it names. */
+      binaryPath?: string;
       baseUrl?: string;
       forwarderUrl?: string;
       model?: string;
@@ -91,6 +98,8 @@ export function selectUllmConfig(
   const forwarderUrl = env.MANDU_ULLM_FORWARDER || undefined;
   const model = env.MANDU_ULLM_MODEL || undefined;
   const binary = normalizeBinary(env.MANDU_ULLM_BINARY);
+  const binaryPath = binaryPathOf(env.MANDU_ULLM_BINARY_PATH);
+  const withPath = binaryPath !== undefined ? { binaryPath } : {};
 
   if (mode === "api") {
     if (!apiKey) {
@@ -117,7 +126,7 @@ export function selectUllmConfig(
     // loopback-proxy base would route the quarantined child through T-LLM's
     // instrumented path.
     if (baseUrl) assertNonProxyBaseUrl(baseUrl, forwarderUrl);
-    return { mode: "cli", binary, baseUrl, forwarderUrl, model };
+    return { mode: "cli", binary, ...withPath, baseUrl, forwarderUrl, model };
   }
 
   // auto: prefer an explicit key (api), else a CLI binary (cli), else fail closed.
@@ -129,18 +138,33 @@ export function selectUllmConfig(
   const resolved = resolveProbeBinary(binary, model);
   if (baseUrl) assertNonProxyBaseUrl(baseUrl, forwarderUrl);
   if (cliAvailable(resolved)) {
-    return { mode: "cli", binary, baseUrl, forwarderUrl, model };
+    return { mode: "cli", binary, ...withPath, baseUrl, forwarderUrl, model };
   }
   // Try the other binary as a last resort (e.g. binary hint was claude but only
   // codex is installed, or vice versa) before giving up.
   const alt: "claude" | "codex" = resolved === "claude" ? "codex" : "claude";
   if (cliAvailable(alt)) {
-    return { mode: "cli", binary: alt, baseUrl, forwarderUrl, model };
+    return { mode: "cli", binary: alt, ...withPath, baseUrl, forwarderUrl, model };
   }
   throw new Error(
     "no ANTHROPIC_API_KEY and no claude/codex CLI on PATH — the quarantined U-LLM cannot run (fail closed). " +
       "Log in to Claude Code (so `claude` is on PATH) or set ANTHROPIC_API_KEY.",
   );
+}
+
+/** MANDU_ULLM_BINARY_PATH: undefined when unset, else an absolute path whose
+ *  file name is `claude` or `codex`, or a throw (fail closed: a malformed pin
+ *  must not fall back to the bare name, which the session's `claude` shim
+ *  routes to the model proxy). */
+function binaryPathOf(raw: string | undefined): string | undefined {
+  const v = (raw ?? "").trim();
+  if (v === "") return undefined;
+  if (cliBinaryOfPath(v) === null) {
+    throw new Error(
+      `MANDU_ULLM_BINARY_PATH=${JSON.stringify(v)} is not an absolute path to a claude or codex CLI — refusing to start the quarantined U-LLM (fail closed).`,
+    );
+  }
+  return v;
 }
 
 function normalizeBinary(raw: string | undefined): UllmCliBinary {
@@ -168,6 +192,7 @@ export function buildUllmClient(config: UllmConfig): UllmClient {
   }
   return new CliUllmClient({
     binary: config.binary,
+    ...(config.binaryPath !== undefined ? { binaryPath: config.binaryPath } : {}),
     baseUrl: config.baseUrl,
     model: config.model,
     ...(config.forwarderUrl ? { forwarderUrl: config.forwarderUrl } : {}),

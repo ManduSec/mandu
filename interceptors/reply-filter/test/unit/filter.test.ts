@@ -872,6 +872,29 @@ test("EAGER tab: the column is KNOWN (anchor + width) → the splice carries the
   assert.ok(!out.includes("\t"));
 });
 
+test("frameSafeValue(startCol, origin): the stops count from screen column `origin` (§19.7); a value left of it from its own start", () => {
+  assert.equal(frameSafeValue("a\tb", 2, 2), "a" + " ".repeat(7) + "b", "a@0 of the text, its TAB to 8");
+  // The live sentence capture (differential-interactive.md §19): `The value
+  // is ` puts the value at column 15; Claude Code puts `port` at 2 + 32.
+  assert.equal(frameSafeValue("DIFFTAB_HOST\tport", 15, 2), "DIFFTAB_HOST" + " ".repeat(7) + "port");
+  assert.equal(frameSafeValue("DIFFTAB_HOST\tport", 15), "DIFFTAB_HOST" + " ".repeat(5) + "port", "origin 0: the screen's stops");
+  assert.equal(frameSafeValue("a\tb", 0, 2), "a" + " ".repeat(7) + "b", "left of the origin: from its own start");
+  for (const bad of [NaN, -3, Infinity, -Infinity]) assert.equal(frameSafeValue("a\tb", 2, bad), "a" + " ".repeat(5) + "b", String(bad));
+  assert.equal(frameSafeValue("a\tb", undefined, 2), "a b", "no column: the one-space fallback still");
+});
+
+test("EAGER tab, content origin (§19.7): the splice counts the stops from the reply's text column, as Claude Code does", async () => {
+  const TAB_SYM = "$MDU:Read[7ab1]";
+  const r = new MockResolver({ [TAB_SYM]: "k\tvalue-longer-than-token" });
+  const reserveCache = new ReserveValueCache(undefined, "ink", "content");
+  const f = new ReplyStreamFilter(r, { eager: true, cols: 80, reserveCache });
+  // CHA 3 → 0-based column 2, the text's column 0: k@0, its TAB to 8 = 7 spaces.
+  const tokenEnd = 3 + TAB_SYM.length;
+  const out = (await f.write(`\x1b[3G${TAB_SYM}${cha(tokenEnd)}\x1b[K`)) + (await f.flush());
+  const rendered = "k" + " ".repeat(7) + "value-longer-than-token";
+  assert.equal(out, `\x1b[3G\x1b[?7l${rendered}\x1b[?7h\x1b[34G\x1b[K`);
+});
+
 test("EAGER tab: a second value on the row expands from its REAL column (the first splice's widening counted)", async () => {
   const A = "$MDU:Read[aaaa]";
   const B = "$MDU:Read[bbbb]";

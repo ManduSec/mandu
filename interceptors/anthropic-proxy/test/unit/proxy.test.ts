@@ -835,3 +835,93 @@ test("session health: a tool-less FIRST request (quota probe / title side call) 
   assert.deepEqual(mine("tool_surface")[0]!["names"], ["Read", "Bash"]);
   assert.equal(arbiter.toolSurfaceCalls.length, 1);
 });
+
+// ── The response id on tllm_call (confidentiality-plan-17 §3 item 6) ─────────
+// Claude Code's transcript keeps each response's `message.id`; the proxy
+// records the same id on the exchange's tllm_call so `mandu scan` can tell a
+// past session under Mandu exactly. Read off the relayed bytes: the client
+// gets the same body either way.
+
+test("tllm_call carries the response id: SSE message_start's message.id, the bytes relayed unchanged", async () => {
+  const arbiter = new MockArbiter();
+  const sse = buildTextSse("All done.").replace('"id":"msg_txt"', '"id":"msg_01AbCdEfGhIjKlMnOpQrStUv"');
+  const upstream = new MockUpstream({ sse });
+  await withProxy(arbiter, upstream, async (port) => {
+    const res = await call(port, "POST", "/v1/messages", messagesBody("ok"));
+    assert.equal(res.status, 200);
+    assert.ok(res.body.includes('"id":"msg_01AbCdEfGhIjKlMnOpQrStUv"'), "the client gets the id as sent");
+  });
+  const ev = arbiter.eventsOfKind("tllm_call")[0]!;
+  assert.equal(ev.model?.responseId, "msg_01AbCdEfGhIjKlMnOpQrStUv");
+  assert.equal(ev.model?.id, "claude-test");
+});
+
+test("tllm_call carries the response id: a stream:false JSON body's id", async () => {
+  const arbiter = new MockArbiter();
+  const upstream = new MockUpstream({ json: { id: "msg_01JsonJsonJsonJsonJson", type: "message", role: "assistant", content: [{ type: "text", text: "ok" }] } });
+  await withProxy(arbiter, upstream, async (port) => {
+    const res = await call(port, "POST", "/v1/messages", messagesBody("ok", false));
+    assert.equal(res.status, 200);
+  });
+  assert.equal(arbiter.eventsOfKind("tllm_call")[0]!.model?.responseId, "msg_01JsonJsonJsonJsonJson");
+});
+
+// OpenCode keeps no response id on the Messages wire, but sends its session's
+// id with every request (1.18.13: `X-Session-Id` and `x-session-affinity`;
+// 2.0.23 also `x-opencode-session-id`, its own id) and keeps it as the
+// session's row id: the proxy records it on the tllm_call as
+// `model.agentSessionId`, the scan's join key there. Read off the request's
+// headers, which go upstream unchanged.
+
+test("tllm_call carries OpenCode's session id from the request's headers (2.x's x-opencode-session-id first, else 1.x's X-Session-Id); the headers go upstream unchanged", async () => {
+  const SID = "ses_ea01c135bffeCP5yfhwWtH7qTq";
+  const cases: Array<[Record<string, string>, string]> = [
+    [{ "X-Session-Id": SID, "x-session-affinity": SID }, SID],
+    [{ "x-opencode-session-id": SID, "X-Session-Id": "ses_ea01c135bffeRootSession0001", "x-opencode-session": "ses_ea01c135bffeRootSession0001" }, SID],
+    [{ "x-opencode-session": SID }, SID],
+  ];
+  for (const [headers, want] of cases) {
+    const arbiter = new MockArbiter();
+    const upstream = new MockUpstream({ sse: buildTextSse("ok") });
+    await withProxy(arbiter, upstream, async (port) => {
+      assert.equal((await call(port, "POST", "/v1/messages", messagesBody("ok"), headers)).status, 200);
+    });
+    const ev = arbiter.eventsOfKind("tllm_call")[0]!;
+    assert.equal(ev.model?.agentSessionId, want, JSON.stringify(headers));
+    for (const [k, v] of Object.entries(headers)) assert.equal(upstream.requests[0]!.headers[k.toLowerCase()], v, `${k} goes upstream as it came`);
+  }
+});
+
+test("tllm_call keeps no agent session id from a request without one, or one not in OpenCode's shape (no other header value is taken)", async () => {
+  const cases: Array<Record<string, string>> = [
+    {},
+    { "X-Session-Id": "sk-ant-api03-NotASessionIdAtAll000000" },
+    { "X-Session-Id": "ses_short" },
+    { "X-Session-Id": `ses_${"a".repeat(130)}` },
+    { "x-opencode-session-id": "ses with spaces 0000000", "X-Session-Id": "ses_ea01c135bffeCP5yfhwWtH7qTq" },
+    { "x-session-affinity": "ses_ea01c135bffeCP5yfhwWtH7qTq" },
+  ];
+  for (const headers of cases) {
+    const arbiter = new MockArbiter();
+    const upstream = new MockUpstream({ json: { id: "msg_01JsonJsonJsonJsonJson", type: "message", role: "assistant", content: [] } });
+    await withProxy(arbiter, upstream, async (port) => {
+      assert.equal((await call(port, "POST", "/v1/messages", messagesBody("ok", false), headers)).status, 200);
+    });
+    const ev = arbiter.eventsOfKind("tllm_call")[0]!;
+    assert.equal(ev.model?.agentSessionId, undefined, JSON.stringify(headers));
+    assert.deepEqual(Object.keys(ev.model ?? {}), ["id", "responseId"]);
+  }
+});
+
+test("tllm_call keeps no response id when the answer has none or an ill-formed one (nothing else of the response is taken)", async () => {
+  for (const id of [undefined, "msg with spaces and \"quotes\"", "x".repeat(200)]) {
+    const arbiter = new MockArbiter();
+    const upstream = new MockUpstream({ json: { ...(id !== undefined ? { id } : {}), type: "message", role: "assistant", content: [] } });
+    await withProxy(arbiter, upstream, async (port) => {
+      assert.equal((await call(port, "POST", "/v1/messages", messagesBody("ok", false))).status, 200);
+    });
+    const ev = arbiter.eventsOfKind("tllm_call")[0]!;
+    assert.equal(ev.model?.responseId, undefined, String(id));
+    assert.deepEqual(Object.keys(ev.model ?? {}), ["id"]);
+  }
+});

@@ -23,6 +23,14 @@
  *   T4  the oracle: no page text nor notification carries the key's value
  *       or a token (`$MDU`).
  *
+ * Since 2026-10-22 (§4.25 *Send a test*): T5 *Send a test* shows one
+ * notification in fixed words and the row says "Sent. …"; in jsdom a
+ * `Notification` constructor that throws (Chrome on Android, which shows
+ * them only from a service worker) makes the row say this browser cannot
+ * show them, in place of "On.". In Chromium the recording stub stands in
+ * for the browser's own, as in T1-T4: headless Chromium reports its own
+ * permission as denied even after `Browser.grantPermissions`.
+ *
  * Once in jsdom over the served page and script (served-page.ts), and once
  * in a real headless Chromium over the DevTools protocol
  * (scripts/tour-screenshots.mjs, as settings-appearance.test does), where
@@ -68,12 +76,23 @@ const browser = tour.probeBrowser({});
 /** The recording stub, as page script: `window.__notes` holds what was shown. */
 const STUB = `(() => {
   const notes = [];
-  function N(title, o) { notes.push({ title, body: (o && o.body) || "" }); this.close = () => {}; }
+  function N(title, o) { notes.push({ title, body: (o && o.body) || "", tag: (o && o.tag) || "" }); this.close = () => {}; }
   N.permission = "granted";
   N.requestPermission = () => Promise.resolve("granted");
   Object.defineProperty(window, "Notification", { value: N, configurable: true, writable: true });
   window.__notes = notes;
 })();`;
+
+/** Chrome on Android: granted, but the constructor throws. */
+const THROWS = `(() => {
+  function N() { throw new TypeError("Failed to construct 'Notification': Illegal constructor. Use ServiceWorkerRegistration.showNotification() instead."); }
+  N.permission = "granted";
+  N.requestPermission = () => Promise.resolve("granted");
+  Object.defineProperty(window, "Notification", { value: N, configurable: true, writable: true });
+})();`;
+const TEST_TITLE = "Mandu: notifications work";
+const TEST_BODY = "This is how Mandu tells you when an agent needs your OK.";
+const SENT = /^Sent\. If nothing appeared, your computer may be set to Do Not Disturb or Focus/;
 
 /** A fresh stack: arbiter (secrets axes) with the key registered, the
  *  dashboard over the production wiring, signed in; `ask(host)` has the
@@ -252,6 +271,114 @@ test("in a real Chromium: Turn off in Settings, a real ask is counted and seen b
     // T4: the oracle.
     for (const t of texts) oracle("a page", t);
     for (const n of on.notes) oracle("a notification", n.title + n.body);
+  } finally {
+    cdp.close();
+    await tour.stopProc(proc);
+    await s.close();
+  }
+});
+
+test("served page: Send a test shows one notification in fixed words; a constructor that throws makes the row say this browser cannot show them (secrets axes, explicit)", { timeout: 120_000 }, async () => {
+  const s = await stack();
+  try {
+    const ready = (doc: any) => doc.getElementById("notify-enable").textContent === "Turn off";
+    // T5: a browser that shows them.
+    await servedProductPage(s.base, "/settings", ready, async (doc) => {
+      const notes = doc.defaultView.__notes as { title: string; body: string }[];
+      const btn = doc.getElementById("notify-test");
+      assert.equal(btn.hidden, false, "on: Send a test");
+      assert.equal(btn.getAttribute("aria-label"), "Send a test notification");
+      btn.focus();
+      btn.click();
+      assert.equal(notes.length, 1, "one notification");
+      assert.equal(notes[0]!.title, TEST_TITLE);
+      assert.equal(notes[0]!.body, TEST_BODY);
+      assert.match(doc.getElementById("notify-test-result").textContent, SENT);
+      assert.match(doc.getElementById("notify-state").textContent, /^On\. You get a notification/);
+      assert.equal(doc.activeElement, btn, "the button keeps the focus");
+      oracle("the served page", doc.body.textContent);
+    }, { headers: { Cookie: ADMIN_COOKIE }, beforeScripts: (w) => w.eval(STUB) });
+    // T5: a browser whose constructor throws.
+    await servedProductPage(s.base, "/settings", ready, async (doc) => {
+      assert.match(doc.getElementById("notify-state").textContent, /^On\. /, "nothing known before one was tried");
+      doc.getElementById("notify-test").click();
+      assert.equal(doc.getElementById("notify-test-result").textContent,
+        "This browser cannot show Mandu's notifications from this page. Use a desktop browser, or keep this tab open: the tab title still counts what waits.");
+      assert.match(doc.getElementById("notify-state").textContent, /^On, but this browser cannot show them from this page\. /);
+      oracle("the served page", doc.body.textContent);
+    }, { headers: { Cookie: ADMIN_COOKIE }, beforeScripts: (w) => w.eval(THROWS) });
+  } finally {
+    await s.close();
+  }
+});
+
+test("in a real Chromium: Send a test, pressed with Enter, shows one notification in fixed words and the row says Sent. (secrets axes, explicit)", {
+  skip: browser ? false : "no Chromium found (MANDU_TOUR_BROWSER, CHROME_PATH, a Playwright headless shell)", timeout: 180_000,
+}, async () => {
+  const s = await stack();
+  const { proc, wsUrl } = await tour.startBrowser(browser as string, join(s.tmp, "chrome"), process.env);
+  const cdp = await tour.Cdp.connect(wsUrl);
+  try {
+    await cdp.send("Browser.grantPermissions", { origin: s.base, permissions: ["notifications"] });
+    const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    const send = (method: string, params: object = {}) => cdp.send(method, params, sessionId);
+    const evaluate = async (expression: string) => {
+      const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+      if (r.exceptionDetails) throw new Error(`page script failed: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`);
+      return r.result.value;
+    };
+    const until = async (what: string, expression: string) => {
+      let ok = false;
+      for (const end = Date.now() + 30_000; Date.now() < end && !ok; await new Promise((r) => setTimeout(r, 100))) {
+        try { ok = await evaluate(expression); } catch { /* navigating */ }
+      }
+      assert.ok(ok, what);
+    };
+    await send("Page.enable");
+    await send("Runtime.enable");
+    await send("Network.enable");
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: STUB });
+    const eq = ADMIN_COOKIE.indexOf("=");
+    await send("Network.setCookie", { name: ADMIN_COOKIE.slice(0, eq), value: ADMIN_COOKIE.slice(eq + 1), url: s.base, httpOnly: true, sameSite: "Strict" });
+    await send("Page.navigate", { url: s.base + "/settings" });
+    await until("/settings: on, with Send a test", `document.getElementById("notify-test")?.hidden === false`);
+
+    // T5: two buttons fit the row, wide and on a phone: inside it, side by
+    // side, and clear of the row's words.
+    for (const width of [1280, 390]) {
+      await send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
+      const g = await evaluate(`(() => {
+        const r = (id) => { const b = document.getElementById(id).getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom }; };
+        const row = document.querySelector("#settings-notify-block .row").getBoundingClientRect();
+        return { test: r("notify-test"), enable: r("notify-enable"), words: r("notify-state"), row: { l: row.left, r: row.right, t: row.top, b: row.bottom } };
+      })()`);
+      const apart = (a: any, b: any) => a.r <= b.l + 0.5 || b.r <= a.l + 0.5 || a.b <= b.t + 0.5 || b.b <= a.t + 0.5;
+      for (const k of ["test", "enable"]) {
+        assert.ok(g[k].l >= g.row.l - 0.5 && g[k].r <= g.row.r + 0.5, `${width}px: ${k} inside the row ${JSON.stringify(g)}`);
+        assert.ok(apart(g[k], g.words), `${width}px: ${k} clear of the words ${JSON.stringify(g)}`);
+      }
+      assert.ok(apart(g.test, g.enable), `${width}px: the two buttons apart ${JSON.stringify(g)}`);
+      assert.ok(Math.abs(g.test.t - g.enable.t) < 1, `${width}px: the two buttons side by side ${JSON.stringify(g)}`);
+    }
+    await send("Emulation.clearDeviceMetricsOverride");
+
+    // T5: a real key press on the button.
+    await evaluate(`(() => { const b = document.getElementById("notify-test"); b.scrollIntoView({ block: "center" }); b.focus(); return true; })()`);
+    await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+    await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    await until("Send a test answered", `!document.getElementById("notify-test-result").hidden`);
+    const r = await evaluate(`(() => ({
+      result: document.getElementById("notify-test-result").textContent,
+      state: document.getElementById("notify-state").textContent,
+      focused: document.activeElement === document.getElementById("notify-test"),
+      notes: window.__notes, text: document.body.innerText,
+    }))()`);
+    assert.match(r.result, SENT);
+    assert.match(r.state, /^On\. You get a notification/);
+    assert.equal(r.focused, true, "the button keeps the focus");
+    assert.deepEqual(r.notes, [{ title: TEST_TITLE, body: TEST_BODY, tag: "mandu-test" }], "one notification, in fixed words");
+    oracle("a page", r.text);
   } finally {
     cdp.close();
     await tour.stopProc(proc);

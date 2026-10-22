@@ -171,18 +171,24 @@ export class LaunchConsole {
 
 /** main()'s hold on the launch's console, so it is put back however the launch ends. */
 export class LaunchConsoleSlot {
-  private current: LaunchConsole | null = null;
+  private held: LaunchConsole | null = null;
 
   attach(c: LaunchConsole): LaunchConsole {
-    this.current = c;
+    this.held = c;
     return c;
   }
 
+  /** The attached console (null before the parse, and for `--help` or a
+   *  subcommand, which attach none). */
+  get current(): LaunchConsole | null {
+    return this.held;
+  }
+
   abort(e: unknown): void {
-    this.current?.abort(e);
+    this.held?.abort(e);
   }
 
   end(): void {
-    this.current?.end();
+    this.held?.end();
   }
 }

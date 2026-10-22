@@ -1,0 +1,15 @@
+{"sessionId":"id-1","projectHash":"id-2","startTime":"2026-01-01T00:00:01.000Z","lastUpdated":"2026-01-01T00:00:02.000Z","kind":"main"}
+{"id":"id-3","timestamp":"2026-01-01T00:00:03.000Z","type":"user","content":[{"text":"<text>"}]}
+{"$set":{"lastUpdated":"2026-01-01T00:00:04.000Z"}}
+{"id":"id-4","timestamp":"2026-01-01T00:00:05.000Z","type":"user","content":[{"text":"<text>"},{"text":"<text>"},{"text":"<text>"},{"text":"<text>"},{"text":"<text>"}],"displayContent":[{"text":"<text>"}]}
+{"id":"id-5","timestamp":"2026-01-01T00:00:06.000Z","type":"gemini","content":"<text>","thoughts":[{"subject":"<text>","description":"<text>","timestamp":"2026-01-01T00:00:07.000Z"}],"tokens":{"input":1,"output":2,"cached":0,"thoughts":1,"tool":0,"total":4},"model":"<text>"}
+{"id":"id-5","timestamp":"2026-01-01T00:00:08.000Z","type":"gemini","content":"<text>","model":"<text>","toolCalls":[{"id":"id-6","name":"run_shell_command","args":{"command":"<text>","description":"<text>"},"result":[{"functionResponse":{"id":"id-6","name":"run_shell_command","response":{"output":"<text>"}}}],"status":"success","timestamp":"2026-01-01T00:00:09.000Z","resultDisplay":"<text>","description":"<text>","displayName":"<text>","renderOutputAsMarkdown":false},{"id":"id-7","name":"read_file","args":{"file_path":"/home/user/project"},"result":[{"functionResponse":{"id":"id-7","name":"read_file","response":{"output":"<text>"}}}],"status":"success","timestamp":"2026-01-01T00:00:10.000Z","resultDisplay":{"fileDiff":"<text>","fileName":"<text>","filePath":"/home/user/project","originalContent":"<text>","newContent":"<text>"},"description":"<text>","displayName":"<text>","renderOutputAsMarkdown":false}]}
+{"id":"id-8","timestamp":"2026-01-01T00:00:11.000Z","type":"user","content":[{"functionResponse":{"id":"id-6","name":"run_shell_command","response":{"output":"<text>"}}}]}
+{"id":"id-9","timestamp":"2026-01-01T00:00:12.000Z","type":"gemini","content":[{"text":"<text>"},{"text":"<text>","thought":true,"thoughtSignature":"<text>"},{"functionCall":{"id":"id-10","name":"run_shell_command","args":{"command":"<text>"}}}],"model":"<text>","toolCalls":[{"id":"id-10","name":"run_shell_command","args":{"command":"<text>"},"result":[{"functionResponse":{"id":"id-10","name":"run_shell_command","response":{"error":"<text>"}}}],"status":"cancelled","timestamp":"2026-01-01T00:00:13.000Z","resultDisplay":"<text>","description":"<text>","displayName":"<text>","renderOutputAsMarkdown":false}]}
+{"id":"id-11","timestamp":"2026-01-01T00:00:14.000Z","type":"info","content":"<text>"}
+{"id":"id-12","timestamp":"2026-01-01T00:00:15.000Z","type":"warning","content":"<text>"}
+{"id":"id-13","timestamp":"2026-01-01T00:00:16.000Z","type":"error","content":"<text>"}
+{"$patch":{"updates":[{"id":"id-8","content":[{"functionResponse":{"id":"id-6","name":"run_shell_command","response":{"output":"<text>"}}}],"toolCalls":[]}]}}
+{"$set":{"messages":[{"id":"id-4","timestamp":"2026-01-01T00:00:17.000Z","type":"user","content":[{"text":"<text>"}],"displayContent":[{"text":"<text>"}]}]}}
+{"$set":{"summary":"<text>","memoryScratchpad":{"version":1,"workflowSummary":"<text>"}}}
+{"$rewindTo":"id-11"}

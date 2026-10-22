@@ -114,6 +114,21 @@ export interface SuggestionEvidence {
   /** Source `sensitivity-label` only: the label that decided it (then
    *  `findings` is empty). */
   label?: SuggestionLabelEvidence;
+  /** Source `past-sessions` only (plan 17 §3 item 13): what `mandu scan`
+   *  found of the file's keys in the agents' past sessions (then `findings`
+   *  is empty): the key names the arbiter itself read in the file, and the
+   *  scan's session count and last date. Names and counts, never a value. */
+  pastSessions?: SuggestionPastSessionsEvidence;
+}
+
+/** A `past-sessions` suggestion's evidence (plan 17 §3 item 13). */
+export interface SuggestionPastSessionsEvidence {
+  /** The key names in the file (`STRIPE_KEY`, `hosts.github.com.token`). */
+  names: string[];
+  /** Past sessions in which one of them reached the AI (the scan's count). */
+  sessions: number;
+  /** The last one (ISO), when the scan said. */
+  last: string | null;
 }
 
 export interface SuggestionImpact {
@@ -128,8 +143,10 @@ export interface SuggestionImpact {
 
 /** The scans a suggestion can come from; `model-names` is the optional
  *  names-only model (plan 14 §14.4, T1), `model-contents` the declared
- *  local model reading documents (§14.4, T2, §14.11). */
-export type SuggestionSource = "git-history" | "workspace" | "sensitivity-label" | "model-names" | "model-contents";
+ *  local model reading documents (§14.4, T2, §14.11), `past-sessions` a
+ *  file whose key `mandu scan` found in the agents' past sessions (plan 17
+ *  §3 item 13). */
+export type SuggestionSource = "git-history" | "workspace" | "sensitivity-label" | "model-names" | "model-contents" | "past-sessions";
 
 /** A sensitivity-label suggestion's evidence (plan 14 §14.1): the label and
  *  the MAPPING's words for it, never the file's. */
@@ -539,6 +556,85 @@ export function suggestWorkspaceEdits(
       impact: { historicalVersions: 0, workingTreeChanges: true, files: [rel] },
       historyOnly: false,
       rotate: false,
+    });
+  }
+  out.suggestions.sort((a, b) => a.findingKey.localeCompare(b.findingKey));
+  return out;
+}
+
+// ── the past-sessions generator (plan 17 §3 item 13) ─────────────────────────
+
+/** The dedup key of a past-sessions suggestion: `past-sessions:path:<literal
+ *  path>` (a hash past 512 characters, as for the others). */
+export function pastSessionsFindingKey(literalPath: string): string {
+  const key = `past-sessions:path:${literalPath}`;
+  return key.length <= 512 ? key : `past-sessions:sha256:${createHash("sha256").update(`path:${literalPath}`).digest("hex")}`;
+}
+
+/** One file `mandu scan` found a key of in the agents' past sessions, as the
+ *  arbiter verified it (transcript-suggestions.ts `verifyScanFile`). */
+export interface PastSessionsFile {
+  /** Absolute. */
+  path: string;
+  /** The nearest work tree above the file and below HOME, else its folder. */
+  repoRoot: string;
+  /** The key names the arbiter read in the file and the scan named. */
+  names: string[];
+  sessions: number;
+  last: string | null;
+}
+
+/**
+ * Plan 17 §3 item 13: files whose key reached the AI in a past session and
+ * that nothing protects → one `lock-path { path, level: "no-model" }`
+ * suggestion per file, source `past-sessions`, through the tightening check.
+ * A file the catalog or a label protects now (`isCovered`, the walk's
+ * coverage check), or one the law labels above public, is covered. The
+ * evidence is the file and `pastSessions` (names and counts); `rotate` is
+ * TRUE: the key did leave the machine. Pure over `isCovered`.
+ */
+export function suggestPastSessionEdits(
+  files: readonly PastSessionsFile[],
+  law: SuggestLaw,
+  opts: { home?: string; now?: number; isCovered?: (absPath: string) => boolean } = {},
+): SuggestEditsResult {
+  const out: SuggestEditsResult = { suggestions: [], covered: [], dropped: [] };
+  const done = new Set<string>();
+  for (const f of files) {
+    if (done.has(f.path) || !isAbsolute(f.path)) continue;
+    done.add(f.path);
+    const rel = relative(f.repoRoot, f.path) || f.path;
+    const path = literalLabelPath(f.path);
+    const edit: LockPathEdit = { op: "lock-path", path, level: "no-model" };
+    const findingKey = pastSessionsFindingKey(path);
+    const labelled = resolvePathLabel(f.path, law.pathLabels, opts.home);
+    const judged = opts.isCovered?.(f.path) === true || (labelled !== null && labelled.level !== "public")
+      ? ({ verdict: "covered" } as const)
+      : judgeEdits(law, [edit], opts.now);
+    if (judged.verdict === "covered") {
+      out.covered.push({ repoRoot: f.repoRoot, paths: [rel], blobs: [], why: "law" });
+      continue;
+    }
+    if (judged.verdict !== "ok") {
+      out.dropped.push({ findingKey, repoRoot: f.repoRoot, why: judged.verdict, problems: judged.problems });
+      continue;
+    }
+    out.suggestions.push({
+      findingKey,
+      source: "past-sessions",
+      repoRoot: f.repoRoot,
+      edits: judged.edits,
+      sentence: suggestionSentence(judged.edits, { home: opts.home }),
+      evidence: {
+        paths: [rel],
+        blobs: [],
+        findings: [],
+        historyOnly: false,
+        pastSessions: { names: [...f.names], sessions: f.sessions, last: f.last },
+      },
+      impact: { historicalVersions: 0, workingTreeChanges: true, files: [rel] },
+      historyOnly: false,
+      rotate: true,
     });
   }
   out.suggestions.sort((a, b) => a.findingKey.localeCompare(b.findingKey));

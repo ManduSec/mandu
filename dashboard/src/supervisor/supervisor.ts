@@ -69,6 +69,7 @@ import { arbiterAxisSpawnEnv } from "../config-axes.js";
 import { checkReady, helloProbe, readPortFile, READY_PROBE_INTERVAL_MS } from "../net-probes.js";
 import { defaultEventDir } from "../event-dir.js";
 import { discoverUnixSocketOwner, procCmdlineOf } from "./socket-owner.js";
+import { liveSessionsOn } from "./stack-sessions.js";
 import { signalGroup, signalPidChecked, waitPidGone } from "./process-signals.js";
 import { createServiceRuntime, dropAdminChannel, type ServiceRuntime } from "./service-runtime.js";
 import { endLogFile, logFileWritten, openLogFile, tailStderr, wireLogs } from "./service-logs.js";
@@ -129,6 +130,9 @@ export class Supervisor {
       procCmdline: opts.procCmdline ?? procCmdlineOf,
       killPid: opts.killPid ?? ((pid, sig) => process.kill(pid, sig)),
       discoverSocketOwner: opts.discoverSocketOwner ?? discoverUnixSocketOwner,
+      replaceStaleOnAdopt: opts.replaceStaleOnAdopt ?? true,
+      liveSessions: opts.liveSessions ?? ((base) => liveSessionsOn(base)),
+      onCrash: opts.onCrash ?? (() => {}),
       log,
     };
     this.logRingMax = this.opts.logRingMax;
@@ -244,13 +248,55 @@ export class Supervisor {
           svc.since = null;
           // fall through to the spawn below
         } else {
-          this.opts.log(`${id}: adopted an already-running instance at ${svc.def.endpoint} (${who})`);
-          if (foreign !== null) this.opts.log(`${id}: FOREIGN — ${foreign}; this dashboard shows that arbiter's sessions, not yours`);
           const verdict = this.staleness(svc.identity);
-          if (verdict.stale) {
-            this.opts.log(`${id}: STALE — ${verdict.staleReason}; restart the arbiter to load current code`);
+          // A STALE arbiter of OUR stack (runtime-instances.md §4.1b,
+          // 2026-10-21): another release, build or rev than this dashboard
+          // would start, and so than the launches of this checkout or
+          // install, which refuse it. Adopting it kept it the stack's
+          // arbiter across every restart of this dashboard (four days, two
+          // releases). When no `mandu` session uses the stack it is
+          // replaced, as a launch of this build replaces an unused older
+          // stack (§4.1); with one, it is adopted and flagged as before.
+          const replacing = verdict.stale && foreign === null && svc.identity !== null
+            && this.opts.arbiterInstanceBase !== undefined && this.opts.replaceStaleOnAdopt;
+          const sessions = replacing ? this.opts.liveSessions(this.opts.arbiterInstanceBase!) : [];
+          if (replacing && sessions !== null && sessions.length === 0) {
+            this.opts.log(
+              `${id}: NOT adopting the instance at ${svc.def.endpoint} (${who}): STALE — ${verdict.staleReason}. ` +
+                "No mandu session uses this stack, so this dashboard replaces it with its own.",
+            );
+            try {
+              await this.stopAdoptedDaemon(id, svc.identity!.pid);
+              svc.adopted = false;
+              svc.identity = null;
+              svc.owner = null;
+              svc.state = "stopped";
+              svc.since = null;
+            } catch (err) {
+              this.opts.log(`${id}: could not replace the stale arbiter: ${(err as Error).message}`);
+              // Refused before any signal (it stays, adopted and flagged), or
+              // it went down and the endpoint is clear: then start our own.
+              if (!(await checkReady(svc.def.ready))) {
+                svc.adopted = false;
+                svc.identity = null;
+                svc.state = "stopped";
+                svc.since = null;
+              }
+            }
           }
-          return;
+          if (svc.adopted) {
+            this.opts.log(`${id}: adopted an already-running instance at ${svc.def.endpoint} (${who})`);
+            if (foreign !== null) this.opts.log(`${id}: FOREIGN — ${foreign}; this dashboard shows that arbiter's sessions, not yours`);
+            if (verdict.stale) {
+              const why = !replacing ? ""
+                : sessions === null ? " (not replaced: this dashboard cannot tell which mandu sessions use it)"
+                  : sessions.length > 0 ? ` (not replaced: mandu session${sessions.length === 1 ? "" : "s"} pid ${sessions.join(", ")} use${sessions.length === 1 ? "s" : ""} it)`
+                    : "";
+              this.opts.log(`${id}: STALE — ${verdict.staleReason}; restart the arbiter to load current code${why}`);
+            }
+            return;
+          }
+          // fall through to the spawn below
         }
       } else {
         this.opts.log(`${id}: adopted an already-running instance at ${svc.def.endpoint}`);
@@ -441,6 +487,26 @@ export class Supervisor {
           `Stop whatever listens on ${svc.def.endpoint} yourself, then press Start.`,
       );
     }
+    await this.stopAdoptedDaemon(id, pid);
+    svc.adopted = false;
+    svc.identity = null;
+    svc.owner = null;
+    svc.state = "stopped";
+    svc.since = null;
+    svc.lastError = null;
+    this.opts.log(`${id}: REPLACE — old daemon gone; starting our own`);
+    await this.start(id);
+  }
+
+  /**
+   * Stop the daemon `pid` that answers at an adopted service's endpoint and
+   * wait until its endpoint is clear (replace(), and the adopt-time
+   * replacement of a stale arbiter). Signals only a pid whose command line
+   * names an arbiter; SIGTERM, SIGKILL after stopGraceMs. Throws, naming why,
+   * when it refuses or the daemon or its endpoint outlives that.
+   */
+  private async stopAdoptedDaemon(id: ServiceId, pid: number): Promise<void> {
+    const svc = this.services[id];
     const cmd = this.opts.procCmdline(pid) ?? "";
     if (!/arbiter|server-main/.test(cmd)) {
       throw new Error(
@@ -472,14 +538,6 @@ export class Supervisor {
       }
       await new Promise((r) => setTimeout(r, 50));
     }
-    svc.adopted = false;
-    svc.identity = null;
-    svc.owner = null;
-    svc.state = "stopped";
-    svc.since = null;
-    svc.lastError = null;
-    this.opts.log(`${id}: REPLACE — old daemon gone; starting our own`);
-    await this.start(id);
   }
 
   /**
@@ -857,6 +915,7 @@ export class Supervisor {
       dropAdminChannel(svc);
       svc.pid = null;
       svc.since = null;
+      try { this.opts.onCrash(id, svc.lastError); } catch { /* a listener's failure is not the supervisor's */ }
     });
   }
 

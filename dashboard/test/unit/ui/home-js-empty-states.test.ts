@@ -307,8 +307,8 @@ test("Settings › Prompt filters, unread: the refusal alone, no Exceptions head
   const parts = ["settings-prompt-meanings-fold", "settings-prompt-meanings", "settings-prompt-exceptions-head", "settings-prompt-exceptions-about", "settings-prompt-exceptions"];
   const refused = load({ url: SETTINGS_URL, routes: { "GET policy/prompt-filters": { status: 403, body: { error: "admin session required: open the login link" } } } });
   await tick();
-  assert.equal(refused.doc.getElementById("settings-prompt-kinds").textContent, "Sign in first: in your own terminal, run mandu dashboard and open the sign-in link it prints (each link works once), or sign in with the dashboard's password if it has one.");
-  assert.deepEqual(codes(refused.doc.getElementById("settings-prompt-kinds")), ["mandu dashboard"]);
+  assert.equal(refused.doc.getElementById("settings-prompt-kinds").textContent, "Sign in first: reload this page and sign in with your dashboard account (if there isn't one yet, run mandu dashboard --set-password in your own terminal).");
+  assert.deepEqual(codes(refused.doc.getElementById("settings-prompt-kinds")), ["mandu dashboard --set-password"]);
   for (const id of parts) assert.equal(refused.doc.getElementById(id).hidden, true, `${id} hidden`);
   assert.equal(refused.doc.getElementById("prompt-exception-form").hidden, true);
   // A service that cannot give the filters: the server's own projection,

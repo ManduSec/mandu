@@ -121,23 +121,40 @@ test("a background request never keeps the process alive; doctor's awaited one d
   const s = await standIn(() => "hang");
   try {
     const mod = join(PKG, "src", "update-check.ts");
-    // Timed from the request's start (the child says `go` just before it),
-    // not from the spawn: tsx's start-up alone took 5 to 8 s on a loaded CI
-    // guest and differed between the two children by more than the margin
-    // (pipeline 9856, "7860 vs 7922 ms", 2026-10-09).
+    // Each child times itself, from just before its request to its own
+    // exit, and reports the elapsed ms on exit (a synchronous write, so it
+    // reaches the pipe before the process ends). Not from the spawn: tsx's
+    // start-up alone took 5 to 8 s on a loaded CI guest and differed between
+    // the two children by more than the margin (pipeline 9856, "7860 vs
+    // 7922 ms", 2026-10-09). Not from the parent's receipt of a `go` line
+    // either: the pipe and the parent's loop delivered it late, so the child's
+    // 3000 ms budget had already begun and the parent measured 2996 ms
+    // (pipeline 12450, 2026-10-21).
     const run = (background: boolean): Promise<{ code: number | null; ms: number }> => new Promise((done) => {
-      let t0: number | null = null;
+      let out = "";
       const c = spawn(join(PKG, "node_modules", ".bin", "tsx"), [
-        "-e", `import(${JSON.stringify(mod)}).then((m) => { process.stdout.write("go\\n"); void m.realFetchReleases(${JSON.stringify(s.url)}, 3000, ${background}); })`,
+        "-e", `Promise.all([import(${JSON.stringify(mod)}), import("node:fs")]).then(([m, fs]) => {
+          const t0 = performance.now();
+          process.on("exit", () => { fs.writeSync(1, "elapsed=" + (performance.now() - t0) + "\\n"); });
+          void m.realFetchReleases(${JSON.stringify(s.url)}, 3000, ${background});
+        })`,
       ], { stdio: ["ignore", "pipe", "ignore"] });
-      c.stdout!.on("data", (d: Buffer) => { if (t0 === null && d.toString().includes("go")) t0 = Date.now(); });
-      c.on("close", (code) => done({ code, ms: t0 === null ? -1 : Date.now() - t0 }));
+      c.stdout!.on("data", (d: Buffer) => { out += d.toString(); });
+      c.on("close", (code) => {
+        const m = /elapsed=([\d.]+)/.exec(out);
+        done({ code, ms: m ? Number(m[1]) : -1 });
+      });
     });
     const [bg, fg] = await Promise.all([run(true), run(false)]);
     assert.equal(bg.code, 0);
     assert.equal(fg.code, 0);
-    assert.ok(bg.ms >= 0 && fg.ms >= 0, "both children started their request");
-    assert.ok(fg.ms >= 3000, `the awaited request holds the process to its budget (${fg.ms} ms)`);
+    assert.ok(bg.ms >= 0 && fg.ms >= 0, `both children started their request and reported (${bg.ms}, ${fg.ms})`);
+    // 2 ms of slack, no more: the timer fires on libuv's loop clock, whole
+    // milliseconds truncated from a monotonic clock that may be the coarse
+    // one (libuv takes CLOCK_MONOTONIC_COARSE when its resolution is 1 ms or
+    // finer), so the precise performance.now() can see the 3000 ms budget
+    // end under 2 ms early. A request cut short would end far sooner.
+    assert.ok(fg.ms >= 3000 - 2, `the awaited request holds the process to its budget (${fg.ms} ms)`);
     assert.ok(bg.ms < fg.ms - 1000, `the background one does not (${bg.ms} vs ${fg.ms} ms)`);
   } finally {
     await s.close();

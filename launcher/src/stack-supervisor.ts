@@ -24,7 +24,9 @@
  * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code (no reference origin).
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { runtimeBase } from "./arbiter-sock.js";
 
 /** A systemd service that runs a Mandu daemon as its main process. */
 export interface StackSupervisor {
@@ -40,6 +42,64 @@ export interface StackSupervisor {
   workingDirectory: string | null;
   /** Its unit file, or null. */
   fragmentPath: string | null;
+  /** The stack's arbiter is NOT this service's process (its cgroup is not
+   *  the unit's): another launch or dashboard started it and the service's
+   *  dashboard adopted it. null/absent = not told (no arbiter pid, no /proc). */
+  arbiterOutside?: boolean | null;
+  /** The service runs this mandu's own code (its folder is inside this
+   *  mandu's package or checkout). null/absent = cannot tell. */
+  runsOurCode?: boolean | null;
+}
+
+/** The effects `withStackFacts` needs (test seams). */
+export interface StackFactDeps {
+  cgroupOf: (pid: number) => string | null;
+  /** The folder a process runs in (/proc/<pid>/cwd), or null. */
+  cwdOf: (pid: number) => string | null;
+  /** A path with its links resolved, or the path itself when that fails. */
+  realpath: (p: string) => string;
+}
+
+export const realStackFactDeps: StackFactDeps = {
+  cgroupOf: realSupervisorDepsCgroup,
+  cwdOf: (pid) => {
+    if (process.platform !== "linux") return null;
+    try { return readlinkSync(`/proc/${pid}/cwd`).replace(/ \(deleted\)$/, ""); } catch { return null; }
+  },
+  realpath: (p) => { try { return realpathSync(p); } catch { return p; } },
+};
+
+function realSupervisorDepsCgroup(pid: number): string | null {
+  if (process.platform !== "linux") return null;
+  try { return readFileSync(`/proc/${pid}/cgroup`, "utf8"); } catch { return null; }
+}
+
+/**
+ * `s` with the two facts that decide what a refusal tells the user
+ * (runtime-instances.md §4.1a, §4.1b): whether the stack's arbiter
+ * (`arbiterPid`) runs outside the service (the service's dashboard adopted
+ * an arbiter someone else started), and whether the service runs the code of
+ * this mandu (`ourRoot`: its package root, or its checkout). Never throws.
+ */
+export function withStackFacts(
+  s: StackSupervisor,
+  arbiterPid: number | null,
+  ourRoot: string,
+  deps: StackFactDeps = realStackFactDeps,
+): StackSupervisor {
+  let arbiterOutside: boolean | null = null;
+  if (arbiterPid !== null) {
+    const cg = deps.cgroupOf(arbiterPid);
+    if (cg !== null) arbiterOutside = serviceUnitOfCgroup(cg)?.unit !== s.unit;
+  }
+  const dir = s.workingDirectory ?? deps.cwdOf(s.mainPid);
+  let runsOurCode: boolean | null = null;
+  if (dir !== null) {
+    const d = deps.realpath(dir).replace(/\/+$/, "");
+    const root = deps.realpath(ourRoot).replace(/\/+$/, "");
+    runsOurCode = d === root || d.startsWith(`${root}/`);
+  }
+  return { ...s, arbiterOutside, runsOurCode };
 }
 
 /** The service unit a `/proc/<pid>/cgroup` text places the process in, or
@@ -132,7 +192,9 @@ export function stackSupervisor(pids: readonly number[], deps: SupervisorDeps = 
       user: u.user,
       mainPid,
       restart,
-      workingDirectory: p["WorkingDirectory"]?.trim() || null,
+      // systemd prefixes a WorkingDirectory= it may skip ("-") or that a
+      // transient unit defaulted to the home ("!"): the folder is what follows.
+      workingDirectory: p["WorkingDirectory"]?.trim().replace(/^[-!+~]+/, "") || null,
       fragmentPath: p["FragmentPath"]?.trim() || null,
     };
   }
@@ -158,6 +220,65 @@ export function ownStackCommand(base: string): string {
 /** What that second Mandu folder means, said beside the command. */
 export const OWN_STACK_NOTE =
   "a Mandu folder of its own, so its own rules and history: copy your policy.yaml and config.toml from ~/.mandu into it to keep your rules";
+
+/** The effects stackService needs, injectable for tests. */
+export interface StackServiceDeps extends SupervisorDeps {
+  /** This user's pids (Linux: /proc), or [] where that cannot be read. */
+  listPids: () => number[];
+  /** The environment `pid` was started with, or null (gone, another user's). */
+  environOf: (pid: number) => Record<string, string> | null;
+  /** The stack (runtime base) an environment selects (arbiter-sock.ts runtimeBase). */
+  stackOfEnv: (env: Record<string, string>) => string | null;
+}
+
+function normBase(p: string): string {
+  return resolve(p).replace(/\/+$/, "") || "/";
+}
+
+export const realStackServiceDeps: StackServiceDeps = {
+  ...realSupervisorDeps,
+  listPids: () => {
+    if (process.platform !== "linux") return [];
+    try { return readdirSync("/proc").filter((n) => /^\d+$/.test(n)).map(Number); } catch { return []; }
+  },
+  environOf: (pid) => {
+    let raw: string;
+    try { raw = readFileSync(`/proc/${pid}/environ`, "utf8"); } catch { return null; }
+    const env: Record<string, string> = {};
+    for (const kv of raw.split("\0")) {
+      const i = kv.indexOf("=");
+      if (i > 0) env[kv.slice(0, i)] = kv.slice(i + 1);
+    }
+    return env;
+  },
+  stackOfEnv: (env) => {
+    if (!env["MANDU_RUNTIME_DIR"] && !env["XDG_RUNTIME_DIR"] && !env["HOME"]) return null;
+    try { return runtimeBase(env); } catch { return null; }
+  },
+};
+
+/**
+ * The systemd service that runs the stack at `base` right now, or null
+ * (runtime-instances.md §4.1c): a process of this user in a service's cgroup
+ * whose environment selects that stack (any process of it, so the unit's
+ * main process counts while it is still loading, before its dashboard has a
+ * title or an arbiter), and whose unit restarts it (stackSupervisor's rule).
+ * Found while the service restarts, too: systemd starts the new main process
+ * as soon as the old one is gone. Linux only; null elsewhere.
+ */
+export function stackService(base: string, deps: StackServiceDeps = realStackServiceDeps): StackSupervisor | null {
+  const want = normBase(base);
+  const pids: number[] = [];
+  for (const pid of deps.listPids()) {
+    if (pid === process.pid) continue;
+    const cg = deps.cgroupOf(pid);
+    if (cg === null || serviceUnitOfCgroup(cg) === null) continue;
+    const env = deps.environOf(pid);
+    const stack = env === null ? null : deps.stackOfEnv(env);
+    if (stack !== null && normBase(stack) === want) pids.push(pid);
+  }
+  return pids.length === 0 ? null : stackSupervisor(pids, deps);
+}
 
 /** "the systemd user service mandu-dashboard.service (Restart=always, in /home/u/mandu)". */
 export function describeSupervisor(s: StackSupervisor): string {

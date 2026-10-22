@@ -8,10 +8,12 @@
  * (§4.25p). This module reads the same rules the other way round, per
  * program, per host and per AI, as plan 13 Figure 7 does for its example:
  *
- *   - a program row: the files it opens raw (and how each admits it: checked
- *     by Mandu, or the human's word, `prints: nothing`), the files it gets
- *     masked, the ones it never gets because it prints or runs what it reads,
- *     and the ones it is refused; then "Any other program";
+ *   - a program row: only where it differs from any other program (queue
+ *     item #52): the files it opens raw (and how each admits it: checked by
+ *     Mandu, or the human's word, `prints: nothing`), the ones it never gets
+ *     because it prints or runs what it reads, and a masked copy where any
+ *     other program is refused; a line counts the rest, which it gets as
+ *     "Any other program", the closing row, does;
  *   - a host row: the files whose real value goes there without asking (the
  *     rule's hosts); then "Any other host", which gets no secret;
  *   - an AI row: what any AI reads as written (Not secret), what it may read
@@ -26,7 +28,7 @@
  */
 
 import type { PolicyDocumentRow } from "../policy-model.js";
-import { toModelEndpointRows } from "./model-endpoints.js";
+import { MODELS_LINK, toModelEndpointRows, type ModelsPlacePart } from "./model-endpoints.js";
 import { judgedAdmitsNothing, judgedReadsTwin, type ArbiterReaderJudgment } from "./reader-runs-code.js";
 import { pathReach, tildePath, type OpenerHow } from "./rule-words.js";
 
@@ -93,9 +95,16 @@ export interface ByWhoRow {
   name: string;
   /** A line under the name, or null. */
   about: string | null;
+  /** `about` as parts where it names a place the page links (Settings ›
+   *  Models, dashboard.md §4.25aa); absent otherwise. */
+  aboutParts?: ModelsPlacePart[];
   /** "any": the closing row of a tab, everything not named above. */
   kind: "named" | "any";
   groups: ByWhoGroup[];
+  /** A named program: the line under its lists for the files it gets as
+   *  any other program does (`sameAsAny`, or `allAsAny` when that is every
+   *  file); null or absent otherwise. */
+  rest?: string | null;
 }
 
 export interface ByWhoTab {
@@ -145,6 +154,8 @@ export const BY_WHO_WORDS = {
   masked: "Gets a masked copy",
   never: "Never gets the real file: it prints or runs what it reads",
   refused: "Refused",
+  sameAsAny: (n: number) => "The rest (" + n + "): as any other program, below.",
+  allAsAny: "Everything: as any other program, below.",
   anyProgram: "Any other program",
   anyProgramAbout: "A program no rule names.",
   noProgram: "No rule of yours names a program.",
@@ -164,6 +175,14 @@ export const BY_WHO_WORDS = {
   noOwnAIAbout: "None is listed in Settings › Models, so no AI reads these files.",
   modelsNote: "Your OK never lets an AI read a file its rule keeps from it. Each read when it asks is logged.",
 } as const;
+
+/** `BY_WHO_WORDS.noOwnAIAbout` as parts, "Settings › Models" the link:
+ *  joined, the same words. */
+const NO_OWN_AI_ABOUT_PARTS: ModelsPlacePart[] = [
+  { kind: "text", text: "None is listed in " },
+  MODELS_LINK,
+  { kind: "text", text: ", so no AI reads these files." },
+];
 
 const SECRET_LEVELS = new Set(["no-model", "local-model", "any-model"]);
 
@@ -250,7 +269,12 @@ export function toByWhoVM(
   const open = rules.filter((r) => levelOf(r.level) === "public");
 
   // ── per program: the readers lists, read by program ──
-  const programs = new Map<string, { name: string; about: string | null; opens: ByWhoItem[]; masked: ByWhoItem[]; never: ByWhoItem[]; refused: ByWhoItem[] }>();
+  // A rule that does not name a program: a masked copy (no list, or
+  // `others: twin`), else refused. "Any other program" is named by none.
+  const notNamed = (r: ByWhoRule): "masked" | "refused" => (r.openers === null || r.others === "twin" ? "masked" : "refused");
+  // A named program lists only what differs from "Any other program", and
+  // counts the rest (`rest`): what every row repeats hid what sets it apart.
+  const programs = new Map<string, { name: string; about: string | null; opens: ByWhoItem[]; masked: ByWhoItem[]; never: ByWhoItem[]; rest: number }>();
   const rank: Record<OpenerHow, number> = { checked: 0, word: 0, masked: 1, never: 2 };
   for (const r of secret) {
     // One entry per program in a rule: the best of its entries decides.
@@ -262,37 +286,38 @@ export function toByWhoVM(
       if (!programs.has(key)) {
         programs.set(key, {
           name: o.script ? `${o.name} running ${tildePath(o.script, home)}` : o.name,
-          about: null, opens: [], masked: [], never: [], refused: [],
+          about: null, opens: [], masked: [], never: [], rest: 0,
         });
       }
     }
     for (const [key, o] of mine) {
       const p = programs.get(key)!;
       if (o.how === "checked" || o.how === "word") p.opens.push(item(r, o.how === "checked" ? "checked by Mandu" : "your word"));
-      else if (o.how === "masked") p.masked.push(item(r));
-      else p.never.push(item(r));
+      else if (o.how === "masked") {
+        if (notNamed(r) === "masked") p.rest++;
+        else p.masked.push(item(r));
+      } else p.never.push(item(r));
     }
   }
-  // A rule that does not name a program: a masked copy (no list, or
-  // `others: twin`), else refused. "Any other program" is named by none.
-  const notNamed = (r: ByWhoRule): "masked" | "refused" => (r.openers === null || r.others === "twin" ? "masked" : "refused");
   for (const [key, p] of programs) {
     for (const r of secret) {
       const named = (r.openers ?? []).some((o) => (o.script ? `${o.name}\0${o.script}` : o.name) === key);
-      if (!named) (notNamed(r) === "masked" ? p.masked : p.refused).push(item(r));
+      if (!named) p.rest++;
     }
   }
   const programRows: ByWhoRow[] = [...programs.values()]
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((p) => ({
-      name: p.name, about: p.about, kind: "named" as const,
-      groups: [
+    .map((p) => {
+      const groups = [
         ...group(BY_WHO_WORDS.opens, "ok", p.opens),
         ...group(BY_WHO_WORDS.masked, "bad", p.masked),
         ...group(BY_WHO_WORDS.never, "bad", p.never),
-        ...group(BY_WHO_WORDS.refused, "bad", p.refused),
-      ],
-    }));
+      ];
+      return {
+        name: p.name, about: p.about, kind: "named" as const, groups,
+        rest: !groups.length ? BY_WHO_WORDS.allAsAny : p.rest ? BY_WHO_WORDS.sameAsAny(p.rest) : null,
+      };
+    });
   if (secret.length) {
     programRows.push({
       name: BY_WHO_WORDS.anyProgram,
@@ -369,7 +394,7 @@ export function toByWhoVM(
     }
     if (!own.length && ownOnly.length) {
       modelRows.push({
-        name: BY_WHO_WORDS.ownAI, about: BY_WHO_WORDS.noOwnAIAbout, kind: "named",
+        name: BY_WHO_WORDS.ownAI, about: BY_WHO_WORDS.noOwnAIAbout, aboutParts: NO_OWN_AI_ABOUT_PARTS, kind: "named",
         groups: group(BY_WHO_WORDS.alwaysMasked, "bad", ownOnly),
       });
     }

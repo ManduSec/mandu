@@ -67,7 +67,7 @@ import { dirname, join, resolve } from "node:path";
 import Database from "../db/sqlite.js";
 import {
   compileHistoryLabels, HISTORY_WALK_ARGS, historyPathspecs, labelFilterKey, labelledAbovePublic, labelWalkKey, realSpellingOf,
-  resolutionKey, walkBaseKey, withRealSpellings, type CompiledHistoryLabels, type HistoryLabel,
+  resolutionKey, walkBaseKey, walkShallowRule, withRealSpellings, type CompiledHistoryLabels, type HistoryLabel,
 } from "./history-labels.js";
 import {
   findRepositories, isUnderAny, isWorkTreeRoot, KnownRepoStore, manduOwnDirs, workTreeRootAt, type RegistryLimits, type RepoSource, type RepoWalkLimits,
@@ -657,7 +657,7 @@ export class LockResolver {
       return r.stdout;
     };
     // Validated by git: the root is a work tree's top, by real path.
-    const rp = (await must(["rev-parse", "--show-toplevel", "--show-object-format", "--git-path", "shallow", "--git-path", "info/grafts"], "git rev-parse")).split("\n");
+    const rp = (await must(["rev-parse", "--show-toplevel", "--show-object-format", "--git-path", "shallow"], "git rev-parse")).split("\n");
     if (this.realpath((rp[0] ?? "").trim()) !== root) throw new Error(`${root} is not a work tree's top`);
     const format: "sha1" | "sha256" = (rp[1] ?? "").trim() === "sha256" ? "sha256" : "sha1";
     if (this.gitVersion === null) this.gitVersion = await must(["version"], "git version");
@@ -675,12 +675,15 @@ export class LockResolver {
     const got = await historyTipsOf(tg, names);
     if ("error" in got) throw new Error(`${got.error} in ${root}`);
     const tips = got.tips;
-    const base = walkBaseKey({
-      gitVersion: this.gitVersion,
-      shallow: rp[2] ? readOptional(resolve(root, rp[2].trim())) : "",
-      grafts: rp[3] ? readOptional(resolve(root, rp[3].trim())) : "",
-      replaceRefs: await must(["for-each-ref", "--format=%(objectname) %(refname)", "refs/replace/"], "git for-each-ref"),
-    });
+    // The launcher's base and walk (history-labels.ts walkShallowRule):
+    // grafts and replace refs are off for every hardened call, and the
+    // shallow file is honoured only where it is true.
+    const shallow = await walkShallowRule(
+      async (args, input) => this.git(args, { cwd: root, timeoutMs: left(), input }).then((r) => (r.complete ? r : { ...r, code: 1 })),
+      rp[2] ? readOptional(resolve(root, rp[2].trim())) : "",
+      format === "sha256" ? 64 : 40,
+    );
+    const base = walkBaseKey({ gitVersion: this.gitVersion, shallow: shallow.honoured });
     const filter = labelFilterKey(view.labelKey, specs);
     const key = resolutionKey(root, filter, base, tips);
     const memo = new Map<string, boolean>();
@@ -705,7 +708,7 @@ export class LockResolver {
     } else {
       let got: Set<string> | null = null;
       if (plan.kind === "incremental") {
-        got = await walk(["log", "--stdin", ...HISTORY_WALK_ARGS, "--", ...rels], `${plan.include.join("\n")}\n${plan.exclude.map((t) => `^${t}`).join("\n")}\n`);
+        got = await walk([...shallow.args, "log", "--stdin", ...HISTORY_WALK_ARGS, "--", ...rels], `${plan.include.join("\n")}\n${plan.exclude.map((t) => `^${t}`).join("\n")}\n`);
         if (got !== null) for (const b of prior!.history) got.add(b);
       }
       // The whole history: from the tips (every ref and reflog entry), the
@@ -713,9 +716,14 @@ export class LockResolver {
       // enumerating the reflogs again. No tip (an empty repository) is no
       // history (`git log --stdin` with no input would walk HEAD).
       if (got === null) {
-        got = tips.length === 0 ? new Set<string>() : await walk(["log", "--stdin", ...HISTORY_WALK_ARGS, "--", ...rels], `${tips.join("\n")}\n`);
+        got = tips.length === 0 ? new Set<string>() : await walk([...shallow.args, "log", "--stdin", ...HISTORY_WALK_ARGS, "--", ...rels], `${tips.join("\n")}\n`);
       }
       if (got === null) throw new Error(`git log failed or ran out of time in ${root}`);
+      // A version once resolved stays resolved while the same labels decide
+      // the same repository (the launcher's locked memory, locked-memory.ts,
+      // confidentiality.md §7.2a "A version once locked stays locked"): a
+      // walk anew (another base, a history an agent cut) never drops one.
+      if (prior !== null && prior.root === root && prior.filter === filter) for (const b of prior.history) got.add(b);
       history = [...got].sort();
       walked = true;
     }

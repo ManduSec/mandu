@@ -15,11 +15,17 @@
 >   passwords, §2.9), and so is a text document it
 >   recognises as a personal document, a statement, a payslip, a tax
 >   return, a lab report, an identity document or household codes (§2.7),
->   in a PDF or an Office file as well (§2.8).
+>   in a PDF or an Office file as well (§2.8). Since 2026-10-21 the MCP
+>   and editor config files too, each launch's agent keeping its own
+>   readable so its MCP servers get their values (§2.10).
 > - §3, the git-history scan: keys that live only in history, which no walk
 >   can find, reported by `mandu doctor --secrets` and turned into suggested
 >   locks by [`confidentiality-plan-14-policy-suggestions.md`](./confidentiality-plan-14-policy-suggestions.md)
 >   (built 2026-09-30, with an incremental, sealed cache).
+>
+> The same detector, over the agents' own transcripts instead of git, is
+> `mandu scan` (secrets that already reached a model; built 2026-10-21):
+> [`confidentiality-plan-17-past-sessions-scan.md`](./confidentiality-plan-17-past-sessions-scan.md).
 >
 > Spine: [`confidentiality.md`](./confidentiality.md) (§6 the catalog, §7.2
 > the twins, §7.2a the git object twins, §10.1 the documented gaps).
@@ -57,7 +63,11 @@ model budget, seconds per case) and the failure it prevents is total.
 - `arbiter/policy/secret-discovery.ts`: a synchronous walk inside the
   arbiter; `lstat` decides the walk (symlinked directories are never
   descended); `SKIP_DIRS` prunes caches and toolchains; `MAX_DEPTH = 4` and
-  `MAX_FILES = 256` bound it; the human labels' places are roots of their
+  `MAX_FILES = 256` bound it (a caller may raise the file cap,
+  `DiscoveryOptions.maxFiles`, never lower it: only `mandu scan`'s own
+  walk does, to 4096, as it binds nothing and must know every value; it
+  also reads the catalog's stores and every agent's login by their places,
+  confidentiality-plan-17-past-sessions-scan.md §3 item 5); the human labels' places are roots of their
   own with a budget of their own, `MAX_LABEL_FILES = 256` (§1.11); only
   readable regular files are returned;
   `AGENT_STORES` keeps every agent's own data unmasked in every launch, and
@@ -538,7 +548,9 @@ reads both itself (its `claude-cli` and `codex-cli` auth profiles read
 app-server harness, which it defaults to for OpenAI's own endpoint, reads
 `~/.codex/auth.json`; found in review of OpenClaw 2026.7.1-2). A kept login
 is skipped before labels (`agent-login`, a quiet reason) and that launch
-does not register it. Every other agent's login goes on through the walk
+does not register it (one exception since 2026-10-21, §2.10: a kept
+`.claude.json` whose MCP servers hold a credential is listed again by the
+walk's MCP pass, tagged `agentConfig`, registered and left readable). Every other agent's login goes on through the walk
 like any file: the user's label decides, else the catalog (`SENSITIVE_PATHS`
 already labels the default places `no-model`), else, for a login a variable
 moved out of the catalog's places, `no-model` under the rule
@@ -1318,7 +1330,8 @@ a human applies it.
    lockfile (`package.json`, `Cargo.toml`, …), a file under a test,
    fixture, example or documentation directory (below the walk root), or
    an agent's or editor's own config (`.claude/`, `.vscode/`, `.mcp.json`,
-   `~/.config/opencode/`, …). At most 1024 files and 8 MiB a walk
+   `~/.config/opencode/`, …; an MCP config among them is read by a route of
+   its own since 2026-10-21, §2.10). At most 1024 files and 8 MiB a walk
    (`content.capped` counts the rest). It labels the file when the
    extractor that builds its twin finds a span that is a credential beyond
    reasonable doubt (`credentialInDataFile`): a value under a
@@ -2123,6 +2136,235 @@ sandbox oracle K12 (`tests/sandbox/git-history-locks.test.ts`) moved to a
 `.tfvars` for the same reason. `scripts/tour-screenshots.mjs` renames the
 recording's file to the tour's, and the screenshots were redrawn.
 
+### 2.10 MCP and editor config files (2026-10-21)
+
+**The gap.** Every MCP user keeps tokens in an MCP config: a GitHub token
+in a stdio server's `env`, a Linear bearer in an HTTP server's `headers`, a
+database URL in `args`. No catalog rule named `.mcp.json`,
+`~/.cursor/mcp.json`, `.vscode/mcp.json` or Claude Desktop's config; the
+content tier (§2.6) skipped agents' and editors' own configs on purpose;
+under `mandu claude` the kept login `~/.claude.json` (Claude Code's user
+and local scopes) was neither twinned nor registered (§1.10), and Codex's
+`config.toml` sits in its store, never walked. A model that read one ("fix
+my MCP setup", `cat .mcp.json`, a glob, a script) sent every server's token
+to its provider; only a human label protected them (!1222 masks a labelled
+config's lists). The obvious fix, twinning them, hands every MCP server the
+agent spawns a placeholder: the agent reads its config in its own process,
+so a twin there reaches the server's `env` and the HTTP client's headers.
+The maintainer's decision (2026-10-21): catalog them, with the values kept
+where each server needs them.
+
+**Who reads what.** Measured from the agents' code paths Mandu already
+models (`launcher/src/mcp-server-config.ts`, plan 10 §11.13):
+
+| File | Read by | Written by |
+|---|---|---|
+| `~/.claude.json` (`mcpServers`, `projects.*.mcpServers`) | Claude Code's own process: it spawns stdio servers with each entry's `env` and connects HTTP servers with its `headers` itself | Claude Code, constantly (its whole state file: onboarding, project trust, its login metadata) |
+| a project's `.mcp.json` | Claude Code's own process (project scope, at its working directory) | `claude mcp add -s project`, editors, the user |
+| Codex's `~/.codex/config.toml` (`[mcp_servers.*]`) | Codex's own process (`env`, `bearer_token`, `http_headers`) | Codex (trust decisions, `codex mcp add`) |
+| `~/.cursor/mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, VS Code's user `mcp.json`, Claude Desktop's and Windsurf's configs | an editor or app outside the session; no supported agent reads them | the editor, the user |
+
+A stdio server gets its values in its environment from the agent at spawn;
+an HTTP or SSE server's credential is sent by the agent's own MCP client.
+Nothing put back on the wire reaches a stdio server's environment, and the
+two state files cannot be twinned to their own agent without breaking it
+(its saves would land in the placeholder copy, and the next save would
+write placeholders over the real tokens).
+
+**The decision.**
+
+1. *The catalog* (`arbiter/policy/mcp-config.ts`, `found-labels.ts`
+   `mcpConfigCandidate` / `mcpConfigCredential`). An MCP config is a secret
+   file when one of its server entries holds a credential: the twin's own
+   spans (the key rules, the list rules, the credential belt, and
+   `mcpEntrySpans`, below) inside a server entry, one of which is a
+   credential by the content tier's test, a vendor format, or a word that
+   reads as a token (`Bearer <token>`, a key under a name that says
+   nothing, a header set in a variable). A config whose values are all
+   references the client expands (`"${GITHUB_TOKEN}"`, VS Code's
+   `${input:…}`) or that holds none stays public: every program reads it as
+   written. The walk reads a project's configs where it meets them
+   (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, never in a test or
+   docs tree) and the per-user ones at their places in HOME
+   (`mcpHomeConfigPaths`, its MCP pass), past every prune (`~/.codex` is a
+   store, `~/Library` a macOS prune, `.claude.json` a login). The editors'
+   and projects' configs get a found label (§2.6, rule
+   `content:secret-key`); `.claude.json` and `config.toml` are judged per
+   launch (point 3) and get no found label, so the guard's catalog gate
+   keeps pruning them as an agent's login and store.
+2. *The twin* (`secret-extract.ts`, `extractShape` for an MCP config). The
+   shape's own reading plus each entry's values: an `env` value under a
+   secret-looking name, under a name that holds a header set
+   (`OPENAPI_MCP_HEADERS`), or one that reads as a credential under any
+   name; every `headers` / `http_headers` value but a benign header's
+   (`Content-Type`, `Accept`, a `*-Version`); Codex's `bearer_token`. Never
+   a reference (`withoutMcpReferences` also drops the key rule's span over
+   `"GITHUB_TOKEN": "${GITHUB_TOKEN}"`), an empty value or a URL (its
+   password is the key rules', its query the belt's). Codex's one-line
+   inline tables in a server's table (`env = { K = "v" }`, Codex's own
+   documented form) are read in full (`codexTomlReading`) and blanked for
+   the generic TOML reading, which twins any file with an inline table
+   whole; one it cannot read in full, or one elsewhere, still makes the
+   whole-file twin. The twin parses as the original (JSON, JSONC, TOML).
+3. *The launch posture: the agent's own configs are left readable to it.*
+   The walk tags `agentConfig: <agent>` on the launched agent's own MCP
+   configs that hold a credential: `.claude.json` (where Claude Code's
+   login is kept: `mandu claude`, a plain command, `mandu openclaw`, and a
+   helper that runs `claude`) and the `.mcp.json` at a walk root under
+   those launches; Codex's `config.toml` under `mandu codex` and `mandu
+   openclaw`. The launcher registers each (its values are known to the
+   value backstop, the prompt filter, the upload gate and the egress
+   tripwire) and leaves it readable (the `agentOwnFiles` posture: no bind,
+   no twin in the guard's policy file). So the agent spawns its stdio
+   servers with the real values and sends its HTTP servers' credentials
+   itself, and keeps writing its state. Where the guard runs, a found
+   label still gates a project `.mcp.json` at the open for every program
+   but the agent (§1.12: the agent's own open is not gated), so `cat`,
+   `jq`, a script or a nested `claude` read its twin; `.claude.json` and
+   `config.toml` stay readable to the agent's whole world, as its login
+   and store always were (Mandu's AI helper runs `claude -p` and saves
+   `.claude.json`). Every other MCP config is twinned like any catalog
+   file: Codex's `config.toml` under `mandu claude`, `.mcp.json` and
+   `.claude.json` under `mandu codex`, the editors' configs everywhere.
+4. *The bindings: each value only where its own entry sends it.*
+   - An HTTP server's Authorization credential (JSON `headers.Authorization`,
+     Codex's `bearer_token` and `http_headers.Authorization`) is marked
+     `wire: {host, scheme: bearer, httpsOnly}` with the host of its entry's
+     own `url` (`withMcpWire`; only a span that is exactly that value).
+     In an editor's HOME config (`isHomeWireFile`: `~/.cursor/mcp.json`,
+     Claude Desktop's, Windsurf's, VS Code's user file), twinned in every
+     launch so nothing in the agent's world writes the real file, the
+     registration records it as a wire grant (confidentiality.md §2.1): a
+     program that reads the twin sends the placeholder, and the session's
+     egress proxy puts the credential back at that host, in the
+     Authorization header only (the npm rule, plan 10 §11.13.1), over
+     https only unless the entry's URL is `http://`. NOT in `.claude.json`
+     or `config.toml`: their agent's launch leaves them writable to its
+     world, so a host a session wrote there would be granted to the next
+     launch, in every session; nor in a workspace config (§11.6).
+   - The tripwire, in the session that runs the config's agent
+     (`sessionLoginPaths` + `sessionMcpConfigPaths`: Codex's `config.toml`
+     when Codex is kept, and the session's `mcpConfigs`, the project
+     `.mcp.json` the launcher names, accepted only as a kind a kept agent
+     reads): a stdio server's value is exempt everywhere, as a login's token
+     is (the config names no host its server talks to, and the tripwire was
+     never the guarantee for a raw holder); an HTTP server's Authorization
+     credential is exempt only at its entry's host (`keptRowWireHost`): the
+     agent's own header to another host trips, in its own session. Because
+     a masked tool result is a row of its own that holds the raw config and
+     outlives the session (a Read the model made of `.claude.json`), the
+     scan also drops an occurrence of exactly a kept value from such a
+     row (`keptMcpValues`, `scanEgressFingerprintIndexed`'s `exemptText`;
+     the credential after `Bearer ` too), at the host the value may go to;
+     never from another file's or a masked variable's row with the same
+     value, and never a longer text around it (a whole line of the file
+     still trips). In every other session the values trip at any host but
+     a granted one.
+   - Placeholders of the twinned configs that no grant covers (a stdio
+     server's variable, another header, a workspace config's credential)
+     ask before they leave, as any unbound secret does; a vendor format the
+     issuer bindings know (confidentiality.md §2.3) goes to its issuer.
+5. *What the model sees.* A Read of the raw file (the agent's own config:
+   it reads the real file), a command naming it, a glob, a script: the path
+   rule (the found label, or `~/.claude.json` and `~/.codex` in
+   `SENSITIVE_PATHS`) masks the result, and the value backstop catches every
+   registered value elsewhere (a server's error message that quotes its
+   token, `claude mcp get`). A Read of a twin shows its keys and layout with
+   each value a placeholder.
+
+**Why not the other shapes.**
+
+- *Twin the agent's own config and put the values back at the server's
+  spawn.* The agent would hold placeholders and the guard would rewrite the
+  environment of the exec whose argv is a registered server's. That needs
+  the guard to write the agent's memory at `execve` (seccomp user
+  notification cannot change a syscall's arguments), and the server then
+  holds the value raw, so plan 10 §11.13.1's rule makes it a holder whose
+  every result is masked whole: MCP results would reach the model as one
+  placeholder each. Not built; the maintainer's question below.
+- *Twin it and put values back on the wire only.* Breaks every stdio server
+  whose credential is no HTTP header its own process sends through the
+  proxy: a database URL (the PostgreSQL server), a server run with `docker
+  run -e` (GitHub's official one: the container's traffic leaves outside
+  the session), an SDK that checks a key's format or signs with it. And it
+  breaks `.claude.json` and `config.toml` themselves (their agent's saves).
+- *Grant the HTTP credential's host from `.claude.json` and a project
+  `.mcp.json` too.* Rejected above (a session could rewrite the host and
+  the next launch would grant it). The session-scoped narrowing gives the
+  same "own host only" check for the agent's raw header without a grant.
+
+**What changes for utility.** Nothing for the agent's own MCP servers
+(they start and authenticate as without Mandu, also after the model read
+the config). A program the agent runs reads the twin of an editor's config
+and, where the guard runs, of the project's `.mcp.json`: a server that
+`claude mcp list` starts from a shell gets placeholders; `claude mcp add -s
+project` run as a command writes into the twin, lost at the session's end
+and named there. The model reads a config with no credential as written, a twin's
+keys and layout, and the agent's own config masked whole by a Read (its
+programs show it the twin under the guard).
+
+**What stays open (not covered).**
+
+- *A stdio server holds its values raw, and is not tracked as a holder*,
+  as before this section: a server that runs commands, or one the model
+  reconfigures through the agent's own write tool (a changed `command`
+  keeping the `env`, effective at the next start), can print or send an
+  encoding of its token, which neither the value backstop nor the tripwire
+  sees. Writing `~/.claude.json` from the agent's file tools asks first
+  (`SENSITIVE_PATHS`); a program in its world writes it freely, and a
+  project `.mcp.json` is in the workspace. The maintainer's question below.
+- *Without the guard* (`--no-kernel`, a host without it), the agent's own
+  project `.mcp.json` is readable to every program in the session (the bind
+  posture cannot exempt one process): only the path rule and the value
+  backstop stand between it and the model, as for `~/.claude.json` and
+  `config.toml` in every posture.
+- A workspace config's HTTP credential is put back nowhere for a program
+  that reads the twin (no grant, §11.6); it asks.
+- A `config.toml` a `CODEX_HOME` moved out of `.codex` is read as any TOML
+  file (its secret-named keys only); a `.mcp.json` named by
+  `--mcp-config <file>` is a project file like any other (twinned unless at
+  the launch's directory).
+- Other agents' and tools' MCP configs: OpenCode's `opencode.json`
+  (`mcp.*.environment`, `headers`), Goose's `config.yaml` extensions
+  (`envs`), Gemini CLI's `settings.json`, Zed's `context_servers`,
+  Continue's YAML. They stay in the content tier's exclusion; their
+  launches' own posture (point 3) would need their readers modelled.
+- A secret written into one of these files during a session is found by the
+  next launch's walk.
+
+**Question for the maintainer.** Point 3 keeps a stdio server's values
+where the server needs them by leaving the agent's own config readable to
+it, so the server holds them raw and untracked, as it did before. Two ways
+to close it, each with a cost: (a) treat a configured stdio server holding
+a registered value as a holder (plan 10's rule), which masks every result
+it returns to the model; (b) build the spawn-time put-back (the agent reads
+a twin; the guard puts the values into the registered server's environment
+at its exec, kernel work, and the server is then a holder as in (a) unless
+the human vouches for it, `prints: nothing`). Until a decision, the
+guarantee for these values is the model door (path rule, value backstop)
+and the tripwire, not the flow taint.
+
+**Tests.** `arbiter/test/unit/mcp-config.test.ts` (the files and their
+readers, the JSON and TOML readings with offsets, every format's twin and
+what it keeps, the wire marks, the content decision, the candidates, the
+walk's MCP pass per launch, the grants, a session's exempt paths);
+`found-labels.test.ts` and `agent-login-discovery.test.ts` (updated: a
+`.mcp.json` is listed, a kept `.claude.json` holding a server's token is
+tagged); `arbiter/test/component/mcp-config-tripwire.test.ts` (the
+tripwire in the owning session, a masked Read's row, another file's copy,
+other sessions); launcher `secret-setup.test.ts` (`agentConfig` left
+readable) and `agent-login.test.ts` (`sessionMcpConfigs`, the identity
+key); net-proxy `session-logins.test.ts`; and the e2e oracle
+`tests/stack/mcp-config-catalog.test.ts` (the real arbiter, the launcher's
+secret setup for `mandu claude` and `mandu codex`, the production proxy
+wiring and each session's real net-proxy: a stdio server spawned from the
+config the agent reads gets the real value; no value of any config in any
+model-facing request; an HTTP credential at its own host only, raw and put
+back; a stdio server's token in its own session, also after the model read
+the config, and refused in the other; the arbiter gone fails closed);
+`tests/stack/other-agent-logins.test.ts` (updated: a plain command
+registers `~/.claude.json`'s server token and leaves the file readable).
+
 ## 3. The git-history secret scan
 
 Phase 1 is the scanner (an arbiter op) and the advisory report in
@@ -2260,7 +2502,10 @@ regression. The scan makes it **visible**; plan 14 makes it closable.
      low false-positive rate: PEM and OpenSSH private-key blocks (a header
      alone, as in documentation, is not one), AWS access key ids
      (`AKIA`/`ASIA`) and `aws_secret_access_key` values, GitHub (`ghp_`,
-     `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), GitLab (`glpat-`),
+     `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), GitLab (`glpat-`, a
+     newer token's `.version.id` suffix included: `glpat-<body>.01.<id>`
+     is one value, 2026-10-22; stopping at the dot left the suffix in the
+     clear),
      Anthropic (`sk-ant-`), OpenAI-style `sk-` keys, Slack (`xox?-`), Stripe
      live keys, Google API keys (`AIza`), npm (`npm_`), PyPI (`pypi-`),
      Hugging Face (`hf_`), a URL with a password, and an assignment whose
@@ -2355,8 +2600,15 @@ regression. The scan makes it **visible**; plan 14 makes it closable.
      replace refs); and the TIPS every reachable object hangs from (what
      `git rev-list --all --reflog --no-walk` names, the reflogs read from
      their files, plus every ref's own object). A
-     shallow clone or `info/grafts` changes what is reachable without moving
-     a tip, so such a repository is not cached (`plan: "off"`). A change to
+     shallow clone changes what is reachable without moving a tip, so such
+     a repository is not cached (`plan: "off"`). Grafts and replace refs no
+     longer change what the scan lists (2026-10-21, a security fix:
+     every hardened git call runs with replace refs off and an empty graft
+     file; confidentiality.md §7.2a "What the walk does not let a repository
+     hide"), so an `info/grafts` file no longer turns the cache off. The
+     listing and the traces apply the history walk's shallow rule: a
+     shallow file is honoured only where no commit it names has a parent
+     in the store, so one written over a full history hides no key. A change to
      the detector moves the fingerprint, so every blob a cache called clean
      is read once more.
    - **Stored.** The reachable blobs (name, size, a path); the blobs READ,
@@ -2405,7 +2657,10 @@ regression. The scan makes it **visible**; plan 14 makes it closable.
   can reach needs its own run.
 - Objects reachable from nothing (dangling after a rebase, before `git gc`)
   are not scanned; `git show <name>` still reads one if the agent knows the
-  name. The object twins have the same reach.
+  name. The object twins have the same reach, except that a version a
+  launch once found protected stays locked while its path is protected,
+  reachable or not (confidentiality.md §7.2a "A version once locked stays
+  locked", 2026-10-21).
 - A repository whose history is too large to list inside the budget is not
   scanned at all (said, with the knob).
 

@@ -16,7 +16,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  AGENTS, ANTHROPIC_WIRE_AGENTS, ANTHROPIC_WIRE_LINES, API_KEY_AGENTS, CACHED_LINES, LINES, NPM_AGENTS, tableProblems,
+  AGENTS, ANTHROPIC_WIRE_AGENTS, ANTHROPIC_WIRE_LINES, API_KEY_AGENTS, CACHED_LINES, LINES, NPM_AGENTS, SCAN_ONLY_AGENTS, SCAN_ONLY_IDS,
+  SCAN_READ_IDS, tableProblems,
 } from "./agent-registry.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -74,6 +75,18 @@ export declare function agentOfLine(id: string): string;
 export declare function isAgent(s: unknown): s is Agent;
 export declare function isLine(s: unknown): s is AgentLine;
 export declare function tableProblems(lines?: readonly AgentLineRow[]): string[];
+
+/** An agent only the past-sessions scan knows (Mandu does not run it). */
+export type ScanOnlyAgent = ${union(SCAN_ONLY_IDS)};
+export interface ScanOnlyAgentRow {
+  id: ScanOnlyAgent;
+  name: string;
+  read: boolean;
+}
+export declare const SCAN_ONLY_AGENTS: readonly ScanOnlyAgentRow[];
+export declare const SCAN_ONLY_IDS: ${tuple(SCAN_ONLY_IDS)};
+export declare const SCAN_ONLY_NAMES: Readonly<Record<ScanOnlyAgent, string>>;
+export declare const SCAN_READ_IDS: ${tuple(SCAN_READ_IDS)};
 `;
 }
 
@@ -89,11 +102,20 @@ function packageCopy(pkg, body) {
 ${body}`;
 }
 
+/** The scan-only agents' names, as a TypeScript object literal. */
+const names = () => `{ ${SCAN_ONLY_AGENTS.map((a) => `${a.id}: ${JSON.stringify(a.name)}`).join(", ")} }`;
+
 function dashboardCopy() {
   return packageCopy("dashboard", `
 /** The agents (event-source/registry.ts AGENT_KINDS). */
 export const AGENTS = [${list(AGENTS)}] as const;
 export type Agent = (typeof AGENTS)[number];
+
+/** The agents only the past-sessions scan knows: Mandu does not run them,
+ *  and the scan reads their sessions (\`read\`) or counts them (plan 17 §4). */
+export const SCAN_ONLY_AGENTS = [${list(SCAN_ONLY_IDS)}] as const;
+export type ScanOnlyAgent = (typeof SCAN_ONLY_AGENTS)[number];
+export const SCAN_ONLY_NAMES: Readonly<Record<ScanOnlyAgent, string>> = ${names()};
 `);
 }
 
@@ -110,6 +132,12 @@ export type AgentLine = (typeof LINES)[number];
 export function isAgent(s: unknown): s is Agent {
   return (AGENTS as readonly unknown[]).includes(s);
 }
+
+/** The agents only the past-sessions scan knows: Mandu does not run them,
+ *  and the scan reads their sessions (\`read\`) or counts them (plan 17 §4). */
+export const SCAN_ONLY_AGENTS = [${list(SCAN_ONLY_IDS)}] as const;
+export type ScanOnlyAgent = (typeof SCAN_ONLY_AGENTS)[number];
+export const SCAN_ONLY_NAMES: Readonly<Record<ScanOnlyAgent, string>> = ${names()};
 `);
 }
 
@@ -119,6 +147,14 @@ function arbiterCopy() {
  *  agents whose stores are left raw). */
 export const AGENTS = [${list(AGENTS)}] as const;
 export type Agent = (typeof AGENTS)[number];
+
+/** The agents only the past-sessions scan knows: Mandu does not run them,
+ *  and the scan reads their sessions (\`read\`) or counts them (plan 17 §4). */
+export const SCAN_ONLY_AGENTS = [${list(SCAN_ONLY_IDS)}] as const;
+export type ScanOnlyAgent = (typeof SCAN_ONLY_AGENTS)[number];
+export const SCAN_ONLY_NAMES: Readonly<Record<ScanOnlyAgent, string>> = ${names()};
+/** Those the scan reads (the others it only counts). */
+export const SCAN_READ_AGENTS = [${list(SCAN_READ_IDS)}] as const;
 `);
 }
 

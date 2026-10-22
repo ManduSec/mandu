@@ -36,6 +36,10 @@
  *                           ANTHROPIC_BASE_URL so the U-LLM works under the
  *                           whole-agent TCP confine (exec-routing.md §7.1).
  *   MANDU_ULLM_BINARY   — cli-mode binary hint: "claude" | "codex" | "auto".
+ *   MANDU_ULLM_BINARY_PATH — that CLI's absolute path (optional), which the
+ *                           launcher resolves past the session's `claude`
+ *                           PATH shim: by name, the shim would route the
+ *                           quarantined `claude -p` to the model proxy.
  *   MANDU_ULLM_MODEL    — quarantined model id (optional).
  *   MANDU_SCOPE_ID      — the Mandu session (scope) id: symbolize, events, and
  *                           the session a declassify_symbol release is

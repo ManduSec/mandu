@@ -129,12 +129,22 @@ test("per principal over the real arbiter: programs, hosts and AI read back as t
 
     // 1. Per program, as the arbiter judges each entry.
     assert.deepEqual(v.programs.rows.map((r: any) => r.name), ["deploy", "psql", "Any other program"]);
-    assert.deepEqual(lists(v.programs.rows, "deploy"), {
-      "Opens the real file": ["~/ws/.env (your word)"],
+    // Only what differs from Any other program (§4.25aa *Only what differs*):
+    // the masked files moved to the closing row, and a line counts them.
+    assert.deepEqual(lists(v.programs.rows, "deploy"), { "Opens the real file": ["~/ws/.env (your word)"] });
+    assert.equal(v.programs.rows.find((r: any) => r.name === "deploy").rest, "The rest (3): as any other program, below.");
+    assert.deepEqual(lists(v.programs.rows, "psql"), { "Never gets the real file: it prints or runs what it reads": ["~/ws/.env"] });
+    assert.deepEqual(lists(v.programs.rows, "Any other program"), {
       "Gets a masked copy": ["~/ws/contract.txt", "~/ws/memo.txt", "~/ws/notes.md"],
+      "Refused": ["~/ws/.env"],
     });
-    assert.deepEqual(lists(v.programs.rows, "psql")["Never gets the real file: it prints or runs what it reads"], ["~/ws/.env"]);
-    assert.deepEqual(lists(v.programs.rows, "Any other program")["Refused"], ["~/ws/.env"]);
+    // Every secret file is in a named row's lists or counted by its rest.
+    for (const r of v.programs.rows.filter((x: any) => x.kind === "named")) {
+      const shown = r.groups.flatMap((g: any) => g.items.map((i: any) => i.rule));
+      const rest = Number(/^The rest \((\d+)\)/.exec(r.rest ?? "")?.[1] ?? 0);
+      assert.equal(new Set(shown).size + rest, v.secretCount, `${r.name}: ${shown.join(", ")} + ${rest}`);
+    }
+    assert.equal(v.secretCount, 4);
 
     // 2. Per host, and the egress gate agrees.
     assert.deepEqual(v.hosts.rows.map((r: any) => r.name), ["api.example.com", "api.stripe.com", "Any other host"]);
@@ -171,6 +181,7 @@ test("per principal over the real arbiter: programs, hosts and AI read back as t
         assert.ok(deploy, `${where}: a row for deploy`);
         const link = ([...deploy.querySelectorAll("button.by-who-link")] as Doc[]).find((b) => b.textContent === "~/ws/.env");
         assert.ok(link, `${where}: deploy's ~/ws/.env is a button`);
+        assert.equal(deploy.querySelector(".by-who-rest")?.textContent, "The rest (3): as any other program, below.", `${where}: deploy's rest line`);
         assert.equal(link.getAttribute("aria-label"), "Show the rule for ~/ws/.env in Your rules");
         // The rule sits under the folder heading ~/ws, folded shut first.
         assert.ok(wsFolder(doc), `${where}: Your rules has the heading ~/ws`);

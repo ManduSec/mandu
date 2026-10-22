@@ -106,6 +106,15 @@ function asVoiding(v: unknown): VoidingLaunch[] | undefined {
 }
 
 /** The marker the voided-caches line starts with (compactNotice matches it). */
+/** Why the history is re-checked (historyRecheckNotice): the arbiter's
+ *  epoch cause, or `walk-changed`: a cached walk whose base key is no longer
+ *  the one the launch computes (a new git version, a new walk rule such as
+ *  the 2026-10-21 one, a shallow boundary honoured or not), which walks the
+ *  whole history anew as an unsealed cache does; or `store-scan`: the first
+ *  check of every object a repository stores (store-scan.ts), once per
+ *  object store. */
+export type RecheckCause = EpochCause | "walk-changed" | "store-scan";
+
 export const VOIDED_CACHES_PREFIX = "mandu: the git-history caches are not trusted this launch: ";
 
 /** Why a launch is unconfined, as the notice says it: the arbiter's words,
@@ -146,12 +155,16 @@ const RECHECK_RE = /^mandu: ! .+, so Mandu is re-checking the git history of \d+
  * silent without `--verbose`. `repos`: the repositories (object stores) the
  * step covers. Plain words: no epoch, no seal, no pack. Pure.
  */
-export function historyRecheckNotice(cause: EpochCause | undefined, repos: number): string {
+export function historyRecheckNotice(cause: RecheckCause | undefined, repos: number): string {
   const why = cause === "unprotected-ended"
     ? "an earlier Mandu session without protection has ended"
     : cause === "unclean-stop"
       ? "Mandu's protection service restarted after an unprotected or abrupt stop"
-      : "Mandu's earlier checks could not be vouched for";
+      : cause === "walk-changed"
+        ? "how Mandu reads git history changed since the last launch (a new git, a new Mandu, or a moved shallow boundary)"
+        : cause === "store-scan"
+          ? "Mandu checks every object a repository stores once, history no branch reaches included"
+          : "Mandu's earlier checks could not be vouched for";
   const n = Math.max(1, repos);
   return `mandu: ! ${why}, so Mandu is re-checking the git history of ${n} repositor${n === 1 ? "y" : "ies"} (slower this once)`;
 }
@@ -222,7 +235,7 @@ export class SealSession {
    * line says why). Display only: a throw is swallowed, and nothing it does
    * changes what is trusted.
    */
-  onRecheck?: (cause: EpochCause | undefined) => void;
+  onRecheck?: (cause: RecheckCause | undefined) => void;
   private recheckSaid = false;
   /** The cause the last honoured answer gave. */
   private epochCause: EpochCause | undefined;
@@ -326,10 +339,23 @@ export class SealSession {
     return true;
   }
 
-  private noteRecheck(): void {
+  private noteRecheck(cause: RecheckCause | undefined = this.epochCause): void {
     if (this.recheckSaid || this.onRecheck === undefined) return;
     this.recheckSaid = true;
-    try { this.onRecheck(this.epochCause); } catch { /* display only */ }
+    try { this.onRecheck(cause); } catch { /* display only */ }
+  }
+
+  /** A cached walk, sealed, is walked anew all the same because its base
+   *  key changed (`walk-changed`): the same one notice as an unsealed
+   *  cache, before that work. Display only. */
+  noteWalkChanged(): void {
+    this.noteRecheck("walk-changed");
+  }
+
+  /** A large object store is scanned for the first time (store-scan.ts):
+   *  the same one notice, cause `store-scan`. Display only. */
+  noteStoreScan(): void {
+    this.noteRecheck("store-scan");
   }
 
   /** Seal bytes just written. */

@@ -63,6 +63,21 @@ for (const bp of ["/mandu", ""]) {
     assert.deepEqual(h("/rules", "#prompt-filters"), R("rules"), "a Settings card is not on Rules");
     assert.deepEqual(h("/rules", "#nowhere"), R("rules"));
     assert.deepEqual(h("/approvals", "#who"), R("approvals"));
+    // The file a Your secrets card opens Rules at (§4.25b *A card opens its
+    // file in Rules*); an empty one reads as today, a hash too; only on Rules.
+    const f = (path: string, search: string, hash = "") => plain(window.parseRoute(bp + path, search, hash));
+    assert.deepEqual(f("/rules", "?file=~/a/b.env"), { ...R("rules"), file: "~/a/b.env" });
+    assert.deepEqual(f("/rules", "?file=%7E%2Fa%2Fb%20c.env"), { ...R("rules"), file: "~/a/b c.env" });
+    assert.deepEqual(f("/rules", "?file="), R("rules"));
+    assert.deepEqual(f("/rules", "?file=", "#who"), { ...R("rules"), section: "who" });
+    assert.deepEqual(f("/rules", "?file=~/a/b.env", "#who"), { ...R("rules"), file: "~/a/b.env" }, "a file wins over a card");
+    assert.deepEqual(f("/settings", "?file=~/a/b.env"), R("settings"));
+    assert.equal(window.routeHref("rules", "~/mandu-try/deploy/staging.conf"), `${bp}/rules?file=~/mandu-try/deploy/staging.conf`);
+    assert.equal(window.routeHref("rules", "/srv/a b&c#d.env"), `${bp}/rules?file=/srv/a%20b%26c%23d.env`, "encoded, its / kept");
+    for (const file of ["~/a/b.env", "/srv/a b&c#d.env", "~/x?y=1"]) {
+      const u = new URL(ORIGIN + window.routeHref("rules", file));
+      assert.equal(window.parseRoute(u.pathname, u.search, u.hash).file, file, file);
+    }
     if (bp) assert.deepEqual(plain(window.parseRoute(bp, "")), R("home"), "the bare base path is Home");
     // Every built URL round-trips.
     for (const [page, id, ask] of [["approvals", "q/1 %"], ["agent", "s 1/é", "a?b"], ["rules"], ["settings"], ["home"]] as [string, string?, string?][]) {

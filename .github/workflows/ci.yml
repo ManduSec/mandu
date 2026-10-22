@@ -60,7 +60,7 @@
 #     real model with a login and its quota. By hand.
 #   - the `install` kind (the VM matrix): needs /dev/kvm and a VM image cache.
 #     GitLab `install` job, v* tags.
-#   - release-pack, release-publish: releases are cut on the canonical remote.
+#   - release-pack and the publish: release.yml, on a v* tag.
 #   - the `internet: true` entries (wire-release-live, tls-compat): a kind
 #     listing leaves them out; they reach public hosts and run only by name.
 #   - the frozen integrity lane (`frozen: true`, among it eval.deterministic,
@@ -74,13 +74,16 @@ name: CI
 
 # WHEN IT RUNS (continuous-integration.md §12, "When GitHub runs"): only where
 # GitHub is the only signal.
-#   - By hand (workflow_dispatch): the release check, once per snapshot that
-#     will be published, before it is published (the exported tree's own test).
+#   - Called by the release workflow (workflow_call, release.yml `check`): the
+#     release check, on the snapshot a v* tag names, before the publish job
+#     can start (the exported tree's own test). release.yml refuses to run on
+#     a private repository, where the gate below would skip every job.
+#   - By hand (workflow_dispatch): a check of any snapshot.
 #   - A pull request (an outside contributor's), once the repository is
 #     public, unless it changes documentation only.
 #   - Never on a push to main or master: a snapshot push carries a commit the
-#     GitLab pipeline already ran a superset on. Never on a v* tag: GitHub makes
-#     the tag when the release is published, so a run there comes after the check.
+#     GitLab pipeline already ran a superset on. No v* tag trigger of its own:
+#     a tag runs it through release.yml.
 on:
   pull_request:
     # Documentation only runs nothing: the same cut as the GitLab docs lane
@@ -97,6 +100,9 @@ on:
       - "launcher/README.md"
       - "**/fixtures/**"
   workflow_dispatch: {}
+  # The release workflow's check (release.yml `check`): this file, on the
+  # snapshot a v* tag names, before anything is published.
+  workflow_call: {}
 
 permissions:
   contents: read

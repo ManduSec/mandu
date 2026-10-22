@@ -157,7 +157,7 @@ test("Approvals: a rule change that comes while a question waits leaves the ques
   assert.equal(card(), old, "the question's card is not drawn again: no line to change");
 });
 
-test("Home: the last question answered while a rule change waits: the focus lands on 'No question is waiting for you.'", async () => {
+test("Home: the last question answered while a rule change waits: the focus lands on its line, over 'No question is waiting for you.'", async () => {
   // eslint-disable-next-line prefer-const
   let page: ReturnType<typeof load>;
   page = load({ homeVm: home({ waiting: [ASK] }), routes: {
@@ -168,8 +168,9 @@ test("Home: the last question answered while a rule change waits: the focus land
   await tick(30);
   press(button(doc.querySelector('#home-waiting .ask[data-id="egr-1"]'), "Block"));
   await tick(30);
-  assert.equal(doc.activeElement, line(doc, "home-waiting"), "the list's line has the focus");
-  assert.equal(doc.activeElement.textContent, NO_QUESTION);
+  assert.equal(doc.activeElement, doc.querySelector("#home-waiting .answer-line"), "the answer's line has the focus");
+  assert.equal(doc.activeElement.nextElementSibling, line(doc, "home-waiting"));
+  assert.equal(line(doc, "home-waiting").textContent, NO_QUESTION);
   assert.equal(doc.getElementById("home-waiting-title").textContent, "Approvals waiting (1)", "the heading still counts the rule change");
 });
 
@@ -185,7 +186,10 @@ test("a focus on the line stays on it when a poll draws it with the other words"
   await tick(30);
   press(button(doc.querySelector('#approvals-waiting .ask[data-id="egr-1"]'), "Allow once"));
   await tick(30);
-  assert.equal(doc.activeElement.textContent, NOTHING, "the last answer lands on the line");
+  assert.equal(line(doc, "approvals-waiting").textContent, NOTHING);
+  // The line given the focus (the answer gave it to its own line).
+  line(doc, "approvals-waiting").setAttribute("tabindex", "-1");
+  line(doc, "approvals-waiting").focus();
   pending = [P1];
   await poll(doc);
   assert.equal(doc.activeElement, line(doc, "approvals-waiting"), "the line drawn again keeps the focus");

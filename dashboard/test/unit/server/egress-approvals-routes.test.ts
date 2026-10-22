@@ -365,21 +365,20 @@ test("attachArbiterSurfaces late-binds the approvals surface after a cold boot, 
   }
 });
 
-test("with a password set, the egress routes 302 to /login", async () => {
-  const h = await startServer({ password: "secret" });
+test("behind the sign-in gate, the egress routes answer 401 before they run", async () => {
+  const h = await startServer({ basicAuth: { user: "u", password: "secret pass" } });
   try {
-    // No session cookie → the auth gate redirects before the egress routes.
+    // No sign-in session → the gate answers before the egress routes.
     const getRes = await fetch(`${h.baseUrl}/api/egress/approvals`, { redirect: "manual" });
-    assert.equal(getRes.status, 302);
-    assert.match(getRes.headers.get("location") ?? "", /\/login$/);
+    assert.equal(getRes.status, 401);
+    assert.match(((await getRes.json()) as { error: string }).error, /sign in required/);
 
     const postRes = await fetch(`${h.baseUrl}/api/egress/approvals/egr-1/approve`, {
       method: "POST",
       headers: CSRF,
       redirect: "manual",
     });
-    assert.equal(postRes.status, 302);
-    assert.match(postRes.headers.get("location") ?? "", /\/login$/);
+    assert.equal(postRes.status, 401);
   } finally {
     await h.close();
   }

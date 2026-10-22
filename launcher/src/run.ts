@@ -14,7 +14,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { parse, commandStart } from "./parse.js";
 import { dashboardUrl, liveDashboards, liveLaunchersOn, RESERVED_SUBCOMMANDS, residentPidsOn, runSubcommand, stopStackAndWait } from "./subcommands.js";
-import { stackSupervisor } from "./stack-supervisor.js";
+import { stackSupervisor, withStackFacts } from "./stack-supervisor.js";
 import { applyReplyFilter, handOffReplyFilter, prestartReplyFilter, ReplyFilterSlot, wantsPrestart, type ReplyFilterHandoff, type ReplyFilterWiring } from "./reply-filter.js";
 import { applyConfigDefaults } from "./config.js";
 import { getPlatform } from "./platform/index.js";
@@ -67,7 +67,7 @@ import {
   checkPendingPlaceholderRecords, checkPlaceholderRecord, newPlaceholderRecord, placeholderCheckDir, recheckEarlierRecords,
   removePlaceholderRecord, unsaidBlocks, writePlaceholderRecord, PENDING_LAUNCH_BUDGET_MS, WATCH_GIT_TIMEOUT_MS, type CheckBlock, type PlaceholderRecord,
 } from "./placeholder-commits.js";
-import { endTwinIndexSession, restorePendingTwinIndexes, twinIndexRecordDir, untrackedNotice } from "./twin-index-stat.js";
+import { endTwinIndexSession, restorePendingFromStores, twinIndexReadStores, untrackedNotice } from "./twin-index-stat.js";
 import { gatherWslFacts, wslLaunchNotes } from "./wsl.js";
 import { readConnectAllowances } from "./net-guard-law.js";
 import { autoBackgroundNote, CLAUDE_MCP_AUTO_BACKGROUND_ENV, claudeMcpAutoBackgroundMs } from "./claude-mcp-background.js";
@@ -104,6 +104,7 @@ import { disableProbeCache, enableProbeCache, forgetAfterFailure } from "./probe
 import { bannerLine, dashboardLine, launchDisplayMode, modeLine } from "./launch-banner.js";
 import { LaunchConsole, LaunchConsoleSlot } from "./launch-console.js";
 import { LAUNCH_LOG_ENV, openLaunchLog } from "./launch-log.js";
+import { formatTimings, LaunchTimer, timingsLogLine } from "./launch-timings.js";
 import { bannerDashboard, requestSignInLink, terminalDashboardLines, wantsSignInLink, type SignInOutcome } from "./dashboard-sign-in.js";
 import { runtimeBase } from "./arbiter-sock.js";
 import { arbiterAxisEnv, effectiveAxes, modeOf } from "./mode.js";
@@ -125,11 +126,14 @@ import { codexArgvCd, codexConfigNamesConnectors } from "./codex-argv.js";
 import { agentBwrapDir, bwrapLaunchNotes, commandAvailable, manduBwrapInForceHere } from "./bwrap-grant.js";
 import type { ScopePlan } from "./platform/index.js";
 import { publishFile } from "./safe-file.js";
+import { sessionKeptLine } from "./session-kept-line.js";
 
 /**
- * The newest live dashboard's one-time sign-in link for this terminal, or why
- * there is none (dashboard-sign-in.ts). Not asked when stderr is not a
- * terminal: the link is a credential and a log is readable by the agent's uid.
+ * How to sign in to the newest live dashboard, for this terminal's dashboard
+ * line (dashboard-sign-in.ts; dashboard.md §6.z): with the Mandu dashboard
+ * account, or to set one when there is none yet. Not asked when stderr is
+ * not a terminal (an older dashboard may still answer with a one-time link,
+ * a credential, and a log is readable by the agent's uid).
  */
 function askDashboardSignIn(env: Record<string, string | undefined>): Promise<SignInOutcome> {
   if (!wantsSignInLink(process.stderr.isTTY, env)) return Promise.resolve({ kind: "not-asked" });
@@ -161,8 +165,15 @@ export async function main(argv: string[], env = process.env, opts: MainOptions 
   // it ends, console.error is put back here, and a launch that throws says
   // what it held (the warnings, the notice count) before its error.
   const launchConsole = new LaunchConsoleSlot();
+  // How long each step of the launch takes (launch-timings.ts,
+  // runtime-instances.md §14.11): always kept, printed only under --verbose.
+  // `mandu` (bin/mandu.mjs, the entry below) names its process before main(),
+  // so its total counts from the process start; an in-process call's from here.
+  const timer = new LaunchTimer({ cli: process.title === "mandu" });
+  let returned = false;
   try {
-    const code = await launch(argv, env, replyFilterSlot, opts, launchConsole);
+    const code = await launch(argv, env, replyFilterSlot, opts, launchConsole, timer);
+    returned = true;
     if (code !== 0) forgetAfterFailure();
     return code;
   } catch (e) {
@@ -172,13 +183,31 @@ export async function main(argv: string[], env = process.env, opts: MainOptions 
     }
     throw e;
   } finally {
+    finishLaunchTimings(timer, launchConsole, returned);
     launchConsole.end();
     disableProbeCache();
     await replyFilterSlot.abort();
   }
 }
 
-async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: ReplyFilterSlot, opts: MainOptions, launchConsole: LaunchConsoleSlot): Promise<number> {
+/** The launch is over: its timings go to its log (`mandu log --timings`)
+ *  and, under --verbose, to stderr after everything else it said (not for a
+ *  launch that stopped with an error, whose error is its last line). Only a
+ *  launch (its console attached after the parse), never `--help` or a
+ *  subcommand. Best-effort: never throws. */
+function finishLaunchTimings(timer: LaunchTimer, slot: LaunchConsoleSlot, returned: boolean): void {
+  try {
+    const lc = slot.current;
+    if (lc === null || !timer.started) return;
+    timer.end();
+    const t = timer.snapshot();
+    lc.log?.write(timingsLogLine(t));
+    if (returned && lc.display === "full") for (const l of formatTimings(t)) lc.print(l);
+  } catch { /* best-effort */ }
+}
+
+async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: ReplyFilterSlot, opts: MainOptions, launchConsole: LaunchConsoleSlot, timer: LaunchTimer): Promise<number> {
+  timer.step("plan");
   // Apply ~/.mandu/config.toml as low-priority defaults (packaging.md
   // §7): config values seed env only where unset, so the effective precedence
   // is flags > env > config > defaults. Mutates env (process.env in the real
@@ -490,6 +519,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
         : {}),
     });
   };
+  timer.step("arbiter");
   let arbiterStart = await startOrAttachArbiter();
 
   // The release check (arbiter-version.ts, runtime-instances.md §4.1): an
@@ -516,8 +546,11 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
         sameArbiterTree: (a, b) => arbiterTreesMatch(layout.repoRoot, a, b),
       },
       // A systemd service that would restart that stack (stack-supervisor.ts).
-      supervisor: (b: string, arbiterPid: number | null) =>
-        stackSupervisor([...(arbiterPid !== null ? [arbiterPid] : []), ...residentPidsOn(b)]),
+      // Which process is old and who runs it decide what its refusal says.
+      supervisor: (b: string, arbiterPid: number | null) => {
+        const s = stackSupervisor([...(arbiterPid !== null ? [arbiterPid] : []), ...residentPidsOn(b)]);
+        return s === null ? null : withStackFacts(s, arbiterPid, layout.mode === "installed" ? layout.pkgRoot : layout.repoRoot);
+      },
     };
     const checkNow = (started: boolean) => checkArbiterRelease(
       { ours, sock: plan.arbiterSock, mode: plan.arbiterSockMode, started, base }, releaseDeps,
@@ -838,7 +871,17 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     twinPrefetch?.close();
     gitSession?.close();
   };
+  // The quarantined CLI by its path, past the session's `claude` shim
+  // (written below, first on the agent's PATH): by name the shim would route
+  // inspect_symbol's `claude -p` to the model proxy, where the inspect
+  // server's network confine refuses it (Ullm.binaryPath). Before the
+  // services: the manager writes the inspect server entry.
+  if (plan.ullm.mode === "cli") {
+    const real = realExecutable(plan.ullm.binary ?? "claude", env["PATH"] ?? plan.basePath, join(scopeRunDir, SDK_SHIM_DIR), nodeFs, nodePath);
+    if (real !== null) plan.ullm.binaryPath = nodePath.resolve(real);
+  }
   let services: ServiceHandle;
+  timer.step("services");
   try {
     services = await startServices(plan, layout, scopeRunDir, undefined, undefined, {
       onFsViewReady: () => {
@@ -850,6 +893,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     closeTwinReads();
     throw e;
   }
+  timer.step("confine");
 
   // Plan 14 §5.5, §13.6: the advisory scans of this workspace (its
   // repository's history and its files on disk; no `sources`, so both run
@@ -1049,6 +1093,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     // puts the key back in the auth header, when this launch can bind the key
     // to the provider it routes (human plane, before the twins). Otherwise
     // the file stays Goose's own key file, read raw (agentOwnFiles below).
+    timer.step("key-grants");
     const keyGrant = await registerAgentKeyGrant(plan, env, process.env, {
       call: (sock, op, args) => ndjsonCall<unknown>(sock, op, args, 5_000),
       log: (m) => console.error(m),
@@ -1107,8 +1152,9 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     // An earlier session that died with a twin's stat in an index
     // (twin-index-stat.ts): put back BEFORE this launch writes its own, so
     // this launch's launch stat is never a dead session's twin stat.
+    timer.step("secrets");
     if (platform.id === "linux") {
-      for (const root of restorePendingTwinIndexes(twinIndexRecordDir(manduPath("object-walks", process.env, homedir())), placeholderHome, { log: (m) => console.error(m) })) {
+      for (const root of restorePendingFromStores(twinIndexReadStores(process.env, homedir()), { log: (m) => console.error(m) })) {
         console.error(`mandu: ${root}: put back the index stat of a protected file an earlier session left (git there no longer shows it modified)`);
       }
     }
@@ -1132,6 +1178,8 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
         // grant above lets it be twinned.
         agentOwnFiles: keyGrant.granted ? [] : agentOwnCredentialFiles(plan.target, env),
         ...(codexGrant.granted ? { grantedLoginFiles: [codexGrant.path!] } : {}),
+        // Its parts' times (launch-timings.ts): the walk's wait, the history step, …
+        timer,
       });
     } finally {
       closeTwinReads();
@@ -1160,6 +1208,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     // started waits for the next launch; one cut short, or whose git failed,
     // stays on disk until it is checked again after the agent exits): the
     // launch waits for this.
+    timer.step("placeholder-check");
     if (platform.id === "linux") {
       const pending = await checkPendingPlaceholderRecords(placeholderChecks, placeholderHome, {
         timeoutMs: WATCH_GIT_TIMEOUT_MS, budgetMs: PENDING_LAUNCH_BUDGET_MS,
@@ -1179,6 +1228,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     // The environment half of the same registry (plan 10 §11.4): secret-shaped
     // variables reach the agent as symbols. After the twins (same axis rule),
     // before the reply filter (which shows the human the real values).
+    timer.step("env-secrets");
     envResult = await applyEnvSecrets(plan, env, mut, {
       arbiter: socketSecretArbiter(plan.arbiterSock),
       log: (m) => console.error(m),
@@ -1210,6 +1260,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     // needs costs about 25 µs an open). MANDU_WRITE_PROTECT=0 opts out.
     // policy.yaml write_protect: / unix_sockets: add to (and opt out of) both
     // lists below (guard-settings.ts).
+    timer.step("compose");
     const guardSettings = netGuard !== null && platform.id === "linux" ? await readGuardSettings(plan.arbiterSock, (m) => console.error(m)) : NO_GUARD_SETTINGS;
     if (netGuard !== null && platform.id === "linux" && modeOf(plan.effectiveAxes!) !== "off" && env["MANDU_WRITE_PROTECT"] !== "0") {
       // The home is one refused entry; the frozen integrity modes carve their
@@ -1681,6 +1732,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     }
     // Plan 10 §11.13.1: this session's proxy inspects TLS, so npm may read
     // the `.npmrc` twin (the arbiter decides per file). Best-effort.
+    timer.step("record");
     wireRelease = await registerLaunchWireRelease(plan, env, {
       call: (sock, op, args) => ndjsonCall<unknown>(sock, op, args, 5_000),
       log: (m) => console.error(m),
@@ -1710,10 +1762,10 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     // is walled off from the human-plane socket (the guard's deny entry, or
     // the wrap's tmpfs over it); while an unwalled launch is live the
     // arbiter believes no guard or proxy record there.
-    // Before `beginLaunch`: a launch with no wall is on the record from
-    // there on, and while one is, the dashboard hands out no link (a program
-    // of that agent could ask for it). Asked now, the link is this terminal's
-    // alone; nothing this launch's agent runs can ask for another one.
+    // How to sign in to the dashboard, asked now so the answer is ready for
+    // the dashboard line (an older dashboard that still mints links refuses
+    // one while a launch with no wall is on the record: asked before
+    // `beginLaunch`, as before).
     signInAsk = askDashboardSignIn(env);
     const claim: LaunchClaim = {
       pid: process.pid,
@@ -1801,6 +1853,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
   // From here console.error prints as it is, and is copied to the launch's
   // log (the lines said after the agent exits too); main() puts it back.
   lc.tee();
+  timer.step("banner");
   // The mode the session really runs under (protection-modes.md §3.2), kept
   // as the mode line (the logs, the posture event) and printed: alone under
   // --verbose, as the start of the one banner line by default.
@@ -1852,9 +1905,16 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
   // The full banner, in the session's scope dir for as long as it lives (a
   // clean end removes it, scope-dir-cleanup.ts; the posture event below keeps
   // the same lines) and under --verbose. Best-effort: a failed write costs nothing.
+  // Then the steps so far and their times (launch-timings.ts), here, in the
+  // launch's own log and on the posture event; the whole launch's go to the
+  // launch's log at its end (finishLaunchTimings).
+  timer.step("posture");
+  const launchTimings = timer.snapshot();
+  const launchTimingsLine = timingsLogLine(launchTimings);
+  lc.log?.write(launchTimingsLine);
   try {
     mkdirSync(scopeRunDir, { recursive: true });
-    publishFile(`${scopeRunDir}/launch.log`, launchNotes.map((n) => n + "\n").join(""));
+    publishFile(`${scopeRunDir}/launch.log`, launchNotes.map((n) => n + "\n").join("") + launchTimingsLine + "\n");
   } catch { /* best-effort */ }
 
   // The launch's posture, on the record (best-effort, never on the launch path).
@@ -1875,12 +1935,14 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
       ...plan.effectiveAxes,
       reported: reportedAxes.integrity !== undefined && reportedAxes.confidentiality !== undefined,
     },
+    timings: launchTimings,
   }), plan.arbiterHumanSock);
 
   // The early-started reply filter takes the agent now (packaging.md §5.3):
   // runAgent adopts it as the chain's first process, exactly where the serial
   // form spawned it. Gone ⇒ a fresh one; that failing too ⇒ the chain runs
   // without a filter (utility-only; the WARNING says so).
+  timer.step("agent-start");
   const pre = replyFilterSlot.take();
   const adopted = filterHandoff === null ? null : await handOffReplyFilter(
     pre, filterHandoff, scope.detached,
@@ -1893,6 +1955,9 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
   // service stop, the fs-view sweep and the session-exit event run to the
   // end; SIGTERM / SIGHUP / SIGQUIT keep their default action.
   const teardown = createTeardownGuard({ note: (m) => origConsoleError(m) });
+  // What the session untracked of the twinned files git tracked (the index
+  // restore at the agent's exit, postExit below), for the exit notice.
+  let twinUntracked: Array<{ root: string; rel: string }> = [];
   try {
     // `mandu goose acp`: the editor's JSON-RPC stream goes through the ACP
     // relay (goose-acp-relay.ts): Goose is offered neither the editor's file
@@ -1914,6 +1979,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
           : "the arbiter names no human-plane socket, so the editor sees Goose's symbols";
       console.error(`mandu: goose acp: the editor's stream goes through Mandu's ACP relay (Goose runs every tool itself, inside this session; ${shown})`);
     }
+    timer.step("agent");
     const code = await runAgent({
       argv: finalArgv,
       ...(adopted !== null ? { adopted } : {}),
@@ -1944,8 +2010,18 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
       // services is older than this call (reply-filter.ts handOffReplyFilter).
       tree: { track: (pid, sinceMs) => platform.trackTree(pid, { sinceMs }), end: (t) => platform.killTree(t) },
       postExit: async () => {
+        // The index stat the secret setup wrote goes back FIRST, the moment
+        // the agent is gone (twin-index-stat.ts): the rest of the teardown
+        // can take seconds, and a SIGTERM or SIGHUP there (a closed
+        // terminal, a harness that kills the pane once the agent exits)
+        // keeps its default action and ends the launcher before any later
+        // step runs. The exit notice of what the session untracked is said
+        // below, with the other notices.
+        timer.step("teardown.index");
+        twinUntracked = endTwinIndex(secretResult);
         // The ACP relay's last editor-bound lines are written before the
         // services stop (their resolution may still be in flight; bounded).
+        timer.step("teardown.services");
         if (acpRelayRun.relay !== null) {
           await Promise.race([acpRelayRun.relay.drained(), new Promise((r) => setTimeout(r, 5_000).unref())]);
         }
@@ -1967,6 +2043,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     // an agent's own git store (OpenCode's snapshots) apart, with nothing to
     // do. Printed after the agent is gone, so a full-screen agent's display
     // is not torn; the dashboard has the event as it happened.
+    timer.step("teardown.notices");
     if (netGuarded) {
       const refused = readGitLockRefusals(gitLockNoticeFile(scopeRunDir));
       for (const line of gitLockNoticeLines(refused, env)) console.error(line);
@@ -1987,12 +2064,15 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     // a block whose repair differs is never dropped. Then an earlier record
     // whose check at launch did not complete, kept on disk until now, is
     // removed.
-    // The launch stat back into each index entry the launch set to its
-    // twin's (twin-index-stat.ts), where the entry still holds it.
-    // Its crash record goes once every entry is back (else the next launch
-    // retries). A protected file the session untracked and .gitignore does
-    // not name is said: a later `git add -A` would commit the real file.
-    for (const line of await untrackedNotice(endTwinIndex(secretResult))) console.error(line);
+    // The index entries the launch set to its twins' stat were put back
+    // when the agent exited (postExit above; here only if that never ran),
+    // each to the real file's stat (twin-index-stat.ts) where the entry
+    // still holds the twin's. The crash record goes once every entry is
+    // back (else the next launch retries). A protected file the session
+    // untracked and .gitignore does not name is said: a later `git add -A`
+    // would commit the real file.
+    timer.step("teardown.placeholder");
+    for (const line of await untrackedNotice([...twinUntracked, ...endTwinIndex(secretResult)])) console.error(line);
     const saidNow: CheckBlock[] = [];
     if (placeholderRecord !== null) {
       for (const b of await checkPlaceholderRecord(placeholderRecord)) {
@@ -2014,6 +2094,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     // Decided here (pure), so the notice below can say which; the removal
     // itself comes last. Still under the teardown guard: a ^C here does not
     // cut it short.
+    timer.step("teardown.exit");
     const cleanup = scopeDirCleanupDecision({
       scopeRunDir, runtimeBase: plan.arbiterRuntimeBase, scopeId: plan.scopeId,
       scopeIdGenerated: plan.scopeIdGenerated === true, pid: process.pid, code,
@@ -2043,13 +2124,28 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
       code,
       durationMs: Date.now() - launchedAt,
       ...(discarded.length > 0 ? { discardedWrites: discarded.map((d) => d.path) } : {}),
+      // The agent's run and the teardown so far (the launch's own steps are
+      // on the posture event; all of them in the launch's log at its end).
+      timings: timer.snapshot({ from: "agent" }),
     }), plan.arbiterHumanSock);
     if (cleanup.remove) {
       const r = removeOwnScopeDir(scopeRunDir);
       if (r.error && display === "full") origConsoleError(`mandu: left the scope dir ${scopeRunDir} for \`mandu reap\` (${r.error})`);
     }
+    // The session's last line (session-kept-line.ts; packaging.md §5,
+    // dashboard.md §4.25ah): what Mandu kept from the AI, in the dashboard's
+    // own counts and words, asked once the session's exit is on the record.
+    // On stderr, after the agent and its reply filter have exited, so it
+    // never mixes into a TUI or into an agent's machine-readable stdout.
+    // Best-effort: no dashboard, no answer in time, nothing printed.
+    if (plan.sessionSummary !== false) {
+      timer.step("teardown.summary");
+      const line = await sessionKeptLine({ session: plan.scopeId, dashboards: liveDashboards(env), runtimeBase: runtimeBase(env) });
+      if (line !== null) console.error(line);
+    }
     return code;
   } finally {
+    timer.step("teardown.records");
     humanWatch?.stop();
     mcpWatch?.stop();
     copiesInUse?.stop();
@@ -2057,6 +2153,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     await endLaunchWireRelease(plan, wireRelease, { call: (sock, op, args) => ndjsonCall<unknown>(sock, op, args, 2_000), pid: process.pid });
     // Plan 14 §11.2: the end of an unconfined launch starts a new epoch.
     if (launchRecord !== null) await endLaunchRecord(plan.arbiterHumanSock, launchRecord, { ...cacheEpochDeps, log: (m) => origConsoleError(m) });
+    timer.end();
     teardown.disarm();
   }
 }

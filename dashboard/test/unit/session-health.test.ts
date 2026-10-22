@@ -86,6 +86,20 @@ test("a --version / quit-only launch (exit 0, no model call) is NOT broken; a no
   assert.equal(died.verdict, "broken");
 });
 
+test("a broken verdict names its causes as codes for the product page, in the order of its reasons; none otherwise", () => {
+  assert.deepEqual(deriveHealth([posture(["fs"]), ev("relay_mode", { mode: "passthrough" }), turn()])!.broken, ["relay"]);
+  assert.deepEqual(deriveHealth([posture(["fs"]), ev("relay_mode", { mode: "pty", resolveFailure: "timeout" }), turn()])!.broken, ["relay-lookup"]);
+  assert.deepEqual(deriveHealth([posture(["fs"]), sideCall(), ev("session_exit", { code: 0 })])!.broken, ["no-turn"]);
+  assert.deepEqual(deriveHealth([posture(["fs"]), ev("session_exit", { code: 1 })])!.broken, ["no-call"]);
+  assert.deepEqual(deriveHealth([posture(["fs"]), ev("exec_action"), toolResult("Exit code 127\nbash: x: command not found"), turn()])!.broken, ["commands"]);
+  const several = deriveHealth([posture(["fs"]), ev("relay_mode", { mode: "passthrough" }), ev("exec_action"), toolResult("Exit code 126\nbwrap: x"), sideCall(), ev("session_exit", { code: 1 })])!;
+  assert.deepEqual(several.broken, ["relay", "no-turn", "commands"]);
+  assert.equal(several.reasons.length, 3);
+  // Degraded and ok carry none.
+  assert.equal(deriveHealth([posture(["fs"]), ev("exec_action"), ev("exec_action"), toolResult("Exit code 126\nbwrap: x"), turn()])!.broken, undefined);
+  assert.equal(deriveHealth([posture(["fs"]), ev("relay_mode", { mode: "pty" }), turn()])!.broken, undefined);
+});
+
 test("the tool-failure scan reads only EXEC tool outputs, and counts one failing call once", () => {
   // A secret twin's bytes (tool nomodel_Read) that happen to say "command not found" are not a tool failure.
   const secret = deriveHealth([posture(["fs"]), ev("symbolize", { tool: "nomodel_Read", input: { symbolized: "$MDU:nomodel_Read[1]", original: "# bash: foo: command not found\n", differs: true, symbols: [] } }), turn()])!;

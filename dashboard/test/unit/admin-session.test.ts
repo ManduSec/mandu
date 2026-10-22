@@ -15,7 +15,10 @@
  *     `projection` read is served without its values; a metadata read
  *     (the session list) stays open. The whole table is read-gate.test.ts
  *     and test/component/value-gate.test.ts;
- *   - adminCookie()/adminLoginPath() are the values a client needs;
+ *   - adminCookie()/adminLoginPath() are the values a client needs; they are
+ *     TEST SEAMS: with the dashboard account (or none yet, fail closed) the
+ *     token's cookie and link pass the sign-in gate only when the token was
+ *     pinned (`pinnedAdminToken`, DASHBOARD_ADMIN_TOKEN), dashboard.md §6.z;
  *   - a write whose arbiter surface throws the admin-unavailable error (an
  *     ADOPTED arbiter — no inherited fd) answers 503 with the remedy, never
  *     404 "unknown id" and never 200.
@@ -30,7 +33,9 @@ import {
   type EgressApproval,
 } from "../../src/server.js";
 import { adminUnavailableError } from "../../src/server/http-util.js";
-import { SignInTickets } from "../../src/sign-in.js";
+import { AccountFile, makeAccount, writeAccount } from "../../src/account.js";
+import { tmpDir } from "./tmp-dir.js";
+import { join } from "node:path";
 import { ADMIN_OPTS, ADMIN_COOKIE, ADMIN_TOKEN } from "./admin-session.js";
 import type { EventSource, SessionRef } from "../../src/event-source.js";
 import type { ManduEvent } from "../../src/event-model.js";
@@ -152,26 +157,32 @@ test("GET /login?token=<adminToken> sets the session cookie and redirects; a wro
   }
 });
 
-test("with a password set, the token link is refused and the password session is the admin session", async () => {
-  const h = await start({ password: "pw" });
-  try {
-    const viaToken = await fetch(`${h.base}/login?token=${ADMIN_TOKEN}`, { redirect: "manual" });
-    assert.equal(viaToken.status, 403, "a token cannot bypass a configured password");
-    const login = await fetch(`${h.base}/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "password=pw",
-      redirect: "manual",
-    });
-    assert.equal(login.status, 302);
-    const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0]!;
-    const res = await fetch(`${h.base}/api/egress/approvals/egr-1/approve`, {
-      method: "POST",
-      headers: { ...CSRF_ONLY, Cookie: cookie },
-    });
-    assert.equal(res.status, 200, "the password cookie is an admin session");
-  } finally {
-    await h.close();
+test("with the account gate, the admin token passes only when pinned (a test seam)", async () => {
+  for (const withAccount of [true, false]) {
+    const dir = tmpDir("mandu-admin-token-");
+    const file = join(dir, "state", "dashboard-account.json");
+    if (withAccount) writeAccount(file, await makeAccount("alice", "a long enough password"));
+    const closed = await start({ account: new AccountFile(file) });
+    try {
+      // Not pinned: neither the link nor the cookie gets past the sign-in.
+      assert.equal((await fetch(`${closed.base}/login?token=${ADMIN_TOKEN}`, { redirect: "manual" })).status, 401);
+      assert.equal((await fetch(`${closed.base}/api/egress/approvals/egr-1/approve`, { method: "POST", headers: CSRF_ADMIN })).status, 401);
+      assert.deepEqual(closed.fa.calls, []);
+    } finally {
+      await closed.close();
+    }
+    const pinned = await start({ account: new AccountFile(file), pinnedAdminToken: true });
+    try {
+      const ok = await fetch(`${pinned.base}/login?token=${ADMIN_TOKEN}`, { redirect: "manual" });
+      assert.equal(ok.status, 302, `pinned (${withAccount ? "an account" : "no account"}): the link sets the cookie`);
+      assert.equal((ok.headers.get("set-cookie") ?? "").split(";")[0], ADMIN_COOKIE);
+      assert.equal((await fetch(`${pinned.base}/login?token=nope`, { redirect: "manual" })).status, 403, "a wrong token: a bare 403, no cookie");
+      const res = await fetch(`${pinned.base}/api/egress/approvals/egr-1/approve`, { method: "POST", headers: CSRF_ADMIN });
+      assert.equal(res.status, 200, await res.text());
+      assert.deepEqual(pinned.fa.calls, ["egr-1:true"]);
+    } finally {
+      await pinned.close();
+    }
   }
 });
 
@@ -196,82 +207,23 @@ test("an adopted arbiter (no admin channel) → 503 with the remedy, never 404 a
   }
 });
 
-// ── One-time sign-in links (src/sign-in.ts; policy-surface.md §2.6 "Signing in") ──
-
-test("a one-time sign-in link sets the admin cookie once; spent, it signs nobody in and says what to run", async () => {
+test("GET /login past the gate goes Home (the sign-in page is the gate's)", async () => {
   const h = await start();
   try {
-    assert.equal(h.server.signInMode(), "tickets");
-    const { path } = h.server.mintSignInPath();
-    assert.match(path, /^\/login\?ticket=[0-9a-f]{32}$/);
-    const ok = await fetch(`${h.base}${path}`, { redirect: "manual" });
-    assert.equal(ok.status, 302);
-    assert.equal(ok.headers.get("location"), "/");
-    const cookie = (ok.headers.get("set-cookie") ?? "").split(";")[0]!;
-    assert.equal(cookie, ADMIN_COOKIE, "the ticket earns the ordinary admin session");
-    const res = await fetch(`${h.base}/api/egress/approvals/egr-1/approve`, { method: "POST", headers: { ...CSRF_ONLY, Cookie: cookie } });
-    assert.equal(res.status, 200);
-    assert.deepEqual(h.fa.calls, ["egr-1:true"]);
-
-    // The same link again, from a browser without the cookie (browser
-    // history, scrollback): no cookie, a page that names the remedy.
-    const again = await fetch(`${h.base}${path}`, { redirect: "manual" });
-    assert.equal(again.status, 403);
-    assert.equal(again.headers.get("set-cookie"), null);
-    assert.match(await again.text(), /already used, or it has expired[\s\S]*<code>mandu dashboard<\/code>/);
-    // A guess is the same refusal.
-    assert.equal((await fetch(`${h.base}/login?ticket=${"0".repeat(32)}`, { redirect: "manual" })).status, 403);
-    // A browser that already holds the session is just let in.
-    const signedIn = await fetch(`${h.base}${path}`, { redirect: "manual", headers: { Cookie: cookie } });
-    assert.equal(signedIn.status, 302);
-    assert.equal(signedIn.headers.get("set-cookie"), null);
+    const res = await fetch(`${h.base}/login`, { redirect: "manual" });
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get("location"), "/");
+    assert.equal(h.server.signInMode(), "none", "a server built without an account has no sign-in gate (tests only)");
+    // A ticket link of an older launcher signs nobody in.
+    const ticket = await fetch(`${h.base}/login?ticket=${"0".repeat(32)}`, { redirect: "manual" });
+    assert.equal(ticket.headers.get("set-cookie"), null);
   } finally {
     await h.close();
   }
 });
 
-test("an expired sign-in link signs nobody in", async () => {
-  let now = 0;
-  const h = await start({ signInTickets: new SignInTickets({ ttlMs: 1_000, now: () => now }) });
-  try {
-    const { path } = h.server.mintSignInPath();
-    now = 1_000;
-    const res = await fetch(`${h.base}${path}`, { redirect: "manual" });
-    assert.equal(res.status, 403);
-    assert.equal(res.headers.get("set-cookie"), null);
-  } finally {
-    await h.close();
-  }
-});
-
-test("with a password, sign-in links are off: the mode says so and a ticket is not accepted", async () => {
-  const h = await start({ password: "pw" });
-  try {
-    assert.equal(h.server.signInMode(), "password");
-    const { path } = h.server.mintSignInPath();
-    const res = await fetch(`${h.base}${path}`, { redirect: "manual" });
-    assert.equal(res.status, 302);
-    assert.equal(res.headers.get("location"), "/login", "to the password form");
-    assert.equal(res.headers.get("set-cookie"), null);
-  } finally {
-    await h.close();
-  }
-});
-
-test("GET /login with no password: what to run, never a password form", async () => {
-  const h = await start();
-  try {
-    const res = await fetch(`${h.base}/login`);
-    assert.equal(res.status, 200);
-    const body = await res.text();
-    assert.match(body, /not signed in[\s\S]*<code>mandu dashboard<\/code>/);
-    assert.doesNotMatch(body, /type="password"/);
-  } finally {
-    await h.close();
-  }
-});
-
-test("the 403 without a session tells the person what to run", () => {
+test("the 403 without a session says how to sign in", () => {
   assert.match(ADMIN_SESSION_REQUIRED, /^admin session required\b/, "home.js ADMIN_REFUSAL still matches");
-  assert.match(ADMIN_SESSION_REQUIRED, /run `mandu dashboard` in your own terminal and open the sign-in link it prints/);
+  assert.match(ADMIN_SESSION_REQUIRED, /sign in with your Mandu dashboard account \(no account yet: run `mandu dashboard --set-password` in your own terminal\)/);
+  assert.doesNotMatch(ADMIN_SESSION_REQUIRED, /sign-in link|DASHBOARD_PASSWORD/);
 });

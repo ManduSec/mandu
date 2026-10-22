@@ -4124,6 +4124,18 @@ pub(crate) fn inject_twin_high(listener: RawFd, notif: &libc::seccomp_notif, fd:
 /// raw secret. Only an open that cannot read (`open`/`openat`, write-only or
 /// `O_PATH`: its flags are a register, not memory) still runs as issued when
 /// its path is not a secret. Every failure is answered with an errno.
+/// Say the first cgroup refusal of the session where the guard's messages
+/// go (`diag`), so a tool that fails on it (podman, crun) is explained once.
+fn note_cgroup_refusal(path: &str, refused: crate::cgroup_guard::Refusal) {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        crate::diag::say(&format!(
+            "mandu-net-guard: refused opening {path} for writing ({}): the guard's own cgroup is kept out of the session's reach, so tools that move processes between cgroups (podman, crun) fail inside a session",
+            refused.reason()
+        ));
+    }
+}
+
 pub fn handle_open_notif(listener: RawFd, cfg: &GuardConfig, notif: &libc::seccomp_notif) -> OpenOutcome {
     use crate::secret_open::supervisor_open_flags;
     use fs_supervisor::kernel::canonicalize_for_tracee;
@@ -4467,6 +4479,18 @@ pub fn handle_open_notif(listener: RawFd, cfg: &GuardConfig, notif: &libc::secco
                         return fail(e);
                     }
                 }
+            }
+            // The guard's own cgroup (rootless-confinement §12.2, "The
+            // cgroup"): a write-capable descriptor of a cgroup2 file of the
+            // guard's cgroup or one above it, or of a task list a move
+            // could take the guard through, is never handed over. Judged
+            // on the descriptor about to be handed over, after any reopen.
+            if let Some(refused) = crate::cgroup_guard_kernel::refusal(fd, flags) {
+                close_fd(fd);
+                answer_errno(listener, notif, libc::EACCES);
+                let what = String::from_utf8_lossy(&raw_path).into_owned();
+                note_cgroup_refusal(&what, refused);
+                return OpenOutcome::Denied { reason: format!("{what}: {}", refused.reason()) };
             }
             let r = inject(listener, notif, fd, flags);
             close_fd(fd);

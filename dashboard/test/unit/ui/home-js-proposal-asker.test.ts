@@ -17,6 +17,13 @@
  * "since this was asked". An agent's request reads exactly as before, and
  * a card the server sent without `byAgent` reads as the agent's.
  *
+ * An agent's request also names the agent and folder that asked, from
+ * Home's row of its session (`proposalAsker`; dashboard.md *A rule change
+ * and the agent that asked*): "Codex wants to change a rule", its moment
+ * line "· from Codex in ~/blog", as a question's card (§4.25u *A question
+ * says which session asked*). A session Home does not model reads "Your
+ * agent wants to change a rule", no folder.
+ *
  * The cards are the real view model's (`toProposalCard`) over the rows the
  * arbiter records. Drives the PRODUCT page script in jsdom over the shared
  * fetch stub (home-js-fixtures.ts); across the real arbiter and dashboard,
@@ -28,7 +35,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { toProposalCard, type PolicyProposalRow } from "../../../src/view-model/policy-proposals.js";
-import { home, load, tick } from "./home-js-fixtures.js";
+import { CLOCK, home, load, tick } from "./home-js-fixtures.js";
 
 const APPROVALS = "http://127.0.0.1:4500/mandu/approvals";
 const PENDING = "GET policy/proposals?status=pending";
@@ -62,6 +69,11 @@ const AGENTS = toProposalCard(row("pp-000002", {
   relaxes: [{ facet: "origins", direction: "relax", subject: "URL:https://pypi.org/", detail: "" }],
 }));
 const quiet = () => home({ waiting: [], verdict: "protected", headline: "Your secrets are guarded." });
+/** Home with no row for the agent's session `s1` (older than Home's window). */
+const unmodeled = () => home({ agents: home().agents.filter((a: { id: string }) => a.id !== "s1") });
+/** Home whose row for `s1` is `agent` in `cwd`. */
+const modeled = (agent: string, cwd: string | null) =>
+  home({ agents: home().agents.map((a: { id: string }) => (a.id === "s1" ? { ...a, agent, cwd } : a)) });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Doc = any;
@@ -94,9 +106,9 @@ test("Home: your own request waiting links 'waits for you', never 'your agent as
   assert.equal(homeLink(doc), "1 rule change waits for you in Approvals");
 });
 
-test("an agent's request reads exactly as before: its headline, 'Your agent says', the heading, Home's line", async () => {
+test("an agent's request whose session Home does not model reads as before: its headline, 'Your agent says', the heading, Home's line", async () => {
   assert.equal(AGENTS.byAgent, true);
-  const { doc } = load({ url: APPROVALS, routes: { [PENDING]: { proposals: [AGENTS] } } });
+  const { doc } = load({ url: APPROVALS, homeVm: unmodeled(), routes: { [PENDING]: { proposals: [AGENTS] } } });
   await tick(30);
   assert.equal(head(doc), "Rule changes your agent asked for");
   const card = cardOf(doc, "pp-000002");
@@ -107,7 +119,7 @@ test("an agent's request reads exactly as before: its headline, 'Your agent says
   assert.equal(homeLink(atHome.doc), "1 rule change your agent asked for is in Approvals");
   // A card the server sent without byAgent reads as the agent's, as before.
   const { byAgent: _dropped, ...older } = AGENTS;
-  const old = load({ url: APPROVALS, routes: { [PENDING]: { proposals: [older] } } });
+  const old = load({ url: APPROVALS, homeVm: unmodeled(), routes: { [PENDING]: { proposals: [older] } } });
   await tick(30);
   assert.equal(head(old.doc), "Rule changes your agent asked for");
   assert.equal(label(cardOf(old.doc, "pp-000002")), "Your agent says");
@@ -168,4 +180,86 @@ test("Allow on your own request that is refiled: 'The rules changed since this w
   ([...cardOf(theirs.doc, "pp-000002").querySelectorAll("button")].find((b: Doc) => b.textContent === "Allow") as Doc).click();
   await tick(30);
   assert.match(theirs.doc.getElementById("approvals-proposals").textContent, /The rules changed since your agent asked; here is the updated request\./);
+});
+
+const sub = (card: Doc): Doc => card.querySelector(".ask-sub");
+
+test("an agent's request names the agent and folder of its session: 'Codex wants to change a rule', '· from Codex in ~/blog'", async () => {
+  const { doc } = load({ url: APPROVALS, homeVm: modeled("Codex", "/home/u/blog"), routes: { [PENDING]: { proposals: [AGENTS] } } });
+  await tick(30);
+  const card = cardOf(doc, "pp-000002");
+  assert.equal(card.querySelector(".ask-sentence").textContent, "Codex wants to change a rule");
+  const line = sub(card);
+  assert.match(line.textContent, new RegExp(`^${CLOCK} · .+ · from Codex in ~/blog$`), "the moment, then the folder, no period");
+  const from = line.querySelector(".ask-from");
+  assert.ok(from, "drawn as a question card's askedFrom");
+  assert.equal(from.querySelector("code").textContent, "~/blog", "the folder is code");
+  assert.equal(label(card), "Your agent says", "the agent's words keep their label");
+  assert.equal(head(doc), "Rule changes your agent asked for", "the heading is unchanged");
+  const see = [...card.querySelectorAll("a")].find((a: Doc) => /See what the agent was doing/.test(a.textContent));
+  assert.ok(see && /\/agents\/s1\b/.test(see.getAttribute("href")), "the link still opens the session");
+  const atHome = load({ homeVm: { ...modeled("Codex", "/home/u/blog"), waiting: [], verdict: "protected" }, routes: { [PENDING]: { proposals: [AGENTS] } } });
+  await tick(30);
+  assert.equal(homeLink(atHome.doc), "1 rule change your agent asked for is in Approvals", "Home's line is unchanged");
+});
+
+test("a session with no folder names the agent only; an agent of no known kind keeps 'Your agent', its folder 'from your agent'", async () => {
+  const bare = load({ url: APPROVALS, homeVm: modeled("Claude Code", null), routes: { [PENDING]: { proposals: [AGENTS] } } });
+  await tick(30);
+  const card = cardOf(bare.doc, "pp-000002");
+  assert.equal(card.querySelector(".ask-sentence").textContent, "Claude Code wants to change a rule");
+  assert.equal(sub(card).querySelector(".ask-from"), null);
+  assert.doesNotMatch(sub(card).textContent, /from/);
+  const unknown = load({ url: APPROVALS, homeVm: modeled("The agent", "/home/u/blog"), routes: { [PENDING]: { proposals: [AGENTS] } } });
+  await tick(30);
+  const other = cardOf(unknown.doc, "pp-000002");
+  assert.equal(other.querySelector(".ask-sentence").textContent, "Your agent wants to change a rule");
+  assert.match(sub(other).textContent, / · from your agent in ~\/blog$/);
+});
+
+test("a session Home does not model: 'Your agent wants to change a rule', no 'from'", async () => {
+  const { doc } = load({ url: APPROVALS, homeVm: unmodeled(), routes: { [PENDING]: { proposals: [AGENTS] } } });
+  await tick(30);
+  const card = cardOf(doc, "pp-000002");
+  assert.equal(card.querySelector(".ask-sentence").textContent, "Your agent wants to change a rule");
+  assert.doesNotMatch(sub(card).textContent, /from/);
+});
+
+test("your own waiting request and a held change to policy.yaml read as today, even with session s1 on Home", async () => {
+  const held = toProposalCard(row("pp-000003", { edits: [], reason: null, requestedBy: "file", diskHash: "ab".repeat(32), sessionKey: "s1" }));
+  const yours = toProposalCard(row("pp-000006", { sessionKey: "s1" }));
+  assert.equal(held.session, null);
+  assert.equal(yours.session, null);
+  const { doc } = load({ url: APPROVALS, homeVm: modeled("Codex", "/home/u/blog"), routes: { [PENDING]: { proposals: [yours, held] } } });
+  await tick(30);
+  assert.equal(cardOf(doc, "pp-000006").querySelector(".ask-sentence").textContent, "You want to change a rule");
+  assert.equal(cardOf(doc, "pp-000003").querySelector(".ask-sentence").textContent, held.headline);
+  for (const id of ["pp-000006", "pp-000003"]) assert.doesNotMatch(sub(cardOf(doc, id)).textContent, /from/);
+  assert.match(sub(cardOf(doc, "pp-000003")).textContent, /^Seen /, "a held change keeps 'Seen '");
+});
+
+test("a poll that brings the session's row names the agent, keeping the typed ALLOW and its focus", async () => {
+  const wide = toProposalCard(row("pp-000007", {
+    edits: [{ op: "allow-connect", host: "*" }],
+    reason: "I need the network",
+    requestedBy: "agent:s1",
+    sessionKey: "s1",
+    relaxes: [{ facet: "connect", direction: "relax", subject: "*", detail: "" }],
+  }));
+  assert.equal(wide.overBroad, true);
+  const { doc, setHome } = load({ url: APPROVALS, homeVm: unmodeled(), routes: { [PENDING]: { proposals: [wide] } } });
+  await tick(30);
+  assert.equal(cardOf(doc, "pp-000007").querySelector(".ask-sentence").textContent, "Your agent wants to change a rule");
+  const box = cardOf(doc, "pp-000007").querySelector(".proposal-confirm");
+  box.focus();
+  box.value = "ALL";
+  box.dispatchEvent(new doc.defaultView.Event("input"));
+  setHome(modeled("Codex", "/home/u/blog"));
+  await poll(doc);
+  const card = cardOf(doc, "pp-000007");
+  assert.equal(card.querySelector(".ask-sentence").textContent, "Codex wants to change a rule");
+  assert.match(sub(card).textContent, / · from Codex in ~\/blog$/);
+  const again = card.querySelector(".proposal-confirm");
+  assert.equal(again.value, "ALL", "what you typed is kept");
+  assert.equal(doc.activeElement, again, "the focus is kept");
 });

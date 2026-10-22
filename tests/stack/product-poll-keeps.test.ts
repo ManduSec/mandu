@@ -57,7 +57,7 @@ stateAxes("secrets");
 const KEY_VALUE = "sk_live_productPollKeepsStackCanary000001";
 const SESSION = "1791300000-2030";
 const CSRF = { "X-Mandu-Control": "1" };
-const SIGN_IN = /^Sign in first: in your own terminal, run mandu dashboard and open the sign-in link it prints/;
+const SIGN_IN = /^Sign in first: reload this page and sign in with your dashboard account/;
 
 /** One absolute-form request through the forward proxy. */
 function viaProxy(port: number, url: string, body: string): Promise<{ status: number; body: string }> {

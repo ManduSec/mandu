@@ -28,7 +28,7 @@ import assert from "node:assert/strict";
 import { AGENT, ASK, home, load, T, tick } from "./home-js-fixtures.js";
 
 const ADMIN_403 = { status: 403, body: { error: "admin session required — run `mandu dashboard` in your own terminal and open the sign-in link it prints (or set DASHBOARD_PASSWORD)" } };
-const SIGN_IN = /^Sign in first: in your own terminal, run mandu dashboard and open the sign-in link it prints/;
+const SIGN_IN = /^Sign in first: reload this page and sign in with your dashboard account/;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function poll(doc: any): Promise<void> {
@@ -254,6 +254,22 @@ test("an over-broad change: what you typed stays across a poll, with Allow and t
   assert.equal(doc.activeElement, kept, "and so does the focus");
   assert.equal(button(cards[0], "Allow").disabled, false);
   assert.equal(cards[1].querySelector(".proposal-confirm").value, "", "the other request has its own field");
+  assert.equal(button(cards[1], "Allow").disabled, true);
+});
+
+test("an over-broad change: a typed \"allow\" (any case) survives the poll's redraw and keeps Allow on", async () => {
+  let proposals = [WIDE];
+  const { doc, window } = load({ url: "http://127.0.0.1:4500/mandu/approvals", routes: { [PENDING]: () => ({ proposals }) } });
+  await tick();
+  type(window, doc.querySelector(".proposal-confirm"), "allow");
+  assert.equal(button(doc.getElementById("approvals-proposals"), "Allow").disabled, false, "the word counts in any case");
+  proposals = [WIDE, { ...WIDE, id: "pp-000002" }];
+  await poll(doc);
+  const cards = [...doc.querySelectorAll("#approvals-proposals .proposal")] as any[];
+  assert.equal(cards.length, 2, "drawn again");
+  assert.equal(cards[0].querySelector(".proposal-confirm").value, "allow", "what you typed stays");
+  assert.equal(button(cards[0], "Allow").disabled, false, "and Allow stays on");
+  assert.equal(cards[0].querySelector(".confirm-hint").hidden, true, "with no hint");
   assert.equal(button(cards[1], "Allow").disabled, true);
 });
 

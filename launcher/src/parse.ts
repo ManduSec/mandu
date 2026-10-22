@@ -223,6 +223,9 @@ export function parse(args: string[], env: Env, launchDir?: string): LaunchPlan 
     env["MANDU_REPLY_FILTER"] === undefined || env["MANDU_REPLY_FILTER"] === ""
       ? true
       : env["MANDU_REPLY_FILTER"] === "1";
+  // The session's last line (session-kept-line.ts): default ON, read as
+  // MANDU_ENV_SECRETS is: unset/empty ⇒ on, "0"/false/off/no ⇒ off.
+  let sessionSummary = !["0", "false", "off", "no"].includes((env["MANDU_SESSION_SUMMARY"] ?? "").toLowerCase());
   // `goose acp`'s JSON-aware display pass (set below for that shape only).
   let acpDisplay: boolean | undefined;
   // Protection mode + the two axes (protection-modes.md §3.2, mode.ts). Two
@@ -341,6 +344,8 @@ export function parse(args: string[], env: Env, launchDir?: string): LaunchPlan 
     if (a === "--no-fs-sync-eager") { fsSyncEager = false; continue; }
     if (a === "--reply-filter") { replyFilter = true; continue; }
     if (a === "--no-reply-filter") { replyFilter = false; continue; }
+    if (a === "--session-summary") { sessionSummary = true; continue; }
+    if (a === "--no-session-summary") { sessionSummary = false; continue; }
     if (a === "--mode") { flagLevel.mode = parseMode(opts[++i] ?? "", "--mode") ?? missingMode(); continue; }
     if (a.startsWith("--mode=")) { flagLevel.mode = parseMode(valueOf(a), "--mode") ?? missingMode(); continue; }
     if (a === "--confidentiality") { flagLevel.confidentiality = true; continue; }
@@ -626,6 +631,7 @@ export function parse(args: string[], env: Env, launchDir?: string): LaunchPlan 
     ...(secretBind === false ? { secretBind } : {}),
     verbose,
     replyFilter,
+    ...(sessionSummary ? {} : { sessionSummary: false as const }),
     ...(acpDisplay !== undefined ? { acpDisplay } : {}),
     ...(integrity !== undefined && confidentiality !== undefined
       ? { mode: modeOf({ integrity, confidentiality }) }

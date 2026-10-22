@@ -25,7 +25,11 @@
  *     posture event, sent as run.ts sends it, after the launch record: a
  *     claim by then), the notice names its agent as its Home row does, a
  *     link to its page, over the real dashboard server; the served product
- *     page draws the link and opens that agent's page in place (§4.25x).
+ *     page draws the link and opens that agent's page in place (§4.25x);
+ *   - the served product page, open with notifications granted while the
+ *     plane is walled, raises one notification when the unwalled launch
+ *     starts, in fixed words that hold neither its pid nor its session id
+ *     (dashboard.md §4.25 *Notifications*), and none on the next poll.
  *
  * Axes: secrets (stated below).
  */
@@ -248,6 +252,66 @@ test("e2e: the unwalled launch's session is on record: the notice names its agen
     });
 
     await endLaunchRecord(r.humanSock, offRec, r.deps);
+    conf.watch.stop();
+    await endLaunchRecord(r.humanSock, conf.rec, r.deps);
+  } finally { await dashboard.close(); await r.close(); }
+});
+
+/** The recording Notification stub, as page script (proposal-notifies). */
+const NOTE_STUB = `(() => {
+  const notes = [];
+  function N(title, o) { notes.push({ title, body: (o && o.body) || "", tag: (o && o.tag) || "" }); this.close = () => {}; }
+  N.permission = "granted";
+  N.requestPermission = () => Promise.resolve("granted");
+  Object.defineProperty(window, "Notification", { value: N, configurable: true, writable: true });
+  window.__notes = notes;
+})();`;
+
+test("e2e: an unwalled launch starts while the served Home is open with notifications on: one notification, naming neither its pid nor its session", async () => {
+  const r = await rig();
+  const dashboard = new DashboardServer({ source: new ArbiterEventSource({ socketPath: r.sock }), configEnv: { MANDU_HOME: join(r.dir, "home") }, log: () => {} });
+  try {
+    const conf = await startConfined(r);
+    const base = `http://127.0.0.1:${await dashboard.listen(0)}`;
+    const SESSION = "claude-off-4";
+    const seen = (doc: any): string[] | null => JSON.parse(doc.defaultView.localStorage.getItem("mandu.home.seenExposure") ?? "null");
+    // The first poll, walled, primes this browser with nothing exposed.
+    await servedProductPage(base, "/", (doc) => seen(doc) !== null, async (doc) => {
+      const w = doc.defaultView;
+      const notes = w.__notes as Array<{ title: string; body: string; tag: string }>;
+      assert.deepEqual(seen(doc), [], "walled: primed with nothing");
+      const off = claim(r, { mode: "off", posture: "off", sessionId: SESSION });
+      const offRec = await beginLaunchRecord(r.humanSock, off, r.deps);
+      await until(() => conf.printed.length > 0, "the WARNING");
+      const poll = () => {
+        Object.defineProperty(doc, "visibilityState", { value: "visible", configurable: true });
+        doc.dispatchEvent(new w.Event("visibilitychange"));
+      };
+      poll();
+      await until(() => notes.length > 0, "the exposure notification");
+      // The poll notifies before it loads the suggestions and draws the
+      // sections (home.js), so on a loaded machine the card comes a little
+      // after the notification (CI pipelines 12729, 12730).
+      await until(() => doc.getElementById("home-exposure").hidden === false, "the card is drawn too");
+      // Plain copies: the page's objects belong to its own realm.
+      const shown = Array.from(notes, (n) => ({ title: n.title, body: n.body, tag: n.tag }));
+      assert.equal(shown.length, 1, JSON.stringify(shown));
+      assert.equal(shown[0]!.title, "Mandu: another agent can reach Mandu's controls");
+      assert.equal(shown[0]!.body, "Your other agents get masked copies of secret files and masked output until it stops. Open Home to see which agent.");
+      assert.match(shown[0]!.tag, /^mandu-exposure-\d+$/, "keyed by when the arbiter first saw it");
+      for (const words of [shown[0]!.title, shown[0]!.body]) {
+        assert.ok(!words.includes(String(process.pid)), `the notification names the launch's pid: ${words}`);
+        assert.ok(!words.includes(SESSION), `the notification names the launch's session: ${words}`);
+        assert.ok(!words.includes("HP_NOTICE_STACK_CANARY") && !words.includes(r.secret), `CONFIDENTIALITY VIOLATION: ${words}`);
+      }
+      // The next poll, the same exposure: told once.
+      const before = seen(doc);
+      poll();
+      await new Promise((ok) => setTimeout(ok, 500)); // its answer
+      assert.deepEqual(seen(doc), before);
+      assert.equal(notes.length, 1, "the same exposure is not told again");
+      await endLaunchRecord(r.humanSock, offRec, r.deps);
+    }, { beforeScripts: (w) => w.eval(NOTE_STUB) });
     conf.watch.stop();
     await endLaunchRecord(r.humanSock, conf.rec, r.deps);
   } finally { await dashboard.close(); await r.close(); }

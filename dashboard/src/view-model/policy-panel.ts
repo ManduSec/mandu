@@ -39,7 +39,7 @@
  *    OMITTED, never reconstructed dashboard-side (they would drift).
  */
 
-import { hasLocalModel, NO_OWN_MODEL_WARNING, toModelEndpointRows } from "./model-endpoints.js";
+import { hasLocalModel, NO_OWN_MODEL_WARNING, NO_OWN_MODEL_WARNING_PARTS, toModelEndpointRows } from "./model-endpoints.js";
 import { ADMITS_NOTHING, READS_PLACEHOLDER, codeRunningReadersWarning, judgedAdmitsNothing, judgedCopyOf, judgedReadsTwin, readerRunsCode, type ArbiterReaderJudgment } from "./reader-runs-code.js";
 import { answerWords, holderAnswerWords, noLongerAppliesWords, promptAnswerWords, sessionAnswerWords, levelWords, opensWords, pathReach, perValueParts, perValueWords, programWords, sendRuleReach, sendRuleReachParts, sendWords, sourceReach, builtinName, TERMS } from "./rule-words.js";
 import type {
@@ -575,11 +575,15 @@ function yourRuleRowsVM(snapshot: PolicySnapshot, files: ReadonlySet<string>): A
         + (p.values?.length ? ` · per value: ${p.values.map((v) => `${v.key} → ${v.bindings.join(", ") || "nowhere"}`).join("; ")}` : "") + readersEffect,
       ...(() => {
         // Plan 13 D8: a shell or interpreter reader runs the agent's code.
-        const warnings = [
-          ...(p.level === "local-model" && !ownModel ? [NO_OWN_MODEL_WARNING] : []),
-          ...[codeRunningReadersWarning(p.readers, judged)].filter((w): w is string => w !== null),
+        const noOwn = p.level === "local-model" && !ownModel;
+        const readers = codeRunningReadersWarning(p.readers, judged);
+        const warnings = [...(noOwn ? [NO_OWN_MODEL_WARNING] : []), ...(readers !== null ? [readers] : [])];
+        // The same words as parts, the place a link (dashboard.md §4.25p).
+        const parts = [
+          ...(noOwn ? NO_OWN_MODEL_WARNING_PARTS : []),
+          ...(readers !== null ? [{ kind: "text" as const, text: (noOwn ? " " : "") + readers }] : []),
         ];
-        return warnings.length ? { warning: warnings.join(" ") } : {};
+        return warnings.length ? { warning: warnings.join(" "), warningParts: parts } : {};
       })(),
       source: "policy.yaml", reach: null, relaxes, ...none, expires: null, expired: false,
       detail: [

@@ -464,6 +464,9 @@ export interface SessionRelayState {
   rows?: number;
   /** The filter paints v2 heads (§11.5); absent from a v1 filter. */
   wrap?: boolean;
+  /** Where the agent's TUI counts a reply TAB's stops from (§19.7); absent:
+   *  `screen`, as Codex does. */
+  tabs?: "screen" | "content";
   updatedAt: number;
 }
 

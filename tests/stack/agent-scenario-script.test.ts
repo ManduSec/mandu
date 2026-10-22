@@ -137,23 +137,47 @@ test("the inspect mount name yields OpenCode's single-underscore tool name", () 
 
 // ── The confidentiality scenarios (test-organization.md §7.1) ────────────────
 
-test("confScenarios: a labelled read + sink exfil, a labelled net-proxy upload, and an unlabelled control", () => {
+test("confScenarios: a labelled read + sink exfil, a labelled net-proxy upload, an unlabelled control, a labelled read for the human", () => {
   const scenarios = confScenarios({ readInput: (path) => ({ path }), shell: "exec" }, "T");
-  assert.deepEqual(scenarios.map((s) => s.name), ["secret-read-exfil", "secret-net-exfil-blocked", "secret-read-control"]);
-  const [exfil, net, control] = scenarios as [AgentScenario, AgentScenario, AgentScenario];
+  assert.deepEqual(scenarios.map((s) => s.name), ["secret-read-exfil", "secret-net-exfil-blocked", "secret-read-control", "secret-read-reply"]);
+  const [exfil, net, control, reply] = scenarios as [AgentScenario, AgentScenario, AgentScenario, AgentScenario];
   // The labelled legs label the seeded file no-model; the control leaves it
   // unlabelled, which is what makes it the control.
   assert.deepEqual(exfil.conf?.label, { file: CONF_SECRET_FILE, level: "no-model" });
   assert.deepEqual(net.conf?.label, { file: CONF_SECRET_FILE, level: "no-model" });
+  assert.deepEqual(reply.conf?.label, { file: CONF_SECRET_FILE, level: "no-model" });
   assert.equal(control.conf?.label, undefined);
   assert.equal(control.fakeOnly, true, "the control's script is the point: fake tier only");
   // Each leg has its own canary; the net leg stands the net-proxy up.
   const canaries = scenarios.map((s) => s.conf!.canary);
-  assert.equal(new Set(canaries).size, 3);
-  for (const c of canaries) assert.match(c, /^MDUCONF_T[XNC]_[0-9a-f]{12}$/);
+  assert.equal(new Set(canaries).size, 4);
+  for (const c of canaries) assert.match(c, /^MDUCONF_T[XNCR]_[0-9a-f]{12}$/);
   assert.equal(net.conf?.exfil, "net-proxy");
   assert.equal(net.needsWeb, true);
   assert.equal(exfil.conf?.exfil, "sink");
+});
+
+test("confScenarios: the read for the human sends nothing, and the human's reply must carry the token", () => {
+  const reply = confScenarios({ readInput: (filePath) => ({ filePath }), shell: "bash" }, "T")
+    .find((s) => s.name === "secret-read-reply")!;
+  const canary = reply.conf!.canary;
+  // labelled, no exfil leg: the task needs no send, so a model has nothing to decline
+  assert.deepEqual(reply.conf?.label, { file: CONF_SECRET_FILE, level: "no-model" });
+  assert.equal(reply.conf?.exfil, undefined);
+  assert.equal(reply.fakeOnly, undefined, "the leg runs on the real tier too");
+  const prompt = reply.prompt("/ws/notes.md", { sinkOrigin: "" });
+  assert.ok(prompt.includes(`/ws/${CONF_SECRET_FILE}`));
+  assert.doesNotMatch(prompt, /curl|POST|send|upload|collect/i, "no send in the task");
+  // the scripted model reads, then quotes what the read returned
+  const ctx = { workspaceFile: "/ws/notes.md", provisioner: {} as never, sinkOrigin: "" };
+  const steps = reply.fake!.toolUses!.map((f) => f(ctx)!);
+  assert.deepEqual(steps, [{ name: "read", input: { filePath: `/ws/${CONF_SECRET_FILE}` } }]);
+  const final = reply.fake!.finalText as (last: string | null) => string;
+  assert.ok(final("$MDU:nomodel_read[a1b2]").includes("$MDU:nomodel_read[a1b2]"));
+  // the utility oracle reads the desymbolized reply: the token, not the symbol
+  const [want] = reply.utility!.reply!;
+  assert.ok(want!.re.test(`The current token: PARTNER_API_TOKEN=sk-live-${canary}`));
+  assert.ok(!want!.re.test("The current token: $MDU:nomodel_read[a1b2]"));
 });
 
 test("confScenarios: the scripted exfil carries whatever the read ACTUALLY returned", () => {

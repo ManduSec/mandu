@@ -78,6 +78,20 @@ const HOME_ASK_CAP = 3;
  *  single-quoted strings.) */
 const FRONT = { 'X-Mandu-Front': 'product' };
 
+/** The sign-in gate answered (dashboard.md §6.z): the session ended (signed
+ *  out elsewhere, 12 hours unused, the account changed, the dashboard
+ *  restarted). The page reloads once, and the reload is the sign-in page,
+ *  which brings the person back here after. */
+let signInReloading = false;
+function signInEnded(status, data) {
+  if (status !== 401 || !data || typeof data.error !== 'string' || !/^sign in required/.test(data.error)) return false;
+  if (!signInReloading) {
+    signInReloading = true;
+    try { window.location.reload(); } catch { /* no window to reload */ }
+  }
+  return true;
+}
+
 /** A failed GET: the status, and whether the server said its protection
  *  service is down (a 503 `unreachable`), so the page can say so plainly. */
 async function apiGet(path) {
@@ -88,6 +102,7 @@ async function apiGet(path) {
   if (!res.ok) {
     let data = null;
     try { data = await res.json(); } catch { data = null; }
+    signInEnded(res.status, data);
     const err = new Error(path + ' → ' + res.status);
     err.status = res.status;
     err.unreachable = !!(data && data.unreachable);
@@ -109,6 +124,7 @@ async function answerOf(path, init) {
   }
   let data = null;
   try { data = await res.json(); } catch { data = null; }
+  signInEnded(res.status, data);
   return { ok: res.ok, status: res.status, data };
 }
 async function apiPost(path, body, signal) {
@@ -163,7 +179,7 @@ function ownWords(...parts) {
   OWN_WORDS.set(text, parts);
   return text;
 }
-const SIGN_IN_WORDS = ownWords('Sign in first: in your own terminal, run ', ['mandu dashboard'], ' and open the sign-in link it prints (each link works once), or sign in with the dashboard\'s password if it has one.');
+const SIGN_IN_WORDS = ownWords('Sign in first: reload this page and sign in with your dashboard account (if there isn\'t one yet, run ', ['mandu dashboard --set-password'], ' in your own terminal).');
 const NOT_CONNECTED_WORDS = 'The protection service is not connected.';
 // Settings has the Start of the service, at its top: the words link there,
 // as in the hero and on the agent page.
@@ -173,7 +189,7 @@ const UNREACHABLE_WORDS = ownWords('The protection service is not running. ', { 
 const NO_ANSWER_WORDS = 'The dashboard could not reach its own server. Refresh in a moment.';
 function errorWords(status) { return 'The dashboard server answered with an error (' + status + '). Refresh in a moment.'; }
 /** Where a signed-out page would show a real value (dashboard.md §6). */
-const SIGN_IN_VALUES = ownWords('Sign in to see real values: in your own terminal, run ', ['mandu dashboard'], ' and open the sign-in link it prints.');
+const SIGN_IN_VALUES = 'Sign in to see real values: reload this page and sign in with your dashboard account.';
 
 /** The own words of the page for a refused request, or null for an error
  *  the server worded itself: `r` is an apiPost / apiSend / apiGetControl answer
@@ -491,8 +507,11 @@ function textParts(parts, text) {
  *  the note under Settings › Sensitivity labels, §4.25s), as Review them on
  *  Approvals opens it; or that Sensitivity labels card itself (`labels`,
  *  the line under Scan for keys, §4.25r); or the page of one agent (`agent`,
- *  its `session`: the agent a Home notice names, §4.25x). The page builds
- *  the link; a place it does not know is plain text. */
+ *  its `session`: the agent a Home notice names, §4.25x); or Settings at
+ *  its Models card (`models`, the focus on Add a model) or at its Protection
+ *  card (`protection`, the focus on the switch); or the rule of one file on
+ *  Rules (`rule`, its `path`: the row opened, else Your rules). The page
+ *  builds the link; a place it does not know is plain text. */
 function placeLink(p) {
   if (p.to === 'settings') return el('a', { href: routeHref('settings'), 'data-page-link': 'settings', text: p.text });
   if (p.to === 'agent' && typeof p.session === 'string' && p.session !== '') {
@@ -517,6 +536,27 @@ function placeLink(p) {
       if (e.metaKey || e.ctrlKey || e.shiftKey) return;
       e.preventDefault();
       openLabels();
+    } });
+  }
+  if (p.to === 'models' || p.to === 'protection') {
+    // Inside a row that opens on a click (a rule of the tree), the link
+    // only opens its card.
+    return el('a', { href: routeHref('settings') + '#' + p.to, text: p.text, onclick: (e) => {
+      e.stopPropagation();
+      if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+      e.preventDefault();
+      if (p.to === 'models') openModels();
+      else openProtection();
+    } });
+  }
+  if (p.to === 'rule' && typeof p.path === 'string' && p.path !== '') {
+    // The address names the file only (its rule, opened in a new tab, as
+    // Change it in Rules on a session page does): never a value.
+    return el('a', { href: routeHref('rules', p.path), text: p.text, 'aria-label': p.text + ': ' + shortPath(p.path), onclick: (e) => {
+      e.stopPropagation();
+      if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+      e.preventDefault();
+      openRuleAt(p.path);
     } });
   }
   return document.createTextNode(p.text);
@@ -585,7 +625,8 @@ const FAMILY_ICON = { send: 'globe', run: 'terminal', read: 'lock', show: 'eye',
 
 /** Plan 15 §7: the found text of each held message, by the id of its ask. Fetched
  *  with the CSRF header (the route serves it only to the signed-in person);
- *  never part of /api/home. Null until loaded or when it cannot be. */
+ *  never part of /api/home. Null until loaded or when it cannot be. Each read
+ *  also keeps the deadline of each hold (keepHoldEnds). */
 async function loadPromptHolds() {
   try {
     const res = await fetch(BASE + '/api/prompt-filters/holds', { headers: { ...FRONT, 'X-Mandu-Control': '1' } });
@@ -593,19 +634,109 @@ async function loadPromptHolds() {
     const d = await res.json();
     const m = new Map();
     for (const h of (d && d.holds) || []) m.set(h.approvalId, h);
+    keepHoldEnds(m, d && d.timeoutMs);
     return m;
   } catch {
     return null;
   }
 }
 
+/** The deadline of each held message, by the id of its ask (dashboard.md
+ *  §4.34, the deadline of a held message): `endsAt` on the clock of this
+ *  page, from the time left the route sent when the read arrived, so the
+ *  clock of the server never matters; `total` the whole deadline the route
+ *  sent. A later read keeps the
+ *  earlier end, so a redraw never restarts the count, unless it says the
+ *  time is up sooner. */
+const HOLD_ENDS = new Map();
+const HOLD_TICK_MS = 1000;
+let holdTimer = null;
+function keepHoldEnds(holds, total) {
+  const now = Date.now();
+  for (const id of [...HOLD_ENDS.keys()]) if (!holds.has(id)) HOLD_ENDS.delete(id);
+  for (const [id, h] of holds) {
+    const left = Number(h.timeoutMs);
+    if (!Number.isFinite(left)) continue;
+    const kept = HOLD_ENDS.get(id);
+    const endsAt = now + Math.max(0, left);
+    HOLD_ENDS.set(id, {
+      endsAt: kept ? Math.min(kept.endsAt, endsAt) : endsAt,
+      total: Number(total), firstSeen: Number(h.firstSeen), redact: h.fallback === 'redact',
+    });
+  }
+}
+
 function fillPromptFound(host, holds) {
   for (const node of host.querySelectorAll('.ask-found[data-id]')) {
-    const h = holds.get(node.getAttribute('data-id'));
+    const id = node.getAttribute('data-id');
+    const h = holds.get(id);
     clear(node);
+    const drawn = node.nextElementSibling;
+    if (drawn && drawn.classList.contains('ask-hold')) drawn.remove();
     if (!h || typeof h.span !== 'string') continue;
     node.append('It found: ', el('code', { text: h.span }));
+    const line = holdLine(id);
+    if (line) node.after(line);
   }
+  armHoldTick();
+}
+
+/** The line under the found text of a held message (dashboard.md §4.34,
+ *  the deadline of a held message): how long its request still waits, counted down
+ *  each second, then that it went with the default. None when the route
+ *  sent no deadline. */
+function holdLine(id) {
+  const e = HOLD_ENDS.get(id);
+  if (!e || !(e.total > 0)) return null;
+  const line = el('div', { class: 'ask-hold', 'data-id': id });
+  sayHold(line, e);
+  return line;
+}
+/** The words of the line now. While it counts only the text node of the count is
+ *  written, never the card (§4.25 *The poll keeps your place*); the line is
+ *  no live region then, which would be read every second. The turn of a
+ *  counting line to the past sets `role="status"` first, so that change alone is
+ *  announced. */
+function sayHold(line, e) {
+  const left = e.endsAt - Date.now();
+  const what = e.redact ? 'removed' : 'masked';
+  if (left > 0) {
+    const words = n(Math.ceil(left / 1000), 'more second', 'more seconds');
+    const count = line.querySelector('.ask-hold-left');
+    if (count) { count.firstChild.nodeValue = words; return; }
+    line.classList.add('live');
+    line.append('The request to the AI waits ', el('span', { class: 'ask-hold-left', text: words }), ' for your answer, then goes with that part ' + what + '.');
+    return;
+  }
+  if (line.classList.contains('past')) return;
+  // Each line its own: the short card of the same hold on Home is drawn too,
+  // hidden while Approvals is shown. A line first drawn past says nothing.
+  if (line.classList.contains('live')) line.setAttribute('role', 'status');
+  line.classList.remove('live');
+  line.classList.add('past');
+  clear(line);
+  const at = e.firstSeen > 0 ? whenNode(e.firstSeen + e.total) : null;
+  line.append('No answer came within ' + holdWords(e.total) + ', so your message went to the AI with that part ' + what,
+    at ? ' at ' : null, at, '. Your answer applies the next time the agent sends it.');
+}
+function holdWords(ms) {
+  const s = Math.round(ms / 1000);
+  return s >= 120 && s % 60 === 0 ? n(s / 60, 'minute', 'minutes') : n(s, 'second', 'seconds');
+}
+/** The one timer, armed only while a counting line is drawn. A line whose
+ *  hold a later read no longer lists stops counting. */
+function armHoldTick() {
+  if (holdTimer !== null || !document.querySelector('.ask-hold.live')) return;
+  holdTimer = setTimeout(tickHolds, HOLD_TICK_MS);
+}
+function tickHolds() {
+  holdTimer = null;
+  for (const line of document.querySelectorAll('.ask-hold.live')) {
+    const e = HOLD_ENDS.get(line.getAttribute('data-id'));
+    if (e) sayHold(line, e);
+    else line.classList.remove('live');
+  }
+  armHoldTick();
 }
 
 function maskChip(p) {
@@ -680,10 +811,12 @@ function keepInWindow(pop) {
   if (over > 0) pop.style.left = -Math.min(over, Math.max(0, r.left - 16)) + 'px';
 }
 function maskedHelp() { return helpButton('What masked means', maskedHelpText()); }
-/** The notice of an agent row (supported-agents.md §3): a warning mark by its
- *  name that opens the sentence, so the row stays one line. */
-function agentNoticeMark(notice) {
-  return helpButton('Warning about this agent', notice, { icon: 'alert', cls: 'notice-btn' });
+/** The notice of an agent row (supported-agents.md §3; dashboard.md §4.21
+ *  *On the product page*): a warning mark by its name that opens the
+ *  sentence, each command in it as code (`parts`; an older server sends the
+ *  plain line only), so the row stays one line. */
+function agentNoticeMark(notice, parts) {
+  return helpButton('Warning about this agent', Array.isArray(parts) && parts.length ? textParts(parts, notice) : notice, { icon: 'alert', cls: 'notice-btn' });
 }
 /** A preview agent's tag (supported-agents.md §2.0), by its name on its
  *  Home row and its page: "Preview", a button that opens what that means
@@ -735,6 +868,21 @@ function sentenceNode(parts, cls, md, at) {
       // trace"); under a step (`at`, its id), the trace opens at that step.
       code = null;
       s.append(traceLink(p.text, p.trace, null, at));
+    } else if (p.href && /^https:\/\//.test(p.href)) {
+      // A fixed address the server names (the leak check's Report a
+      // problem), in a new tab as the page's other such links.
+      code = null;
+      s.append(el('a', { href: p.href, target: '_blank', rel: 'noopener noreferrer', text: p.text }));
+    } else if (p.rules === 'built-in') {
+      // The card of Rules that lists the companies whose keys go to their
+      // own API without asking (the note of a sent step, §4.25b), opened
+      // there as its section link does; a modifier click is the browser.
+      code = null;
+      s.append(el('a', { href: routeHref('rules') + '#built-in', text: p.text, onclick: (e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
+        e.preventDefault();
+        goToSection('rules', 'built-in', 'builtin-block');
+      } }));
     } else {
       code = null;
       s.append(md === 'data' ? document.createTextNode(p.text) : countWords(p.text));
@@ -906,7 +1054,42 @@ function markdownNode(parts, cls) {
     if (c.textContent.length > WHOLE_MAX) longName(c);
     else c.classList.add('name-fit');
   }
+  // A fenced block of text only has a Copy button (dashboard.md §4.25b, *A
+  // code block has a Copy button*), outside the box so scrolling never
+  // carries it away. None for a block holding a chip (its text is not the
+  // value), and none without a clipboard (not a secure context).
+  if (canCopy()) {
+    for (const pre of s.querySelectorAll('pre.code-block')) {
+      if (pre.querySelector('.mask-chip')) continue;
+      const wrap = el('div', { class: 'code-wrap' });
+      pre.replaceWith(wrap);
+      wrap.append(pre, ...copyButton(pre));
+    }
+  }
   return s;
+}
+function canCopy() {
+  return typeof navigator !== 'undefined' && !!navigator.clipboard && typeof navigator.clipboard.writeText === 'function';
+}
+/** Copy and its polite status: the text of the block as drawn goes to the
+ *  clipboard; the button reads Copied (or Could not copy) for two seconds,
+ *  and the focus stays on it. */
+function copyButton(pre) {
+  const said = el('span', { class: 'code-copy-said', role: 'status' });
+  let back = 0;
+  const btn = el('button', { type: 'button', class: 'code-copy', text: 'Copy' });
+  const show = (words) => {
+    btn.textContent = words;
+    said.textContent = words === 'Copy' ? '' : words;
+  };
+  btn.addEventListener('click', () => {
+    clearTimeout(back);
+    navigator.clipboard.writeText(pre.textContent).then(() => 'Copied', () => 'Could not copy').then((words) => {
+      show(words);
+      back = setTimeout(() => show('Copy'), 2000);
+    });
+  });
+  return [btn, said];
 }
 
 function ago(ms) {
@@ -993,6 +1176,13 @@ const S = { home: null, panel: null, secrets: null, axes: null, services: null, 
   // The Home polls asked so far, and the latest one whose answer the page
   // took (loadHome): an answer to a poll asked before that one is dropped.
   homeAsked: 0, homeTaken: 0,
+  // Settings › About Mandu: the `about` an answer last drew (renderAbout),
+  // kept through a poll that fails; null before the first.
+  about: null,
+  // The question ids and rule-change ids the announcement line of the top bar
+  // has met in this tab (announceNewAsks), each null until its first read
+  // answered, which records what waits without a word.
+  announcedAsks: null, announcedProposals: null,
   // The Settings blocks whose last read left them unread ('labels',
   // 'prompt'), read again when the service comes back (readAgainUnread).
   unread: new Set(),
@@ -1014,12 +1204,15 @@ const S = { home: null, panel: null, secrets: null, axes: null, services: null, 
   // The words of the answer to the last button of each card or row the poll
   // draws, by its place and id (keepAnswer).
   answers: new Map(),
+  // The line an answer that worked left where its card was, by its place
+  // (answerLine; dashboard.md §4.25 *An answer says what it did*).
+  answerLines: new Map(),
   // The lists of the past on Approvals, past their newest 20 (dashboard.md
   // §4.25 *Past the newest 20*): the rows of Answered earlier once Show more
   // brought more (null: the newest 20 of Home), the answer `/approvals/<id>` sought past
   // them (seekAnswered), and how many Rule changes draws (loadRuleHistory).
-  answered: null, answeredSought: null,
-  changes: { want: 20, last: null, failure: null, out: 0 },
+  answered: null, answeredSought: null, answeredQ: '',
+  changes: { want: 20, last: null, failure: null, out: 0, read: false },
   // The heading the last page change gave the focus (focusPage), null before
   // any; the card or step that took it from there (focusMarked).
   pageHeading: null, marked: null,
@@ -1031,9 +1224,17 @@ const S = { home: null, panel: null, secrets: null, axes: null, services: null, 
   // visit whose Earlier list shows every session (renderEarlier;
   // dashboard.md §4.25ad).
   agentShow: null, agentLand: null, earlierAll: null,
+  // Back to the page of a session (dashboard.md §4.25 *Back and Forward keep
+  // your place*): the place its entry kept, until the first read of the
+  // visit is drawn (agentLandPlace), the visit and session it is for, and
+  // the scroll just after the Back (`at`: a scroll since is yours, and wins).
+  agentPlace: null,
   // The step each count tile of the agent page last went to, this visit
   // (tileAt; dashboard.md §4.25 *A tile takes you to what it counts*).
   agentTileAt: null,
+  // Where the agent page goes once its visit is first drawn, the visit and
+  // its kind (a Home count's link, `?go=`; landGo), then null.
+  agentGo: null,
   // The agent page shows only the turns where Mandu stepped in (its switch,
   // `?only=stepped-in`; dashboard.md §4.25ae *Only where Mandu stepped in*).
   agentOnly: false,
@@ -1117,6 +1318,7 @@ function putBackAnswers(place, list) {
     if (card && (card.dataset.state || '') === a.state) showAnswer(card, a);
     else S.answers.delete(key);
   }
+  putAnswerLine(place, list);
   const f = S.answerFocus;
   if (f && f.worked && f.place === place) focusOn(f, list);
 }
@@ -1195,6 +1397,49 @@ function revealAnswered(btn, at, r, had) {
   if (to.disabled || to.getAttribute('aria-expanded') === 'true') return;
   REVEALS.get(to).answered(r, had);
 }
+/** A real value shown hides itself again (dashboard.md §4.25b *The page*):
+ *  a minute after it shows, at once when the tab goes to the background.
+ *  Each open box: its button → its timer and its `hide`, which empties the
+ *  box as Hide it again does and never moves the focus. */
+const REVEAL_MS = 60_000;
+const REVEAL_SOON_MS = 10_000;
+const HIDE_SOON = 'Hides again in 1 minute.';
+const HIDE_NOW = 'Hides again in a few seconds.';
+const HIDES = new Map();
+/** Hide the box of `btn` later; `say` puts when in its caption. */
+function hideRevealLater(btn, hide, say) {
+  stopHideLater(btn);
+  if (!HIDES.size) document.addEventListener('visibilitychange', hideRevealsAway);
+  say(HIDE_SOON);
+  const at = { hide, timer: 0 };
+  at.timer = setTimeout(() => {
+    say(HIDE_NOW);
+    at.timer = setTimeout(() => hideRevealNow(btn), REVEAL_SOON_MS);
+  }, REVEAL_MS - REVEAL_SOON_MS);
+  HIDES.set(btn, at);
+}
+/** Hide it again pressed, or a redraw: the timer of `btn` goes. */
+function stopHideLater(btn) {
+  const at = HIDES.get(btn);
+  if (!at) return;
+  clearTimeout(at.timer);
+  HIDES.delete(btn);
+  if (!HIDES.size) document.removeEventListener('visibilitychange', hideRevealsAway);
+}
+function hideRevealNow(btn) {
+  const at = HIDES.get(btn);
+  stopHideLater(btn);
+  // A box a redraw took off the page is gone with its value.
+  if (at && btn.isConnected) at.hide();
+}
+/** Another tab, a minimised window, a locked screen: every value goes. */
+function hideRevealsAway() {
+  if (document.visibilityState === 'hidden') for (const btn of [...HIDES.keys()]) hideRevealNow(btn);
+}
+/** The story is drawn again from nothing: no timer outlives its box. */
+function stopHidesLater() {
+  for (const btn of [...HIDES.keys()]) stopHideLater(btn);
+}
 /** Focus a card, a row, a line or a heading: none is a control, so none is
  *  a Tab stop (tabindex -1); the page keeps its scroll. */
 function focusThere(x) {
@@ -1232,8 +1477,9 @@ function focusAnswered(place, id, list, refusedOn) {
 }
 /** An answer that worked, its list drawn again with the focus fallen: the
  *  card with its id when still drawn (an answered row's new outcome), else
- *  the one that took its place, else the one before it; with none left, the
- *  list's own line ("Nothing is waiting for you."), else the heading of its
+ *  the line the answer left where the card was (answerLine), else the card
+ *  that took its place, else the one before it; with none left, the list's
+ *  own line ("Nothing is waiting for you."), else the heading of its
  *  section, else the page's. Never an answer button: a second Enter must not
  *  answer another question. A card still drawn keeps the focus across the
  *  next draws while it has it (`on`). */
@@ -1244,7 +1490,9 @@ function focusOn(f, list) {
   const cards = [...drawnCards(list).values()].filter(shown);
   const same = cards.find((c) => c.dataset.id === f.id);
   const block = list && list.closest('section.block');
-  const to = same || cards[Math.min(f.rank, cards.length - 1)]
+  const line = S.answerLines.get(f.place);
+  const to = same || (line && line.id === f.id && shown(line.node) ? line.node : null)
+    || cards[Math.min(f.rank, cards.length - 1)]
     || (list && [...list.children].find((c) => c.classList.contains('empty') && shown(c)))
     || (shown(block) ? block.querySelector('h2') : null)
     || document.querySelector('#main > section[data-page="' + S.page + '"] h1');
@@ -1265,14 +1513,15 @@ function focusOn(f, list) {
  *  among those keyed alike, then the control's tag, rank and words. Keys
  *  are compared as values, never spliced into a selector: ids are server
  *  data. Ids the page numbers as it draws (a note, an answer's words, the
- *  words that name a card: nameBy) are no keys, nor is a menu's colour
- *  (a rule's `data-effect`, a label menu's `data-level`, `data-send` and
+ *  words that name a card: nameBy, the text of a reply: foldReply) are
+ *  no keys, nor is a menu's colour (a rule's `data-effect`, a label menu's `data-level`, `data-send` and
  *  `data-from`: what the menu shows, not which it is). A menu
  *  with a name reads as its name, not its options: a change in it changes
  *  what it shows (a rule's "What happens for <host>" turned from allowed to
- *  blocked), not which menu it is. While an answer holds the focus
+ *  blocked), not which menu it is; the Copy of a code block reads as Copy
+ *  while it says Copied. While an answer holds the focus
  *  (holdFocus), it says where the focus goes, so the poll takes no place. */
-const DRAWN_ID = /^(help|ask-error|ask-name)-\d+$/;
+const DRAWN_ID = /^(help|ask-error|ask-name|reply-text)-\d+$/;
 const COLOUR_DATA = new Set(['data-effect', 'data-level', 'data-send', 'data-from', 'data-outcome']);
 function placeKey(x) {
   const keys = x.id && !DRAWN_ID.test(x.id) ? [['id', x.id]] : [...x.attributes].filter((a) => a.name.startsWith('data-') && !COLOUR_DATA.has(a.name)).map((a) => [a.name, a.value]);
@@ -1292,6 +1541,7 @@ function listed(coll) {
 function keyedAlike(at, key) { return listed(at.getElementsByTagName(JSON.parse(key)[0])).filter((x) => placeKey(x) === key); }
 function readsAs(x) {
   if (x.tagName === 'SELECT' && x.getAttribute('aria-label')) return 'SELECT ' + x.getAttribute('aria-label');
+  if (x.classList.contains('code-copy')) return 'BUTTON code-copy';
   return x.tagName + ' ' + (x.type || '') + ' ' + String(x.textContent || '').replace(/\s+/g, ' ').trim();
 }
 function isControl(x) { return x.matches('a[href], button, input, select, textarea, summary, [role="button"]'); }
@@ -1361,9 +1611,12 @@ function pollRefocus(place) {
 //   /agents/<sessionId>   the agent page; `?ask=<askId>` marks a moment,
 //                         `?only=stepped-in` shows only where Mandu stepped in
 //   /rules#<key>  /settings#<key>  that page at one of its cards (SECTIONS)
+//   /rules?file=<path>    Rules with Add a rule's file browser opened at one
+//                         file (a Your secrets card's or a scan finding's
+//                         link); dropped once used
 // A path names the resource, the query only view state (the agent page's
 // mark, History's search). Segments are encodeURIComponent-written and decoded on read.
-const PAGES = ['home', 'approvals', 'rules', 'settings', 'agent', 'history'];
+const PAGES = ['home', 'approvals', 'rules', 'settings', 'agent', 'history', 'scan'];
 /** The `?only=` of the agent page's switch and History's (§4.25ae *Only
  *  where Mandu stepped in*, *Only the sessions where Mandu stepped in*);
  *  any other value reads as off. */
@@ -1387,6 +1640,7 @@ const SECTIONS = {
     ['prompt-filters', 'settings-prompt-block', 'Prompt filters'],
     ['notifications', 'settings-notify-block', 'Notifications'],
     ['appearance', 'settings-appearance-block', 'Appearance'],
+    ['about', 'settings-about-block', 'About'],
   ],
 };
 /** The section of `page` a hash names (`#keys-found`), or null. */
@@ -1400,21 +1654,32 @@ function sectionKey(page, id) {
   return s ? s[0] : null;
 }
 /** Each page's name as the person reads it (the tab title, the nav). */
-const PAGE_NAMES = { home: 'Home', approvals: 'Approvals', rules: 'Rules', settings: 'Settings', agent: 'Agent', history: 'History' };
+const PAGE_NAMES = { home: 'Home', approvals: 'Approvals', rules: 'Rules', settings: 'Settings', agent: 'Agent', history: 'History', scan: 'Scan' };
 const enc = encodeURIComponent;
 
 /** The URL (absolute, under the base path) of a page; `id` is the agent
- *  page's session or the approvals page's question, `ask` the agent page's
- *  marked moment. An agent page with no session is Home. */
-function routeHref(page, id, ask) {
+ *  page's session, the approvals page's question or the file Rules opens
+ *  (`?file=`, its `/` kept as written), `ask` the agent page's marked
+ *  moment, `go` where the agent page goes once drawn (`?go=`, AGENT_GO).
+ *  An agent page with no session is Home. */
+function routeHref(page, id, ask, go) {
   if (page === 'approvals') return BASE + '/approvals' + (id ? '/' + enc(id) : '');
-  if (page === 'rules' || page === 'settings' || page === 'history') return BASE + '/' + page;
-  if (page === 'agent' && id) return BASE + '/agents/' + enc(id) + (ask ? '?ask=' + enc(ask) : '');
+  if (page === 'rules' && id) return BASE + '/rules?file=' + enc(id).replace(/%2F/g, '/');
+  if (page === 'rules' || page === 'settings' || page === 'history' || page === 'scan') return BASE + '/' + page;
+  if (page === 'agent' && id) return BASE + '/agents/' + enc(id) + (ask ? '?ask=' + enc(ask) : AGENT_GO.includes(go) ? '?go=' + go : '');
   return BASE + '/';
 }
+/** Where a link opens an agent page (`?go=`, a Home count's link; §4.25 *A
+ *  tile takes you to what it counts*): its blocked or sent steps, as the
+ *  tile's press, or Your secrets. */
+const AGENT_GO = ['blocked', 'sent', 'secrets'];
 
-/** The page a URL names: { page, session, ask }, and on Rules and Settings
- *  the card its hash names (`section`, only a key SECTIONS knows). A retired
+/** The page a URL names: { page, session, ask } (on Approvals `ask` is the
+ *  question, the rule change or the change made it opens at), and on Rules and Settings
+ *  the card its hash names (`section`, only a key SECTIONS knows); on Rules
+ *  a non-empty `?file=` is the file Add a rule opens at (`file`), which
+ *  wins over a card; on an agent page a known `?go=` is where it goes once
+ *  drawn (`go`, AGENT_GO). A retired
  *  query-string URL (`?page=inbox&ask=…`, `?page=agent&session=…`) reads as
  *  its page (the server already 302s those; this keeps a stale tab working).
  *  An unknown or garbled path reads as Home. */
@@ -1434,17 +1699,36 @@ function parseRoute(pathname, search, hash) {
   try { segs = path.split('/').slice(1).map(decodeURIComponent); } catch { return home; }
   const [first, second, ...more] = segs;
   if (more.length) return home;
-  if (first === 'approvals' && second === undefined) return { page: 'approvals', session: null, ask: null };
+  if (first === 'approvals' && second === undefined) {
+    // The search of Answered earlier (§4.25 *Finding an answer*), if any.
+    const words = historyQuery(q.get('q'));
+    return { page: 'approvals', session: null, ask: null, ...(words ? { q: words } : {}) };
+  }
   if (first === 'approvals' && second) return { page: 'approvals', session: null, ask: second };
+  if (first === 'scan' && second === undefined) return { page: 'scan', session: null, ask: null };
   if (first === 'history' && second === undefined) return { page: first, session: null, ask: null, q: historyQuery(q.get('q')), ...(q.get('only') === ONLY_STEPPED_IN ? { only: true } : {}) };
   if ((first === 'rules' || first === 'settings') && second === undefined) {
+    const file = first === 'rules' ? q.get('file') || '' : '';
+    if (file) return { page: first, session: null, ask: null, file };
+    // The row of a remembered answer (`#answer-<id>`, Kept in Rules on Approvals).
+    const answer = first === 'rules' ? answerInHash(hash) : null;
+    if (answer) return { page: first, session: null, ask: null, answer };
     const section = sectionOf(first, hash);
     return { page: first, session: null, ask: null, ...(section ? { section } : {}) };
   }
-  if (first === 'agents' && second) return { page: 'agent', session: second, ask: q.get('ask') || null, ...(q.get('only') === ONLY_STEPPED_IN ? { only: true } : {}) };
+  if (first === 'agents' && second) {
+    const go = q.get('go');
+    return { page: 'agent', session: second, ask: q.get('ask') || null, ...(q.get('only') === ONLY_STEPPED_IN ? { only: true } : {}), ...(AGENT_GO.includes(go) ? { go } : {}) };
+  }
   return home;
 }
 const currentRoute = () => parseRoute(location.pathname, location.search, location.hash);
+/** The answer a Rules hash names (`#answer-<id>`, keptLink), or null. */
+function answerInHash(hash) {
+  const m = /^#?answer-(.+)$/.exec(String(hash || ''));
+  if (!m) return null;
+  try { return decodeURIComponent(m[1]) || null; } catch { return null; }
+}
 
 /** The URL a page state is canonically at. */
 function stateHref() {
@@ -1452,7 +1736,7 @@ function stateHref() {
     const href = routeHref('agent', S.agentId, S.agentAsk);
     return S.agentOnly ? href + (href.includes('?') ? '&' : '?') + 'only=' + ONLY_STEPPED_IN : href;
   }
-  if (S.page === 'approvals') return routeHref('approvals', S.approvalsAsk);
+  if (S.page === 'approvals') return routeHref('approvals', S.approvalsAsk) + (S.answeredQ && !S.approvalsAsk ? '?q=' + enc(S.answeredQ) : '');
   if (S.page === 'history' && (S.historyQ || S.historyOnly)) return routeHref('history') + '?' + historyParams(S.historyQ, S.historyOnly);
   if (S.section && SECTIONS[S.page]) return routeHref(S.page) + '#' + S.section;
   return routeHref(S.page);
@@ -1461,9 +1745,12 @@ function stateHref() {
 /** `nav`: a page change the person made (a link, Back or Forward), which
  *  moves the focus to the page (focusPage); not the first load. `restore`:
  *  the place Back or Forward returns to (savePlace; dashboard.md §4.25
- *  *Back and Forward keep your place*), which History, Approvals and Home
- *  return to; a link starts the page at its top. */
-function setPage(page, push, sessionId, askId, nav = push, restore = null) {
+ *  *Back and Forward keep your place*), which History, Approvals, Home,
+ *  Rules and Settings return to; a link starts the page at its top. `land`: where a link opens
+ *  its page (a page's own address says it otherwise): on Rules the file
+ *  (`data-file`), on an agent page where it goes (`data-land`, AGENT_GO),
+ *  on History its switch on (`data-land="stepped-in"`). */
+function setPage(page, push, sessionId, askId, nav = push, restore = null, land = null) {
   // The page left keeps its place in its own entry, and the new one names
   // it (the back link of the agent page, agentBack).
   const left = S.page;
@@ -1487,16 +1774,44 @@ function setPage(page, push, sessionId, askId, nav = push, restore = null) {
   clearRuleFind(false);
   S.historyQ = S.page === 'history' && !push ? currentRoute().q || '' : '';
   if (S.page === 'history') document.getElementById('history-q').value = S.historyQ;
+  // So does the search of Answered earlier (§4.25 *Finding an answer*), but never with
+  // an answer the address opens (`/approvals/<id>`): the row it marks is
+  // never filtered out.
+  clearTimeout(answeredSearchTimer);
+  S.answeredQ = S.page === 'approvals' && !push && !S.approvalsAsk ? currentRoute().q || '' : '';
+  document.getElementById('answered-q').value = S.answeredQ;
+  if (S.answeredQ) document.getElementById('answered-search').hidden = false;
   // And its switch (§4.25ae *Only the sessions where Mandu stepped in*).
-  S.historyOnly = S.page === 'history' && !push && currentRoute().only === true;
+  // A link opens it off, unless it is a link to the switch (a Home count's,
+  // §4.25 *The counts link where they point*).
+  S.historyOnly = S.page === 'history' && (push ? land === ONLY_STEPPED_IN : currentRoute().only === true);
   if (S.page === 'history') document.getElementById('history-only').setAttribute('aria-checked', String(S.historyOnly));
+  // An address with a search or the switch has its box at once, though the
+  // record was empty when last drawn (§4.25ae *An empty History has nothing
+  // to find*).
+  if (S.page === 'history' && (S.historyQ || S.historyOnly)) document.getElementById('history-search').hidden = false;
   // So does the agent page's switch (§4.25ae *Only where Mandu stepped in*):
   // a link to a session opens it whole.
   S.agentOnly = S.page === 'agent' && !push && currentRoute().only === true;
   // And Rules' and Settings' card (§4.25 *Section links*): a typed address,
-  // a new tab or Back opens at the card its hash names; a link opens the
-  // page at its top (openAtCard names its card after).
+  // a new tab or a Back with no place opens at the card its hash names (a
+  // place Back hands back wins, landAtSection); a link opens the page at
+  // its top (openAtCard names its card after).
   S.section = SECTIONS[S.page] && !push ? currentRoute().section || null : null;
+  // And the file a Your secrets card opens Rules at (§4.25b *A card opens
+  // its file in Rules*): a link's, else the address's. Used once: the
+  // canonical replace below drops `?file=`, so a reload or a later visit
+  // does not open it again.
+  const rulesFile = S.page === 'rules' ? (push ? land : currentRoute().file) || null : null;
+  // And the answer Kept in Rules names (`#answer-<id>`, §4.25 *A remembered
+  // answer opens where Rules keeps it*), used once as `?file=` is. A link on
+  // the page opens it itself (openAnswerRule); its note goes with the page.
+  const rulesAnswer = S.page === 'rules' && !push ? currentRoute().answer || null : null;
+  hideAnswerNote();
+  // And where an agent page goes once drawn (§4.25 *A tile takes you to
+  // what it counts*, `?go=`): used once, after the visit's first draw
+  // (landGo); the canonical replace below drops it from the address.
+  const go = S.page === 'agent' ? (push ? land : currentRoute().go) : null;
   if (S.page === 'agent' && !S.agentId) S.page = 'home';
   for (const sec of document.querySelectorAll('#main > section[data-page]')) sec.hidden = sec.dataset.page !== S.page;
   for (const a of document.querySelectorAll('#nav [data-page-link]')) {
@@ -1513,9 +1828,23 @@ function setPage(page, push, sessionId, askId, nav = push, restore = null) {
   else if (at !== href) history.replaceState(history.state, '', href);
   S.pageTitle = S.page === 'home' ? 'Mandu' : 'Mandu · ' + PAGE_NAMES[S.page];
   renderTitle();
-  const back = restore && PLACE_PAGES.includes(S.page) ? restore : null;
+  // The page of a session opened at the moment of an ask (`?ask=`) is not: it
+  // lands on the ask as a link does (markFocus).
+  const back = restore && PLACE_PAGES.includes(S.page) && !(S.page === 'agent' && S.agentAsk) ? restore : null;
   window.scrollTo(0, back ? back.y || 0 : 0);
   S.visit++;
+  dropAnswerLines();
+  S.agentGo = AGENT_GO.includes(go) ? { visit: S.visit, kind: go } : null;
+  // Back to the page of a session: what Show them brought is asked for
+  // again by its first read, and the toggles you had opened and the turn
+  // you were reading wait for the draw of that read (drawAgentPage,
+  // agentLandPlace).
+  S.agentPlace = null;
+  if (back && S.page === 'agent') {
+    const place = { y: back.y || 0, ...agentPlaceOf(back) };
+    S.agentShow = { key: S.visit + ':' + S.agentId, ...place.show };
+    S.agentPlace = { visit: S.visit, id: S.agentId, place, at: window.scrollY };
+  }
   // Held until the page has landed there: a scroll on the way (the page
   // shorter until its read draws) is not the place.
   S.placeHeld = back ? S.visit : 0;
@@ -1529,37 +1858,71 @@ function setPage(page, push, sessionId, askId, nav = push, restore = null) {
   // Add a rule opens with on its first read, when it was left open.
   let load = null;
   if (S.page === 'rules') load = loadRules().then(() => F.listing);
+  if (rulesFile) landAtFile(load, rulesFile);
+  else if (rulesAnswer) landAtAnswer(load, rulesAnswer);
   // A link to Approvals starts its lists of the past over at their newest
   // 20, as a link to History does; Back keeps the rows you had brought.
   if (S.page === 'approvals' && !back) startPastOver();
+  if (S.page === 'approvals') answeredSearchNow();
   if (S.page === 'approvals') keepPlace(loadRuleHistory(), back);
   if (S.page === 'approvals' && S.home) markApprovalsAsk();
   if (S.page === 'settings') load = loadSettings();
+  // Back to Rules or Settings: where you were once its reads have drawn,
+  // never the card its address names (landAtSection).
+  if (S.page === 'rules' || S.page === 'settings') keepPlace(load, back);
   if (S.page === 'agent') loadAgent();
   if (S.page === 'history') loadHistory(false, back);
+  if (S.page === 'scan') load = loadScan();
   if (S.page === 'home') keepPlace(null, back);
   return load;
 }
 /** An address that names a card (§4.25 *Section links*: a typed address, a
  *  new tab, Back or Forward): the page lands there once `load`, what draws
  *  above the card, has drawn, as a link to it does (openAtCard), the focus
- *  on the card's heading. */
+ *  on the card's heading. Not when Back or Forward handed the page a place
+ *  (setPage holds it, placeHeld, until its reads have drawn): the person
+ *  left the page there, and the place wins over the card. */
 function landAtSection(load) {
+  if (S.placeHeld && S.placeHeld === S.visit) return;
   const card = S.section && SECTIONS[S.page] && SECTIONS[S.page].find((x) => x[0] === S.section);
   if (!card) return;
   focusPage();
   landAtCard(load, card[1]);
 }
 
+/** Rules opened at a file (`/rules?file=`, a Your secrets card's or a scan
+ *  finding's link; §4.25b *A card opens its file in Rules*): once the page's reads have
+ *  drawn, Add a rule's file browser opens at the file's folder with its row
+ *  opened, as Show in the file browser does, and the focus goes to the
+ *  row's ⋯ (the path box when it is not listed: focusPicked). The focus
+ *  moves only from the page (its heading, or none): one the person moved
+ *  meanwhile stays. Nothing is changed: Rules' own menus and Save do that. */
+async function landAtFile(load, file) {
+  const visit = S.visit;
+  try { await load; } catch { /* each card says what it could not read */ }
+  if (S.visit !== visit || S.page !== 'rules') return;
+  const now = document.activeElement;
+  const ours = (!!S.pageHeading && now === S.pageHeading) || focusFell();
+  if (ours) focusPage();
+  setFilesView('all', { folder: parentOf(file), pick: file, by: ours ? document.activeElement : null });
+}
+
 // ── Back and Forward keep your place (dashboard.md §4.25) ────────────────────
 /** The pages Back and Forward return to where you left them; the others
- *  start at their top, as a link does. */
-const PLACE_PAGES = ['history', 'approvals', 'home'];
+ *  (Scan) start at their top, as a link does. */
+const PLACE_PAGES = ['history', 'approvals', 'home', 'agent', 'rules', 'settings'];
 /** Writes the place of the page shown into its own history entry, which Back or
  *  Forward hands back (popstate): how far it was scrolled (`y`), how many
  *  History rows were loaded (`rows`) and the session whose agent page it
- *  opened (`opened`, kept from the last push when not given). A browser that
- *  refuses the write (too many) keeps the last one. */
+ *  opened (`opened`, kept from the last push when not given). On the page of
+ *  a session, once drawn this visit, also the turn you were reading and how far
+ *  down the screen it was (`turn`, `top`: a running session gains turns, and
+ *  past its cap the oldest drops off), the toggles you had opened (`story`,
+ *  storyToggles) and what Show them brought (`show`, agentShow). Rules
+ *  with text in Find a rule keeps its top: Find is never kept (setPage
+ *  empties it), and a place in the shorter list would land elsewhere in the
+ *  whole one. A browser that refuses the write (too many) keeps the last
+ *  one. */
 function savePlace(opened) {
   const st = history.state && typeof history.state === 'object' ? history.state : {};
   const had = st.place || {};
@@ -1568,14 +1931,74 @@ function savePlace(opened) {
   const held = !!S.placeHeld && S.placeHeld === S.visit;
   if (held && opened === undefined) return;
   const place = {
-    y: held ? had.y || 0 : Math.round(window.scrollY || 0),
+    y: held ? had.y || 0 : S.page === 'rules' && findText() ? 0 : Math.round(window.scrollY || 0),
     rows: held ? had.rows || 0 : S.page === 'history' && S.history ? S.history.rows.length : 0,
     opened: opened === undefined ? had.opened || null : opened,
   };
+  if (S.page === 'agent') Object.assign(place, held ? agentPlaceOf(had) : agentPlace());
   try { history.replaceState({ ...st, place }, ''); } catch { /* the last place stays */ }
 }
-/** Back to Approvals or Home, once what the page reads has drawn (`read`,
- *  the rule changes of Approvals): scrolled again to the place, if a page shorter
+/** The session page part of its place, read off the page (savePlace):
+ *  nothing before its first draw this visit, which would read the story of
+ *  the visit before. */
+function agentPlace() {
+  if (S.agentDrawn !== S.visit + ':' + S.agentId) return {};
+  const story = document.getElementById('agent-story');
+  const anchor = [...story.querySelectorAll('article.turn[data-turn-id]')].find((t) => !t.closest('[hidden]') && t.getBoundingClientRect().bottom > 0);
+  const { key, ...show } = agentShow();
+  return {
+    turn: anchor ? anchor.dataset.turnId : null,
+    top: anchor ? Math.round(anchor.getBoundingClientRect().top) : 0,
+    story: storyToggles(story),
+    show: { ...show, steps: [...show.steps], background: [...show.background] },
+  };
+}
+/** The session page part of a place as an entry holds it, its shape
+ *  checked: the page wrote the entry itself, but a browser keeps it across
+ *  versions of this script. */
+function agentPlaceOf(p) {
+  const strings = (x) => (Array.isArray(x) ? x.filter((v) => typeof v === 'string') : []);
+  const s = p && p.story && typeof p.story === 'object' ? p.story : null;
+  const sh = p && p.show && typeof p.show === 'object' ? p.show : {};
+  return {
+    turn: p && typeof p.turn === 'string' ? p.turn : null,
+    top: p && Number.isFinite(p.top) ? p.top : 0,
+    story: s ? {
+      toggles: (Array.isArray(s.toggles) ? s.toggles : []).filter((x) => x && typeof x.turn === 'string' && Object.prototype.hasOwnProperty.call(STORY_TOGGLES, x.kind) && Number.isInteger(x.i))
+        .map((x) => ({ turn: x.turn, kind: x.kind, i: x.i, open: x.open === true })),
+      shown: typeof s.shown === 'string' ? s.shown : null,
+      quiet: strings(s.quiet),
+    } : null,
+    show: { turns: sh.turns === true, secrets: sh.secrets === true, steps: strings(sh.steps), background: strings(sh.background) },
+  };
+}
+/** Back to the page of a session, its first read drawn (renderAgentPage):
+ *  the turn you were reading back at the height it had on the screen, else
+ *  the `y` of the place, if nobody scrolled since the Back (the rule of
+ *  keepPlace; the page, shorter until drawn, held it above). Once more after
+ *  two frames, when the long replies above have folded (foldReply measures
+ *  them as laid out), again only if nobody scrolled. Landed mid-page, the
+ *  turn takes the focus from the heading, as the row of History does
+ *  (historyLand). */
+function agentLandPlace(kept) {
+  const visit = S.visit;
+  const land = () => {
+    if (S.visit !== visit || window.scrollY !== kept.at) return null;
+    // Compared as values, never spliced into a selector: ids are server data.
+    const turn = kept.place.turn ? [...document.querySelectorAll('#agent-story article.turn[data-turn-id]')].find((t) => t.dataset.turnId === kept.place.turn && !t.closest('[hidden]')) : null;
+    window.scrollTo(0, turn ? Math.max(0, Math.round(window.scrollY + turn.getBoundingClientRect().top - kept.place.top)) : kept.place.y || 0);
+    kept.at = window.scrollY;
+    return turn;
+  };
+  const turn = land();
+  if (turn && kept.place.y > 0) focusMarked(turn, true);
+  const done = () => { if (S.placeHeld === visit) S.placeHeld = 0; };
+  if (S.visit !== visit || !turn) { done(); return; }
+  requestAnimationFrame(() => requestAnimationFrame(() => { land(); done(); }));
+}
+/** Back to Approvals, Home, Rules or Settings, once what the page reads has
+ *  drawn (`read`: the rule changes of Approvals, every read of Rules or of
+ *  Settings): scrolled again to the place, if a page shorter
  *  meanwhile held it above and nobody scrolled since. Then the place is
  *  the page itself to keep again (savePlace). */
 function keepPlace(read, back) {
@@ -1612,7 +2035,7 @@ function wireNav() {
     e.preventDefault();
     // The back link of the agent page, to the page before it in this tab, is Back.
     if (a.id === 'agent-back' && a.dataset.back) { history.back(); return; }
-    setPage(a.dataset.pageLink, true, a.dataset.session, a.dataset.ask || null);
+    setPage(a.dataset.pageLink, true, a.dataset.session, a.dataset.ask || null, true, null, a.dataset.file || a.dataset.land || null);
   });
   // A middle click on a session row opens it in a new tab, as on its link.
   document.addEventListener('auxclick', (e) => { if (e.button === 1) rowClick(e); });
@@ -1626,10 +2049,14 @@ function wireNav() {
   // rows were read again.
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
   let placeTimer = 0;
-  window.addEventListener('scroll', () => {
+  const placeSoon = () => {
     clearTimeout(placeTimer);
     placeTimer = setTimeout(() => savePlace(), 250);
-  }, { passive: true });
+  };
+  window.addEventListener('scroll', placeSoon, { passive: true });
+  // A toggle of the story of a session moves nothing, and the Back of the
+  // browser saves nothing on its way out: the click saves the place.
+  document.getElementById('agent-story').addEventListener('click', placeSoon);
   // A focus the person moves elsewhere leaves the mark (focusMarked) and an
   // answer's place (holdFocus).
   document.addEventListener('focusin', (e) => {
@@ -1754,8 +2181,12 @@ async function loadHome() {
     followRunning();
     renderHero(null, S.homeFailure);
     renderBuiltIn(null);
+    renderAbout(null);
     renderFirstRun(null);
+    renderHomeScan(null);
     renderExposure(null);
+    renderUpdateNotice(null);
+    renderSecretsPosture(null);
     // Every section the answer fills says it could not check, never a bare
     // heading, nor the last poll's questions with live buttons (dashboard.md
     // §4.25 *Empty states*), each with the cause this poll knows. The open
@@ -1788,8 +2219,13 @@ async function loadHome() {
   followRunning();
   renderHero(S.home);
   renderBuiltIn(S.home);
+  renderAbout(S.home);
   renderFirstRun(S.home);
+  renderHomeScan(S.home);
   renderExposure(S.home);
+  renderUpdateNotice(S.home);
+  renderSignIn(S.home);
+  renderSecretsPosture(S.home);
   renderHomeWaiting(S.home);
   renderAgents(S.home);
   renderEarlier(S.home);
@@ -1800,7 +2236,11 @@ async function loadHome() {
   else { followCannotCheck(); if (F.unread === 'new') readFolderAgain(); }
   if (S.page === 'approvals') { loadRuleHistory(); followAnswered(asked); }
   if (S.page === 'history') followHistory(asked);
+  // A Scan page whose read failed (the dashboard restarting, an answer cut
+  // on its way) reads again once a poll answers (§4.25ai).
+  if (S.page === 'scan' && SC.unread && !SC.reading) loadScan();
   notifyNewAsks(S.home);
+  announceNewAsks(S.home);
   renderTitle();
   refreshWhen();
   pollRefocus(place);
@@ -1818,7 +2258,7 @@ function renderHomeWaiting(home) {
     return;
   }
   const asks = home.waitingKnown ? home.waiting : 'unknown';
-  if (sameAsDrawn('home-waiting', [asks, S.proposals.length, S.proposals.some((p) => p.onDisk)])) return;
+  if (sameAsDrawn('home-waiting', [asks, S.proposals.length, S.proposals.some((p) => p.onDisk), oneProposal(S.proposals)])) return;
   renderAsks(host, home, false, S.proposals.length > 0);
   putBackAnswers('home', host);
   renderHomeProposalLink();
@@ -1835,10 +2275,16 @@ function renderTopStatus(home) {
   if (title) title.textContent = waiting ? 'Approvals waiting (' + waiting + ')' : 'Approvals waiting';
   // A live region: written again only when what it says changed, never
   // every poll (§4.25 *The poll keeps your place*).
-  if (sameAsDrawn('top-status', home ? [home.protection.level, home.protection.connected, home.protection.configured] : 'failed')) return;
+  if (sameAsDrawn('top-status', home ? [home.protection.level, home.protection.connected, home.protection.configured, !!home.protection.notRunning] : 'failed')) return;
   clear(host);
   if (!home) {
     host.append(el('span', { class: 'dot bad' }), protectionLink('Not connected'));
+    return;
+  }
+  // Mandu is not running at all (§4.25, *Protection is off when nothing runs*):
+  // no agent is protected, so off, as the hero says; never "unknown".
+  if (home.protection.notRunning) {
+    host.append(el('span', { class: 'dot warn' }), protectionLink('Protection off'));
     return;
   }
   // On or off, the words of the Settings switch (§4.25 *The top bar says on
@@ -1887,7 +2333,145 @@ function renderBuiltIn(home) {
   clear(list);
   note.textContent = b ? b.note : 'not connected';
   const items = b ? b.items : ['The protection service is not reachable, so Mandu cannot say what is on.'];
-  for (const text of items) list.append(el('li', { text }));
+  const parts = b && Array.isArray(b.itemsParts) ? b.itemsParts : [];
+  items.forEach((text, i) => list.append(el('li', {}, textParts(parts[i], text))));
+  if (b && b.issuers && typeof b.issuers === 'object') list.append(issuerItem(b.issuers));
+}
+
+/** The item for the built-in issuer bindings (dashboard.md §4.25z): its sentence,
+ *  each company with its hosts as code under a "Which companies" fold, and
+ *  how to change it as policy.yaml text. The page offers no switch. */
+function issuerItem(it) {
+  const li = el('li', { class: 'builtin-issuers', 'data-state': it.state });
+  li.append(el('span', {}, textParts(it.parts, it.text)));
+  const companies = Array.isArray(it.companies) ? it.companies : [];
+  if (companies.length) {
+    const ul = el('ul', { class: 'plain-list issuer-list' });
+    for (const c of companies) {
+      const row = el('li', {}, c.name + (c.off ? ' (asks)' : '') + ': ');
+      (Array.isArray(c.hosts) ? c.hosts : []).forEach((h, i) => row.append(...(i ? [', ', ownCode(h)] : [ownCode(h)])));
+      ul.append(row);
+    }
+    li.append(el('details', { class: 'more' }, el('summary', { text: 'Which companies' }), ul));
+  }
+  if (it.change) li.append(el('p', { class: 'muted issuer-change' }, textParts(it.change.parts, it.change.text)));
+  return li;
+}
+
+/** Settings › About Mandu (dashboard.md §4.25 *About Mandu*): the release
+ *  the dashboard runs and its three help links, from Home's `about`, drawn
+ *  on every page's poll so Settings opens with it, and drawn again only when
+ *  it changed. "Checking…" (the page's own) until the first answer; a poll
+ *  that fails keeps what an answer drew, and with none yet the row says how
+ *  to find the version, as an unknown one does: never an empty row, never
+ *  "Checking…" for good. Each link opens in a new tab with noopener
+ *  noreferrer (the page's address can name a session), and only an https
+ *  address is drawn as a link. */
+function renderAbout(home) {
+  const row = document.getElementById('settings-about-version');
+  const links = document.getElementById('settings-about-links');
+  const report = document.getElementById('settings-about-report');
+  if (!row || !links || !report) return;
+  const about = home && home.about && typeof home.about === 'object' ? home.about : null;
+  if (!home && S.about) return;
+  if (sameAsDrawn('about', about || 'none')) return;
+  if (about) S.about = about;
+  const v = about && typeof about.version === 'string' && about.version !== 'unknown' ? about.version : null;
+  clear(row); clear(links); clear(report);
+  if (v) row.textContent = 'Mandu ' + v;
+  else row.append('Not known. Run ', ownCode('mandu --version'), ' in a terminal.');
+  // Whether a newer release is out (§4.25 *A newer release*): the answer
+  // the launcher's last check left, or, with none, when Mandu checks.
+  const up = v ? updateOf(about) : null;
+  if (up && up.state !== 'unknown') row.append('. ', aboutUpdateNode(up));
+  const check = document.getElementById('settings-about-check');
+  if (check) check.hidden = !(up && up.state === 'unknown');
+  const said = v ? 'Say which version you run: Mandu ' + v + '.' : null;
+  const link = (url, text, title) => typeof url === 'string' && /^https:\/\//.test(url)
+    ? el('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text, title }) : null;
+  const shown = [
+    link(about && about.guideUrl, 'Guide'),
+    link(about && about.troubleshootingUrl, 'Troubleshooting'),
+    link(about && about.issuesUrl, 'Report a problem', said),
+  ].filter(Boolean);
+  shown.forEach((a, i) => links.append(...(i ? [' · ', a] : [a])));
+  links.hidden = shown.length === 0;
+  const reporting = shown.some((a) => a.textContent === 'Report a problem');
+  report.hidden = !(reporting && v);
+  if (!report.hidden) report.textContent = 'When you report a problem, say which version you run: Mandu ' + v + '.';
+}
+
+/** About Mandu's update answer (`about.update`, dashboard.md §4.25 *A
+ *  newer release*) when it is one the page can draw: `unknown`, `current`,
+ *  or `newer` with its version and install command; else null (nothing to
+ *  compare, and the row says nothing of updates). */
+function updateOf(about) {
+  const up = about && about.update;
+  if (!up || typeof up !== 'object') return null;
+  if (up.state === 'unknown' || up.state === 'current') return up;
+  if (up.state === 'newer' && typeof up.newest === 'string' && up.newest !== '' && typeof up.install === 'string' && up.install !== '') return up;
+  return null;
+}
+/** The Version row's update words: "This is the newest release", or "Mandu
+ *  <v> is out" with the command that installs it as code (ownCode, so it
+ *  can be copied), in the warn tint when it fixes security problems; then
+ *  when the release list was fetched, "(checked … ago)", when known. */
+function aboutUpdateNode(up) {
+  const security = up.state === 'newer' && up.security === true;
+  const span = el('span', { class: 'about-update' + (security ? ' security' : ''), 'data-update': security ? 'security' : up.state });
+  if (up.state === 'current') span.append('This is the newest release');
+  else span.append('Mandu ' + up.newest + (security ? ' is out with security fixes. Update now: ' : ' is out. To update: '), ownCode(up.install), ', then start your agent again');
+  const at = whenNode(up.at);
+  span.append(...(at ? [' (checked ', at, ').'] : ['.']));
+  return span;
+}
+
+/** A newer Mandu fixes security problems in the version you run
+ *  (dashboard.md §4.25 *A newer release*): Home's notice, shown only for
+ *  such a release (a plain update stays in Settings › About Mandu), with
+ *  the command and a link to About Mandu; hidden as soon as the answer
+ *  stops saying so, or a poll fails. Drawn once across polls. */
+function renderUpdateNotice(home) {
+  const block = document.getElementById('home-update');
+  if (!block) return;
+  const about = home && home.about && typeof home.about === 'object' ? home.about : null;
+  const v = about && typeof about.version === 'string' && about.version !== 'unknown' ? about.version : null;
+  const up = v ? updateOf(about) : null;
+  const shown = up && up.state === 'newer' && up.security === true ? up : null;
+  if (sameAsDrawn('update-notice', shown ? [v, shown.newest, shown.install] : null)) return;
+  block.hidden = !shown;
+  if (!shown) return;
+  document.getElementById('update-headline').textContent = 'A security update for Mandu is out';
+  document.getElementById('update-sentence').textContent = 'Mandu ' + shown.newest + ' fixes security problems in the version you run (' + v + ').';
+  const fix = document.getElementById('update-fix');
+  clear(fix);
+  // A modifier click is left to the browser: Settings at About Mandu, in a
+  // new tab or window (its address, §4.25 *Section links*).
+  const toAbout = el('a', { href: routeHref('settings') + '#about', text: 'About Mandu in Settings', onclick: (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+    e.preventDefault();
+    openAtCard('settings', 'settings-about-block');
+  } });
+  fix.append('Update now: ', ownCode(shown.install), ', then start your agent again. ', toAbout);
+}
+
+/** The dashboard account (dashboard.md §6.z), from /api/home's `signIn`:
+ *  Settings' Sign out for a browser signed in on the sign-in page, and the
+ *  Home notice when the account file changed while the dashboard ran. A
+ *  poll without an answer leaves both as they were drawn. */
+function renderSignIn(home) {
+  if (!home) return;
+  const signIn = home.signIn && typeof home.signIn === 'object' ? home.signIn : null;
+  const account = document.getElementById('settings-account-block');
+  if (account) account.hidden = !(signIn && signIn.signOut === true);
+  const changed = document.getElementById('home-account-changed');
+  const at = signIn && typeof signIn.accountChangedAt === 'string' ? new Date(signIn.accountChangedAt) : null;
+  const when = at && !Number.isNaN(at.getTime()) ? at : null;
+  if (changed) changed.hidden = !when;
+  const sentence = document.getElementById('account-changed-sentence');
+  if (when && sentence) {
+    sentence.textContent = 'The dashboard account file changed at ' + when.toLocaleString() + ', so every browser was signed out then.';
+  }
 }
 
 /** Without a home, `status` is the HTTP status the server answered (null
@@ -1924,7 +2508,16 @@ function renderHero(home, failure) {
   // points*): Settings, or the trace of the session where protection failed.
   sentence.append(textParts(home.sentenceParts, home.sentence));
   const w = home.window;
-  const fact = (k, label, warn) => el('span', {}, el('strong', { class: warn ? 'warn' : '', text: String(k) }), ' ' + label);
+  // A count is a link to what it counts (§4.25 *The counts link where they
+  // point*): `to` the one session holding it, with the kind its page goes
+  // to (`go`); else History's sessions where Mandu stepped in; or a page
+  // (`page`). Its words stay its name ("1 action blocked"); `title` says
+  // what it is and where it goes. Without `to`, plain words.
+  const fact = (k, label, warn, to, title) => {
+    const words = [el('strong', { class: warn ? 'warn' : '', text: String(k) }), ' ' + label];
+    return to ? el('span', {}, countLink(to, title, words)) : el('span', { title: title || null }, ...words);
+  };
+  const where = (kind, go) => ({ session: countOwner(w, kind), go });
   if (home.verdict !== 'unknown' && home.verdict !== 'off') {
     // The same counts and words as each session's page tiles (dashboard.md
     // §4.25): secrets as its Your secrets cards tell them, never the masked
@@ -1938,22 +2531,21 @@ function renderHero(home, failure) {
     // (Protection failed.) gets the fact. It counts the rule changes too,
     // as the Approvals badge does.
     const waitingNow = w.waiting + (home.ruleChangesWaiting || 0);
-    if (waitingNow > 0 && home.verdict !== 'waiting') facts.append(fact(waitingNow, 'waiting for you', true));
+    if (waitingNow > 0 && home.verdict !== 'waiting') facts.append(fact(waitingNow, 'waiting for you', true, { page: 'approvals' }));
     const counts = []; // the window's counts: [fact, its "?" or null]
     const masked = [];
-    if (w.secretsMasked > 0) masked.push(fact(w.secretsMasked, w.secretsMasked === 1 ? 'secret masked before the AI saw it' : 'secrets masked before the AI saw them'));
+    if (w.secretsMasked > 0) masked.push(fact(w.secretsMasked, w.secretsMasked === 1 ? 'secret masked before the AI saw it' : 'secrets masked before the AI saw them', false, where('secretsMasked', 'secrets')));
+    // Masked untrusted items are the frozen levels' (integrity): plain words.
     if (w.untrusted > 0) masked.push(fact(w.untrusted, w.untrusted === 1 ? 'untrusted item masked before the AI saw it' : 'untrusted items masked before the AI saw them'));
     masked.forEach((f, i) => counts.push([f, i === 0 ? maskedHelp() : null]));
     if (w.secretsEarly > 0) {
-      const early = fact(w.secretsEarly, w.secretsEarly === 1 ? 'secret the AI read before it was marked a secret' : 'secrets the AI read before they were marked secrets', true);
-      early.title = 'The AI read the real value as it was, before it was marked a secret. A session\'s page says when.';
-      counts.push([early, null]);
+      counts.push([fact(w.secretsEarly, w.secretsEarly === 1 ? 'secret the AI read before it was marked a secret' : 'secrets the AI read before they were marked secrets', true,
+        where('secretsEarly', 'secrets'), 'The AI read the real value as it was, before it was marked a secret.'), null]);
     }
-    if (w.blocked > 0) counts.push([fact(w.blocked, w.blocked === 1 ? 'action blocked' : 'actions blocked'), null]);
+    if (w.blocked > 0) counts.push([fact(w.blocked, w.blocked === 1 ? 'action blocked' : 'actions blocked', false, where('blocked', 'blocked')), null]);
     if (w.sent > 0) {
-      const sent = fact(w.sent, w.sent === 1 ? 'send with a real value filled in' : 'sends with a real value filled in');
-      sent.title = (w.sent === 1 ? 'It' : 'Each') + ' went to a destination allowed to receive it. A session\'s page shows where.';
-      counts.push([sent, null]);
+      counts.push([fact(w.sent, w.sent === 1 ? 'send with a real value filled in' : 'sends with a real value filled in', false,
+        where('sent', 'sent'), (w.sent === 1 ? 'It' : 'Each') + ' went to a destination allowed to receive it.'), null]);
     }
     // The window the counts cover leads the first of them, in its words
     // ("In the last 24 hours:"); not known, no lead, as the earlier list's
@@ -1975,6 +2567,30 @@ function renderHero(home, failure) {
     });
     if (facts.childElementCount === 0) facts.append(el('span', { class: 'dim', text: nothingCounted(w, span, scope) }));
   }
+}
+
+/** The one session holding the window's count `kind` (`window.only`), or
+ *  null: none or several do, the window was only partly counted, or the
+ *  server is older and does not say. */
+function countOwner(w, kind) {
+  const id = w.only && w.only[kind];
+  return typeof id === 'string' && id !== '' && !partlyCounted(w) ? id : null;
+}
+/** A hero count's link (§4.25 *The counts link where they point*): a page
+ *  (`to.page`), or the session holding the count, opened where its tile
+ *  goes (`?go=`, the tile's press), or History with its switch on, the
+ *  sessions where Mandu stepped in. `about` says what the count is; the
+ *  title adds where the link goes. A modifier click is the browser's (the
+ *  page's links, wireNav). */
+function countLink(to, about, words) {
+  const say = (where) => (about ? about + ' ' : '') + where;
+  if (to.page) return el('a', { href: routeHref(to.page), 'data-page-link': to.page, class: 'fact-link', title: say('Opens ' + PAGE_NAMES[to.page] + '.') }, ...words);
+  if (to.session) {
+    return el('a', { href: routeHref('agent', to.session, null, to.go), 'data-page-link': 'agent', 'data-session': to.session, 'data-land': to.go,
+      class: 'fact-link', title: say('Opens the session where it happened.') }, ...words);
+  }
+  return el('a', { href: routeHref('history') + '?' + historyParams('', true), 'data-page-link': 'history', 'data-land': ONLY_STEPPED_IN,
+    class: 'fact-link', title: say('Opens History: the sessions where Mandu stepped in.') }, ...words);
 }
 
 /** The server added up only some of the window's sessions (`window.counted`
@@ -2023,6 +2639,565 @@ function renderExposure(home) {
   const fix = document.getElementById('exposure-fix');
   clear(fix);
   fix.append(textParts(x.fixParts, x.fix));
+}
+
+/** The newest launch left the agent's programs able to read your
+ *  credential files (dashboard.md §4.23 *Product page*): the server sends
+ *  `secretsPosture` only while that launch is `gated`; the card says so in
+ *  the launcher's words, with the fix as a command, and hides as soon as it
+ *  stops coming (a confined launch, or a failed load). */
+function renderSecretsPosture(home) {
+  const block = document.getElementById('home-posture');
+  if (!block) return;
+  const p = home && home.secretsPosture;
+  if (sameAsDrawn('secrets-posture', p || null)) return;
+  block.hidden = !p;
+  if (!p) return;
+  document.getElementById('posture-headline').textContent = p.headline;
+  document.getElementById('posture-sentence').textContent = p.sentence;
+  postureRest(document.getElementById('posture-note'), document.getElementById('posture-fix'), p);
+}
+
+/** The partial-layer line of a posture note and its fix, each hidden when absent. */
+function postureRest(note, fix, p) {
+  note.textContent = p.note || '';
+  note.hidden = !p.note;
+  clear(fix);
+  if (p.fixParts) fix.append(textParts(p.fixParts, ''));
+  fix.hidden = !p.fixParts;
+}
+
+/** The notice of the agent page, written out under its header: the session
+ *  could not do its job (`noticeShown`, its health broken; dashboard.md
+ *  §4.21 *On the product page*), so the words do not wait behind the mark
+ *  by its name. None otherwise. */
+function renderAgentNotice(vm) {
+  const line = document.getElementById('agent-notice');
+  if (!line) return;
+  const show = !!(vm && vm.noticeShown && vm.notice);
+  clear(line);
+  line.hidden = !show;
+  if (!show) return;
+  line.append(el('p', { class: 'posture-title', text: 'This session did not work as it should.' }), el('p', null, textParts(vm.noticeParts, vm.notice)));
+}
+
+/** The agent page's line under its header: this session's launch was
+ *  `gated` (dashboard.md §4.23 *Product page*); none otherwise. */
+function renderAgentPosture(vm) {
+  const line = document.getElementById('agent-posture');
+  if (!line) return;
+  const p = vm && vm.secretsPosture;
+  clear(line);
+  line.hidden = !p;
+  if (!p) return;
+  const note = el('p', { class: 'posture-note' });
+  const fix = el('p', { class: 'posture-fix' });
+  line.append(el('p', { class: 'posture-title', text: p.headline }), el('p', { text: p.sentence }), note, fix);
+  postureRest(note, fix, p);
+}
+
+// ── The last `mandu scan` (dashboard.md §4.25ai) ─────────────────────────────
+// The figure (§4.25ai *The figure*): the same secret twice, without Mandu (it
+// leaves its file, goes through the agent, and the AI model receives the real
+// value) and with it (it is wrapped in its mask where it crosses into Mandu,
+// the model gets only the mask, the agent still works). Its glyphs are those
+// of the engineering post "What Mandu is for" (the key, the dumpling that is
+// the mask and the Mandu mark, the document, the agent's terminal, the green
+// Mandu zone with its tab, the pill key → dumpling at its border), adapted:
+// the theme's colors, and a plain "AI model" tile, never a provider's logo.
+// Two layouts from one script: wide (from 540 px of figure) and narrow (a
+// phone), the CSS picks one. The only motion is CSS (the lanes' dots flow,
+// the key and the mask ride them), off under prefers-reduced-motion.
+// Every word is set as text; the facts are the server's (figure VM).
+const SVGNS = 'http://www.w3.org/2000/svg';
+function sv(tag, attrs, ...kids) {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v !== undefined && v !== null) n.setAttribute(k, String(v));
+  for (const c of kids) if (c) n.append(c);
+  return n;
+}
+function svText(x, y, text, cls, anchor) {
+  const t = sv('text', { x, y, class: cls, 'text-anchor': anchor || 'middle' });
+  t.textContent = text;
+  return t;
+}
+const r1 = (v) => Math.round(v * 10) / 10;
+function figKey(x, y, size, cls) {
+  return sv('use', { href: '#scan-key', class: 'sf-key' + (cls ? ' ' + cls : ''), x: r1(x - size * 0.53), y: r1(y - size / 2), width: size, height: size });
+}
+function figMask(x, y, size, cls) {
+  return sv('use', { href: '#scan-mandu', class: cls || null, x: r1(x - size / 2), y: r1(y - size * 31.5 / 64), width: size, height: size });
+}
+function figDoc(x, y, k) {
+  return sv('g', { transform: `translate(${x} ${y}) scale(${k})` },
+    sv('path', { class: 'sf-box', d: 'M-24 -32 H14 L28 -18 V28 Q28 32 24 32 H-24 Q-28 32 -28 28 V-28 Q-28 -32 -24 -32 Z' }),
+    sv('path', { class: 'sf-fold', d: 'M14 -32 V-22 Q14 -18 18 -18 H28' }),
+    figKey(-1, 2, 34));
+}
+function figAgent(x, y, k) {
+  return sv('g', { transform: `translate(${x} ${y}) scale(${k})` },
+    sv('rect', { class: 'sf-box sf-agent', x: -34, y: -24, width: 68, height: 48, rx: 7 }),
+    sv('path', { class: 'sf-fold', d: 'M-34 -12 H34' }),
+    sv('circle', { class: 'sf-led', cx: -26, cy: -18, r: 2 }), sv('circle', { class: 'sf-led', cx: -19, cy: -18, r: 2 }), sv('circle', { class: 'sf-led', cx: -12, cy: -18, r: 2 }),
+    sv('path', { class: 'sf-prompt', d: 'M-22 -3 l7 5.5 l-7 5.5 M-10 9 h13' }));
+}
+/** The AI model: a plain tile with a chip on it (no provider's logo). */
+function figModel(x, y, k) {
+  return sv('g', { transform: `translate(${x} ${y}) scale(${k})` },
+    sv('rect', { class: 'sf-box sf-model', x: -30, y: -28, width: 60, height: 56, rx: 12 }),
+    sv('rect', { class: 'sf-chip', x: -11, y: -11, width: 22, height: 22, rx: 4 }),
+    sv('path', { class: 'sf-pins', d: 'M-5 -11v-5M5 -11v-5M-5 11v5M5 11v5M-11 -5h-5M-11 5h-5M11 -5h5M11 5h5' }));
+}
+function figMark(x, y, ok, r) {
+  return sv('g', { class: ok ? 'sf-ok' : 'sf-bad', transform: `translate(${x} ${y}) scale(${r / 11})` },
+    sv('circle', { class: 'sf-mark', r: 11 }),
+    sv('path', { class: 'sf-mark-m', d: ok ? 'M-5 .2 L-1.5 3.7 L5.2 -3.7' : 'M-4.2 -4.2 L4.2 4.2 M4.2 -4.2 L-4.2 4.2' }));
+}
+/** Mandu's border pill: the key goes in, its mask comes out. */
+function figPill(x, y, w) {
+  const h = w >= 70 ? 34 : 30;
+  const g = w >= 70 ? 22 : 19;
+  const off = w / 2 - 6 - g / 2;
+  return sv('g', { class: 'sf-pill' },
+    sv('rect', { x: r1(x - w / 2), y: r1(y - h / 2), width: w, height: h, rx: h / 2 }),
+    figKey(x - off, y, g),
+    sv('path', { class: 'sf-arw', d: `M${r1(x - 4.5)} ${y} h9 m-3.2 -3.2 l3.2 3.2 l-3.2 3.2` }),
+    figMask(x + off, y, g + 6));
+}
+/** A dotted lane from p to q, with an arrowhead at q (across or down). */
+function figLane(p, q, cls) {
+  const [x1, y1] = p;
+  const [x2, y2] = q;
+  const down = x1 === x2;
+  const chev = down ? `M${x2 - 5} ${y2 - 7} L${x2} ${y2 - 1} L${x2 + 5} ${y2 - 7}` : `M${x2 - 7} ${y2 - 5} L${x2 - 1} ${y2} L${x2 - 7} ${y2 + 5}`;
+  return sv('g', { class: 'sf-lane-g ' + cls }, sv('path', { class: 'sf-lane', d: `M${x1} ${y1} L${x2} ${y2}` }), sv('path', { class: 'sf-chev', d: chev }));
+}
+/** A path cut to fit `max` characters: its last parts, after "…/". */
+function cutPath(p, max) {
+  if (!p || p.length <= max) return p || '';
+  const parts = p.split('/');
+  let out = parts.pop();
+  while (parts.length && (parts[parts.length - 1] + '/' + out).length + 2 <= max) out = parts.pop() + '/' + out;
+  return out.length + 2 <= max ? '…/' + out : '…' + out.slice(-(max - 1));
+}
+/** The two layouts, as points: wide (`w`, across: the file, the agent,
+ *  then the internet on the right) and tall (`t`, down: this computer
+ *  above, the internet below, every label beside its glyph), so no label is
+ *  drawn smaller than about 13 px on a 360 px phone. */
+const SF_LAYOUT = {
+  w: {
+    W: 640, H: 158, mach: [2, 2, 452, 154], net: [466, 2, 172, 154], machLbl: [16, 22, 'start'], netLbl: [480, 22, 'start'], ride: 'sf-ride',
+    doc: [104, 86, 0.85], agent: [318, 86, 1], model: [540, 86, 1],
+    key: [[134, 86], [280, 86]], keyIn: [[134, 86], [163, 86]], pill: [200, 86, 70], maskIn: [[237, 86], [280, 86]], out: [[356, 86], [504, 86]],
+    ride1: [236, 86], ride2: [458, 86], zone: [200, 36, 236, 96], tab: [216, 36, 96], mark: [572, 58], got: [604, 100, 15],
+    fileLbl: [104, 146, 'middle'], agentLbl: [318, 146, 'middle'], agentKind: [318, 128, 'middle'], modelLbl: [540, 146, 'middle'], modelKind: [540, 128, 'middle'],
+    fileMax: 26, nameMax: 22,
+  },
+  t: {
+    W: 320, H: 404, mach: [2, 2, 316, 264], net: [2, 280, 316, 122], machLbl: [16, 24, 'start'], netLbl: [116, 304, 'start'], ride: 'sf-ride-v',
+    doc: [70, 74, 0.85], agent: [70, 198, 1], model: [70, 344, 1],
+    key: [[70, 106], [70, 170]], keyIn: [[70, 106], [70, 119]], pill: [70, 138, 70], maskIn: [[70, 157], [70, 170]], out: [[70, 226], [70, 312]],
+    ride1: [70, 138], ride2: [70, 270], zone: [14, 138, 292, 118], tab: [200, 138, 96], mark: [98, 318], got: [128, 356, 15],
+    fileLbl: [116, 80, 'start'], agentLbl: [116, 208, 'start'], agentKind: [116, 188, 'start'], modelLbl: [156, 352, 'start'], modelKind: [156, 332, 'start'],
+    fileMax: 20, nameMax: 18,
+  },
+};
+/** One row of the figure, in one layout: `without` (red) or `with` (green). */
+function scanFigScene(fig, row, lay) {
+  const L = SF_LAYOUT[lay];
+  const safe = row === 'with';
+  const s = sv('svg', { class: 'sf-svg sf-' + lay, viewBox: `0 0 ${L.W} ${L.H}`, 'aria-hidden': 'true', focusable: 'false' });
+  // The internet is red only where the real value goes there.
+  s.append(sv('rect', { class: 'sf-mach', x: L.mach[0], y: L.mach[1], width: L.mach[2], height: L.mach[3], rx: 16 }),
+    sv('rect', { class: safe ? 'sf-net sf-net-calm' : 'sf-net', x: L.net[0], y: L.net[1], width: L.net[2], height: L.net[3], rx: 16 }),
+    svText(L.machLbl[0], L.machLbl[1], 'THIS COMPUTER', 'sf-region', L.machLbl[2]),
+    svText(L.netLbl[0], L.netLbl[1], 'THE INTERNET', safe ? 'sf-region' : 'sf-region sf-region-net', L.netLbl[2]));
+  if (safe) {
+    const [zx, zy, zw, zh] = L.zone;
+    s.append(sv('rect', { class: 'sf-zone', x: zx, y: zy, width: zw, height: zh, rx: 18 }));
+  }
+  // The lanes: the key's (to the agent; with Mandu, through its pill), then
+  // the request's (to the model).
+  if (safe) s.append(figLane(L.keyIn[0], L.keyIn[1], 'sf-lane-key'), figLane(L.maskIn[0], L.maskIn[1], 'sf-lane-mask'));
+  else s.append(figLane(L.key[0], L.key[1], 'sf-lane-key'));
+  s.append(figLane(L.out[0], L.out[1], safe ? 'sf-lane-mask' : 'sf-lane-real'));
+  s.append(figDoc(L.doc[0], L.doc[1], L.doc[2]), figAgent(L.agent[0], L.agent[1], L.agent[2]), figModel(L.model[0], L.model[1], L.model[2]));
+  if (safe) {
+    const [tx, ty, tw] = L.tab;
+    s.append(sv('g', { class: 'sf-tab' }, sv('rect', { x: tx, y: ty - 14, width: tw, height: 28, rx: 14 }),
+      figMask(tx + 18, ty + 1, 20), svText(tx + 32, ty + 5, 'Mandu', 'sf-tab-t', 'start')));
+    s.append(figPill(L.pill[0], L.pill[1], L.pill[2]));
+    s.append(sv('g', { class: L.ride }, figMask(L.ride2[0], L.ride2[1], 30)));
+  } else {
+    s.append(sv('g', { class: L.ride }, figKey(L.ride1[0], L.ride1[1], 28)));
+    s.append(sv('g', { class: L.ride }, figKey(L.ride2[0], L.ride2[1], 28)));
+  }
+  // What the model got: the real value (red) or its mask (green).
+  const [gx, gy, gr] = L.got;
+  s.append(sv('circle', { class: safe ? 'sf-got sf-got-ok' : 'sf-got sf-got-bad', cx: gx, cy: gy, r: gr }));
+  s.append(safe ? figMask(gx, gy, 24) : figKey(gx, gy, 20));
+  s.append(figMark(L.mark[0], L.mark[1], safe, 11));
+  // The labels: the file, the agent, the model (its provider when known);
+  // what each is, small, over a name (not over "your agent" or "AI model").
+  const lbl = (p, text, cls) => svText(p[0], p[1], text, cls, p[2]);
+  s.append(lbl(L.fileLbl, fig.file ? cutPath(fig.file, L.fileMax) : 'a file', 'sf-lbl'));
+  s.append(lbl(L.agentLbl, fig.agent ? cutPath(fig.agent, L.nameMax) : 'your agent', 'sf-lbl'));
+  s.append(lbl(L.modelLbl, fig.provider ? cutPath(fig.provider, L.nameMax) : 'AI model', 'sf-lbl'));
+  if (fig.agent) s.append(lbl(L.agentKind, 'AGENT', 'sf-kind'));
+  if (fig.provider) s.append(lbl(L.modelKind, 'AI MODEL', 'sf-kind'));
+  return s;
+}
+/** The whole figure (the Scan page's): a heading, its two rows, each with
+ *  its label, both layouts of its scene, and its steps; then the green line. */
+function scanFigure(fig, safeLine) {
+  const box = el('figure', { class: 'scan-fig', 'aria-labelledby': 'scan-fig-title' });
+  box.append(el('h2', { id: 'scan-fig-title', class: 'scan-fig-title', text: fig.title }));
+  for (const [row, part] of [['without', fig.without], ['with', fig.with]]) {
+    const ok = row === 'with';
+    const r = el('div', { class: 'scan-fig-row', 'data-row': row, 'data-tone': ok ? 'ok' : 'bad' });
+    r.append(el('p', { class: 'scan-fig-label' }, el('span', { class: 'tone-mark' }, svg(ok ? ICON.check : ICON.x, 14)), part.label));
+    r.append(el('div', { class: 'sf-scene' }, scanFigScene(fig, row, 'w'), scanFigScene(fig, row, 't')));
+    const steps = el('ol', { class: 'scan-fig-steps' });
+    for (const s of part.steps || []) steps.append(el('li', {}, countWords(s)));
+    r.append(steps);
+    box.append(r);
+  }
+  if (safeLine) box.append(el('p', { class: 'scan-safe' }, el('span', { class: 'tone-mark' }, svg(ICON.check, 14)), safeLine));
+  return box;
+}
+/** The small flow: file → agent → the AI model, and what it got. One row
+ *  of chips (Home's card, each of your secrets on the Scan page). */
+function scanFlow(f) {
+  const ok = f.reached === 'masked';
+  const arrow = () => el('span', { class: 'sf-arrow', 'aria-hidden': 'true', text: '→' });
+  const chip = (icon, text, cls) => el('span', { class: 'sf-chip-h' + (cls ? ' ' + cls : '') }, icon, el('span', { text }));
+  const maskIcon = () => { const s = sv('svg', { viewBox: '0 0 64 64', width: 16, height: 16, 'aria-hidden': 'true' }); s.append(sv('use', { href: '#scan-mandu' })); return s; };
+  const row = el('p', { class: 'scan-flow', 'data-tone': ok ? 'ok' : 'bad' });
+  const chips = [];
+  if (f.file) chips.push(chip(svg(ICON.file, 14), cutPath(f.file, 32)));
+  if (ok) chips.push(chip(maskIcon(), 'masked by Mandu', 'sf-chip-mask'));
+  chips.push(chip(svg(ICON.terminal, 14), f.agent));
+  chips.push(chip(svg(ok ? ICON.check : ICON.x, 14), (f.provider ? f.provider + '’s AI' : 'the AI') + (ok ? ' got only the mask' : ' got the real value'), ok ? 'sf-chip-ok' : 'sf-chip-bad'));
+  // An arrow goes with the chip it points at, so a line never ends on one.
+  chips.forEach((c, i) => row.append(i === 0 ? c : el('span', { class: 'sf-next' }, arrow(), c)));
+  return row;
+}
+/** The card on Home: how many of your secrets already left this computer in
+ *  the requests of your agents (the "your secrets" of the scan, in sessions without Mandu),
+ *  the top ones with their name and file, the sends worth a look, and the
+ *  command; with no scan kept, how to run one. No answer, or a server that
+ *  sends no `scan`: no card. */
+function renderHomeScan(home) {
+  const block = document.getElementById('home-scan');
+  const card = home && home.scan;
+  if (sameAsDrawn('home-scan', card || null)) return;
+  block.hidden = !card;
+  const top = document.getElementById('home-scan-top');
+  clear(top);
+  if (!card) return;
+  block.dataset.ran = card.ran ? 'yes' : 'no';
+  // Red when some of your secrets left, green when none did (the server's
+  // tone, never read from the words), with a mark beside the words.
+  block.dataset.tone = card.tone || '';
+  const headline = document.getElementById('home-scan-headline');
+  clear(headline);
+  if (card.tone === 'bad' || card.tone === 'ok') headline.append(el('span', { class: 'tone-mark' }, svg(card.tone === 'ok' ? ICON.check : ICON.x, 16)));
+  headline.append(card.headline);
+  const safe = document.getElementById('home-scan-safe');
+  safe.hidden = !card.safeLine;
+  clear(safe);
+  if (card.safeLine) safe.append(el('span', { class: 'tone-mark' }, svg(ICON.check, 14)), card.safeLine);
+  // The figure, small: the two flows of the Scan page's figure as chips.
+  const figBox = document.getElementById('home-scan-figure');
+  clear(figBox);
+  const fig = card.figure;
+  figBox.hidden = !(fig && fig.leaked);
+  if (fig && fig.leaked) {
+    figBox.append(el('p', { class: 'scan-flow-label', 'data-tone': 'bad' }, 'Without Mandu'),
+      scanFlow({ file: fig.file, agent: fig.agent, provider: fig.provider, reached: 'real' }),
+      el('p', { class: 'scan-flow-label', 'data-tone': 'ok' }, 'With Mandu'),
+      scanFlow({ file: fig.file, agent: fig.agent, provider: fig.provider, reached: 'masked' }));
+  }
+  const when = document.getElementById('home-scan-when');
+  when.hidden = !card.when;
+  when.textContent = card.when || '';
+  const sentence = document.getElementById('home-scan-sentence');
+  clear(sentence);
+  sentence.append(textParts(card.parts, card.sentence));
+  for (const f of card.top || []) {
+    top.append(el('li', {}, el('span', { class: 'scan-top-name' }, ownCode(f.name), f.file ? ' in ' : '', f.file ? ownCode(f.file) : ''),
+      el('span', { class: 'dim scan-top-how', text: f.how }), typeof f.ruleFile === 'string' && f.ruleFile ? scanRuleLink(f.ruleFile) : ''));
+  }
+  if (card.more > 0) top.append(el('li', { class: 'dim' }, countWords('and ' + card.more + ' more on the Scan page')));
+  const worth = document.getElementById('home-scan-worth');
+  worth.hidden = !card.worthWords;
+  clear(worth);
+  if (card.worthWords) worth.append(el('span', { class: 'tone-mark' }, svg(ICON.alert, 14)), card.worthWords);
+  const sug = document.getElementById('home-scan-suggested');
+  sug.hidden = !card.suggested;
+  clear(sug);
+  if (card.suggested) sug.append(card.suggested, ' ', placeLink({ to: 'suggested', text: 'Review them' }));
+  const again = document.getElementById('home-scan-again');
+  clear(again);
+  again.append(textParts(card.againParts, ''));
+  document.getElementById('home-scan-open').hidden = !card.link;
+}
+
+/** A scan finding's file opens in Rules, to change who may get it
+ *  (§4.25ai): the session card's link (§4.25b *A card opens its file in
+ *  Rules*), a plain link, so a new tab, a bookmark and Back work. */
+function scanRuleLink(file) {
+  return el('div', { class: 'secret-rule scan-rule' },
+    el('a', { href: routeHref('rules', file), 'data-page-link': 'rules', 'data-file': file, class: 'secret-rule-link',
+      text: 'Change it in Rules', 'aria-label': 'Change the rule for ' + file + ' in Rules' }));
+}
+
+/** The rows a section shows at once; Show more adds as many again (the
+ *  head's `pageRows`, the server's SCAN_PAGE_ROWS, when it says). */
+const SCAN_PAGE_ROWS = 25;
+/** The Scan page's read (§4.25ai *A long scan, in pages*): the head's `rev`
+ *  (which kept scan its rows are of; a page asked of another is refused
+ *  409 and the page reads again), its rows a page, and whether the last
+ *  read failed (`unread`: read again once a Home poll answers). */
+const SC = { rev: null, pageRows: SCAN_PAGE_ROWS, unread: false, reading: false };
+/** How long the filter waits after a key before it asks the server. */
+const SCAN_FIND_WAIT_MS = 150;
+
+/** The read of the Scan page: GET /api/scan (its head), drawn once it
+ *  answers. A failed read says why and is read again on the next poll
+ *  that answers (loadHome). */
+async function loadScan() {
+  const visit = S.visit;
+  let vm = null;
+  let failure = null;
+  SC.reading = true;
+  try { vm = (await apiGet('scan')).scan || null; } catch (err) { failure = readFailure(err); }
+  SC.reading = false;
+  if (S.visit !== visit || S.page !== 'scan') return;
+  SC.unread = !vm;
+  SC.rev = (vm && typeof vm.rev === 'string' && vm.rev) || null;
+  SC.pageRows = (vm && Number.isInteger(vm.pageRows) && vm.pageRows > 0) ? vm.pageRows : SCAN_PAGE_ROWS;
+  renderScanPage(vm, failure);
+}
+
+/** A part of the Scan page read when opened (a section's next rows or its
+ *  filter's matches, a row's examples): { data } or { failure }. An answer
+ *  that says the scan changed reads the page again. */
+async function scanPart(path) {
+  const rev = SC.rev;
+  const q = rev ? (path.includes('?') ? '&' : '?') + 'rev=' + encodeURIComponent(rev) : '';
+  try { return { data: await apiGet(path + q) }; } catch (err) {
+    if (err && err.status === 409 && S.page === 'scan' && rev === SC.rev) loadScan();
+    return { failure: readFailure(err) };
+  }
+}
+
+/** The panel of examples of one finding: the date range, the projects, then
+ *  each example (when, the agent, the project, the command or the file, and
+ *  with or without Mandu, small). `item` is GET scan/item/<id>'s answer. */
+function scanDetail(item) {
+  const d = item.detail || {};
+  const box = el('div', { class: 'scan-detail' });
+  const facts = [d.range ? 'When: ' + d.range : null, d.projects ? 'In ' + d.projects : null].filter(Boolean);
+  if (facts.length) box.append(el('p', { class: 'note' }, countWords(facts.join(' · '))));
+  const groups = (d.groups || []).filter((g) => g.examples && g.examples.length);
+  for (const g of groups) {
+    box.append(el('p', { class: 'scan-group-title', text: g.title }));
+    const list = el('ol', { class: 'scan-examples' });
+    for (const e of g.examples) {
+      list.append(el('li', {},
+        el('span', { class: 'scan-example-head', text: e.head }),
+        el('span', { text: e.did }), e.code ? ' ' : '', e.code ? ownCode(e.code) : '',
+        e.mandu ? el('span', { class: 'dim scan-example-mandu', text: ' (' + e.mandu + ')' }) : ''));
+    }
+    box.append(list);
+  }
+  if (!groups.length) {
+    box.append(el('p', { class: 'note dim', text: 'This scan kept no examples of it. Run mandu scan again for them.' }));
+  }
+  return box;
+}
+
+/** One finding: its title and summary, the story of how it left this
+ *  computer, the footnote on Mandu, and a fold with its examples. */
+const TONE_ICON = { bad: 'x', ok: 'check', warn: 'alert' };
+function scanItem(item) {
+  const row = el('li', { class: 'scan-item', 'data-id': item.id, 'data-tone': item.tone || 'plain' });
+  const icon = TONE_ICON[item.tone];
+  const badge = item.badge ? el('span', { class: 'scan-badge' }, icon ? svg(ICON[icon], 12) : null, item.badge) : null;
+  row.append(el('div', { class: 'scan-item-head' }, el('div', { class: 'scan-item-title' }, ownCode(item.title)), badge));
+  row.append(el('div', { class: 'dim scan-item-summary', text: item.summary }));
+  if (item.flow) row.append(scanFlow(item.flow));
+  const story = el('ul', { class: 'scan-story' });
+  for (const s of item.story || []) {
+    const mark = s.tone === 'ok' || s.tone === 'bad' ? el('span', { class: 'tone-mark' }, svg(ICON[TONE_ICON[s.tone]], 13)) : null;
+    story.append(el('li', { class: 'scan-step', 'data-step': s.step, 'data-tone': s.tone || 'plain' }, mark, textParts(s.parts, s.text)));
+  }
+  row.append(story);
+  if (typeof item.file === 'string' && item.file) row.append(scanRuleLink(item.file));
+  if (item.footnoteParts && item.footnoteParts.length) {
+    row.append(el('p', { class: 'note scan-footnote' }, ...item.footnoteParts.map((p) => el('span', { 'data-tone': p.tone, text: p.text }))));
+  } else if (item.footnote) row.append(el('p', { class: 'note dim scan-footnote', text: item.footnote }));
+  // Its examples are read when the fold first opens (GET scan/item/<id>);
+  // a failed read says why, and the next opening tries again.
+  const fold = el('details', { class: 'scan-more' }, el('summary', { text: 'Details and examples' }));
+  fold.addEventListener('toggle', async () => {
+    if (!fold.open || fold.dataset.read === 'reading' || fold.dataset.read === 'yes') return;
+    fold.dataset.read = 'reading';
+    while (fold.childElementCount > 1) fold.lastElementChild.remove();
+    const wait = el('p', { class: 'note dim scan-reading', text: 'Reading…' });
+    fold.append(wait);
+    const r = await scanPart('scan/item/' + encodeURIComponent(item.id));
+    wait.remove();
+    if (r.data && r.data.detail) {
+      fold.dataset.read = 'yes';
+      fold.append(scanDetail(r.data));
+    } else {
+      fold.dataset.read = '';
+      fold.append(el('p', { class: 'note scan-unread' }, ...cannotCheck('The examples could not be read.', r.failure || null, true)));
+    }
+  });
+  row.append(fold);
+  return row;
+}
+
+/** One section: its heading, sentence, filter (a long tier) and rows. The
+ *  head carries its first rows and its count (`total`, `next`); Show more
+ *  reads the next page of the section, and *Find one* asks the server for
+ *  the section's rows that match (over the whole section, not the rows
+ *  drawn). Folded when the tier is long. */
+function scanSection(sec) {
+  const box = el('section', { class: 'block scan-section', 'data-section': sec.id, 'data-tone': sec.tone || 'plain', 'aria-label': sec.heading });
+  const list = el('ul', { class: 'scan-items' });
+  const moreBtn = el('button', { type: 'button', class: 'btn small', hidden: true });
+  const unread = el('p', { class: 'note scan-unread', hidden: true });
+  const pageRows = SC.pageRows;
+  const head = { rows: (sec.items || []).slice(), total: Number.isInteger(sec.total) ? sec.total : (sec.items || []).length, next: Number.isInteger(sec.next) ? sec.next : null };
+  // What is drawn: the rows, how many match in all, the next page's start,
+  // the query they answer; `asked` counts the reads, so an older answer
+  // (a key typed meanwhile) never draws over a newer one.
+  const st = { rows: head.rows.slice(), total: head.total, next: head.next, query: '', asked: 0, busy: false };
+  const say = (lead, failure) => {
+    clear(unread);
+    unread.hidden = !lead;
+    if (lead) unread.append(...cannotCheck(lead, failure, true));
+  };
+  const drawMore = () => {
+    const left = st.total - st.rows.length;
+    moreBtn.hidden = st.next === null || left <= 0;
+    moreBtn.disabled = st.busy;
+    moreBtn.textContent = 'Show ' + Math.min(pageRows, Math.max(left, 0)) + ' more';
+  };
+  const draw = () => {
+    clear(list);
+    for (const i of st.rows) list.append(scanItem(i));
+    if (!st.rows.length && unread.hidden) list.append(el('li', { class: 'empty', 'data-tone': !st.query && sec.emptyTone ? sec.emptyTone : null, text: st.query ? 'None matches.' : sec.empty || 'None.' }));
+    drawMore();
+  };
+  const sectionPath = (after, query) => 'scan/section/' + encodeURIComponent(sec.id) + '?after=' + after + (query ? '&q=' + encodeURIComponent(query) : '');
+  moreBtn.addEventListener('click', async () => {
+    if (st.busy || st.next === null) return;
+    st.busy = true;
+    drawMore();
+    const asked = st.asked;
+    const r = await scanPart(sectionPath(st.next, st.query));
+    st.busy = false;
+    if (asked !== st.asked) return drawMore();
+    if (r.data && Array.isArray(r.data.items)) {
+      say(null);
+      for (const i of r.data.items) { st.rows.push(i); list.append(scanItem(i)); }
+      st.total = r.data.total;
+      st.next = r.data.next;
+    } else say('The next rows could not be read.', r.failure || null);
+    drawMore();
+  });
+  const find = async (value) => {
+    const query = value.trim().toLowerCase();
+    const asked = ++st.asked;
+    st.busy = false;
+    if (!query) {
+      Object.assign(st, { rows: head.rows.slice(), total: head.total, next: head.next, query: '' });
+      say(null);
+      return draw();
+    }
+    const r = await scanPart(sectionPath(0, query));
+    if (asked !== st.asked) return;
+    st.query = query;
+    if (r.data && Array.isArray(r.data.items)) {
+      say(null);
+      Object.assign(st, { rows: r.data.items, total: r.data.total, next: r.data.next });
+    } else {
+      Object.assign(st, { rows: [], total: 0, next: null });
+      say('The matching rows could not be read.', r.failure || null);
+    }
+    draw();
+  };
+  const body = el('div', { class: 'scan-section-body' }, el('p', { class: 'note', text: sec.sentence }));
+  if (sec.filter) {
+    const id = 'scan-filter-' + sec.id;
+    const input = el('input', { type: 'search', id, class: 'scan-filter', placeholder: 'A mask, a project, a command', autocomplete: 'off', spellcheck: 'false', maxlength: '200' });
+    let timer = 0;
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => find(input.value), SCAN_FIND_WAIT_MS); });
+    body.append(el('div', { class: 'scan-filter-row' }, el('label', { for: id, text: 'Find one' }), input));
+  }
+  body.append(list, unread, moreBtn);
+  draw();
+  // The heading's mark says its tone in a shape too (✗ red, ! amber, ✓ green).
+  const icon = TONE_ICON[sec.tone];
+  const mark = () => (icon ? el('span', { class: 'tone-mark' }, svg(ICON[icon], 15)) : null);
+  if (sec.folded) {
+    box.append(el('details', { class: 'scan-fold' }, el('summary', {}, el('h2', { class: 'scan-fold-title' }, mark(), sec.heading)), body));
+  } else {
+    box.append(el('h2', {}, mark(), sec.heading), body);
+  }
+  return box;
+}
+
+/** The Scan page from its answer; no answer: it says it could not read it. */
+function renderScanPage(vm, failure) {
+  const sentence = document.getElementById('scan-sentence');
+  const read = document.getElementById('scan-read');
+  const notes = document.getElementById('scan-notes');
+  const sections = document.getElementById('scan-sections');
+  const riskBlock = document.getElementById('scan-risk-block');
+  const risk = document.getElementById('scan-risk');
+  const figure = document.getElementById('scan-figure');
+  clear(sentence); clear(notes); clear(sections); clear(risk); clear(figure);
+  if (!vm) {
+    document.getElementById('scan-headline').textContent = 'What your agents already sent to the AI';
+    sentence.append(...cannotCheck('The last scan could not be read.', failure, true));
+    read.hidden = true; notes.hidden = true; riskBlock.hidden = true; figure.hidden = true;
+    return;
+  }
+  const headline = document.getElementById('scan-headline');
+  clear(headline);
+  if (vm.tone === 'bad' || vm.tone === 'ok') headline.append(el('span', { class: 'tone-mark' }, svg(vm.tone === 'ok' ? ICON.check : ICON.x, 22)));
+  headline.append(vm.headline);
+  document.getElementById('page-scan').dataset.tone = vm.tone || '';
+  sentence.append(textParts(vm.parts, vm.sentence));
+  figure.hidden = !vm.figure;
+  if (vm.figure) figure.append(scanFigure(vm.figure, vm.safeLine));
+  read.hidden = !vm.read;
+  read.textContent = vm.read || '';
+  notes.hidden = !(vm.notes && vm.notes.length);
+  for (const n of vm.notes || []) notes.append(el('li', {}, countWords(n)));
+  for (const sec of vm.sections || []) sections.append(scanSection(sec));
+  riskBlock.hidden = !(vm.risk && vm.risk.length);
+  // Worth a look: amber, with its mark (drawn once).
+  riskBlock.dataset.tone = 'warn';
+  const riskTitle = document.getElementById('scan-risk-title');
+  if (!riskTitle.querySelector('.tone-mark')) riskTitle.prepend(el('span', { class: 'tone-mark' }, svg(ICON.alert, 15)));
+  for (const r of vm.risk || []) risk.append(el('li', {}, countWords(r)));
+  const sug = document.getElementById('scan-suggested');
+  sug.hidden = !vm.suggested;
+  clear(sug);
+  if (vm.suggested) sug.append(vm.suggested, ' ', placeLink({ to: 'suggested', text: 'Review them' }));
+  const stop = document.getElementById('scan-stop');
+  clear(stop);
+  stop.append(textParts(vm.stopParts, ''));
+  const again = document.getElementById('scan-again');
+  clear(again);
+  again.append(textParts(vm.againParts, ''));
 }
 
 /** The first-run setup card (dashboard.md §4.25, "First-run card"). The
@@ -2149,7 +3324,8 @@ function askCard(ask, expanded) {
       const key = keyOf(v);
       if (offered.size && !offered.has(key)) continue;
       if (key === 'strip' && !offered.has(key)) continue;
-      const b = el('button', { type: 'button', class: 'btn' + (v.primary ? ' primary' : ''), text: said.get(key) || v.label, onclick: () => answer(ask, v, card) });
+      const words = said.get(key) || v.label;
+      const b = el('button', { type: 'button', class: 'btn' + (v.primary ? ' primary' : ''), text: words, onclick: () => answer(ask, { ...v, label: words }, card) });
       actions.append(b);
     }
   }
@@ -2207,7 +3383,7 @@ function askSources(ask, card) {
     if (s.always) {
       li.append(el('button', { type: 'button', class: 'btn ask-source-always', text: s.always, onclick: () => alwaysSource(ask, s, card) }));
     } else if (s.noAlways) {
-      li.append(el('div', { class: 'note ask-source-why', text: s.noAlways }));
+      li.append(el('div', { class: 'note ask-source-why' }, textParts(s.noAlwaysParts, s.noAlways)));
     }
     list.append(li);
   }
@@ -2274,6 +3450,7 @@ async function answer(ask, verb, card) {
     S.approvalsAsk = null;
     if (S.page === 'approvals') history.replaceState(history.state, '', routeHref('approvals'));
   }
+  answerLine(place, card, ask, verb);
   answerWorked(place, card);
   // The agent page reads it again after (loadHome): a read of it asked
   // before this answer still has the question waiting (readsInOrder).
@@ -2289,12 +3466,88 @@ function showAskError(card, text) {
   // a refusal (the poll no longer redraws the card that would turn it off).
   const typed = card.querySelector('.proposal-confirm');
   const allow = card.querySelector('.proposal-allow');
-  if (typed && allow) allow.disabled = typed.value !== 'ALLOW';
+  if (typed && allow) allow.disabled = !typedAllow(typed.value);
   let e = card.querySelector('.ask-error');
   // Its id: the button pressed, given the focus back, is described by it
   // (focusAnswered).
   if (!e) { e = el('div', { class: 'ask-error', id: 'ask-error-' + (++askErrorSeq) }); card.append(e); }
   setWords(e, text);
+}
+
+/** What a held message's answer did, by its answer and scope, led by the
+ *  words Answered earlier says it with (ANSWERED_OUTCOME_WORDS), then what
+ *  the AI reads: from its next request when the request already went. */
+const PROMPT_ANSWERED = {
+  'send once': 'Sent as written: the AI reads your message as you wrote it.',
+  'send session': 'Sent as written for this session: the AI reads your message as you wrote it.',
+  'mask once': 'Sent masked: the AI reads your message with that part masked.',
+  'cancel once': 'Cancelled: the AI does not read your message.',
+};
+/** After an answer that worked, the list its card was in (Home's Approvals
+ *  waiting, Approvals' Waiting for your answer, the session page's Needs
+ *  your OK) shows one line where the card was (dashboard.md §4.25 *An
+ *  answer says what it did*): what you chose and about what, the one thing
+ *  left to do (the ask's `afterAllow`: "Tell Claude Code to try again.",
+ *  "The program goes on now."; a blocked send, "Nothing was sent."), and
+ *  Change your answer, which opens the answered row on Approvals
+ *  (markApprovalsAsk). It names only what the card named. Until 2026-10-22
+ *  the card just went: a person who answered from Home never read the
+ *  card's "tell the agent to try again", and waited for an agent that would
+ *  not try again on its own. The line replaces the place's last one, is
+ *  put back by each draw of its list (putAnswerLine) at the rank its card
+ *  had, and goes with the page (dropAnswerLines). */
+function answerLine(place, card, ask, verb) {
+  if (!place || !ANSWER_LINE_PLACES.has(place)) return;
+  dropAnswerLine(place);
+  const list = document.getElementById(ANSWER_PLACES[place]);
+  const rank = Math.max(0, [...drawnCards(list).keys()].indexOf(card.dataset.id));
+  const node = el('div', { class: 'answer-line', role: 'status', 'data-answer-line': place });
+  if (verb.prompt) node.append(PROMPT_ANSWERED[verb.prompt + ' ' + (verb.scope || 'once')] || 'Answered.');
+  else {
+    const allowed = verb.approve || verb.strip;
+    const head = verb.strip ? 'Allowed without the secret'
+      : !verb.approve ? 'Blocked'
+        : verb.scope === 'once' ? 'Allowed once'
+          : verb.label === 'Allow this session' ? 'Allowed for this session' : 'Always allowed';
+    const what = Array.isArray(ask.whatParts) && ask.whatParts.length ? ask.whatParts : ask.sentence;
+    const after = !allowed ? (ask.family === 'send' ? 'Nothing was sent.' : '')
+      // The agent that asked has ended: none tries again (the card said so).
+      : ask.askerEnded ? 'Your answer counts the next time an agent asks.'
+        : typeof ask.afterAllow === 'string' ? ask.afterAllow : '';
+    const said = (what || []).map((p) => p.text).join('');
+    node.append(el('strong', { text: head + ':' }), ' ', askCellWords(what, said), /[.!?]$/.test(said) ? '' : '.', after ? ' ' + after : '');
+  }
+  node.append(' ', el('a', { href: routeHref('approvals', ask.id), 'data-page-link': 'approvals', 'data-ask': ask.id, class: 'answer-change', text: 'Change your answer' }));
+  S.answerLines.set(place, { id: ask.id, rank, visit: S.visit, node });
+}
+/** The places whose waiting questions leave a line once answered. */
+const ANSWER_LINE_PLACES = new Set(['home', 'approvals', 'agent']);
+/** After each draw of `place` into `list`: its line, back where its card
+ *  was (before the card now at that rank, else after the last card, else
+ *  first, above "Nothing is waiting for you."). One left from another
+ *  visit of the page goes. */
+function putAnswerLine(place, list) {
+  const a = S.answerLines.get(place);
+  if (!a) return;
+  if (a.visit !== S.visit || !list) { dropAnswerLine(place); return; }
+  const cards = [...drawnCards(list).values()];
+  const before = cards[a.rank] || (cards.length ? cards[cards.length - 1].nextSibling : list.firstChild);
+  if (before !== a.node) list.insertBefore(a.node, before || null);
+}
+function dropAnswerLine(place) {
+  const a = S.answerLines.get(place);
+  if (a) a.node.remove();
+  S.answerLines.delete(place);
+}
+/** The page changed: every line goes with it. */
+function dropAnswerLines() {
+  for (const place of [...S.answerLines.keys()]) dropAnswerLine(place);
+}
+/** The line `place` shows now, if any (the session page keeps Needs your
+ *  OK shown under it). */
+function hasAnswerLine(place) {
+  const a = S.answerLines.get(place);
+  return !!a && a.visit === S.visit;
 }
 
 /** The waiting questions of a list. `changesWait`: a rule change waits too
@@ -2331,7 +3584,8 @@ function renderAgents(home) {
   const hist = document.getElementById('home-history');
   hist.href = routeHref('history');
   const shown = home ? home.agents.filter((a) => a.state !== 'idle') : [];
-  if (sameAsDrawn('agents', home ? [home.history.total, shown.map((a) => rowDrawnFrom(a, 'startedAt'))] : ['failed', S.homeFailure])) return;
+  moveLastSteps(host, shown);
+  if (sameAsDrawn('agents', home ? [home.history.total, shown.map(liveDrawnFrom)] : ['failed', S.homeFailure])) return;
   if (!home) {
     hist.textContent = '';
     keepRows(host, [el('div', { class: 'empty' }, ...cannotCheck('Could not check which agents are running.', S.homeFailure, false))]);
@@ -2353,9 +3607,58 @@ function renderAgents(home) {
     if (!a.holds) bits.push('protection failed');
     if (a.waiting) bits.push(n(a.waiting, 'question waiting for you', 'questions waiting for you'));
     bits.push(...rowCounts(a));
-    return agentRow(a, dot, what, countsLine('sub', bits),
-      whenLine('agent-started', 'started', a.startedAt));
-  })));
+    return agentRow(a, dot, what, countsLine('sub', bits), liveWhen(a));
+  }, liveDrawnFrom(a))));
+}
+
+/** When a Running now row's agent last did something (`lastAt`, its last
+ *  event), or NaN when that says nothing more than its start: not known, or
+ *  within a minute of `startedAt` (a session that has only just begun). */
+function lastStepMs(a) {
+  const start = a.startedAt ? Date.parse(a.startedAt) : NaN;
+  const last = a.lastAt ? Date.parse(a.lastAt) : NaN;
+  return Number.isFinite(start) && Number.isFinite(last) && last - start > 60_000 ? last : NaN;
+}
+
+/** A Running now row's moment (dashboard.md §4.25 *Agents, not sessions*):
+ *  "started 6 hours ago · last step 2 minutes ago", so a session left open
+ *  in a forgotten terminal does not read like one working now; "started …"
+ *  alone when lastStepMs has nothing to add. The dot ends the first
+ *  `.when-phrase` and "last step" opens the second, so a narrow column
+ *  breaks only between them. The second moment is `time.agent-last`, which
+ *  moveLastSteps keeps current without drawing the row again. */
+function liveWhen(a) {
+  const line = whenLine('agent-started', 'started', a.startedAt);
+  const ms = lastStepMs(a);
+  if (!line || !Number.isFinite(ms)) return line;
+  line.lastChild.append(' ·');
+  line.append(' ', el('span', { class: 'when-phrase' }, 'last step ', el('time', { class: 'ago agent-last', datetime: new Date(ms).toISOString(), title: clockWords(ms), text: ago(ms) })));
+  return line;
+}
+
+/** What a Running now row is drawn from: rowDrawnFrom without `lastAt`, so
+ *  a working agent's next step does not draw its row again (*The rows you
+ *  read stay still*), with only whether it names a last step at all. */
+function liveDrawnFrom(a) {
+  return { ...rowDrawnFrom(a, 'startedAt'), stepped: Number.isFinite(lastStepMs(a)) };
+}
+
+/** Every poll, before Running now decides whether to draw: each row kept
+ *  in place takes its agent's last step into its `time.agent-last` (its
+ *  datetime, its words, its clock on hover), so the moment moves while the
+ *  row and a focused Details stay as they are. */
+function moveLastSteps(host, shown) {
+  for (const a of shown) {
+    const ms = lastStepMs(a);
+    if (!Number.isFinite(ms)) continue;
+    const row = [...host.children].find((x) => x.dataset.session === a.id);
+    const t = row && row.querySelector('time.agent-last');
+    const iso = new Date(ms).toISOString();
+    if (!t || t.getAttribute('datetime') === iso) continue;
+    t.setAttribute('datetime', iso);
+    t.textContent = ago(ms);
+    t.title = clockWords(ms);
+  }
 }
 
 /** A session row's first line under Running now, Earlier and History: what
@@ -2372,10 +3675,10 @@ function promptLine(a, none) {
 /** What each row keepRows left or made was drawn from (keptRow's `from`). */
 const ROW_DRAWN = new WeakMap();
 /** A row of a session list for keepRows: its session, what it is drawn
- *  from (rowDrawnFrom with the list's moment, the key sameAsDrawn reads),
- *  and how to draw it. */
-function keptRow(a, moment, make) {
-  return { key: a.id, from: JSON.stringify(rowDrawnFrom(a, moment)), make };
+ *  from (`drawn`, else rowDrawnFrom with the list's moment, the key
+ *  sameAsDrawn reads), and how to draw it. */
+function keptRow(a, moment, make, drawn) {
+  return { key: a.id, from: JSON.stringify(drawn || rowDrawnFrom(a, moment)), make };
 }
 /** Draws a session list the poll follows (Home's Running now and Earlier,
  *  History) without drawing again the rows that did not change
@@ -2413,7 +3716,7 @@ function keepRows(host, parts) {
  *  their row*). */
 function agentRow(a, dot, what, counts, when) {
   const row = el('div', { class: 'row agent', 'data-session': a.id });
-  row.append(el('div', { class: 'name' }, dot, a.agent, a.preview ? agentPreviewMark(a.preview) : null, a.notice ? agentNoticeMark(a.notice) : null));
+  row.append(el('div', { class: 'name' }, dot, a.agent, a.preview ? agentPreviewMark(a.preview) : null, a.notice ? agentNoticeMark(a.notice, a.noticeParts) : null));
   row.append(el('div', { class: 'agent-what' }, what, counts));
   row.append(el('div', { class: 'dim agent-when' }, when));
   const link = agentLink(a.id, 'Details');
@@ -2769,6 +4072,13 @@ function renderHistory(host, poll) {
   const h = S.history;
   const same = sameAsDrawn('history', [h.q, h.only, h.total, h.all, h.next, h.through, h.failure, h.rows.map((a) => rowDrawnFrom(a, a.state !== 'idle' ? 'startedAt' : 'lastAt'))]);
   if (poll && same) return false;
+  // Nothing on record at all, and no search or switch to undo: there is
+  // nothing to find, so no box (§4.25ae *An empty History has nothing to
+  // find*); the poll that brings the first session brings it back. A read
+  // that failed does not say the record is empty, and a box that holds the
+  // focus (emptied, to an empty record) stays.
+  const form = document.getElementById('history-search');
+  if (!h.failure) form.hidden = !h.q && !h.only && h.all === 0 && !form.contains(document.activeElement);
   // A search's count: "3 of 214 sessions" (none while it finds none: the
   // list says so, nor without a search). With the switch, what the list
   // keeps: how many it keeps is not known before every session is read.
@@ -2807,8 +4117,9 @@ function renderHistory(host, poll) {
     return true;
   }
   if (!h.rows.length) {
-    keepRows(host, [el('div', { class: 'empty' }, 'No session has been recorded yet. Start one with ',
-      ownCode('mandu claude'), ' or ', ownCode('mandu codex'), '.')]);
+    // Home's *Get started* step, in the list's words.
+    keepRows(host, [el('div', { class: 'empty' }, 'No session has been recorded yet. Start your agent through Mandu, ',
+      ownCode('mandu claude'), ' or ', ownCode('mandu codex'), ', and it shows up here.')]);
     return true;
   }
   // Each day the rows are on gets its heading before its first row
@@ -3012,7 +4323,7 @@ const CHANGES_MAX = 500;
 function startPastOver() {
   S.answered = null;
   S.answeredSought = null;
-  S.changes = { want: CHANGES_PAGE, last: null, failure: null, out: 0 };
+  S.changes = { want: CHANGES_PAGE, last: null, failure: null, out: 0, read: false };
   if (S.home) renderAnswered(S.home);
 }
 
@@ -3024,9 +4335,16 @@ function startPastOver() {
 function answeredList(home) {
   const rows = Array.isArray(home.answered) ? home.answered : [];
   const homeTotal = Number.isFinite(home.answeredTotal) ? home.answeredTotal : rows.length;
-  const first = { rows, next: homeTotal > rows.length && rows.length ? rows[rows.length - 1].id : null };
   const a = S.answered;
-  if (!a) return { ...first, total: homeTotal, failure: null };
+  // A search (§4.25 *Finding an answer*) lists what its reads found, never
+  // the newest 20 of Home: the rows of the last search until those of the
+  // new one come (`q` the search they answer), or none yet (`pending`).
+  if (S.answeredQ) {
+    if (!a || !a.q) return { rows: [], next: null, total: 0, failure: null, q: S.answeredQ, all: homeTotal, pending: true };
+    return { rows: a.rows, next: a.next, total: a.total, failure: a.failure, q: a.q, all: a.all };
+  }
+  const first = { rows, next: homeTotal > rows.length && rows.length ? rows[rows.length - 1].id : null };
+  if (!a || a.q) return { ...first, total: homeTotal, failure: null };
   const kept = historyFollowed(a, first);
   return { ...kept, total: Math.max(homeTotal, a.total || 0, kept.rows.length), failure: a.failure };
 }
@@ -3040,7 +4358,7 @@ function approvalsKey(home) {
 }
 /** What Answered earlier is drawn from (sameAsDrawn). */
 function answeredKey(list) {
-  return [list.rows, list.total, list.next, list.failure];
+  return [list.rows, list.total, list.next, list.failure, list.q || '', list.all || 0, !!list.pending];
 }
 
 /** Draws Answered earlier when what it shows changed (`force`: always, as
@@ -3065,16 +4383,18 @@ function renderAnswered(home, force) {
 async function moreAnswered() {
   const home = S.home;
   if (!home || !home.waitingKnown) return;
+  // Not while the first read of a search is out: the rows drawn are of another.
+  if (S.answeredQ && (!S.answered || S.answered.q !== S.answeredQ)) return;
   const host = document.getElementById('approvals-answered');
   const drawnNow = answeredList(home);
-  const a = S.answered || (S.answered = { rows: [], next: null, total: 0, failure: null, out: 0, homeAt: S.homeAsked });
+  const a = S.answered || (S.answered = { q: '', rows: [], next: null, total: 0, all: 0, failure: null, out: 0, homeAt: S.homeAsked });
   Object.assign(a, { rows: drawnNow.rows.slice(), next: drawnNow.next, total: drawnNow.total });
   const had = new Set(a.rows.map((x) => x.id));
   const asked = ANSWERED_READS.ask();
   let r = null;
   let failure = null;
   a.out++;
-  try { r = await apiGet('home/answered?after=' + enc(a.next || '') + '&limit=' + ANSWERED_PAGE); } catch (err) { failure = readFailure(err); }
+  try { r = await apiGet('home/answered?after=' + enc(a.next || '') + '&limit=' + ANSWERED_PAGE + answeredFind(a.q)); } catch (err) { failure = readFailure(err); }
   a.out--;
   a.homeAt = S.homeAsked;
   if (S.answered !== a || !ANSWERED_READS.take(asked)) return;
@@ -3084,6 +4404,7 @@ async function moreAnswered() {
     a.rows.push(...fresh);
     a.next = r.next || null;
     a.total = r.total || 0;
+    a.all = historyAll(r);
     a.failure = null;
     first = fresh.length ? fresh[0].id : null;
   } else a.failure = failure;
@@ -3103,15 +4424,17 @@ async function moreAnswered() {
  *  leaves the rows drawn. */
 async function followAnswered(homeAsked) {
   const a = S.answered;
-  if (S.page !== 'approvals' || !a || a.out || a.homeAt >= homeAsked) return;
+  // Nor while the first read of a search is out (readAnswersFound): it would
+  // read the search before it, and its answer, asked later, would win.
+  if (S.page !== 'approvals' || !a || a.out || a.homeAt >= homeAsked || (a.q || '') !== S.answeredQ) return;
   const asked = ANSWERED_READS.ask();
   let r = null;
   a.out++;
-  try { r = await apiGet('home/answered?limit=' + Math.min(Math.max(a.rows.length, ANSWERED_PAGE), ANSWERED_PAGE_MAX)); } catch { r = null; }
+  try { r = await apiGet('home/answered?limit=' + Math.min(Math.max(a.rows.length, ANSWERED_PAGE), ANSWERED_PAGE_MAX) + answeredFind(a.q)); } catch { r = null; }
   a.out--;
   a.homeAt = S.homeAsked;
   if (S.page !== 'approvals' || S.answered !== a || !ANSWERED_READS.take(asked) || !r) return;
-  Object.assign(a, historyFollowed(a, r), { total: r.total || 0, failure: null });
+  Object.assign(a, historyFollowed(a, r), { total: r.total || 0, all: historyAll(r), failure: null });
   const place = pollPlace(document.getElementById('main'));
   if (renderAnswered(S.home)) pollRefocus(place);
 }
@@ -3136,12 +4459,105 @@ function seekAnswered(id, home) {
     if (at >= 0) {
       const kept = rows.slice(0, Math.ceil((at + 1) / ANSWERED_PAGE) * ANSWERED_PAGE);
       const more = kept.length < rows.length || !!r.next;
-      S.answered = { rows: kept, next: more ? kept[kept.length - 1].id : null, total: r.total || 0, failure: null, out: 0, homeAt: S.homeAsked };
+      S.answered = { q: '', rows: kept, next: more ? kept[kept.length - 1].id : null, total: r.total || 0, all: r.total || 0, failure: null, out: 0, homeAt: S.homeAsked };
       if (S.home) renderAnswered(S.home, true);
     }
     if (S.approvalsAsk === id) markApprovalsAsk();
   })();
   return true;
+}
+
+// ── Finding an answer (dashboard.md §4.25 *Finding an answer*) ─────────────
+let answeredSearchTimer = 0;
+/** The search `q` of Answered earlier as the end of a read (`&q=…`), or ''. */
+function answeredFind(q) {
+  return q ? '&q=' + enc(q) : '';
+}
+/** The words in the box, read: once the typing stops (HISTORY_SEARCH_MS), or at
+ *  once (`now`, Enter, Escape or Clear), as the search of History. A search that
+ *  changed lists only its matches, newest 20 first, and writes itself into
+ *  the address (replaced, not pushed); it drops an answer the address
+ *  opened (`/approvals/<id>`) with its mark. Only the list is drawn again,
+ *  so the focus stays in the box. */
+function findAnswers(text, now) {
+  clearTimeout(answeredSearchTimer);
+  const run = () => {
+    if (S.page !== 'approvals') return;
+    const q = historyQuery(text);
+    // The same search again reads again only when its read failed.
+    if (q === S.answeredQ && !(q && S.answered && S.answered.q === q && S.answered.failure && !S.answered.rows.length)) return;
+    S.answeredQ = q;
+    if (S.approvalsAsk) {
+      S.approvalsAsk = null;
+      markApprovalsAsk();
+    }
+    const href = stateHref();
+    if (location.pathname + location.search !== href) history.replaceState(history.state, '', href);
+    if (q) readAnswersFound();
+    else S.answered = null;
+    if (S.home) renderAnswered(S.home);
+  };
+  if (now) run();
+  else answeredSearchTimer = setTimeout(run, HISTORY_SEARCH_MS);
+}
+/** The search the address names is the one Answered earlier lists: read
+ *  when it is not (a reload, a typed address, Back to another search);
+ *  none, and the rows drawn are those of a search: back to the newest. */
+function answeredSearchNow() {
+  const a = S.answered;
+  if (S.answeredQ) {
+    if (!a || a.q !== S.answeredQ) readAnswersFound();
+  } else if (a && a.q) S.answered = null;
+  if (S.home) renderAnswered(S.home);
+}
+/** The first ANSWERED_PAGE answers a search finds (GET
+ *  /api/home/answered?q=); Show more and the poll then go on as without
+ *  one. A read that fails says why where the rows go. */
+async function readAnswersFound() {
+  const q = S.answeredQ;
+  const asked = ANSWERED_READS.ask();
+  let r = null;
+  let failure = null;
+  try { r = await apiGet('home/answered?limit=' + ANSWERED_PAGE + answeredFind(q)); } catch (err) { failure = readFailure(err); }
+  if (S.page !== 'approvals' || S.answeredQ !== q || !ANSWERED_READS.take(asked)) return;
+  S.answered = r
+    ? { q, rows: Array.isArray(r.rows) ? r.rows : [], next: r.next || null, total: r.total || 0, all: historyAll(r), failure: null, out: 0, homeAt: S.homeAsked }
+    : { q, rows: [], next: null, total: 0, all: 0, failure, out: 0, homeAt: S.homeAsked };
+  if (S.home) renderAnswered(S.home, true);
+}
+/** Clear: the box empty, the newest answers listed again, the box focused. */
+function clearAnsweredSearch() {
+  const box = document.getElementById('answered-q');
+  box.value = '';
+  findAnswers('', true);
+  box.focus();
+}
+function wireAnsweredSearch() {
+  const box = document.getElementById('answered-q');
+  box.addEventListener('input', () => findAnswers(box.value, false));
+  document.getElementById('answered-search').addEventListener('submit', (e) => {
+    e.preventDefault();
+    findAnswers(box.value, true);
+  });
+  // Escape empties the box (a plain one, and only with words in it: an
+  // empty box leaves Escape to whatever else takes it), as on Rules.
+  box.addEventListener('keydown', (e) => {
+    if (!plainEscape(e) || !box.value) return;
+    e.preventDefault();
+    clearAnsweredSearch();
+  });
+}
+/** The box and its count line (§4.25 *Finding an answer*): hidden while
+ *  there is no answer to find and no search (the box keeps a focus it
+ *  holds); "3 of 63 answers match" while a search finds some. */
+function drawAnsweredSearch(list) {
+  const form = document.getElementById('answered-search');
+  const count = document.getElementById('answered-count');
+  if (!list) return;
+  if (!list.failure && !list.pending) form.hidden = !list.q && list.total === 0 && !form.contains(document.activeElement);
+  const counted = !!list.q && list.rows.length > 0;
+  count.textContent = counted ? list.total + ' of ' + n(Math.max(list.all || 0, list.total), 'answer', 'answers') + (list.total === 1 ? ' matches' : ' match') : '';
+  count.hidden = !counted;
 }
 
 /** Approvals › Answered earlier (`list`: as answeredList gives it). The state of each
@@ -3150,9 +4566,23 @@ function seekAnswered(id, home) {
  *  and Show more (moreAnswered). */
 function drawAnswered(host, home, list) {
   clear(host);
+  drawAnsweredSearch(list);
   if (!home || !home.waitingKnown || !list) {
     // No link: Waiting for your answer above has it.
     host.append(el('div', { class: 'empty' }, ...cannotCheck('Could not check your earlier answers.', home ? null : S.homeFailure, false)));
+    return;
+  }
+  if (list.pending) {
+    host.append(el('div', { class: 'empty', text: 'Finding your answers\u2026' }));
+    return;
+  }
+  if (!list.rows.length && list.q) {
+    // A search that found none, or whose read failed, says so, with Clear.
+    const clearBtn = el('button', { type: 'button', class: 'btn small history-clear', text: 'Clear' });
+    clearBtn.addEventListener('click', clearAnsweredSearch);
+    host.append(el('div', { class: 'empty' }, ...(list.failure
+      ? [...cannotCheck('Could not find your answers.', list.failure, false), ' ']
+      : ['No answer matches \u201c' + list.q + '\u201d. ']), clearBtn));
     return;
   }
   if (!list.rows.length) {
@@ -3164,7 +4594,11 @@ function drawAnswered(host, home, list) {
     // Its names are kept whole, as on the card it answered.
     const said = keepNamesWhole(sentenceNode(a.sentence, 'answered-sentence'));
     nameBy(row, said);
-    const what = answeredWhat(said, a.decidedAt, a);
+    // A standing answer (Always allowed, Blocked) is one Rules keeps: its
+    // line links the row there (§4.25 *A remembered answer opens where
+    // Rules keeps it*).
+    const kept = !a.staleNote && (a.outcome === 'allowed' || a.outcome === 'blocked');
+    const what = answeredWhat(said, a.decidedAt, kept ? { ...a, kept: true } : a);
     // An answer that applies to nothing any more says why, and offers no
     // change (dashboard.md §4.34 "Answers that no longer apply").
     if (a.staleNote) what.append(el('div', { class: 'note answered-stale', text: a.staleNote }));
@@ -3191,7 +4625,7 @@ function drawAnswered(host, home, list) {
     const shown = list.rows.length;
     host.append(moreLine('answered-more', list.failure
       ? cannotCheck('Could not read more of your answers.', list.failure, false)
-      : ['Showing ' + shown + ' of ' + n(Math.max(list.total, shown), 'answer', 'answers') + '.'], moreAnswered));
+      : ['Showing ' + shown + ' of ' + n(Math.max(list.total, shown), 'answer', 'answers') + (list.q ? ' that match' : '') + '.'], moreAnswered));
   }
 }
 
@@ -3234,20 +4668,38 @@ function answerLabel(outcome) {
  *  and an Allowed once answer, which Rules does not list, had no way to its
  *  moment. A rule change your agent made or asked for (`asked` with no id)
  *  links the agent page at its top, the link named by what the change did
- *  (`asked.about`). No session recorded: no link. */
+ *  (`asked.about`). No session recorded: no link. A standing answer
+ *  (`asked.kept`) ends the line with Kept in Rules (keptLink). */
 function answeredWhat(words, ms, asked) {
   const what = el('div', { class: 'answered-what' }, words);
   const when = whenNode(ms);
   const sessions = asked && Array.isArray(asked.sessions) ? asked.sessions : [];
-  if (!when && !sessions.length) return what;
+  const kept = !!asked && asked.kept === true && typeof asked.id === 'string' && asked.id !== '';
+  if (!when && !sessions.length && !kept) return what;
   const line = el('div', { class: 'dim answered-when' }, when);
   if (sessions.length) {
     if (when) line.append('. ');
     line.append(askLink(sessions[sessions.length - 1], asked.id, undefined, asked.about));
     if (sessions.length > 1) line.append(' (asked in ' + sessions.length + ' sessions, this shows the latest)');
   }
+  if (kept) {
+    if (when || sessions.length) line.append('. ');
+    line.append(keptLink(asked.id));
+  }
   what.append(line);
   return what;
+}
+
+/** "Kept in Rules" (dashboard.md §4.25 *A remembered answer opens where
+ *  Rules keeps it*): Rules with the row of this answer open (openAnswerRule),
+ *  where Remove forgets it. Its address names the row (`/rules#answer-<id>`),
+ *  so a modifier click is left to the browser: a new tab at the same place. */
+function keptLink(id) {
+  return el('a', { href: routeHref('rules') + '#answer-' + enc(id), class: 'kept-link', text: 'Kept in Rules', onclick: (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
+    e.preventDefault();
+    openAnswerRule(id);
+  } });
 }
 
 /**
@@ -3269,18 +4721,27 @@ function markApprovalsAsk() {
   // Or the waiting rule change a notification opened it for (§4.25
   // *Notifications*), drawn whatever the answer about the asks.
   const proposal = id ? find('#approvals-proposals .proposal') : null;
-  if (!proposal && (!id || !S.home || !S.home.waitingKnown)) { note.hidden = true; return; }
-  const card = proposal || find('#approvals-waiting .ask');
-  const row = card ? null : find('#approvals-answered .row.answered');
+  // Or a change made: its Rule changes row, by its own id or by that of the
+  // request it answered (§4.25 *Details*).
+  const change = id && !proposal ? ruleChangeRow(id) : null;
+  const ruleChange = !!id && RULE_CHANGE_ID.test(id);
+  // Nothing is said before the list that would hold it is read.
+  const known = proposal || change ? true : ruleChange ? !!S.changes.read : !!(id && S.home && S.home.waitingKnown);
+  if (!known) { note.hidden = true; return; }
+  const card = proposal || (ruleChange ? null : find('#approvals-waiting .ask'));
+  const row = card ? null : change || (ruleChange ? null : find('#approvals-answered .row.answered'));
   // An answer older than the rows drawn is read, then marked in place
   // (seekAnswered): never "no longer waiting" while it may be there.
-  const seeking = !card && !row && seekAnswered(id, S.home);
+  const seeking = !card && !row && !ruleChange && seekAnswered(id, S.home);
   const target = card || row;
   if (target) target.classList.add('focus');
-  note.hidden = !!card || seeking;
-  note.textContent = card || seeking ? ''
+  const words = card || seeking || (change && change.dataset.id === id) ? ''
+    : change ? 'That rule change was already answered. The change it made is marked below, under Rule changes.'
+    : ruleChange ? ruleChangeGone(id)
     : row ? 'That question was already answered. Its answer is marked below, under Answered earlier.'
     : 'That question is no longer waiting for you.';
+  note.hidden = !words;
+  note.textContent = words;
   if (seeking) return;
   const to = target || note;
   if (S.page === 'approvals') focusMarked(to, false);
@@ -3290,6 +4751,35 @@ function markApprovalsAsk() {
   // Back to Approvals: the place you left, not that of the card (setPage).
   if (S.approvalsPlace) return;
   requestAnimationFrame(() => { if (to.scrollIntoView) to.scrollIntoView({ block: 'center' }); });
+}
+
+/** The policy server's ids of a rule change: a request (`pp-…`) or a change
+ *  made (`pc-…`); a question's id is neither. */
+const RULE_CHANGE_ID = /^p[pc]-/;
+
+/** Approvals is open for a rule change (a link to `/approvals/<pp-…|pc-…>`),
+ *  which Rule changes may hold; a question is marked in its own lists. */
+function linksRuleChange() {
+  return typeof S.approvalsAsk === 'string' && RULE_CHANGE_ID.test(S.approvalsAsk);
+}
+
+/** The Rule changes row of the change `id`, or of the change the request
+ *  `id` made once approved; null when neither is drawn. Compared as values. */
+function ruleChangeRow(id) {
+  const rows = [...document.querySelectorAll('#approvals-rule-history .row')];
+  return rows.find((x) => x.dataset.id === id) || rows.find((x) => x.dataset.proposal === id) || null;
+}
+
+/** The note for a rule change that is neither waiting nor drawn under Rule
+ *  changes. A request, with every change listed: it changed nothing (declined,
+ *  or asked again in new words). Otherwise it may be past the rows drawn,
+ *  which Show more reaches. */
+function ruleChangeGone(id) {
+  const st = S.changes;
+  const all = st.last && Array.isArray(st.last.changes) ? st.last.changes : null;
+  const more = !!all && all.length > st.want;
+  if (id.startsWith('pp-') && all && !more) return 'That rule change is no longer waiting, and it changed none of your rules.';
+  return 'That rule change is not among the changes listed.' + (more ? ' Show more, under Rule changes, reaches older ones.' : '');
 }
 
 // ── Rule changes the agent asked for (policy-surface.md §8.6) ─────────────
@@ -3362,7 +4852,19 @@ function renderHomeProposalLink() {
   const text = !S.proposals.every(askedByAgent)
     ? n(S.proposals.length, 'rule change waits', 'rule changes wait') + ' for you in Approvals'
     : n(S.proposals.length, 'rule change your agent asked for is', 'rule changes your agent asked for are') + ' in Approvals';
-  host.append(el('a', { href: routeHref('approvals'), 'data-page-link': 'approvals', class: 'more', text }));
+  host.append(proposalsLink(S.proposals, { class: 'more', text }));
+}
+
+/** The id of the one rule change `list` holds, or null for none or several. */
+function oneProposal(list) {
+  return list.length === 1 && typeof list[0].id === 'string' && list[0].id !== '' ? list[0].id : null;
+}
+/** A link to Approvals for the waiting rule changes `list`: with exactly one,
+ *  at that change, marked (`/approvals/<id>`, markApprovalsAsk); with
+ *  several, Approvals itself (dashboard.md §4.25 *Details*). */
+function proposalsLink(list, attrs) {
+  const one = oneProposal(list);
+  return el('a', { href: routeHref('approvals', one), 'data-page-link': 'approvals', 'data-ask': one, ...attrs });
 }
 
 /** The rows of a rule change (a request, a change made, what it would let), each
@@ -3378,18 +4880,43 @@ function rowList(rows, cls) {
   return ul;
 }
 
+/** The agent and folder of the session that asked for a rule change, from
+ *  the rows of Home in the same poll (dashboard.md *A rule change and the agent
+ *  that asked*): `{ agent, cwd }`, either null when unknown (an agent of
+ *  no known kind keeps "Your agent"). Null for a request not from your
+ *  agent, or whose session Home does not model: the card reads as the
+ *  server words it. */
+function proposalAsker(p) {
+  if (!p.byAgent || !p.session || p.onDisk) return null;
+  const row = ((S.home && S.home.agents) || []).find((a) => a && a.id === p.session);
+  if (!row) return null;
+  const agent = typeof row.agent === 'string' && row.agent && row.agent !== 'The agent' ? row.agent : null;
+  const cwd = typeof row.cwd === 'string' && row.cwd ? row.cwd : null;
+  return agent || cwd ? { agent, cwd } : null;
+}
+
 function proposalCard(p) {
   const card = el('div', { class: 'ask expanded proposal', 'data-id': p.id });
   const top = el('div', { class: 'ask-top' });
   top.append(el('div', { class: 'ask-icon' }, svg(ICON.lock)));
   const body = el('div', { class: 'ask-body' });
-  const headline = el('div', { class: 'ask-sentence', text: p.headline || (p.requester || 'Your agent') + ' wants to change a rule' });
+  // A request of your agent names the agent that asked, as the card of a
+  // question does ("Claude Code wants to change a rule"); the words of the
+  // server when Home does not know the session.
+  const asker = proposalAsker(p);
+  const headline = el('div', {
+    class: 'ask-sentence',
+    text: asker && asker.agent ? asker.agent + ' wants to change a rule' : p.headline || (p.requester || 'Your agent') + ' wants to change a rule',
+  });
   body.append(headline);
   nameBy(card, headline);
   // The moment alone, with no period, as the waiting cards below (askCard);
-  // no moment recorded, no words.
+  // no moment recorded, no words. After it, the folder of the session that
+  // asked, in the words of a question card (askedFrom: "· from Claude Code in
+  // ~/projects/shop").
   const when = whenNode(p.createdAt);
-  body.append(el('div', { class: 'ask-sub' }, when && p.onDisk ? 'Seen ' : null, when));
+  const from = when && asker && asker.cwd ? askedFrom({ askerCwd: asker.cwd, askerAgent: asker.agent || 'your agent', askerSessions: 1 }) : null;
+  body.append(el('div', { class: 'ask-sub' }, when && p.onDisk ? 'Seen ' : null, when, from));
   top.append(body);
   card.append(top);
   const rows = rowList(p.rows, 'proposal-rows');
@@ -3434,20 +4961,63 @@ function proposalCard(p) {
   // The agent that asked, as a question card links it (dashboard.md §4.25
   // *A rule change and the agent that asked*).
   if (p.session) foot.append(askLink(p.session, null, p.overBroad ? 'font-size:14px' : 'margin-right:auto;font-size:14px', about));
+  let hint = null;
   if (p.overBroad) {
-    const input = el('input', { type: 'text', class: 'proposal-confirm', placeholder: 'Type ALLOW to confirm', 'aria-label': rowControlName('Type ALLOW to confirm this wide change', about) });
-    input.value = S.proposalTyped.get(p.id) || '';
-    allow.disabled = input.value !== 'ALLOW';
-    input.addEventListener('input', () => {
-      S.proposalTyped.set(p.id, input.value);
-      allow.disabled = input.value !== 'ALLOW';
-    });
-    foot.append(wideWhy(p.overBroadWhy, p.warnings && p.warnings.length), input);
+    const box = confirmBox(allow, rowControlName('Type ALLOW to confirm this wide change', about), S.proposalTyped.get(p.id), (v) => S.proposalTyped.set(p.id, v));
+    hint = box.hint;
+    foot.append(wideWhy(p.overBroadWhy, p.warnings && p.warnings.length), box.input);
   }
   actions.append(allow, notNow);
   foot.append(actions);
+  if (hint) foot.append(hint);
   card.append(foot);
   return card;
+}
+
+/** The word typed in a wide change's box counts in any case, with the
+ *  spaces around it trimmed: a phone keyboard capitalises the first letter
+ *  ("Allow"), and autocomplete adds a space (dashboard.md §4.25 *The typed
+ *  ALLOW takes any case*). The word must still be typed. */
+function typedAllow(value) {
+  return String(value == null ? '' : value).trim().toUpperCase() === 'ALLOW';
+}
+let confirmHintSeq = 0;
+/** The Type ALLOW box of a wide change, for `button` (Allow, or Describe's
+ *  Apply), which it keeps off until the word is typed. It asks a phone for
+ *  capitals and no corrections; Enter presses the button when it is on;
+ *  while it holds a word that does not count, the hint line under the foot
+ *  says so and describes the box. `value`: what was typed before (a redraw);
+ *  `onType`: told each change. Returns the box and its hint, for the caller
+ *  to place. */
+function confirmBox(button, label, value, onType) {
+  const hint = el('div', { class: 'confirm-hint', id: 'confirm-hint-' + (++confirmHintSeq), text: 'Type the word ALLOW to turn on ' + button.textContent + '.' });
+  const input = el('input', {
+    type: 'text', class: 'proposal-confirm', placeholder: 'Type ALLOW to confirm', 'aria-label': label,
+    autocapitalize: 'characters', autocorrect: 'off', spellcheck: 'false', autocomplete: 'off',
+  });
+  input.value = value || '';
+  const sync = () => {
+    const ok = typedAllow(input.value);
+    button.disabled = !ok;
+    hint.hidden = ok || !input.value.trim();
+    if (hint.hidden) input.removeAttribute('aria-describedby');
+    else input.setAttribute('aria-describedby', hint.id);
+  };
+  sync();
+  input.addEventListener('input', () => {
+    if (onType) onType(input.value);
+    sync();
+  });
+  // Enter presses the button as a click would, focus included, so what
+  // follows an answer is the same; off (or busy, its POST out), nothing.
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault();
+    if (button.disabled || !typedAllow(input.value)) return;
+    button.focus();
+    button.click();
+  });
+  return { input, hint };
 }
 
 /** The foot line of a wide change, before its Type ALLOW field: what it
@@ -3487,6 +5057,12 @@ async function decideProposal(p, verdict, card) {
   } finally {
     S.busy.delete(p.id);
   }
+  // Answered here: as a question's card (decide), Approvals no longer points
+  // at it, so the note never calls your own answer an earlier one.
+  if (S.approvalsAsk === p.id) {
+    S.approvalsAsk = null;
+    if (S.page === 'approvals') history.replaceState(history.state, '', routeHref('approvals'));
+  }
   answerWorked(place, card);
   forgetDrawn();
   await loadHome();
@@ -3499,7 +5075,9 @@ function renderProposals() {
   // The same requests: the cards stay as they are, with what you typed, the
   // focus and the words of an answer (sameAsDrawn). Drawn again, each ALLOW
   // field keeps what you typed in it, and the focus when it had it.
-  if (sameAsDrawn('proposals', [S.proposals, S.proposalPatternsHidden, S.proposalNotice])) return;
+  // Who asked is read from the rows of Home: a poll that brings the row of
+  // the session draws the card again, with its agent and folder.
+  if (sameAsDrawn('proposals', [S.proposals, S.proposals.map(proposalAsker), S.proposalPatternsHidden, S.proposalNotice])) return;
   const ids = new Set(S.proposals.map((p) => p.id));
   for (const id of S.proposalTyped.keys()) if (!ids.has(id)) S.proposalTyped.delete(id);
   const active = document.activeElement;
@@ -3546,13 +5124,21 @@ async function loadRuleHistory(more) {
   // the poll is dropped; one of Show more draws the list again, its button on.
   const taken = CHANGE_READS.take(asked);
   if (!taken && !more) return;
+  // Read once: a link to a rule change not listed can say so (markApprovalsAsk).
+  const firstRead = taken && !more && !st.read;
+  if (taken && !more) st.read = true;
   const r = taken && got && got.ok ? got.data : null;
   const had = st.last && Array.isArray(st.last.changes) ? st.last.changes.slice(0, st.want).map((x) => x.id) : [];
   if (r) Object.assign(st, { want, last: r, failure: null });
   else if (more && taken) st.failure = !got || got.status === 0 ? 'gone' : got.data && got.data.unreachable ? 'down' : got.status;
   else if (!more) st.last = null;
-  // The same changes: the rows stay as they are, the words of an Undo too.
-  if (sameAsDrawn('rule-history', [st.last, st.want, st.failure]) && !more) return;
+  // The same changes: the rows stay as they are, the words of an Undo too,
+  // and so does a mark on one. The first read of a visit can still answer a
+  // link to a change these rows do not hold (markApprovalsAsk).
+  if (sameAsDrawn('rule-history', [st.last, st.want, st.failure]) && !more) {
+    if (firstRead && linksRuleChange()) markApprovalsAsk();
+    return;
+  }
   const place = more ? null : pollPlace(host);
   const all = st.last && Array.isArray(st.last.changes) ? st.last.changes : [];
   const changes = all.slice(0, st.want);
@@ -3562,7 +5148,9 @@ async function loadRuleHistory(more) {
   for (const c of changes) {
     // Its state: whether Undo is on it, so the words of a refused Undo go
     // once it was undone.
-    const row = el('div', { class: 'row answered', 'data-id': c.id, 'data-state': c.undoable ? 'undoable' : 'done' });
+    // `data-proposal`: the request it answered, which a link to that
+    // request marks it by (markApprovalsAsk).
+    const row = el('div', { class: 'row answered', 'data-id': c.id, 'data-proposal': typeof c.proposalId === 'string' ? c.proposalId : null, 'data-state': c.undoable ? 'undoable' : 'done' });
     const said = el('div', { text: c.sentence });
     nameBy(row, said);
     const list = rowList(c.rows, 'proposal-let');
@@ -3588,6 +5176,9 @@ async function loadRuleHistory(more) {
       : ['Showing the newest ' + n(changes.length, 'change', 'changes') + '.'], () => loadRuleHistory(true)));
   }
   putBackAnswers('change', host);
+  // Drawn again: a link to one of them marks it, whichever of this read and
+  // Home's lands last.
+  if (linksRuleChange()) markApprovalsAsk();
   if (!more) { pollRefocus(place); return; }
   const first = changes.find((x) => !had.includes(x.id));
   const row = r && first ? drawnCards(host).get(first.id) : null;
@@ -3676,7 +5267,7 @@ function renderRulesPending() {
   if (!box) return;
   const k = S.proposals.length;
   const onDisk = S.proposals.some((p) => p.onDisk);
-  if (sameAsDrawn('rules-pending', [k, onDisk])) return;
+  if (sameAsDrawn('rules-pending', [k, onDisk, oneProposal(S.proposals)])) return;
   clear(box);
   if (k) {
     box.append(
@@ -3684,7 +5275,7 @@ function renderRulesPending() {
         ? 'policy.yaml has a change that waits for your OK, so it is not in force yet. '
         : n(k, 'rule change waits', 'rule changes wait') + ' for your OK. ',
       'Until you answer, the rules below are the ones Mandu enforces. ',
-      el('a', { href: routeHref('approvals'), 'data-page-link': 'approvals', text: 'Review ' + (k === 1 ? 'it' : 'them') + ' in Approvals' }),
+      proposalsLink(S.proposals, { text: 'Review ' + (k === 1 ? 'it' : 'them') + ' in Approvals' }),
       '.',
     );
   }
@@ -3723,7 +5314,7 @@ function secretsRunning(home) {
  *  it as it was repaints nothing (a refusal in the note stays). */
 function runningKey(home) {
   const p = home && home.protection;
-  return p ? (p.connected ? 'connected' : 'not connected') + ':' + p.level : 'no home';
+  return p ? (p.connected ? 'connected' : p.notRunning ? 'not running' : 'not connected') + ':' + p.level : 'no home';
 }
 /** The Home poll: Settings › Protection and the Rules line follow what runs
  *  (the first paint of a direct visit may come before Home answers, and a
@@ -3736,8 +5327,14 @@ function followRunning() {
 }
 
 /** Under a "your own model only" rule while no model of your own is listed
- *  (the same words as model-endpoints.ts NO_OWN_MODEL_WARNING). */
-const NO_OWN_MODEL_WARNING = 'No AI of your own is listed, so no AI reads this file. Add one in Settings › Models.';
+ *  (the same words as model-endpoints.ts NO_OWN_MODEL_WARNING), the place a
+ *  link to Settings at its Models card. */
+const NO_OWN_MODEL_WARNING = ownWords('No AI of your own is listed, so no AI reads this file. Add one in ', { to: 'models', text: 'Settings › Models' }, '.');
+/** A rule row warning: the server parts (its place a link), else the words
+ *  as words() draws them, a sentence of this page with its link. */
+function warningWords(r) {
+  return r.warningParts ? textParts(r.warningParts, r.warning) : words(r.warning);
+}
 
 /** Does the rules file name a model the person runs themselves? (plan 11 D6;
  *  the same test as model-endpoints.ts hasLocalModel.) Unknown reads as no. */
@@ -3805,9 +5402,13 @@ function renderProtection() {
   const OFF_WORDS = 'Mandu only watches. Your secrets are not masked, and nothing is stopped.';
   if (now === null) {
     const connected = !!(S.home && S.home.protection && S.home.protection.connected);
+    const notRunning = !!(S.home && S.home.protection && S.home.protection.notRunning);
     text.textContent = 'Saved as ' + (on ? 'on' : 'off') + '. ' + (connected
       ? 'Mandu cannot say what the protection service runs now.'
-      : 'The protection service is not reachable, so Mandu cannot say what is on now.');
+      : notRunning
+        // Mandu is not running at all (§4.25, *Protection is off when nothing runs*).
+        ? 'Mandu is not running now, so no agent is protected. It starts with your first agent: mandu claude (or mandu codex).'
+        : 'The protection service is not reachable, so Mandu cannot say what is on now.');
   } else if ((now === 'on') === on) text.textContent = on ? ON_WORDS : OFF_WORDS;
   else text.textContent = now === 'on'
     ? 'Still on until the protection service restarts: keys and secret files leave this computer only where a rule or your OK allows.'
@@ -3993,6 +5594,8 @@ function wireRuleFind() {
   box.addEventListener('input', () => {
     S.ruleFind = box.value;
     renderRules();
+    // A list narrowed without a scroll: its place is the top (savePlace).
+    savePlace();
   });
   // Escape empties the box (a plain one, and only with text in it: an empty
   // box leaves Escape to whatever else takes it).
@@ -4070,6 +5673,7 @@ function renderRules() {
         sourceId: r.id,
         origin: ruleOrigin(r.id),
         warning: r.warning || null,
+        warningParts: r.warning ? partsOf(r.warningParts) : null,
       });
     }
   }
@@ -4305,7 +5909,7 @@ function ruleRow(r) {
   const subj = el('div', { class: 'rule-text' }, ruleSubject(r));
   if (r.reach) subj.append(el('div', { class: 'dim rule-reach' }, r.reachParts ? fitWords(r.reachParts, r.reach) : r.reach));
   subj.title = r.title || r.subject;
-  if (r.warning) subj.append(el('div', { class: 'rule-warn', role: 'note', text: r.warning }));
+  if (r.warning) subj.append(el('div', { class: 'rule-warn', role: 'note' }, warningWords(r)));
   row.append(subj, effectCell(r, row));
   row.append(moreButton(isOpen, r.subject, () => {
     S.openRule = isOpen ? null : key;
@@ -4648,12 +6252,13 @@ function renderByWho() {
 
 /** One program, host or AI: its name (a long one cut as longName cuts
  *  it), and each list of files under a coloured mark saying what it may do
- *  with them. */
+ *  with them; under a program's lists, the line counting the files it gets
+ *  as any other program does (`rest`, §4.25aa *Only what differs*). */
 function byWhoRow(r, tab) {
   const plain = r.kind === 'any' || tab === 'models';
   const name = el('div', { class: 'by-who-name' },
     plain ? el('strong', { text: r.name }) : longName(el('code', { class: 'by-who-subject', text: r.name })),
-    r.about ? el('p', { class: 'by-who-about', text: r.about }) : null);
+    r.about ? el('p', { class: 'by-who-about' }, textParts(r.aboutParts, r.about)) : null);
   const groups = el('div', { class: 'by-who-groups' });
   for (const g of r.groups) {
     const items = el('ul', { class: 'by-who-items' });
@@ -4673,7 +6278,8 @@ function byWhoRow(r, tab) {
       el('span', { class: 'by-who-label' }, el('span', { class: 'dot ' + (g.tone || 'bad'), 'aria-hidden': 'true' }), g.label),
       items));
   }
-  if (!r.groups.length) groups.append(el('span', { class: 'by-who-none', text: 'Nothing under your rules.' }));
+  if (r.rest) groups.append(el('p', { class: 'by-who-none by-who-rest', text: r.rest }));
+  else if (!r.groups.length) groups.append(el('span', { class: 'by-who-none', text: 'Nothing under your rules.' }));
   return el('div', { class: 'row by-who-row' + (r.kind === 'any' ? ' any' : ''), role: 'listitem' }, name, groups);
 }
 
@@ -4699,6 +6305,55 @@ function openRuleRow(path) {
   F.rule = ruleKey(r);
   renderLabeled();
   afterToggle('#files-tree', r.path);
+}
+
+/** Kept in Rules on an Answered earlier row, pressed (dashboard.md §4.25
+ *  *A remembered answer opens where Rules keeps it*): Rules, at Your rules
+ *  once its reads have drawn, with the row of the answer opened (showAnswerRule). */
+function openAnswerRule(id) {
+  return openAtCard('rules', 'rules-block', null, (card) => showAnswerRule(id, card));
+}
+/** Rules opened at `/rules#answer-<id>` (a new tab, a typed address): the
+ *  same landing, once, as `?file=` is (landAtFile). */
+function landAtAnswer(load, id) {
+  focusPage();
+  return landAtCard(load, 'rules-block', (card) => showAnswerRule(id, card));
+}
+/** The row of the answer `id` under Your rules, opened as its ⋯ opens it (Remove,
+ *  its effect menu, where it was asked), scrolled into view, and returned
+ *  for the focus: its ⋯. A Find a rule text that would hide it is emptied
+ *  first. A row Rules no longer lists (forgotten meanwhile) says so above
+ *  the list, and the heading takes the focus; so does an unread list, which
+ *  says why itself. */
+function showAnswerRule(id, card) {
+  const heading = card && card.querySelector('h2');
+  const panel = S.panel;
+  if (!panel || !panel.verdictsKnown) return heading;
+  const kept = (panel.queue || []).some((v) => v.id === id && v.status !== 'pending' && v.scope !== 'once');
+  if (!kept) {
+    const note = document.getElementById('rules-answer-note');
+    note.textContent = 'That answer is no longer kept: you will be asked next time.';
+    note.hidden = false;
+    return heading;
+  }
+  const key = 'answer:' + id;
+  if (findText()) clearRuleFind(false);
+  S.openRule = key;
+  renderRules();
+  // Compared as values, never spliced into a selector: ids are server data.
+  const row = [...document.querySelectorAll('#rules-list .row[data-rule]')].find((r) => r.getAttribute('data-rule') === key);
+  if (!row) return heading;
+  const detail = row.nextElementSibling;
+  if (detail && detail.scrollIntoView) detail.scrollIntoView({ block: 'nearest' });
+  if (row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+  return row.querySelector('.file-more') || row;
+}
+/** The note showAnswerRule leaves goes with the page. */
+function hideAnswerNote() {
+  const note = document.getElementById('rules-answer-note');
+  if (!note) return;
+  note.hidden = true;
+  note.textContent = '';
 }
 
 // ── Files and folders: the file explorer (dashboard.md §4.25m, §4.25n, §4.25p)
@@ -5333,6 +6988,8 @@ const SEND_CHOICES = [
   { value: 'hosts', text: 'Listed hosts without asking', term: 'Listed hosts without asking' },
   { value: 'public', text: 'Not secret', term: 'Not secret' },
 ];
+/** Why the second menu is off on a row with no rule: the first one starts it. */
+const SEND_FIRST = 'Choose who may read it first. Then you can choose where it may be sent.';
 function sendPick(t, open) {
   const cell = el('div', { class: 'file-hosts' });
   const st = dotState(t);
@@ -5353,6 +7010,11 @@ function sendPick(t, open) {
     const words = inheritedSend(t, (SEND_CHOICES.find((c) => c.value === mode) || {}).text || '', source === 'inherited' || source === 'pattern' ? 'Change it there.' : '');
     sel.setAttribute('aria-label', words);
     sel.title = words;
+  } else if (level === null && !isLocked(t)) {
+    // Greyed with no rule at all: say where a rule starts (§4.25p, *The
+    // browser names its menus*).
+    sel.setAttribute('aria-label', 'Where ' + t.display + ' may be sent. ' + SEND_FIRST);
+    sel.title = SEND_FIRST;
   }
   // A choice here changes a rule of the person's own: with none, the first
   // menu is where a label starts.
@@ -5376,10 +7038,16 @@ function sendPick(t, open) {
 function perValue(t, level) {
   return !!(t.label && t.label.values && t.label.values.length && t.label.send) && level !== null && level !== 'public';
 }
+let perValueHowSeq = 0;
 function perValuePick(cell, t, st, own) {
-  const each = 'Each value has its own hosts. Change them in policy.yaml.';
-  const words = own === null ? inheritedSend(t, 'Per value', each) : null;
-  const sel = el('select', { class: 'label-select send-select', 'aria-label': words || 'Where ' + t.display + ' may be sent', title: words || each });
+  // The menu cannot change the hosts, so the line under the sentence says,
+  // on the page, where they are changed: a disabled control is skipped by
+  // Tab and a touch screen shows no title (dashboard.md §4.25p, *Per value*).
+  const how = el('p', { class: 'dim file-values-how', id: 'per-value-how-' + (++perValueHowSeq) },
+    'Each value has its own hosts, so this menu cannot change them. Edit ', nameCode('values:'),
+    own === null ? ' in the rule it inherits, in ' : ' for this file in ', nameCode(policyFileName()), '.');
+  const words = own === null ? inheritedSend(t, 'Per value', 'Each value has its own hosts. Change them in policy.yaml.') : null;
+  const sel = el('select', { class: 'label-select send-select', 'aria-label': words || 'Where ' + t.display + ' may be sent', title: words || how.textContent, 'aria-describedby': how.id });
   sel.append(el('option', { value: 'values', text: 'Per value' }));
   sel.value = 'values';
   sel.disabled = true;
@@ -5387,7 +7055,14 @@ function perValuePick(cell, t, st, own) {
     el('span', { class: 'label-dot', 'aria-hidden': 'true' }), sel));
   // Each key and host a name kept whole (§4.25u, *Rules names each host*).
   cell.append(el('p', { class: 'dim file-values' }, askCellWords(t.label.sendParts, t.label.send)));
+  cell.append(how);
   return cell;
+}
+/** The policy file as the page names it: the path the panel reports, home
+ *  as `~` (as the rule-source panel heads its lines), else its bare name. */
+function policyFileName() {
+  const f = S.panel && S.panel.policyFile;
+  return f && f.path ? shortPath(f.path) : 'policy.yaml';
 }
 
 /** The tooltip and name of a second menu that follows a label from
@@ -5562,6 +7237,8 @@ function renderFiles(opts) {
   const shown = visibleEntries();
   for (const e of shown) withRow(e);
   if (d && !shown.length) list.append(el('div', { class: 'empty-row dim', text: F.entries.length ? 'Nothing here matches.' : 'This folder is empty.' }));
+  // The heads stand over rows only, not over an empty folder or no listing.
+  document.getElementById('files-list-heads').hidden = !list.querySelector('.row.file:not(.up)');
   if (d && d.more) {
     const btn = el('button', { type: 'button', class: 'btn small files-more', text: 'Show more (' + (d.total - F.entries.length) + ' more)', onclick: moreFiles });
     if (F.moreFailure) {
@@ -5727,7 +7404,12 @@ function ruleTreeRow(r, label, depth) {
   const row = el('div', { class: 'row file-rule' + (isOpen ? ' open' : ''), role: 'listitem', style: '--depth:' + depth, title: r.title || r.path, 'data-path': r.path });
   const name = el('span', { class: 'file-name' }, el('code', { text: label }), r.reach ? ' ' : null, r.reach ? el('span', { class: 'dim', text: r.reach }) : null);
   if (!r.editable) name.append(' ', el('span', { class: 'file-tag', text: 'Set in policy.yaml' }));
-  if (r.warning) name.append(' ', el('span', { class: 'file-warn-mark', role: 'img', 'aria-label': r.warning, title: r.warning }, svg(ICON.alert, 14)));
+  // The mark opens the row, where its words are said in full with the
+  // place they name as a link (dashboard.md §4.25p): never a hover only.
+  if (r.warning) {
+    name.append(' ', el('button', { type: 'button', class: 'file-warn-mark', 'aria-label': r.warning, title: r.warning,
+      onclick: () => (F.rule === key ? afterToggle('#files-tree', r.path) : toggle(false)) }, svg(ICON.alert, 14)));
+  }
   const text = el('div', { class: 'file-text' }, name);
   if (r.opens && r.level !== 'public') text.append(el('div', { class: 'dim file-opens' }, el('span', { class: 'file-opens-k', text: 'Opens it' }), ' ', r.opens));
   const p = pendingFor(t);
@@ -5817,7 +7499,7 @@ function detailFacts(e) {
   const out = [];
   const r = e.rule;
   if (r) {
-    if (r.warning) out.push(el('p', { class: 'rule-warn', role: 'note', text: r.warning }));
+    if (r.warning) out.push(el('p', { class: 'rule-warn', role: 'note' }, warningWords(r)));
     if (r.sourceNote) out.push(el('p', { class: 'dim detail-note', text: r.sourceNote }));
     if (r.origin) out.push(originLine(r.origin));
     if (r.used) out.push(el('p', { class: 'dim detail-note', text: r.used }));
@@ -6489,6 +8171,9 @@ const G = {
 const SUGG_SKIP_KEY = 'mandu.files.skipped';
 const SUGGESTED_BY = 'Suggested by Mandu\'s scan';
 const SCAN_LABEL = 'Scan for keys';
+// The card's line before the suggestions are read (index.html), or while
+// they cannot be: it claims neither keys nor none.
+const SUGGESTED_LINE = 'Mandu looks for keys in your projects that no rule covers yet.';
 // A scan the protection service cut short by stopping: the scan's own lead
 // (server/suggestion-routes.ts), then the failed dial or the closed
 // connection in its client's words, which the page says in its own. The
@@ -6574,18 +8259,42 @@ function renderSuggestionViews() {
   const count = G.rows.length;
   const badge = document.getElementById('files-suggested-count');
   if (badge) badge.textContent = count ? String(count) : '';
-  const line = document.getElementById('suggested-line');
-  if (line) line.textContent = count ? 'Possible keys in ' + suggestionWhere(G.rows) + ' that no rule covers yet.' : 'Possible keys in your projects that no rule covers yet.';
+  drawSuggestedLine();
   renderSuggestionCard();
   renderSuggested();
   renderPending();
 }
 
+/** The line under the card's heading, closed or open (dashboard.md §4.25r
+ *  *The closed card says whether any wait*): where the waiting keys were
+ *  found; with none waiting, that a scan runs, when this dashboard's last
+ *  scan looked and what it found (the line beside Scan for keys, its parts
+ *  drawn the same way), or how to look. Suggestions that could not be read
+ *  say neither: the page does not know. */
+function drawSuggestedLine() {
+  const line = document.getElementById('suggested-line');
+  if (!line) return;
+  clear(line);
+  line.append(suggestedLine());
+}
+function suggestedLine() {
+  const scan = G.scan;
+  if (G.rows.length) return document.createTextNode('Possible keys in ' + suggestionWhere(G.rows) + ' that no rule covers yet.');
+  if (G.error) return document.createTextNode(SUGGESTED_LINE);
+  // Scan for keys' own POST waits on the scan: it runs meanwhile.
+  if (G.posting || (scan && scan.running)) return document.createTextNode('Scanning now… This can take a minute.');
+  const at = scan && !scan.error && scan.summary ? whenNode(scan.finishedAt) : null;
+  if (!at) return document.createTextNode('None waiting. Press Review, then ' + SCAN_LABEL + ', to look through the projects your agents worked in.');
+  const frag = document.createDocumentFragment();
+  frag.append('None waiting. Mandu last looked at ', at, ': ', textParts(scan.summaryParts, scan.summary));
+  return frag;
+}
+
 /** Where the waiting suggestions were found, for the Approvals card: "this
  *  project's git history", "the files of 2 projects", "your home folder". */
 function suggestionWhere(rows) {
-  const hist = rows.some((s) => s.source !== 'workspace' && s.source !== 'sensitivity-label' && s.source !== 'model-names');
-  const files = rows.some((s) => s.source === 'workspace' || s.source === 'sensitivity-label' || s.source === 'model-names');
+  const hist = rows.some((s) => s.source !== 'workspace' && s.source !== 'sensitivity-label' && s.source !== 'model-names' && s.source !== 'past-sessions');
+  const files = rows.some((s) => s.source === 'workspace' || s.source === 'sensitivity-label' || s.source === 'model-names' || s.source === 'past-sessions');
   const what = hist && files ? 'files and git history' : files ? 'files' : 'git history';
   const repos = new Set(rows.map((s) => s.repo));
   if (repos.size === 1 && repos.has('~')) return 'your home folder' + (hist ? '\'s ' + what : '');
@@ -6712,6 +8421,44 @@ function openLabels() {
   return openAtCard('settings', 'settings-labels-block');
 }
 
+/** Settings, at its Models card, the focus on Add a model: where a sentence
+ *  that names Settings › Models leads (dashboard.md §4.25 *The hero links
+ *  where it points*). While Add a model is hidden (the list could not be
+ *  read), the focus goes to the card heading. */
+function openModels() {
+  return openAtCard('settings', 'settings-models-block', null, (card) => {
+    const add = document.getElementById('model-open');
+    return add && reachable(add) ? add : card && card.querySelector('h2');
+  });
+}
+
+/** Rules, with the rule that decides `path` opened under Your rules
+ *  (openRuleRow): where Change it under Rules on an Approvals card leads.
+ *  The rule on the path itself, else the nearest folder rule above it. A
+ *  file no rule of yours decides opens Rules at Your rules, its heading
+ *  focused. */
+function openRuleAt(path) {
+  return openAtCard('rules', 'rules-block', null, (card) => {
+    const r = typeof path === 'string' ? decidingRule(shortPath(path)) : null;
+    if (!r) return card && card.querySelector('h2');
+    openRuleRow(r.path);
+    return null;
+  });
+}
+/** Your rule on `shown` (a path as shortPath writes it, so a rule written
+ *  with ~ and an absolute path meet), even one whose name reads as a
+ *  pattern; else the deepest folder rule of yours with it inside; else
+ *  null. */
+function decidingRule(shown) {
+  let best = null;
+  for (const r of F.rules) {
+    const at = shortPath(r.path).replace(/\/+$/, '');
+    if (at === shown) return r;
+    if (ruleShape(r) === 'dir' && shown.startsWith(at + '/') && (!best || at.length > shortPath(best.path).length)) best = r;
+  }
+  return best;
+}
+
 /** Settings, at its Protection card: where the top bar's words lead while
  *  protection is not plainly on (dashboard.md §4.25 *The top bar says on or
  *  off*). The focus goes to the switch, or to the card's heading while the
@@ -6758,7 +8505,11 @@ function renderModelPicker() {
   run.disabled = sel.value === 'off' || G.sending || !(picked && picked.enabled);
   // Why a choice is unavailable, else what the picker does.
   const off = opts.filter((x) => x.value !== 'off' && !x.enabled && x.why);
-  why.textContent = !m ? '' : !m.offered ? m.hint : sel.value === 'off' && off.length ? m.hint + ' ' + off.map((x) => x.label + ': ' + x.why).join(' ') : m.hint;
+  // Each reason with the place it names as a link (Settings › Models).
+  clear(why);
+  if (!m) return;
+  why.append(m.hint);
+  if (m.offered && sel.value === 'off') for (const x of off) why.append(' ', x.label + ': ', textParts(x.whyParts, x.why));
 }
 
 function closeModelPreview(status) {
@@ -6972,6 +8723,7 @@ async function scanForKeys() {
   btn.textContent = 'Scanning…';
   document.getElementById('suggest-error').textContent = '';
   scanStatus('Scanning ' + scanWhere(root || (home ? '' : 'the projects your agents worked in'), home) + '… This can take a minute.');
+  drawSuggestedLine();
   const body = {};
   if (root) body.root = root;
   if (home) body.includeHome = true;
@@ -6980,6 +8732,7 @@ async function scanForKeys() {
   if (!r.ok || !r.data) {
     btn.textContent = SCAN_LABEL;
     scanStatus('');
+    drawSuggestedLine();
     setWords(document.getElementById('suggest-error'), refusalText(r, 'could not scan (' + r.status + ')'));
     if (r.data && r.data.needsRoot) document.getElementById('suggest-root').focus();
     scanButtonOff(btn, false);
@@ -7283,16 +9036,38 @@ async function suggestRules(sentence) {
   describeAnswered(first, first ? null : host);
 }
 
+// ── The helper cannot run (dashboard.md, *Describe what you want*) ────────
+// The server answers 503 `{unconfigured: true, reason}`; the page says why
+// in its own words, with the command that fixes it as code, and the server's
+// original text only under Details, only for a cause it cannot word
+// (`other`). No link: Settings has nothing that fixes any of these. The
+// words equal the server's HELPER_WORDS (policy-assistant.ts), held equal by
+// a unit test.
+// A one-word code (`claude`, a key's name) has no space to keep whole: it
+// is a plain <code>, named here, not a command kept whole (§4.25u).
+const HELPER_SIGN_IN = ['Sign in to Claude Code (', ['claude'], '), then press Suggest rules again.'];
+const HELPER_KEY = ['ANTHROPIC_API_KEY'];
+const HELPER_REFUSALS = {
+  'no-channel': ownWords("Mandu's helper uses Claude Code or Codex on this computer, or an Anthropic API key, and found neither. ", ...HELPER_SIGN_IN),
+  'not-installed': ownWords("Mandu's helper is not installed with this copy of Mandu. Run ", ['mandu doctor'], ' to check this copy.'),
+  'api-key-missing': ownWords("Mandu's helper is set to use an Anthropic API key, and found none. Set ", HELPER_KEY, ' for Mandu, then press Suggest rules again.'),
+  'cli-missing': ownWords("Mandu's helper is set to use Claude Code or Codex on this computer, and did not find it. ", ...HELPER_SIGN_IN),
+  other: "Mandu's helper cannot run right now.",
+};
+function renderHelperUnavailable(host, d) {
+  const known = Object.prototype.hasOwnProperty.call(HELPER_REFUSALS, d.reason);
+  host.append(el('div', { class: 'ask-error', role: 'alert' }, words(HELPER_REFUSALS[known ? d.reason : 'other'])));
+  const detail = typeof d.detail === 'string' && d.detail ? d.detail : !known && typeof d.error === 'string' ? d.error : '';
+  if (detail) host.append(el('details', { class: 'more describe-detail' }, el('summary', { text: 'Details' }), el('div', { class: 'dim', text: detail })));
+}
+
 function renderDescribeError(r) {
   const host = document.getElementById('describe-result');
   clear(host);
   host.hidden = false;
   const d = r.data || {};
+  if (r.status === 503 && d.unconfigured) { renderHelperUnavailable(host, d); return; }
   host.append(el('div', { class: 'ask-error', role: 'alert' }, words(refusalText(r, 'could not suggest rules (' + r.status + ')'))));
-  if (r.status === 503 && d.unconfigured) {
-    host.append(el('a', { href: routeHref('settings'), 'data-page-link': 'settings', class: 'more', text: 'Open Settings' }));
-    return;
-  }
   if (r.status === 422) {
     if (Array.isArray(d.problems) && d.problems.length) {
       const ul = el('ul', { class: 'describe-problems' });
@@ -7350,15 +9125,16 @@ function renderSuggestion(s) {
     if (had) document.getElementById('describe-submit').focus({ preventScroll: true });
   } });
   const foot = el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' });
+  let hint = null;
   if (rows.some((row) => row.overBroad)) {
-    apply.disabled = true;
-    const input = el('input', { type: 'text', class: 'proposal-confirm', placeholder: 'Type ALLOW to confirm', 'aria-label': 'Type ALLOW to confirm this wide change' });
-    input.addEventListener('input', () => { apply.disabled = input.value !== 'ALLOW'; });
-    foot.append(wideWhy(s.overBroadWhy, false), input);
+    const box = confirmBox(apply, 'Type ALLOW to confirm this wide change', '', null);
+    hint = box.hint;
+    foot.append(wideWhy(s.overBroadWhy, false), box.input);
   }
   const actions = el('div', { class: 'ask-actions' });
   actions.append(discard, apply);
   foot.append(actions);
+  if (hint) foot.append(hint);
   card.append(foot);
   host.append(card);
   return first;
@@ -7410,7 +9186,7 @@ async function applySuggestion(s, card) {
   for (const b of card.querySelectorAll('button')) b.disabled = false;
   // A wide change keeps its typed confirmation after a failed Apply.
   const confirm = card.querySelector('.proposal-confirm');
-  if (confirm && applyBtn) applyBtn.disabled = confirm.value !== 'ALLOW';
+  if (confirm && applyBtn) applyBtn.disabled = !typedAllow(confirm.value);
   for (const old of card.querySelectorAll('.ask-error, .describe-again')) old.remove();
   const msg = changeRefusal(r, 'Not applied', 'could not apply the rules (' + r.status + ')');
   const said = el('div', { class: 'ask-error', role: 'alert', id: 'ask-error-' + (++askErrorSeq) }, words(msg));
@@ -7620,11 +9396,11 @@ function agentWhenParts(vm) {
   return parts;
 }
 
-/** How many rule changes the agent of this session asked for wait in
+/** The rule changes the agent of this session asked for that wait in
  *  Approvals (the server gives a request its session only when an agent
  *  asked, never for a held change to policy.yaml). */
 function agentChanges(id) {
-  return S.proposals.filter((p) => !p.onDisk && p.session === id).length;
+  return S.proposals.filter((p) => !p.onDisk && p.session === id);
 }
 
 function renderAgentPage(vm, id, failure, asked) {
@@ -7632,7 +9408,7 @@ function renderAgentPage(vm, id, failure, asked) {
   // where you scrolled, what you opened, the words of an answer. A new visit
   // draws it afresh. A rule change of this agent that a poll brings or takes
   // away draws it again too.
-  if (sameAsDrawn('agent', [S.visit, id, failure, vm, agentChanges(id)])) return;
+  if (sameAsDrawn('agent', [S.visit, id, failure, vm, agentChanges(id).map((p) => p.id)])) return;
   // Drawn again (the agent did more): the focus goes back to its place
   // (pollPlace).
   const place = pollPlace(document.getElementById('page-agent'));
@@ -7641,7 +9417,38 @@ function renderAgentPage(vm, id, failure, asked) {
   const inTurn = place && document.activeElement.closest('#agent-story article.turn[data-turn-id]');
   const turnId = inTurn ? inTurn.dataset.turnId : null;
   drawAgentPage(vm, id, failure);
+  // Back to the page: once drawn, where you were (agentLandPlace).
+  const kept = S.agentPlace && S.agentPlace.visit === S.visit && S.agentPlace.id === id ? S.agentPlace : null;
+  if (kept) {
+    S.agentPlace = null;
+    agentLandPlace(kept);
+    return;
+  }
+  if (landGo(vm)) return;
   if (!landAgent(asked) && !quietRefocus(turnId)) pollRefocus(place);
+}
+/** A link that opened the agent page somewhere (`?go=`, a Home count's;
+ *  §4.25 *A tile takes you to what it counts*): after the visit's first
+ *  draw, once, its blocked or sent tile is pressed (goToOutcome, with the
+ *  Show them read for a step in a turn not drawn), or Your secrets takes
+ *  the focus. With nothing to go to (no such tile or card), the page stays
+ *  as a plain link opens it. True when it went somewhere. */
+function landGo(vm) {
+  const go = S.agentGo;
+  if (!go || go.visit !== S.visit) return false;
+  S.agentGo = null;
+  if (!vm || !vm.found) return false;
+  if (go.kind === 'secrets') {
+    const block = document.getElementById('agent-secrets-block');
+    if (!block || block.hidden) return false;
+    focusHeading(block);
+    if (block.scrollIntoView) block.scrollIntoView({ block: 'start' });
+    return true;
+  }
+  const tile = [...document.querySelectorAll('#agent-facts button.tile[data-goes]')].find((b) => b.dataset.goes === go.kind);
+  if (!tile) return false;
+  tile.click();
+  return true;
 }
 function drawAgentPage(vm, id, failure) {
   const name = document.getElementById('agent-name');
@@ -7651,11 +9458,14 @@ function drawAgentPage(vm, id, failure) {
   const trace = document.getElementById('agent-trace');
   trace.href = DEV_URL + 'sessions/' + encodeURIComponent(id);
   // Drawn again in the same visit (the agent did more): the toggles of the
-  // story go back as you left them.
-  const left = S.agentDrawn === S.visit + ':' + id ? storyToggles(story) : null;
+  // story go back as you left them. Its first draw after a Back: as the
+  // entry kept them (savePlace).
+  const kept = S.agentPlace && S.agentPlace.visit === S.visit && S.agentPlace.id === id ? S.agentPlace.place.story : null;
+  const left = S.agentDrawn === S.visit + ':' + id ? storyToggles(story) : kept;
   S.agentDrawn = S.visit + ':' + id;
   // The replies drawn before go: their folds are measured no more.
   if (replySizes) replySizes.disconnect();
+  stopHidesLater();
   clear(facts); clear(story); clear(sub);
   const storyBlock = document.getElementById('agent-story-block');
   if (!vm || !vm.found) {
@@ -7680,10 +9490,13 @@ function drawAgentPage(vm, id, failure) {
     clear(document.getElementById('agent-waiting'));
     putBackAnswers('agent', document.getElementById('agent-waiting'));
     putBackAnswers('note', story);
+    renderAgentNotice(null);
+    renderAgentPosture(null);
     renderAgentSecrets(null);
     renderAgentBrowser(null);
     renderAgentFinding(null);
     drawOnlySwitch(null);
+    drawLatestTurn(null);
     storyBlock.hidden = true;
     return;
   }
@@ -7691,7 +9504,9 @@ function drawAgentPage(vm, id, failure) {
   name.textContent = vm.agent;
   // The tag and the warning mark by the name, in its Home row's order.
   if (vm.preview) name.append(' ', agentPreviewMark(vm.preview));
-  if (vm.notice) name.append(' ', agentNoticeMark(vm.notice));
+  if (vm.notice) name.append(' ', agentNoticeMark(vm.notice, vm.noticeParts));
+  renderAgentNotice(vm);
+  renderAgentPosture(vm);
   // Signed out, the page shows only what the AI saw (dashboard.md §6).
   S.valuesShown = vm.valuesShown !== false;
   const valuesNote = document.getElementById('agent-values-note');
@@ -7712,6 +9527,12 @@ function drawAgentPage(vm, id, failure) {
   sub.append(metaLine);
   // Which declared model the conversation goes to (dashboard.md §4.25l).
   if (vm.mainModel) sub.append(el('div', { class: 'dim agent-main-model', 'data-local': vm.mainModel.local ? 'true' : 'false', style: 'font-size:14px;margin-top:2px', text: vm.mainModel.words }));
+  // How long Mandu took to start the session, its slowest steps first, and
+  // to clean up after it (dashboard.md §4.25ag; the server's words).
+  if (vm.launchTime) {
+    const lt = vm.launchTime;
+    sub.append(el('div', { class: 'dim agent-launch-time', style: 'font-size:14px;margin-top:2px', text: lt.sentence + (lt.cleanup ? ' ' + lt.cleanup : '') }));
+  }
 
   // The tiles count what the page below shows (dashboard.md §4.25, the
   // per-agent page): secrets as Your secrets tells each one (the server's
@@ -7774,14 +9595,16 @@ function drawAgentPage(vm, id, failure) {
   // A rule change this agent asked for waits in Approvals, and the list
   // links it as Home does (dashboard.md §4.25 *A rule change and the agent
   // that asked*).
+  // With one, the link opens Approvals at it (§4.25 *Details*).
   const changes = agentChanges(id);
   const wb = document.getElementById('agent-waiting-block');
-  wb.hidden = vm.waiting.length === 0 && changes === 0;
+  // The line an answer left keeps it shown (answerLine).
+  wb.hidden = vm.waiting.length === 0 && changes.length === 0 && !hasAnswerLine('agent');
   const waitingHost = document.getElementById('agent-waiting');
-  renderAsks(waitingHost, { waitingKnown: true, waiting: vm.waiting }, true, changes > 0);
-  if (changes) {
-    waitingHost.append(el('a', { href: routeHref('approvals'), 'data-page-link': 'approvals', class: 'more',
-      text: n(changes, 'rule change this agent asked for is', 'rule changes this agent asked for are') + ' in Approvals' }));
+  renderAsks(waitingHost, { waitingKnown: true, waiting: vm.waiting }, true, changes.length > 0);
+  if (changes.length) {
+    waitingHost.append(proposalsLink(changes, { class: 'more',
+      text: n(changes.length, 'rule change this agent asked for is', 'rule changes this agent asked for are') + ' in Approvals' }));
   }
   // Drawn again while the agent works: each card gets the words of its last
   // answer back (the rows of the note under your message, once the story is).
@@ -7828,6 +9651,7 @@ function drawAgentPage(vm, id, failure) {
   foldQuiet(story);
   if (left) putBackToggles(story, left);
   putBackAnswers('note', story);
+  drawLatestTurn(story);
   // Each tile says where its presses are, drawn again or not.
   for (const b of facts.querySelectorAll('button.tile[data-goes]')) tileWhere(b);
 }
@@ -7897,6 +9721,39 @@ function goToWaiting() {
   if (card.scrollIntoView) card.scrollIntoView({ block: 'center' });
 }
 
+// ── Latest turn (dashboard.md §4.25ad) ──────────────────────────────────────
+/** The turn cards drawn, oldest first: not the messages Mandu stopped,
+ *  which are no turn. */
+function storyTurns(story) {
+  return story ? [...story.querySelectorAll('article.turn[data-turn-id]')] : [];
+}
+/** The link beside the switch: shown from three turns drawn (the earlier
+ *  ones not drawn do not count), its words naming the newest turn's time as
+ *  its card says it (turnTime's words, a day line or not); the arrow is not
+ *  in its name. A static button, so a poll redraw only rewrites its words
+ *  and a focus on it stays. `story` null: hidden. */
+function drawLatestTurn(story) {
+  const btn = document.getElementById('agent-latest');
+  const turns = storyTurns(story);
+  btn.hidden = turns.length < 3;
+  if (btn.hidden) return;
+  const t = turns[turns.length - 1].querySelector('.turn-head > time.time');
+  const words = 'Latest turn' + (t && t.textContent ? ', ' + t.textContent : '') + ' ';
+  if (btn.firstChild.nodeValue !== words) btn.firstChild.nodeValue = words;
+}
+/** Latest turn pressed: the newest turn takes the focus (focusThere) and
+ *  scrolls to its top; folded into a quiet line by the switch, that line's
+ *  button does, never a hidden card. The page never goes there by itself. */
+function goToLatestTurn() {
+  const turn = storyTurns(document.getElementById('agent-story')).pop();
+  if (!turn) return;
+  const btn = turn.hidden ? quietButton(turn) : null;
+  const to = btn || turn;
+  if (btn) btn.focus({ preventScroll: true });
+  else focusThere(turn);
+  if (to.scrollIntoView) to.scrollIntoView({ block: btn ? 'center' : 'start' });
+}
+
 // ── Only where Mandu stepped in (dashboard.md §4.25ae) ──────────────────────
 /** A turn where Mandu did nothing: every step plain (no block, mask, wait,
  *  send, sandboxed read or workspace masking: its `tone`, the most severe
@@ -7958,11 +9815,11 @@ function quietLine(run) {
   const btn = el('button', { type: 'button', class: 'btn small show-rest quiet-toggle', 'aria-expanded': 'false', 'aria-describedby': said.id, text: show });
   btn.addEventListener('click', () => {
     const open = btn.getAttribute('aria-expanded') !== 'true';
-    for (const t of run) t.hidden = !open;
+    for (const t of run) foldFindable(t, !open);
     btn.setAttribute('aria-expanded', String(open));
     btn.textContent = open ? hide : show;
   });
-  for (const t of run) t.hidden = true;
+  for (const t of run) foldFindable(t, true);
   line.append(said, ' ', btn);
   run[0].before(line);
 }
@@ -7991,6 +9848,37 @@ function openQuiet(x) {
   const turn = x && x.closest('article.turn.quiet');
   const btn = turn && turn.hidden ? quietButton(turn) : null;
   if (btn) btn.click();
+}
+/** Opens the run of steps that holds `x` through its button, if one is
+ *  folded (the button of each fold is in the row right after it, as
+ *  showStep, landAgent and markFocus find it). */
+function openSteps(x) {
+  const fold = x && x.closest('.steps-more');
+  if (!fold || !fold.hidden) return;
+  const btn = fold.nextElementSibling && fold.nextElementSibling.querySelector('.steps-toggle');
+  if (btn) btn.click();
+}
+
+// ── Find in page (dashboard.md §4.25b, *Find in page opens a fold*) ─────────
+/** Folds `x` away (`folded`) or shows it. Folded, it is
+ *  `hidden="until-found"`: drawn as nothing, but Find in page (Ctrl+F)
+ *  still searches it and, on a match, opens it (findOpens). A browser
+ *  without it treats it as plain `hidden`. Set as an attribute: the `hidden`
+ *  property is a plain boolean in some browsers. */
+function foldFindable(x, folded) {
+  if (folded) x.setAttribute('hidden', 'until-found');
+  else x.removeAttribute('hidden');
+}
+/** The browser is about to open a fold of the story for a match of its
+ *  Find, a text fragment or a link (`beforematch`, fired at each fold that
+ *  holds the match, before the browser shows it). The fold opens through
+ *  its button, as a press would: its words and `aria-expanded` follow, a
+ *  quiet run opens whole, and a poll keeps it open (storyToggles). */
+function findOpens(e) {
+  const x = e.target;
+  if (!x || !x.closest) return;
+  openQuiet(x);
+  openSteps(x);
 }
 
 /** The toggles of the story as you left them (dashboard.md §4.25 *The poll
@@ -8061,7 +9949,9 @@ function renderAgentFinding(f) {
   const block = document.getElementById('agent-finding-block');
   const list = document.getElementById('agent-finding');
   const intro = document.getElementById('agent-finding-intro');
+  const todo = document.getElementById('agent-finding-todo');
   clear(list);
+  clear(todo);
   if (!f) { block.hidden = true; return; }
   block.hidden = false;
   const places = f.items.length + f.more;
@@ -8070,6 +9960,11 @@ function renderAgentFinding(f) {
     : 'Mandu\'s leak check flagged this session.';
   for (const item of f.items) list.append(el('li', { class: 'finding-line' }, svg(ICON.alert, 14), sentenceNode(item.parts, '')));
   if (f.more) list.append(el('li', { class: 'finding-line dim', text: n(f.more, 'more place is', 'more places are') + ' past what this page lists.' }));
+  // What to do now: change each key it names, and report the fault.
+  const steps = f.todo || [];
+  todo.hidden = !steps.length;
+  document.getElementById('agent-finding-todo-title').hidden = !steps.length;
+  for (const parts of steps) todo.append(el('li', { class: 'todo-line' }, sentenceNode(parts, '')));
 }
 
 // ── Your secrets (dashboard.md §4.25b) ──────────────────────────────────────
@@ -8140,6 +10035,13 @@ function renderAgentSecrets(story, all) {
     // Signed in, its real value on a click (never on the page by default),
     // named by the card heading drawn above it.
     if (s.ref && S.valuesShown !== false) card.append(secretValueBox(s.ref, null, card, lineWords(what)));
+    // Its file opens in Rules, to change who may read it (§4.25b *A card
+    // opens its file in Rules*). A plain link: a new tab, a bookmark, Back.
+    if (typeof s.file === 'string' && s.file) {
+      card.append(el('div', { class: 'secret-rule' },
+        el('a', { href: routeHref('rules', s.file), 'data-page-link': 'rules', 'data-file': s.file, class: 'secret-rule-link',
+          text: 'Change it in Rules', 'aria-label': 'Change the rule for ' + s.file + ' in Rules' })));
+    }
     list.append(card);
   }
   if (story.more) {
@@ -8193,7 +10095,7 @@ function promptNoteNode(note) {
     row.append(what);
     nameBy(row, what);
     const shown = it.canShow && S.valuesShown !== false ? promptReveal(it, row) : null;
-    if (shown) row.append(shown.btn);
+    if (shown) row.append(shown.btn, shown.caption);
     if (it.canLetOnce) row.append(el('button', { type: 'button', class: 'btn small prompt-let-once', text: 'Let it through in this message', onclick: () => letPromptThrough(it, 'once', row) }));
     if (it.canLetSession && !onlyThis) row.append(el('button', { type: 'button', class: 'btn small prompt-let-session', text: 'Let it through for this session', onclick: () => letPromptThrough(it, 'session', row) }));
     if (onlyThis) row.append(el('span', { class: 'prompt-let-once-only', text: it.onlyThisMessage }));
@@ -8208,11 +10110,17 @@ function promptNoteNode(note) {
 function promptReveal(it, row) {
   const pre = el('pre', { class: 'hidden-text prompt-hidden-text', role: 'group', 'aria-label': 'What was hidden', hidden: true });
   const btn = el('button', { type: 'button', class: 'btn small reveal prompt-reveal', 'aria-expanded': 'false', text: 'Show what was hidden' });
+  // When it hides itself again (hideRevealLater); under the button, with it.
+  const caption = el('span', { class: 'hidden-caption prompt-hidden-caption', hidden: true });
+  const hide = () => {
+    pre.hidden = true; caption.hidden = true; clear(pre);
+    btn.setAttribute('aria-expanded', 'false');
+    btn.textContent = 'Show what was hidden';
+  };
   btn.addEventListener('click', async () => {
     if (btn.getAttribute('aria-expanded') === 'true') {
-      pre.hidden = true; clear(pre);
-      btn.setAttribute('aria-expanded', 'false');
-      btn.textContent = 'Show what was hidden';
+      stopHideLater(btn);
+      hide();
       return;
     }
     const had = document.activeElement === btn;
@@ -8229,13 +10137,14 @@ function promptReveal(it, row) {
       return;
     }
     pre.textContent = r.data.original;
-    pre.hidden = false;
+    pre.hidden = false; caption.hidden = false;
     btn.setAttribute('aria-expanded', 'true');
     btn.textContent = 'Hide it again';
+    hideRevealLater(btn, hide, (w) => { caption.textContent = w; });
     focusBack(btn, had, null);
   };
   REVEALS.set(btn, { key: JSON.stringify(['prompt', it.eventId, it.index]), answered });
-  return { btn, pre };
+  return { btn, caption, pre };
 }
 
 async function letPromptThrough(it, scope, row) {
@@ -8339,13 +10248,15 @@ function turnNode(turn) {
     if (run.length === 1) card.append(stepNode(run[0]));
     else if (run.length) {
       const count = run.length;
-      const more = el('div', { class: 'steps-more', hidden: true });
+      const more = el('div', { class: 'steps-more' });
+      foldFindable(more, true);
       for (const s of run) more.append(stepNode(s));
       const btn = el('button', { type: 'button', class: 'btn small steps-toggle', 'aria-expanded': 'false', text: 'Show ' + n(count, 'more step', 'more steps') });
       btn.addEventListener('click', () => {
-        more.hidden = !more.hidden;
-        btn.setAttribute('aria-expanded', String(!more.hidden));
-        btn.textContent = more.hidden ? 'Show ' + n(count, 'more step', 'more steps') : 'Show fewer steps';
+        const open = btn.getAttribute('aria-expanded') !== 'true';
+        foldFindable(more, !open);
+        btn.setAttribute('aria-expanded', String(open));
+        btn.textContent = open ? 'Show fewer steps' : 'Show ' + n(count, 'more step', 'more steps');
       });
       card.append(more, el('div', { class: 'step toggle-row' }, btn));
     }
@@ -8490,7 +10401,8 @@ function stepNode(s) {
 function secretValueBox(ref, name, host, about) {
   const label = name ? 'Show the real value of ' + name : 'Show the real value';
   const of = name || about || '';
-  const caption = el('div', { class: 'hidden-caption', hidden: true, text: 'Only you see this. The AI still has only the masked version.' });
+  const ONLY_YOU = 'Only you see this. The AI still has only the masked version. ';
+  const caption = el('div', { class: 'hidden-caption', hidden: true, text: ONLY_YOU });
   // A box that scrolls, named (dashboard.md §4.25): never the value itself.
   const pre = el('pre', { class: 'hidden-text secret-value', role: 'group', 'aria-label': name ? 'The real value of ' + name : 'The real value', hidden: true });
   const btn = el('button', { type: 'button', class: 'btn small reveal secret-reveal', 'aria-expanded': 'false' });
@@ -8501,11 +10413,16 @@ function secretValueBox(ref, name, host, about) {
     else btn.removeAttribute('aria-label');
   };
   say(label, !name);
+  // Hide it again, by the button or by itself (hideRevealLater).
+  const hide = () => {
+    pre.hidden = true; caption.hidden = true; clear(pre);
+    btn.setAttribute('aria-expanded', 'false');
+    say(label, !name);
+  };
   btn.addEventListener('click', async () => {
     if (btn.getAttribute('aria-expanded') === 'true') {
-      pre.hidden = true; caption.hidden = true; clear(pre);
-      btn.setAttribute('aria-expanded', 'false');
-      say(label, !name);
+      stopHideLater(btn);
+      hide();
       return;
     }
     const had = document.activeElement === btn;
@@ -8526,6 +10443,7 @@ function secretValueBox(ref, name, host, about) {
     pre.hidden = false; caption.hidden = false;
     btn.setAttribute('aria-expanded', 'true');
     say('Hide it again', true);
+    hideRevealLater(btn, hide, (w) => { caption.textContent = ONLY_YOU + w; });
     focusBack(btn, had, null);
   };
   REVEALS.set(btn, { key: JSON.stringify(['secret', ref, name, about]), answered });
@@ -8750,6 +10668,42 @@ function notifyNewAsks(home) {
   }
 }
 const PRIMED_KEY = 'mandu.home.notifyPrimed';
+
+/** A new question or rule change, said to a screen reader in the hidden live
+ *  region of the top bar, `#top-announce` (dashboard.md §4.25 *A new question is
+ *  announced on the page*), whether notifications are on, off or blocked.
+ *  The first read that answers records what already waits without a word;
+ *  the sets live in page memory, so each tab speaks for itself. A poll that
+ *  brings none says nothing and leaves the region as it is; one going away
+ *  says nothing. One line per poll at most: one new names its agent, as its
+ *  notification does ("Claude Code needs your OK. 2 waiting in
+ *  Approvals."), several are counted. Fixed words and the name of the
+ *  agent only, never the sentence of a card, secret, file or host. */
+function announceNewAsks(home) {
+  const lines = [];
+  if (home && home.waitingKnown) {
+    const met = S.announcedAsks;
+    for (const a of home.waiting) {
+      if (met && !met.has(a.id)) lines.push((a.agents[0] || 'An agent') + ' needs your OK');
+    }
+    S.announcedAsks = new Set([...(met || []), ...home.waiting.map((a) => a.id)]);
+  }
+  // Only a read that answered with a list, as notifyNewAsks; one you asked
+  // for yourself is not said (proposalNoteTitle: you know about it).
+  if (S.proposalsKnown) {
+    const met = S.announcedProposals;
+    for (const p of S.proposals) {
+      const title = met && !met.has(p.id) ? proposalNoteTitle(p) : null;
+      if (title) lines.push(title.replace(/^Mandu: (.)/, (_, c) => c.toUpperCase()));
+    }
+    S.announcedProposals = new Set([...(met || []), ...S.proposals.map((p) => p.id)]);
+  }
+  if (!lines.length) return;
+  const waiting = (home && home.waitingKnown ? home.waiting.length : 0) + S.proposals.length;
+  document.getElementById('top-announce').textContent = lines.length === 1
+    ? lines[0] + '. ' + waiting + ' waiting in Approvals.'
+    : lines.length + ' new waiting for your OK in Approvals.';
+}
 /** A waiting rule change's notification title, or null for one you asked
  *  for yourself (you know about it). Fixed words: never the card's rows,
  *  the agent's reason (UNTRUSTED text) nor a file or host it names, since a
@@ -8775,13 +10729,14 @@ function writeProposalsSeen(ids) {
   try { localStorage.setItem(SEEN_PROPOSALS_KEY, JSON.stringify(S.seenProposalsTab)); } catch { /* the tab keeps them */ }
 }
 
-/** The product's two worst states, told to a person not looking at the tab
+/** The product's worst states, told to a person not looking at the tab
  *  (dashboard.md §4.25 *Notifications*): a session that newly shows
- *  protection failed, and the protection service stopping right after a
- *  read that listed a running agent. Called with the answer `loadHome`
- *  keeps (`home`), or with the cause of the poll that failed (`failure`).
- *  The words name the agent only, never a file, host, prompt or secret: a
- *  desktop notification can be mirrored off the machine. */
+ *  protection failed, another agent newly able to reach the controls of Mandu,
+ *  and the protection service stopping right after a read that listed a
+ *  running agent. Called with the answer `loadHome` keeps (`home`), or with
+ *  the cause of the poll that failed (`failure`). The words name the agent
+ *  only, never a file, host, prompt or secret: a desktop notification can
+ *  be mirrored off the machine. */
 function notifyAlarms(home, failure) {
   if (home) {
     const failed = (home.agents || []).filter((a) => a.holds === false);
@@ -8796,6 +10751,7 @@ function notifyAlarms(home, failure) {
         'Something reached the AI unmasked. Open its page to see what.',
         'mandu-failed-' + a.id, () => setPage('agent', true, a.id));
     }
+    notifyExposure(home.exposure);
     return;
   }
   // Once per stop: the next failed polls follow a failed one, not a read
@@ -8822,22 +10778,87 @@ function writeFailedSeen(ids) {
   S.seenFailedTab = [...ids].slice(-500);
   try { localStorage.setItem(FAILED_KEY, JSON.stringify(S.seenFailedTab)); } catch { /* the tab keeps them */ }
 }
+/** Another agent can reach the controls of Mandu (§4.25x): once per
+ *  exposure, keyed by when Mandu first saw it (`since`), so two open
+ *  tabs show one and a new exposure notifies again. Fixed words: the names
+ *  of the causes come from session events, which are claims while it
+ *  lasts. A poll with no `since` uses one tag, forgotten when it ends. */
+function notifyExposure(x) {
+  const seen = readExposureSeen();
+  const tag = x ? (Number.isFinite(x.since) ? 'mandu-exposure-' + x.since : 'mandu-exposure') : null;
+  const fresh = seen !== null && tag !== null && !seen.has(tag);
+  const ids = seen || new Set();
+  if (tag) ids.add(tag); else ids.delete('mandu-exposure');
+  writeExposureSeen(ids);
+  if (!fresh) return;
+  showAlarm('Mandu: another agent can reach Mandu\'s controls',
+    'Your other agents get masked copies of secret files and masked output until it stops. Open Home to see which agent.',
+    tag, () => setPage('home', true));
+}
+/** The exposures this browser has been told of; null on its first visit,
+ *  which records one already showing silently (the asks' priming rule).
+ *  Where storage fails (private mode) the tab keeps them. */
+const EXPOSURE_KEY = 'mandu.home.seenExposure';
+function readExposureSeen() {
+  try {
+    const v = localStorage.getItem(EXPOSURE_KEY);
+    if (v !== null) return new Set(JSON.parse(v));
+  } catch { /* the tab's own copy, below */ }
+  return S.seenExposureTab ? new Set(S.seenExposureTab) : null;
+}
+function writeExposureSeen(ids) {
+  S.seenExposureTab = [...ids].slice(-50);
+  try { localStorage.setItem(EXPOSURE_KEY, JSON.stringify(S.seenExposureTab)); } catch { /* the tab keeps them */ }
+}
 function showAlarm(title, body, tag, open) {
   if (notifyOff() || !notifySupported() || Notification.permission !== 'granted') return;
+  newNote(title, body, tag, open);
+}
+/** One browser notification; a click focuses the tab and runs `open`. Null
+ *  where the constructor throws: Chrome on Android grants the permission but
+ *  shows them only from a service worker, and this page has none
+ *  (dashboard.md §4.25 *Send a test*). The tab remembers which it was
+ *  (`S.notifyBroken`), so Settings › Notifications stops saying "On." for
+ *  notifications that can never appear. */
+function newNote(title, body, tag, open) {
+  let note = null;
   try {
-    const note = new Notification(title, { body, tag });
+    note = new Notification(title, { body, tag });
     note.onclick = () => { window.focus(); open(); note.close(); };
-  } catch { /* some browsers only allow notifications from a service worker */ }
+  } catch { note = null; }
+  const broken = note === null;
+  if ((S.notifyBroken === true) !== broken) {
+    S.notifyBroken = broken;
+    S.notifyTest = undefined;
+    renderNotifyControls();
+  }
+  return note;
+}
+
+const NOTIFY_CANNOT = 'Use a desktop browser, or keep this tab open: the tab title still counts what waits.';
+/** Settings' Send a test: one notification in fixed words, and a line under
+ *  the row saying what happened. A browser does not report a notification
+ *  that Do Not Disturb or Focus silenced, so "Sent." cannot promise one
+ *  appeared. Redraws only its row, so the focus stays on the button. */
+function sendTestNotify() {
+  if (!notifySupported() || Notification.permission !== 'granted' || notifyOff()) return;
+  const note = newNote('Mandu: notifications work', 'This is how Mandu tells you when an agent needs your OK.', 'mandu-test', () => {});
+  S.notifyTest = note ? 'sent' : 'broken';
+  renderNotifyControls();
 }
 
 function renderNotifyControls() {
   const offer = document.getElementById('notify-offer');
   const state = document.getElementById('notify-state');
   const enable = document.getElementById('notify-enable');
+  const test = document.getElementById('notify-test');
+  const result = document.getElementById('notify-test-result');
   if (!notifySupported()) {
     offer.hidden = true;
     state.textContent = 'This browser cannot show notifications here. They need a secure address (https or localhost).';
     enable.hidden = true;
+    test.hidden = true;
+    result.hidden = true;
     return;
   }
   const p = Notification.permission;
@@ -8847,8 +10868,17 @@ function renderNotifyControls() {
   offer.hidden = p !== 'default';
   enable.hidden = p === 'denied';
   enable.textContent = p === 'granted' && !off ? 'Turn off' : 'Turn on';
+  // Send a test only while they are on: the other states say what to do.
+  test.hidden = p !== 'granted' || off;
+  if (test.hidden) S.notifyTest = undefined;
+  result.textContent = S.notifyTest === 'sent'
+    ? 'Sent. If nothing appeared, your computer may be set to Do Not Disturb or Focus, or may silence this browser in its notification settings.'
+    : S.notifyTest === 'broken' ? 'This browser cannot show Mandu\'s notifications from this page. ' + NOTIFY_CANNOT : '';
+  result.hidden = !result.textContent;
   state.textContent = p === 'granted'
-    ? (off ? 'Off in this browser. The tab title still counts what waits.' : 'On. You get a notification when an agent needs your OK, when protection fails, and when the protection service stops under a running agent.')
+    ? (off ? 'Off in this browser. The tab title still counts what waits.'
+      : S.notifyBroken ? 'On, but this browser cannot show them from this page. ' + NOTIFY_CANNOT
+        : 'On. You get a notification when an agent needs your OK, when protection fails, when the protection service stops under a running agent, and when another agent can reach Mandu\'s controls.')
     : p === 'denied'
       ? 'Blocked in this browser. Allow notifications for this site in the browser settings.'
       : 'Off.';
@@ -8901,19 +10931,51 @@ function wireAppearance() {
   });
 }
 
-/** "(3) Mandu" in the tab, and a count on the favicon. */
+/** The tab's shields (dashboard.md §4.25 *The tab says the protection
+ *  state*): a pinned tab shows only its icon, so the icon says what the hero
+ *  says. Each is the shield of index.html's icon in its colour with one mark;
+ *  `on` is that icon itself. `words` lead the tab title. */
+const TAB_STATES = {
+  on: { fill: '#1e7f4f', mark: "<path d='M11 16l3.5 3.5L21 13' stroke='white' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/>" },
+  // The hero's shieldOff mark, a cross.
+  off: { words: 'Protection off', fill: '#6c6c74', mark: "<path d='M12 11l8 8M20 11l-8 8' stroke='white' stroke-width='2.5' fill='none' stroke-linecap='round'/>" },
+  failed: { words: 'Protection failed', fill: '#b4342a', mark: "<path d='M16 9v7.5' stroke='white' stroke-width='2.8' stroke-linecap='round'/><circle cx='16' cy='21.5' r='1.8' fill='white'/>" },
+  'not-connected': { words: 'Not connected', fill: '#6c6c74', mark: '' },
+};
+/** The state the tab says, from the hero's verdict: a failed poll is not
+ *  connected; no read yet, or a verdict this page does not know (an older
+ *  server), says nothing (null), and the tab keeps its baseline. */
+function tabState() {
+  if (!S.home) return S.homeFailure ? 'not-connected' : null;
+  const v = S.home.verdict;
+  if (v === 'off' || v === 'failed') return v;
+  if (v === 'unknown') return 'not-connected';
+  return v === 'protected' || v === 'quiet' || v === 'secrets-only' || v === 'waiting' ? 'on' : null;
+}
+/** "(3) Protection off · Mandu" in the tab, the count first, and the state's
+ *  shield as its icon, with the count on it. */
 function renderTitle() {
   const k = (S.home && S.home.waitingKnown ? S.home.waiting.length : 0) + S.proposals.length;
-  document.title = (k ? '(' + k + ') ' : '') + (S.pageTitle || 'Mandu');
+  const state = tabState();
+  const said = state ? TAB_STATES[state].words : null;
+  document.title = (k ? '(' + k + ') ' : '') + (said ? said + ' · ' : '') + (S.pageTitle || 'Mandu');
   const link = document.getElementById('favicon');
   if (!link) return;
   if (!S.baseFavicon) S.baseFavicon = link.href;
-  if (!k) { link.href = S.baseFavicon; return; }
-  const label = k > 9 ? '9+' : String(k);
+  const shield = state || 'on';
+  const label = !k ? '' : k > 9 ? '9+' : String(k);
+  // Written only when what it shows changed, as the rest of the poll.
+  if (sameAsDrawn('tab-icon', [shield, label])) return;
+  if (shield === 'on' && !label) { link.href = S.baseFavicon; return; }
+  const { fill, mark } = TAB_STATES[shield];
+  // The count's dot takes the mark's place, which it would cover at 16 px.
   const svgText = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
-    + "<path d='M16 3l10 4v8c0 7-5 11-10 14C11 26 6 22 6 15V7z' fill='%231e7f4f'/>"
-    + "<circle cx='23' cy='9' r='9' fill='%23a35d00'/>"
-    + "<text x='23' y='13' font-size='" + (label.length > 1 ? 9 : 12) + "' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'>" + label + '</text></svg>';
+    + "<path d='M16 3l10 4v8c0 7-5 11-10 14C11 26 6 22 6 15V7z' fill='" + fill + "'/>"
+    + (label
+      ? "<circle cx='23' cy='9' r='9' fill='#a35d00'/>"
+        + "<text x='23' y='13' font-size='" + (label.length > 1 ? 9 : 12) + "' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'>" + label + '</text>'
+      : mark)
+    + '</svg>';
   link.href = 'data:image/svg+xml,' + svgText.replace(/#/g, '%23').replace(/</g, '%3C').replace(/>/g, '%3E');
 }
 
@@ -9820,7 +11882,10 @@ function boot() {
   wireNav();
   drawSectionLinks();
   wireHistorySearch();
+  wireAnsweredSearch();
   document.getElementById('agent-only').addEventListener('click', flipAgentOnly);
+  document.getElementById('agent-latest').addEventListener('click', goToLatestTurn);
+  document.getElementById('agent-story').addEventListener('beforematch', findOpens);
   wireLockForm();
   wireRuleFind();
   wireModelForm();
@@ -9830,6 +11895,7 @@ function boot() {
   wireAppearance();
   document.getElementById('notify-offer-btn').addEventListener('click', askNotifyPermission);
   document.getElementById('notify-enable').addEventListener('click', pressNotifyButton);
+  document.getElementById('notify-test').addEventListener('click', sendTestNotify);
   // Another tab's Turn off / Turn on: this tab's row says so too.
   window.addEventListener('storage', (e) => { if (e.key === NOTIFY_OFF_KEY || e.key === null) renderNotifyControls(); });
   const dataWhere = document.getElementById('home-data');

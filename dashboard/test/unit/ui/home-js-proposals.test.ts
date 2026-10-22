@@ -67,12 +67,92 @@ test("an over-broad change needs the typed word ALLOW before Allow enables", asy
   const allow = [...doc.querySelectorAll("#approvals-proposals button")].find((b: any) => b.textContent === "Allow") as any;
   const input = doc.querySelector("#approvals-proposals .proposal-confirm") as any;
   assert.equal(allow.disabled, true);
-  input.value = "allow";
+  input.value = "ALLO";
   input.dispatchEvent(new window.Event("input"));
-  assert.equal(allow.disabled, true, "the word must be exact");
+  assert.equal(allow.disabled, true, "the word must be typed whole");
   input.value = "ALLOW";
   input.dispatchEvent(new window.Event("input"));
   assert.equal(allow.disabled, false);
+});
+
+// ── The typed ALLOW takes any case, and Enter (dashboard.md §4.25) ─────────
+// A phone keyboard capitalises the first letter of a field: a-l-l-o-w gave
+// "Allow", and Allow stayed grey with nothing on the card saying why.
+
+const WIDE_URL = "http://127.0.0.1:4500/mandu/approvals";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function typeIn(window: any, input: any, text: string): void {
+  input.value = text;
+  input.dispatchEvent(new window.Event("input"));
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function enter(window: any, input: any): void {
+  input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+}
+
+test("the ALLOW box counts the word in any case, trimmed; a wrong word shows the hint, which describes the box", async () => {
+  const { doc, window } = load({ url: WIDE_URL, routes: { [PENDING]: { proposals: [{ ...CARD, overBroad: true }] } } });
+  await tick();
+  const card = doc.querySelector("#approvals-proposals .proposal") as any;
+  const allow = card.querySelector(".proposal-allow");
+  const input = card.querySelector(".proposal-confirm");
+  const hint = card.querySelector(".confirm-hint");
+  assert.ok(hint, "the card has the hint line");
+  assert.equal(hint.hidden, true, "nothing typed: no hint");
+  assert.equal(input.getAttribute("aria-describedby"), null);
+  for (const word of ["Allow", "allow", " ALLOW ", "ALLOW"]) {
+    typeIn(window, input, word);
+    assert.equal(allow.disabled, false, `"${word}" turns Allow on`);
+    assert.equal(hint.hidden, true, `"${word}": no hint`);
+  }
+  for (const word of ["ALLO", "ALLOWED", "al low"]) {
+    typeIn(window, input, word);
+    assert.equal(allow.disabled, true, `"${word}" keeps Allow off`);
+    assert.equal(hint.hidden, false, `"${word}": the hint says why`);
+    assert.equal(hint.textContent, "Type the word ALLOW to turn on Allow.");
+    assert.equal(input.getAttribute("aria-describedby"), hint.id, "the hint describes the box");
+  }
+  typeIn(window, input, "");
+  assert.equal(allow.disabled, true, "empty keeps Allow off");
+  assert.equal(hint.hidden, true, "empty: no hint");
+  assert.equal(input.getAttribute("aria-describedby"), null);
+});
+
+test("the ALLOW box asks a phone for capitals and no corrections", async () => {
+  const { doc } = load({ url: WIDE_URL, routes: { [PENDING]: { proposals: [{ ...CARD, overBroad: true }] } } });
+  await tick();
+  const input = doc.querySelector("#approvals-proposals .proposal-confirm") as any;
+  assert.equal(input.getAttribute("autocapitalize"), "characters");
+  assert.equal(input.getAttribute("autocorrect"), "off");
+  assert.equal(input.getAttribute("spellcheck"), "false");
+  assert.equal(input.getAttribute("autocomplete"), "off");
+});
+
+test("Enter in the ALLOW box presses Allow once when it is on, and does nothing when it is off", async () => {
+  const { doc, window, calls } = load({ url: WIDE_URL, routes: { [PENDING]: { proposals: [{ ...CARD, overBroad: true }] } } });
+  await tick();
+  const input = doc.querySelector("#approvals-proposals .proposal-confirm") as any;
+  const posts = () => calls.filter((c) => c.method === "POST");
+  typeIn(window, input, "allo");
+  enter(window, input);
+  await tick();
+  assert.equal(posts().length, 0, "off: Enter posts nothing");
+  typeIn(window, input, "allow");
+  enter(window, input);
+  enter(window, input);
+  await tick();
+  assert.equal(posts().length, 1, "on: Enter posts the approval once, a second Enter while it is out does not");
+  assert.equal(posts()[0].url, "/mandu/api/policy/proposals/pp-000001");
+  assert.deepEqual(posts()[0].body, { verdict: "approved" });
+});
+
+test("a narrow change has no ALLOW box and no hint", async () => {
+  const { doc } = load({ url: WIDE_URL, routes: { [PENDING]: { proposals: [CARD] } } });
+  await tick();
+  const card = doc.querySelector("#approvals-proposals .proposal") as any;
+  assert.equal(card.querySelector(".proposal-confirm"), null);
+  assert.equal(card.querySelector(".confirm-hint"), null);
+  assert.equal(card.querySelector(".proposal-allow").disabled, false);
 });
 
 test("a re-filed request says the rules changed and shows the updated one; a refusal shows the server's words", async () => {
@@ -213,4 +293,43 @@ test("tour 17: an agent's waiting changes are counted on Rules; with none the li
   await tick();
   assert.equal(doc.getElementById("rules-pending").hidden, true);
   assert.ok(rowOf(doc, /api\.example\.com/));
+});
+
+// ── A link to one rule change opens Approvals at it (dashboard.md §4.25 *Details*) ──
+
+test("Home's line and the Rules banner open Approvals at the one rule change waiting, and at Approvals itself for two", async () => {
+  const homeLink = (doc: any) => doc.querySelector("#home-waiting a.more");
+  const one = load({ routes: { [PENDING]: { proposals: [CARD] } } });
+  await tick();
+  assert.equal(homeLink(one.doc).textContent, "1 rule change your agent asked for is in Approvals");
+  assert.equal(homeLink(one.doc).getAttribute("href"), "/mandu/approvals/pp-000001");
+  // A click opens Approvals with that card marked.
+  homeLink(one.doc).click();
+  await tick();
+  assert.equal(one.window.location.pathname, "/mandu/approvals/pp-000001");
+  assert.deepEqual([...one.doc.querySelectorAll("#page-approvals .focus")].map((x: any) => x.dataset.id), ["pp-000001"]);
+  const two = load({ routes: { [PENDING]: { proposals: [CARD, { ...CARD, id: "pp-000002" }] } } });
+  await tick();
+  assert.equal(homeLink(two.doc).textContent, "2 rule changes your agent asked for are in Approvals");
+  assert.equal(homeLink(two.doc).getAttribute("href"), "/mandu/approvals");
+
+  const banner = async (proposals: unknown[]) => {
+    const { doc } = rulesPage({ [PENDING]: { proposals } });
+    await tick();
+    return doc.querySelector("#rules-pending a");
+  };
+  assert.equal((await banner([CARD])).getAttribute("href"), "/mandu/approvals/pp-000001");
+  assert.equal((await banner([CARD, { ...CARD, id: "pp-000002" }])).getAttribute("href"), "/mandu/approvals");
+});
+
+test("a poll that swaps the one waiting change for another points Home's line at the new one", async () => {
+  let proposals = [CARD];
+  const { doc, window } = load({ routes: { [PENDING]: () => ({ proposals }) } });
+  await tick();
+  assert.equal(doc.querySelector("#home-waiting a.more").getAttribute("href"), "/mandu/approvals/pp-000001");
+  proposals = [{ ...CARD, id: "pp-000007" }];
+  Object.defineProperty(doc, "visibilityState", { value: "visible", configurable: true });
+  doc.dispatchEvent(new window.Event("visibilitychange"));
+  await tick();
+  assert.equal(doc.querySelector("#home-waiting a.more").getAttribute("href"), "/mandu/approvals/pp-000007");
 });

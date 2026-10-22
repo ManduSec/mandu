@@ -80,6 +80,8 @@ mandu_path() {
     paired-approvals) parent="$(mandu_path state-root "$h")" && _mandu_join "$parent" "paired-approvals" ;;
     browser-profile) parent="$(mandu_path state-root "$h")" && _mandu_join "$parent" "browser" ;;
     launch-logs) parent="$(mandu_path state-root "$h")" && _mandu_join "$parent" "launch-logs" ;;
+    dashboard-account) parent="$(mandu_path state-root "$h")" && _mandu_join "$parent" "dashboard-account.json" ;;
+    last-scan) parent="$(mandu_path state-root "$h")" && _mandu_join "$parent" "last-scan.json" ;;
     events) parent="$(mandu_path mandu-home "$h")" && _mandu_join "$parent" "events" ;;
     events-test) parent="$(mandu_path events "$h")" && _mandu_join "$parent" "test" ;;
     runs-root) parent="$(mandu_path mandu-home "$h")" && _mandu_join "$parent" "runs" ;;
@@ -108,4 +110,4 @@ mandu_path() {
 }
 
 # Every entry name, for callers that list them.
-MANDU_PATH_NAMES=(mandu-home config-root config-toml policy packs pack-keys prompt-filters secrets-json dashboard-env state-root symbol-db symbol-db-test view-state workspaces object-walks paired-approvals browser-profile launch-logs events events-test runs-root test-runs test-run-results live-drill-runs ci-runs matrix-results eval-runs replay-drill-runs drill-baselines dev-root docker-e2e-home cache-root object-twins ci-cache ci-host-out dashboard-cache update-check runtime-dir install-prefix exec-box-cache bin-dir)
+MANDU_PATH_NAMES=(mandu-home config-root config-toml policy packs pack-keys prompt-filters secrets-json dashboard-env state-root symbol-db symbol-db-test view-state workspaces object-walks paired-approvals browser-profile launch-logs dashboard-account last-scan events events-test runs-root test-runs test-run-results live-drill-runs ci-runs matrix-results eval-runs replay-drill-runs drill-baselines dev-root docker-e2e-home cache-root object-twins ci-cache ci-host-out dashboard-cache update-check runtime-dir install-prefix exec-box-cache bin-dir)

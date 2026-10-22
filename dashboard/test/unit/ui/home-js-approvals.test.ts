@@ -196,13 +196,21 @@ test("Answered earlier: a row says what was asked whole, when on the line under 
 });
 
 test("Answered earlier: an answer with no recorded time has no empty time line", async () => {
-  const answered = [{ id: "a2", sentence: SEND_WORDS, outcome: "blocked", decidedAt: null, actions: [] }];
+  const answered = [
+    { id: "a2", sentence: SEND_WORDS, outcome: "allowed-once", decidedAt: null, actions: [] },
+    // A standing answer's line is its Kept in Rules link alone (§4.25 *A
+    // remembered answer opens where Rules keeps it*).
+    { id: "a3", sentence: SEND_WORDS, outcome: "blocked", decidedAt: null, actions: [] },
+  ];
   const { doc } = load({ url: APPROVALS_URL, homeVm: home({ answered }) });
   await tick();
   const row = doc.querySelector('#approvals-answered .row.answered[data-id="a2"]');
   assert.equal(row.querySelector(".answered-when"), null);
   assert.equal(row.querySelector(".answered-what").textContent, "The agent wants to send your secret GITHUB_TOKEN to gist.github.com");
   assert.equal(row.children.length, 3, "words, answer, and the empty cell where a reversal would be");
+  const kept = doc.querySelector('#approvals-answered .row.answered[data-id="a3"] .answered-when');
+  assert.equal(kept.textContent, "Kept in Rules");
+  assert.equal(kept.querySelector("time"), null);
 });
 
 test("Answered earlier: the when line links to where it was asked, the latest session, as its waiting card did (§4.25h)", async () => {
@@ -239,7 +247,8 @@ test("Answered earlier: the when line links to where it was asked, the latest se
   assert.doesNotMatch(link.getAttribute("href"), /dev\//, "the product's agent page, not the inspector");
 
   // One session: no count.
-  assert.match(line("egr-8").textContent, new RegExp(`^${CLOCK} · 1 minute ago\\. See what the agent was doing$`));
+  // A standing answer (Blocked) adds Kept in Rules after it (§4.25).
+  assert.match(line("egr-8").textContent, new RegExp(`^${CLOCK} · 1 minute ago\\. See what the agent was doing\\. Kept in Rules$`));
   assert.equal(line("egr-8").querySelector("a").getAttribute("href"), "/mandu/agents/s1?ask=egr-8");
   // No recorded time: the line is the link alone.
   assert.equal(line("egr-9").className, "dim answered-when");
@@ -330,7 +339,7 @@ test("§4.25u A moment line ends where it ends: a card's moment with nothing aft
   ] }) });
   await tick();
   const row = answered.doc.querySelector('#approvals-answered .row.answered[data-id="a1"] .answered-when');
-  assert.match(row.textContent, new RegExp(`^${CLOCK} · 2 minutes ago$`));
+  assert.match(row.textContent, new RegExp(`^${CLOCK} · 2 minutes ago\\. Kept in Rules$`));
   // Home's short card: its link follows the moment, so the period stays.
   const short = load({ homeVm: home({ waiting: [once] }) });
   await tick();

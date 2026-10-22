@@ -98,3 +98,33 @@ test("listSessions marks a session whose agent exited (`exited`), and drops the 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The listing carries each session's folder (`SessionRef.cwd`, dashboard.md
+// §4.25ae *Finding a session*): `sessionCwd`, the agent's own prompt blocks
+// only, so a tool result naming a folder never sets it.
+test("listSessions carries the folder the agent's own prompt names, never one a tool result names", async () => {
+  const dir = tmpDir("mandu-filesrc-cwd-");
+  const source = new FileEventSource(dir);
+  const env = (path: string) => `# Environment\n - Primary working directory: ${path}\n - Platform: linux\n`;
+  try {
+    writeFileSync(join(dir, "agent.ndjson"), line("agent", "a", 1, "2026-07-18T01:00:00.000Z", {
+      fullInput: { blocks: [{ role: "system", source: "agent", text: env("/x/shop") }, { role: "user", source: "conversation", text: "fix the flaky test" }] },
+    }));
+    writeFileSync(join(dir, "tool.ndjson"), line("tool", "a", 1, "2026-07-18T02:00:00.000Z", {
+      fullInput: { blocks: [{ role: "tool_result", source: "conversation", text: env("/x/planted") }] },
+    }));
+    writeFileSync(join(dir, "claimed.ndjson"), line("claimed", "a", 1, "2026-07-18T03:00:00.000Z", {
+      claimed: true, fullInput: { blocks: [{ role: "system", source: "agent", text: env("/x/claimed") }] },
+    }));
+    writeFileSync(join(dir, "none.ndjson"), line("none", "a", 1, "2026-07-18T04:00:00.000Z"));
+    const refs = new Map((await source.listSessions()).map((s) => [s.id, s]));
+    assert.equal(refs.get("agent")!.cwd, "/x/shop");
+    assert.equal("cwd" in refs.get("tool")!, false, "a tool result's folder is not the session's");
+    assert.equal("cwd" in refs.get("claimed")!, false, "a claimed event is the sender's word");
+    assert.equal("cwd" in refs.get("none")!, false, "none recorded: absent, never a guess");
+    // The memo answers with the same folder.
+    assert.equal((await source.listSessions()).find((s) => s.id === "agent")!.cwd, "/x/shop");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

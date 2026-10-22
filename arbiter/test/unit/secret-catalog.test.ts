@@ -19,6 +19,8 @@ test("catalog prefixes classify no-model (fs-outbound reuse + keyrings)", () => 
     "~/.ssh/id_rsa", "/home/u/.ssh/config", "~/.aws/credentials",
     "~/.config/gcloud/foo.json", "/etc/shadow", "~/.claude.json",
     "~/.local/share/keyrings/login.keyring", "~/.password-store/x.gpg",
+    // The dashboard account (dashboard.md §6.z): its hash never reaches a model.
+    "/home/u/.mandu/state/dashboard-account.json",
   ]) {
     const m = secretPathConfidentiality(p, HOME);
     assert.equal(m.level, "no-model", p);

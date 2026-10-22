@@ -17,7 +17,10 @@
  *     keeps the JSON keys and holds no raw byte; the egress tripwire refuses
  *     the raw key to an unbound host and the value backstop knows it;
  *     Claude Code's logins stay raw (a `claude` started there must log in)
- *     and are not registered;
+ *     and its subscription login is not registered; its `~/.claude.json`,
+ *     which holds an MCP server's token, is registered and left readable
+ *     (since 2026-10-21, secret-discovery.md §2.10: Claude Code's own MCP
+ *     config), and the session that keeps it is not refused it;
  *   - `mandu codex`: the reverse (Claude Code's logins confined, Codex's
  *     raw);
  *   - in both, the agents' own data (transcripts) is never discovered;
@@ -90,6 +93,8 @@ test("another agent's login is confined and known to the egress gate; the launch
     const paths = (r: SecretSetupResult): string[] => r.confined.map((c) => c.path).sort();
     const tripped = async (value: string): Promise<boolean> =>
       (await client.egressFingerprintScan({ surfaces: [{ where: "body", text: `{"leak":"${value}"}` }], destination: "attacker.example" })).tripped;
+    const scanAsShell = async (value: string): Promise<boolean> =>
+      (await client.egressFingerprintScan({ surfaces: [{ where: "body", text: `{"t":"${value}"}` }], destination: "own-service.example", sessionLogins: { home, target: "shell" } })).tripped;
 
     // ── a plain command (mandu -- bash): Claude Code's routing, so its logins stay raw ──
     // Before any registration, nothing knows the Codex key (the hole).
@@ -103,8 +108,15 @@ test("another agent's login is confined and known to the egress gate; the launch
     assert.ok(shell.logs.some((l) => l.includes(codexAuth) && /Codex's login, a placeholder copy in this session, which does not run Codex/.test(l)), shell.logs.join("\n"));
     assert.equal(await tripped(CODEX_KEY), true, "the egress tripwire refuses the raw key to an unbound host");
     assert.ok((await client.scanSecretValues(`printed: ${CODEX_KEY}`)).hits.length >= 1, "the value backstop knows it");
-    assert.equal(await tripped(MCP_TOKEN), false, "Claude Code's login is left out of the walk under a plain command: not registered");
-    assert.equal(await tripped(OAUTH), false);
+    // Since 2026-10-21 (secret-discovery.md §2.10): `~/.claude.json` holding
+    // an MCP server's token is Claude Code's own MCP config here, registered
+    // (the value is known) and left readable (not among the confined);
+    // the session that keeps it is not refused it (below). Its subscription
+    // login is still left out.
+    assert.ok(shell.logs.some((l) => l.includes(claudeJson) && /Claude Code's MCP config: left readable to it/.test(l)), shell.logs.join("\n"));
+    assert.equal(await tripped(MCP_TOKEN), true, "the MCP token in Claude Code's own config is registered");
+    assert.equal(await scanAsShell(MCP_TOKEN), false, "but a session that keeps Claude Code's login is not refused it");
+    assert.equal(await tripped(OAUTH), false, "Claude Code's subscription login is left out of the walk under a plain command: not registered");
 
     // ── mandu codex: the reverse ──
     const codex = await launch({ target: "codex", writeMcp: true, ullm: { mode: "cli", baseUrl: "https://api.anthropic.com", binary: "codex" } });

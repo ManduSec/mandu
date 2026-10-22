@@ -28,7 +28,8 @@ import {
 import { emptyMutation } from "../../src/backend/types.js";
 import { seatbeltSecretProfile } from "../../src/secret-twins.js";
 import { TWIN_SNAPSHOT_FILE, discardedWrites, parseTwinSnapshots } from "../../src/twin-writes.js";
-import { cleanTwinsInIndex } from "../../src/twin-index-stat.js";
+import { cleanTwinsInIndex, endTwinIndexSession } from "../../src/twin-index-stat.js";
+import type { GitSession } from "../../src/git-session.js";
 import type { GitRunner } from "../../src/git-object-twins.js";
 import { ownFiles } from "../../src/write-protect.js";
 import { manduPath } from "../../src/generated/mandu-paths.js";
@@ -201,6 +202,29 @@ test("the agent's own key file (agentOwnFiles): registered, but neither twinned 
     const res2 = await applySecretTwins(plan(), dir, mut2, deps({ arbiter, guardServesTwins: true }));
     assert.deepEqual(res2.confined.map((c) => c.path).sort(), [GOOSE_KEYS, SECRET].sort());
     assert.ok(mut2.launchPrefix.includes(GOOSE_KEYS));
+  } finally {
+    cleanup();
+  }
+});
+
+test("the launched agent's own MCP config (agentConfig, secret-discovery.md §2.10): registered, left readable (no bind, no twin), and said; another MCP config is twinned", async () => {
+  const { dir, cleanup } = runDir();
+  try {
+    const OWN = "/w/proj/.mcp.json";
+    const OTHER = "/home/u/.cursor/mcp.json";
+    const registered: string[] = [];
+    const logs: string[] = [];
+    const mut = emptyMutation();
+    const arbiter = mockArbiter({
+      discoverSecrets: async () => ({ files: [{ path: SECRET }, { path: OWN, level: "no-model", rule: "content:secret-key", agentConfig: "claude" }, { path: OTHER, level: "no-model", rule: "content:secret-key" }] }),
+      registerSecret: async (p) => { registered.push(p); return { symbol: SYM, reason: "registered" }; },
+    });
+    const res = await applySecretTwins(plan(), dir, mut, deps({ arbiter, guardServesTwins: true, log: (m) => logs.push(m) }));
+    assert.deepEqual(registered, [SECRET, OWN, OTHER], "all registered: the agent's config's values are known to the model gates and the tripwire");
+    assert.deepEqual(res.confined.map((c) => c.path).sort(), [OTHER, SECRET].sort(), "the agent's own config is not confined");
+    assert.ok(!mut.launchPrefix.includes(OWN), "no bind over it: the agent starts its servers from the real values");
+    assert.ok(mut.launchPrefix.includes(OTHER), "another MCP config keeps its bind");
+    assert.ok(logs.some((l) => l.includes(OWN) && /Claude Code's MCP config: left readable to it, so its MCP servers start with their real values/.test(l)), logs.join("\n"));
   } finally {
     cleanup();
   }
@@ -2480,6 +2504,7 @@ test("linux: what the watch found goes to the index patch (twin-index-stat.ts) a
       let twinWritten = false;
       const res = await applySecretTwins(plan({ requireConfinement: true }), dir, emptyMutation(), deps({
         guardServesTwins: true,
+        workspaceRoots: ["/w"],
         placeholderWatch: async () => [WATCHED],
         twinIndex: (async (repos: WatchedRepo[]) => {
           got = repos;
@@ -2503,6 +2528,92 @@ test("linux: what the watch found goes to the index patch (twin-index-stat.ts) a
   }
 });
 
+test("linux: only the launch's own repositories go to the index patch; the placeholder watch still covers every repository it found (the backstop for the rest)", async () => {
+  const top = mkdtempSync(join(tmpdir(), "secret-setup-scope-"));
+  const own = join(top, "own");
+  const other = join(top, "other");
+  const plainDir = join(top, "plain");
+  for (const d of [join(own, ".git"), join(own, "sub"), join(other, ".git"), plainDir]) mkdirSync(d, { recursive: true });
+  const ownRepo: WatchedRepo = { ...WATCHED, root: own };
+  const otherRepo: WatchedRepo = { ...WATCHED, root: other };
+  try {
+    for (const [name, ws, patched] of [
+      ["from a subdir of one repository", [join(own, "sub")], [own]],
+      ["from above both", [top], [own, other]],
+      ["from a plain dir", [plainDir], null],
+    ] as Array<[string, string[], string[] | null]>) {
+      const { dir, cleanup } = runDir();
+      try {
+        let got: WatchedRepo[] | null = null;
+        const res = await applySecretTwins(plan(), dir, emptyMutation(), deps({
+          guardServesTwins: true,
+          workspaceRoots: ws,
+          placeholderWatch: async () => [ownRepo, otherRepo],
+          twinIndex: async (repos) => { got = repos; return []; },
+        }));
+        assert.equal(res.posture, "confined", name);
+        assert.deepEqual(res.placeholderWatch, [ownRepo, otherRepo], `${name}: the watch keeps every repository`);
+        assert.deepEqual((got as WatchedRepo[] | null)?.map((r) => r.root) ?? null, patched, `${name}: patched`);
+      } finally {
+        cleanup();
+      }
+    }
+  } finally {
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("linux: the index patch takes each work tree's index file from the history step's facts (no rev-parse of its own), and records in the HOME's store whatever MANDU_HOME says", async () => {
+  const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@x", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@x", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const top = mkdtempSync(join(tmpdir(), "secret-setup-facts-"));
+  const repo = join(top, "repo");
+  mkdirSync(repo);
+  const g = (...a: string[]): string => execFileSync("git", a, { cwd: repo, encoding: "utf8", env: GIT_ENV });
+  g("init", "-q");
+  writeFileSync(join(repo, ".env"), "K=real\n");
+  g("add", ".env");
+  g("commit", "-qm", "c");
+  const oid = g("rev-parse", "HEAD:.env").trim();
+  const twin = join(top, "twin");
+  writeFileSync(twin, "K=$MDU:x\n");
+  const index = g("rev-parse", "--path-format=absolute", "--git-path", "index").trim();
+  try {
+    for (const [name, indexPaths, revParses] of [
+      ["the step read this work tree", { [repo]: index }, 0],
+      ["the step did not read it", {}, 1],
+    ] as Array<[string, Record<string, string>, number]>) {
+      g("update-index", "-q", "--really-refresh");
+      const calls: string[][] = [];
+      const counting: GitRunner = async (args, o) => {
+        calls.push(args);
+        const r = spawnSync("git", args, { cwd: o.cwd, encoding: "utf8", env: GIT_ENV });
+        return { code: r.status ?? -1, stdout: r.stdout, stderr: r.stderr };
+      };
+      const { dir, cleanup } = runDir();
+      try {
+        const res = await applySecretTwins(plan({ scopeId: "facts-test" } as Partial<LaunchPlan>), dir, emptyMutation(), deps({
+          guardServesTwins: true,
+          home: top,
+          env: { ...process.env, MANDU_HOME: join(top, "scratch-home") },
+          workspaceRoots: [repo],
+          gitSession: { runner: () => counting } as unknown as GitSession,
+          gitObjectTwins: (async () => ({ twins: [], repos: 0, blobs: 0, packsRebuilt: 0, cacheHits: 0, walks: { hit: 0, incremental: 0, full: 0 }, indexPaths })) as unknown as SecretSetupDeps["gitObjectTwins"],
+          placeholderWatch: async () => [{ root: repo, tips: null, paths: [{ rel: ".env", ids: [], index: [oid], twin }] }],
+        }));
+        assert.equal(res.twinIndex?.length, 1, `${name}: patched`);
+        assert.equal(res.twinIndex![0]!.indexPath, index);
+        assert.equal(calls.filter((a) => a[0] === "rev-parse" && a.includes("index")).length, revParses, `${name}: rev-parse calls for the index`);
+        assert.ok(res.twinIndexRecorder?.file?.startsWith(join(top, ".mandu", "state", "object-walks", "twin-index") + "/"), `${name}: the record in the HOME's store, not MANDU_HOME's`);
+        endTwinIndexSession(res.twinIndex, res.twinIndexRecorder);
+      } finally {
+        cleanup();
+      }
+    }
+  } finally {
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
 test("linux, bind-only (no guard serves the twins, posture gated): the index is NEVER patched (a human's git stash or reset there would replace the real file and detach the bind; review of !1642 M1)", async () => {
   for (const guard of [false, undefined]) {
     const { dir, cleanup } = runDir();
@@ -2522,7 +2633,7 @@ test("linux, bind-only (no guard serves the twins, posture gated): the index is 
   }
 });
 
-test("a setup that throws AFTER the index patch puts the launch stat back before it throws (review of !1642 L2)", async () => {
+test("a setup that throws AFTER the index patch puts the real stat back before it throws (review of !1642 L2)", async () => {
   const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@x", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@x", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
   const repo = mkdtempSync(join(tmpdir(), "secret-setup-index-"));
   const g = (...a: string[]): string => execFileSync("git", a, { cwd: repo, encoding: "utf8", env: GIT_ENV });
@@ -2543,6 +2654,7 @@ test("a setup that throws AFTER the index patch puts the launch stat back before
     let patched = false;
     await assert.rejects(applySecretTwins(plan(), dir, emptyMutation(), deps({
       guardServesTwins: true,
+      workspaceRoots: [repo],
       placeholderWatch: async () => [{ root: repo, tips: null, paths: [{ rel: ".env", ids: [], index: [oid], twin }] }],
       twinIndex: async (rs) => {
         const got = await cleanTwinsInIndex(rs, { git: runner, readReal: () => Buffer.from("K=real\n") });

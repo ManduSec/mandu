@@ -45,6 +45,7 @@ import {
 } from "../../dashboard/src/supervisor/supervisor-defs.js";
 import { SERVICE_SOURCES } from "../../launcher/src/services/layout.js";
 import { stateAxes } from "../lib/axes.js";
+import { accountPath, makeAccount, writeAccount } from "../../launcher/src/dashboard-account.js";
 import { tmpDir } from "../lib/tmp-dir.js";
 
 stateAxes("secrets");
@@ -69,9 +70,9 @@ test("the dashboard's table of service sources is the launcher's", () => {
 
 /** One HTTP request; resolves with the status and body, rejects on a
  *  connection error. `path` may be an absolute URL (a proxy request). */
-function get(port: number, path: string): Promise<{ status: number; body: string }> {
+function get(port: number, path: string, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const r = request({ host: "127.0.0.1", port, path, method: "GET", timeout: 15_000 }, (res) => {
+    const r = request({ host: "127.0.0.1", port, path, method: "GET", timeout: 15_000, headers }, (res) => {
       let body = "";
       res.on("data", (c) => { body += c; });
       res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
@@ -165,6 +166,7 @@ test("checkout supervisor: the real services start from a fresh bundle and serve
     startTimeoutMs: 120_000, checkoutDist: dist,
     axisEnv: () => ({ MANDU_INTEGRITY: "0", MANDU_CONFIDENTIALITY: "1" }), log: () => {}, gitRev: () => "nogit",
     gitChangedInRange: () => [], procCmdline: () => null, killPid: () => {}, discoverSocketOwner: () => null,
+    replaceStaleOnAdopt: true, liveSessions: () => [], onCrash: () => {},
     bundleFresh: async () => ({ fresh: false, reason: "unused" }),
     ownArbiterBuild: () => ({ version: null, bundle: null, installed: false }),
   };
@@ -277,7 +279,14 @@ test("checkout supervisor: the real services start from a fresh bundle and serve
   cleanups.push(() => { try { process.kill(-dash.pid!, "SIGKILL"); } catch { /* gone */ } });
   dash.stderr!.on("data", (d) => { dashErr += d; });
   for (let i = 0; i < 600 && !(existsSync(dashPort) && /\d/.test(readFileSync(dashPort, "utf8"))); i++) await new Promise((r) => setTimeout(r, 100));
-  const page = await get(Number(readFileSync(dashPort, "utf8").trim()), "/");
+  // Fail closed without an account (dashboard.md §6.z): the sign-in page.
+  const closed = await get(Number(readFileSync(dashPort, "utf8").trim()), "/", { Accept: "text/html" });
+  assert.equal(closed.status, 401, `no account: the sign-in page; stderr:\n${dashErr}`);
+  assert.match(closed.body, /No account yet/);
+  // With the account, as `mandu dashboard --set-password` writes it.
+  writeAccount(accountPath({ MANDU_HOME: process.env.MANDU_HOME }), await makeAccount("alice", "a long enough password"));
+  const auth = { Authorization: `Basic ${Buffer.from("alice:a long enough password").toString("base64")}` };
+  const page = await get(Number(readFileSync(dashPort, "utf8").trim()), "/", auth);
   assert.equal(page.status, 200, `the dashboard from the build serves its product page; stderr:\n${dashErr}`);
   assert.match(dashErr, /layout: a checkout's build/, "it knows a checkout's build");
   assert.doesNotMatch(dashErr, /layout: installed/, "it never takes itself for an installed package");

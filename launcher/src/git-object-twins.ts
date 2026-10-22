@@ -40,6 +40,13 @@
  *     repositories, `sha256:` in SHA-256 ones). The key once inline in a file
  *     that is public now: the old version goes, the current file stays.
  *
+ * And what no ref reaches: every object a store holds is checked once
+ * (store-scan.ts, confidentiality.md §7.2a "Every stored object is checked
+ * once"), beside the walks, so a protected version in history cut before
+ * Mandu first walked it, in a tree no ref names, or in a blob written by
+ * plumbing is hidden too; a launch with nothing new stats the store's
+ * directories and asks git nothing.
+ *
  * Sanitized packs are cached by (pack, excluded blobs) under the state base,
  * so a relaunch rebuilds nothing. A pack that cannot be sanitized refuses the
  * launch unless --best-effort (secret-setup.ts); rebuilding is capped
@@ -89,11 +96,13 @@ import {
   type AlternatesIo,
 } from "./git-alternates.js";
 import { readReflogOids } from "./reflog-tips.js";
+import { lockedMemoryFile, readLockedMemory, rememberLocked } from "./locked-memory.js";
+import { addStoreScanStats, newStoreScanStats, scanStore, storeScanMaxFromEnv, StoreScanOverCap, topPrefixes, type StoreScan, type StoreScanStats } from "./store-scan.js";
 import { GIT_RUNNER_MAX_STDOUT, isProductionGitRunner, openGitSession, perCallGitRunner, type GitSession } from "./git-session.js";
 import { launchGitSandbox } from "./probe-cache.js";
 import {
   compileHistoryLabels, HISTORY_WALK_ARGS, historyPathspecs, labelFilterKey, labelledAbovePublic, labelWalkKey, realSpellingOf,
-  resolutionKey, walkBaseKey, withRealSpellings, type CompiledHistoryLabels, type HistoryLabel,
+  resolutionKey, walkBaseKey, walkShallowRule, withRealSpellings, type CompiledHistoryLabels, type HistoryLabel, type ShallowRule,
 } from "./history-labels.js";
 
 // The walk's keys moved to history-labels.ts (shared with the arbiter's
@@ -387,6 +396,8 @@ export interface GitObjectTwinResult {
   cacheHits: number;
   /** How the history walks were served. */
   walks: WalkStats;
+  /** How the object stores were scanned (store-scan.ts). */
+  scans?: StoreScanStats;
   /** With `resolved`: how many repositories' label walks the arbiter's
    *  resolution stood in for (an equal key). */
   fromArbiter?: number;
@@ -402,6 +413,9 @@ export interface GitObjectTwinResult {
   /** Every repository this launch prepared itself (twinned or not): the
    *  prepared copies (preparedCopyTwins) leave them alone. */
   roots?: string[];
+  /** Each work tree's index file, from the facts this step read at this
+   *  launch (RepoFacts `index`); a work tree it did not read is absent. */
+  indexPaths?: Record<string, string>;
 }
 
 /** A pack that could not be sanitized, a timeout, a cap: the caller refuses
@@ -427,6 +441,10 @@ export type GitRunner = (
     /** Directories the call writes (the pack cache): read-write in the git
      *  sandbox, which is read-only everywhere else. */
     writable?: readonly string[];
+    /** stdout decoded byte for byte (latin1, one character per byte)
+     *  instead of as UTF-8: an answer that is binary (`cat-file --batch` of
+     *  trees, store-scan.ts). */
+    binary?: boolean;
   },
 ) => Promise<GitRun>;
 
@@ -526,6 +544,9 @@ export interface GitObjectTwinOpts {
   /** History states computed at launch start (twin-prefetch.ts), each
    *  used only for the same work trees and unchanged inputs. */
   statePrefetch?: StatePrefetch;
+  /** A store holding more objects is not scanned (store-scan.ts; default
+   *  MANDU_GIT_STORE_SCAN_MAX_OBJECTS, else STORE_SCAN_MAX_OBJECTS). */
+  maxScanObjects?: number;
   /** Where to leave the hint the next launch's prefetch starts from
    *  (twin-prefetch.ts `writeLaunchHint`). Unset: none is written. */
   hintFile?: string;
@@ -656,16 +677,23 @@ export interface RepoFacts {
   shallow: string;
   grafts: string;
   infoAttributes: string;
+  /** The work tree's index file (`--git-path index`): read here, at the
+   *  same point of the launch as the twin-index patch that follows, so the
+   *  patch asks no rev-parse of its own for it (twin-index-stat.ts
+   *  `cleanTwinsInIndex`). Absent from the old split (a git before 2.27). */
+  index?: string;
 }
 
-/** The rev-parse arguments repoFactsOf asks in one call: five lines out, in
+/** The rev-parse arguments repoFactsOf asks in one call: six lines out, in
  *  order (the format, the common dir, then each `--git-path`). */
 export const REPO_FACTS_ARGS: readonly string[] = [
   "rev-parse", "--show-object-format", "--git-common-dir", "--git-path", "shallow", "--git-path", "info/grafts", "--git-path", "info/attributes",
+  "--git-path", "index",
 ];
 
 /** RepoFacts of `rev-parse` REPO_FACTS_ARGS output, paths resolved against
- *  `root` (the call's cwd); null when it is not five non-empty lines. Pure. */
+ *  `root` (the call's cwd); null when its first five lines are not
+ *  non-empty (the sixth, the index, is taken when present). Pure. */
 export function parseRepoFacts(out: string, root: string): RepoFacts | null {
   const l = out.split("\n");
   if (l.length < 5 || l.slice(0, 5).some((x) => x.trim() === "")) return null;
@@ -677,6 +705,7 @@ export function parseRepoFacts(out: string, root: string): RepoFacts | null {
     shallow: resolve(root, l[2]!.trim()),
     grafts: resolve(root, l[3]!.trim()),
     infoAttributes: resolve(root, l[4]!.trim()),
+    ...((l[5] ?? "").trim() !== "" ? { index: resolve(root, l[5]!.trim()) } : {}),
   };
 }
 
@@ -823,6 +852,13 @@ interface WalkFilter {
 export interface HistoryState {
   tips: string[];
   base: string;
+  /** The global options the walk runs with (the shallow rule: [] or
+   *  IGNORE_SHALLOW_ARGS). Decided with `base`, which names it. */
+  walkArgs: string[];
+  /** Why a walk that fails on a missing parent may have failed (said in
+   *  the refusal, historyWalkFailure): a repository `info/grafts` file
+   *  (ignored: grafts are off), or a shallow file the rule ignored. */
+  rewrites?: { grafts: boolean; shallowIgnored: boolean };
 }
 
 /** The history state of the repository at `root` (the arbiter's resolver
@@ -850,7 +886,7 @@ async function reflogTipsOf(git: GitRunner, root: string, reads: RepoReads): Pro
   if (cfg.refStorage === null) why = "the config could not be read";
   else if (cfg.refStorage !== "" && cfg.refStorage.toLowerCase() !== "files") why = `extensions.refStorage is ${cfg.refStorage}`;
   else {
-    const got = readReflogOids(facts.commonDir, facts.hashLen * 2);
+    const got = await readReflogOids(facts.commonDir, facts.hashLen * 2);
     if ("oids" in got) {
       if (got.oids.length === 0) return [];
       return hexLines(await mustGit(git, ["rev-list", "--no-walk", "--ignore-missing", "--stdin"], root, "git rev-list", `${got.oids.join("\n")}\n`));
@@ -867,30 +903,78 @@ async function reflogTipsOf(git: GitRunner, root: string, reads: RepoReads): Pro
  * every reflog entry: each work tree's `rev-list --all --no-walk` (its HEAD
  * and its own refs; strict, as before: a ref naming a missing object fails
  * the call) and the reflogs' commits once for the store (reflogTipsOf). The
- * base is the store's (the shallow file, `info/grafts` and replace refs are
- * shared). Every git call here runs concurrently.
+ * base is the store's: the git version and the shallow boundary the walk
+ * honours (history-labels.ts walkShallowRule; grafts and replace refs are
+ * off for every hardened call, and a replace ref is a tip like any ref).
+ * Every git call here runs concurrently.
  */
 export async function historyStateOfRoots(git: GitRunner, roots: readonly string[], reads: RepoReads = new RepoReads(git)): Promise<HistoryState> {
   const root = roots[0]!;
-  const [alls, fromLogs, facts, replaceRefs, gitVersion] = await Promise.all([
+  const [alls, fromLogs, shallow, gitVersion] = await Promise.all([
     Promise.all(roots.map((r) => mustGit(git, ["rev-list", "--all", "--no-walk"], r, "git rev-list"))),
     reflogTipsOf(git, root, reads),
-    reads.factsOf(root),
-    mustGit(git, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/replace/"], root, "git for-each-ref"),
+    reads.factsOf(root).then((facts) => shallowRuleOf(git, root, facts)),
     gitVersionOf(git, root),
   ]);
   const tips = [...new Set([...alls.flatMap(hexLines), ...fromLogs])].sort();
-  const base = walkBaseKey({ gitVersion, shallow: readOptional(facts.shallow), grafts: readOptional(facts.grafts), replaceRefs });
-  return { tips, base };
+  const base = walkBaseKey({ gitVersion, shallow: shallow.honoured });
+  const facts = await reads.factsOf(root);
+  const grafts = readOptional(join(facts.commonDir, "info", "grafts")).trim() !== "";
+  return { tips, base, walkArgs: shallow.args, rewrites: { grafts, shallowIgnored: shallow.args.length > 0 } };
+}
+
+/**
+ * The refusal of a walk that failed, in plain words where a history rewrite
+ * the walk does not honour explains it (confidentiality.md §7.2a "What the
+ * walk does not let a repository hide"): history cut by a deprecated
+ * `info/grafts` file over commits the repository does not have, or a shallow
+ * file that names a commit whose parent the repository does have beside a
+ * boundary past which it has nothing. Anything else: `e` as it is. Pure.
+ */
+export function historyWalkFailure(root: string, rewrites: HistoryState["rewrites"], e: unknown): unknown {
+  if (!(e instanceof GitObjectTwinError) || rewrites === undefined) return e;
+  if (rewrites.grafts) {
+    return new GitObjectTwinError(
+      `${root}: its history is cut by a .git/info/grafts file (a git feature git has deprecated), and the commits it cuts away are not in ` +
+      "the repository. Mandu reads history without grafts, since a graft could hide a protected version, so it cannot read this history " +
+      "to its end. To fix it, if the repository is a partial copy, turn the cut into a shallow boundary and remove the file: " +
+      "`cut -d' ' -f1 .git/info/grafts >> .git/shallow && rm .git/info/grafts`; otherwise fetch the missing history, or remove the file. " +
+      "(`git replace --convert-graft-file` does not help: Mandu reads history without replace refs too.)",
+    );
+  }
+  if (rewrites.shallowIgnored) {
+    return new GitObjectTwinError(
+      `${root}: its .git/shallow file names a commit whose parent IS in the repository, beside a boundary past which history is missing. ` +
+      "Mandu honours a shallow file only where it is true, since a false boundary could hide a protected version, and it cannot read past " +
+      "the missing history either. If you did not edit .git/shallow, something did: restore it (`git fetch --depth=<n>` rewrites it) or " +
+      "fetch the whole history (`git fetch --unshallow`).",
+    );
+  }
+  return e;
+}
+
+/** The shallow rule (history-labels.ts walkShallowRule) for the store of
+ *  `root`: its shallow file read as git would, the rule's two calls only
+ *  when it names a commit. */
+export function shallowRuleOf(git: GitRunner, root: string, facts: Pick<RepoFacts, "shallow" | "hashLen">): Promise<ShallowRule> {
+  return walkShallowRule(
+    (args, input) => git(args, { cwd: root, input }),
+    readOptional(facts.shallow),
+    facts.hashLen * 2,
+  );
 }
 
 async function historyBlobsOf(
   git: GitRunner, root: string, rels: readonly string[], walkCacheDir: string | undefined, stats: WalkStats | undefined, filter: WalkFilter | undefined,
-  state: HistoryState, sealing?: SealSession,
+  state: HistoryState, sealing?: SealSession, found?: Array<[string, string]>,
 ): Promise<string[]> {
-  const parse = (out: string): string[] => filter === undefined
-    ? parseRawLogBlobs(out)
-    : [...new Set(parseRawLogBlobPaths(out).filter(([, p]) => filter.keep(p)).map(([b]) => b))].sort();
+  // Each (version, path) a walk reads also goes to `found` (the store's
+  // locked memory, locked-memory.ts).
+  const parse = (out: string): string[] => {
+    const pairs = parseRawLogBlobPaths(out).filter(([, p]) => filter === undefined || filter.keep(p));
+    found?.push(...pairs);
+    return [...new Set(pairs.map(([b]) => b))].sort();
+  };
   // The whole history: from the tips (every ref and reflog entry of every
   // work tree of the store, historyStateOfRoots), the commits `git log --all
   // --reflog` starts from, without git enumerating the reflogs again. No tip
@@ -898,7 +982,8 @@ async function historyBlobsOf(
   // would walk HEAD, which does not exist yet).
   const full = async (): Promise<string[]> => state.tips.length === 0
     ? []
-    : parse(await mustGit(git, ["log", "--stdin", ...WALK_ARGS, "--", ...rels], root, "git log", `${state.tips.join("\n")}\n`));
+    : parse(await mustGit(git, [...state.walkArgs, "log", "--stdin", ...WALK_ARGS, "--", ...rels], root, "git log", `${state.tips.join("\n")}\n`)
+      .catch((e: unknown) => { throw historyWalkFailure(root, state.rewrites, e); }));
   if (walkCacheDir === undefined) {
     if (stats) stats.full++;
     return full();
@@ -912,13 +997,18 @@ async function historyBlobsOf(
   // vouches for its bytes (the same bytes parsed above). No seal session
   // trusts nothing.
   if (entry !== null && !(sealing !== undefined && await sealing.verifyBytes(SEAL_KIND_HISTORY_WALK, sealKey, raw!))) entry = null;
+  // A sealed walk of the same paths, kept under another base key (a new
+  // git, a new walk rule, a shallow boundary honoured or not), is walked
+  // anew as a whole: said once, as an unsealed cache is (plan 14 §11.2.1
+  // "The rebuild notice").
+  if (entry !== null && entry.root === root && entry.base !== base && entry.filter === filter?.key) sealing?.noteWalkChanged();
   const plan = planWalk(entry, root, rels, base, tips, filter?.key);
   let blobs: string[];
   if (plan.kind === "hit") {
     if (stats) stats.hit++;
     blobs = entry!.blobs;
   } else if (plan.kind === "incremental") {
-    const r = await git(["log", "--stdin", ...WALK_ARGS, "--", ...rels], {
+    const r = await git([...state.walkArgs, "log", "--stdin", ...WALK_ARGS, "--", ...rels], {
       cwd: root, input: `${plan.include.join("\n")}\n${plan.exclude.map((t) => `^${t}`).join("\n")}\n`,
     });
     if (r.code === 0) {
@@ -953,6 +1043,17 @@ export interface WalkStats {
   full: number;
 }
 
+/** `Promise.all`, but on a failure it still waits for every other promise
+ *  before rejecting with the first failure: no read of a failed work tree
+ *  (a history walk, which writes its cache entry when it ends) outlives the
+ *  step that gave up on it. */
+async function allSettledOrFirstError<T extends readonly unknown[]>(ps: { [K in keyof T]: Promise<T[K]> }): Promise<T> {
+  const got = await Promise.allSettled(ps as readonly Promise<unknown>[]);
+  const bad = got.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (bad !== undefined) throw bad.reason;
+  return got.map((r) => (r as PromiseFulfilledResult<unknown>).value) as unknown as T;
+}
+
 /** The protected blob names of one repository: every version of the files in
  *  any ref, the reflog and the stash, the index's stages, and the working
  *  copies as `git add` would store them (`worktreeBlobNames`). With
@@ -969,14 +1070,20 @@ export async function protectedBlobsOf(
   // from the same tips): one walk per set of paths, shared; the index and
   // the working copies are this work tree's own. All three run at once.
   const sorted = [...rels].sort();
-  const [history, idx, hashed] = await Promise.all([
+  const [history, idx, hashed] = await allSettledOrFirstError([
     reads.stateOf(roots).then((state) => reads.walkOnce(
       JSON.stringify(["paths", roots, sorted, walkCacheDir ?? null]),
-      () => historyBlobsOf(git, root, rels, walkCacheDir, stats, undefined, state, sealing),
+      () => historyBlobsOf(git, root, rels, walkCacheDir, stats, undefined, state, sealing, store?.found),
     )),
     mustGit(git, ["ls-files", "-s", "-z", "--", ...rels], root, "git ls-files"),
     worktreeBlobNames(git, root, present, reads),
   ]);
+  if (store?.found !== undefined) {
+    store.found.push(...parseLsFilesStagePaths(idx));
+    // The working copies' names: the raw hashes, then the converted ones,
+    // each in `present`'s order.
+    if (hashed.length === 2 * present.length) hashed.forEach((b, i) => store.found!.push([b, present[i % present.length]!]));
+  }
   return [...new Set([...history, ...parseLsFilesStage(idx), ...hashed])].sort();
 }
 
@@ -985,6 +1092,10 @@ export async function protectedBlobsOf(
 export interface StoreReads {
   reads: RepoReads;
   roots: readonly string[];
+  /** Every (version, path) found protected in the store this launch (the
+   *  history walked, the index, the working copies): the store's locked
+   *  memory (locked-memory.ts) adds them. */
+  found?: Array<[string, string]>;
 }
 
 /** The config file of an empty scratch git directory of `format`. Pure. */
@@ -1102,7 +1213,7 @@ export async function labelledBlobsOf(
   const filter: WalkFilter = { key: labelFilterKey(key, specs), keep };
   // The index is this work tree's own; it is read while the history is.
   const idxP = mustGit(git, ["ls-files", "-s", "-z", "--", ...(specs ?? [])], root, "git ls-files")
-    .then((out) => parseLsFilesStagePaths(out).filter(([, p]) => keep(p)).map(([b]) => b));
+    .then((out) => { const kept = parseLsFilesStagePaths(out).filter(([, p]) => keep(p)); store?.found?.push(...kept); return kept.map(([b]) => b); });
   idxP.catch(() => undefined);
   const state = await reads.stateOf(store?.roots ?? [root]);
   // Plan 14 §11.1 R2: the arbiter resolved this repository in the background.
@@ -1116,7 +1227,7 @@ export async function labelledBlobsOf(
   }
   // A label walk is not shared between work trees: which paths it keeps
   // depends on where the work tree is.
-  const history = await historyBlobsOf(git, root, specs ?? [], walkCacheDir, stats, filter, state, sealing);
+  const history = await historyBlobsOf(git, root, specs ?? [], walkCacheDir, stats, filter, state, sealing, store?.found);
   return [...new Set([...history, ...await idxP])].sort();
 }
 
@@ -1484,6 +1595,7 @@ export async function prepareGitObjectTwins(realPaths: readonly string[], opts: 
   const used = new Set<string>();
   const failed: Array<{ root: string; reason: string }> = [];
   const walks: WalkStats = { hit: 0, incremental: 0, full: 0 };
+  const scans: StoreScanStats = newStoreScanStats();
   const fromArbiter = { arbiter: 0 };
   const lockedIds = new Set<string>();
   // Plan 14 §11.2: one launch's use of the seals; what it sealed and what it
@@ -1552,6 +1664,11 @@ export async function prepareGitObjectTwins(realPaths: readonly string[], opts: 
     }
     for (const g of stores.values()) g.roots.sort();
     storeCount = stores.size;
+    const indexPaths: Record<string, string> = {};
+    for (let i = 0; i < active.length; i++) {
+      const f = factsOf[i]!;
+      if (f.ok && f.v.index !== undefined) indexPaths[active[i]![0]] = f.v.index;
+    }
     const groups = [...stores.values()];
     const readsOf = await mapLimit(groups, REPO_CONCURRENCY, (g) =>
       readStore(g).then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e })));
@@ -1623,7 +1740,7 @@ export async function prepareGitObjectTwins(realPaths: readonly string[], opts: 
       writeLaunchHint(opts.hintFile, { stores: reads.statesAsked, packs: [...used].sort() });
     }
     return {
-      twins, repos, blobs, packsRebuilt, cacheHits, walks, lockedIds: [...lockedIds].sort(), roots: [...byRepo.keys()].sort(),
+      twins, repos, blobs, packsRebuilt, cacheHits, walks, scans, lockedIds: [...lockedIds].sort(), roots: [...byRepo.keys()].sort(), indexPaths,
       ...(opts.resolved !== undefined ? { fromArbiter: fromArbiter.arbiter } : {}),
       ...(opts.continueOnFailure ? { failed } : {}),
     };
@@ -1637,11 +1754,22 @@ export async function prepareGitObjectTwins(realPaths: readonly string[], opts: 
    *  versions (each work tree's failure kept apart) and the object
    *  directories it reads, or a null read when it has nothing to hide. */
   async function readStore(g: StoreGroup): Promise<{ read: StoreRead | null; rootErrors: Array<[string, unknown]> }> {
-    const store: StoreReads = { reads, roots: g.roots };
+    const store: StoreReads = { reads, roots: g.roots, found: [] };
+    const commonDir = realpath(g.facts.commonDir) ?? g.facts.commonDir;
+    const hashLen = g.facts.hashLen;
+    // What the store protects this launch: a protected file of one of its
+    // work trees, or a path a label above `public` decides.
+    const isProtected = (rel: string): boolean => g.roots.some((r) =>
+      (byRepo.get(r) ?? []).includes(rel) || (labels.length > 0 && labelledAbovePublic(join(r, rel), compiledLabels)));
+    // Every object the store holds is checked once, reachable or not
+    // (store-scan.ts, confidentiality.md §7.2a "Every stored object is
+    // checked once"), beside the walks.
+    const scanP = scanTheStore(g, commonDir, isProtected);
+    scanP.catch(() => undefined);
     const per = await Promise.all(g.roots.map(async (root) => {
       const rels = byRepo.get(root) ?? [];
       try {
-        const [fromFiles, fromLabels] = await Promise.all([
+        const [fromFiles, fromLabels] = await allSettledOrFirstError([
           rels.length > 0 ? protectedBlobsOf(git, root, rels, opts.walkCacheDir, walks, sealing, store) : Promise.resolve([] as string[]),
           labels.length > 0
             ? labelledBlobsOf(git, root, compiledLabels, labelKey, opts.walkCacheDir, walks, opts.resolved?.get(root), fromArbiter, sealing, store)
@@ -1653,20 +1781,101 @@ export async function prepareGitObjectTwins(realPaths: readonly string[], opts: 
       }
     }));
     const rootErrs: Array<[string, unknown]> = per.flatMap((p) => (p.ok ? [] : [[p.root, p.e] as [string, unknown]]));
+    // The scan's failure fails the store (fail closed: what it would have
+    // found could be readable).
+    let scan: StoreScan | null;
+    try {
+      scan = await scanP;
+    } catch (e) {
+      if (e instanceof AlternatesError) throw e;
+      throw new GitObjectTwinError(`${g.roots[0]}: could not check every object its repository stores (${(e as Error).message})`);
+    }
     // Every work tree failed: the store has nothing it can be twinned from.
     if (rootErrs.length === per.length && per.length > 0) throw rootErrs[0]![1];
+    // A version once found protected stays protected while its path is
+    // (locked-memory.ts, confidentiality.md §7.2a "A version once locked
+    // stays locked"): what the store's memory holds for a path protected now
+    // joins what was found, reachable or not; what was found joins the
+    // memory. Only ever added to, so it needs no seal.
+    const memFile = opts.walkCacheDir === undefined ? undefined : lockedMemoryFile(opts.walkCacheDir, commonDir);
+    const rememberedPairs: Array<[string, string]> = [];
+    if (memFile !== undefined) {
+      for (const [p, names] of readLockedMemory(memFile, commonDir)) if (isProtected(p)) for (const n of names) rememberedPairs.push([n, p]);
+    }
+    // The scan's versions at paths protected now, then the pathless blobs
+    // the token rule hides (it reads every protected version known here).
+    const scanned: Array<[string, string]> = [];
+    if (scan !== null) {
+      scanned.push(...scan.pairs);
+      const working: Array<[string, string]> = [];
+      for (const r of g.roots) for (const rel of byRepo.get(r) ?? []) working.push([join(r, rel), rel]);
+      try {
+        scanned.push(...await scan.finish([...store.found!, ...rememberedPairs, ...scanned], working));
+      } catch (e) {
+        throw new GitObjectTwinError(`${g.roots[0]}: could not check the blobs no tree names in its repository (${(e as Error).message})`);
+      }
+      store.found!.push(...scanned);
+    }
+    if (memFile !== undefined) rememberLocked(memFile, commonDir, store.found!);
+    const remembered = [...new Set([...rememberedPairs.map(([n]) => n), ...scanned.map(([n]) => n)])].sort();
+    // Counted as found only where the store still holds one (twinCluster).
     const byPath = [...new Set(per.flatMap((p) => (p.ok ? p.v : [])))].sort();
-    if (byPath.length === 0 && blobLocks.length === 0) return { read: null, rootErrors: rootErrs };
-    const hashLen = g.facts.hashLen;
+    if (byPath.length === 0 && remembered.length === 0 && blobLocks.length === 0) return { read: null, rootErrors: rootErrs };
     // Plan 14 §8.2: only the ids of this repository's object format apply.
     const locked = lockedNamesFor(blobLocks, hashLen);
-    const found = [...new Set([...byPath, ...locked])].sort();
+    const found = [...new Set([...byPath, ...remembered, ...locked])].sort();
     if (found.length === 0) return { read: null, rootErrors: rootErrs };
     for (const n of found) lockedIds.add(`${hashLen === 32 ? "sha256" : "sha1"}:${n}`);
     // Every object directory the store reads, its alternates' alternates
     // too; one it cannot tell fails the store (objectStoreClosure).
     const { dirs } = objectDirsOfFacts(g.facts, opts.alternatesIo);
     return { read: { found, byPath, hashLen, dirs }, rootErrors: rootErrs };
+  }
+
+  /** The scan of one store (store-scan.ts) for what it protects this launch,
+   *  or null when it protects no path (nothing a scan could find). */
+  async function scanTheStore(g: StoreGroup, commonDir: string, isProtected: (rel: string) => boolean): Promise<StoreScan | null> {
+    const rels = [...new Set(g.roots.flatMap((r) => byRepo.get(r) ?? []))].sort();
+    const specs = labels.length > 0 ? g.roots.map((r) => [r, historyPathspecs(r, compiledLabels)] as const).filter(([, s]) => s === null || s.length > 0) : [];
+    if (rels.length === 0 && specs.length === 0) return null;
+    // Equal keys, equal answers: the protected files (relative), and where
+    // a label reaches, the work tree, its pathspecs and the labels.
+    const key = createHash("sha256").update(JSON.stringify([rels, specs, specs.length > 0 ? labelKey : null])).digest("hex").slice(0, 32);
+    const prefixes = topPrefixes(rels, specs.flatMap(([, s]) => s ?? []));
+    const { dirs } = objectDirsOfFacts(g.facts, opts.alternatesIo);
+    const max = opts.maxScanObjects ?? storeScanMaxFromEnv(process.env);
+    const overCap = (what: string): null => {
+      opts.log?.(
+        `WARNING: mandu: the git object store of ${g.roots[0]} is too large to check every object (${what}; MANDU_GIT_STORE_SCAN_MAX_OBJECTS): ` +
+        "a protected file's version that no branch, tag or reflog reaches is not looked for there.",
+      );
+      return null;
+    };
+    let got: StoreScan;
+    const mine = newStoreScanStats();
+    const t0 = performance.now();
+    try {
+      got = await scanStore({
+        git, cwd: g.roots[0]!, commonDir, hashLen: g.facts.hashLen, dirs,
+        ...(opts.walkCacheDir !== undefined ? { stateRoot: join(opts.walkCacheDir, "store-scan") } : {}),
+        sealing, stats: mine, maxObjects: max,
+        onFirstScan: () => sealing.noteStoreScan(),
+      }, { key, isProtected, prefixes });
+    } catch (e) {
+      if (e instanceof StoreScanOverCap) return overCap(e.message);
+      throw e;
+    } finally {
+      addStoreScanStats(scans, mine);
+    }
+    // Kept for `mandu log` (never a value): what a scan that did read cost.
+    if (mine.first + mine.incremental + mine.reevaluated > 0) {
+      opts.log?.(
+        `mandu: checked the git object store of ${g.roots[0]}: ${mine.asked + mine.loose} new object(s), ${mine.read} read, ` +
+        `${mine.gitCalls} git call(s)${mine.first > 0 ? " (its first check)" : ""} in ${Math.round(performance.now() - t0)} ms`,
+      );
+    }
+    if (got.overCap !== null) return overCap(`${got.overCap} objects, over ${max}`);
+    return got;
   }
 
   /** The twin half of one cluster of stores (clusterObjectStores): each

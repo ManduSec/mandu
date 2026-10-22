@@ -150,3 +150,15 @@ test("Names only with a named model; Cancel sends nothing; a refusal shows the s
   assert.equal(refused.doc.getElementById("suggest-error").textContent, "file contents go only to your own model: 'x' is not declared local: true");
   assert.equal(refused.doc.getElementById("suggest-model-preview").hidden, true);
 });
+
+test("offered without a model of your own: the line says the same words, Settings › Models a link to that card", async () => {
+  const { doc } = await open({ "GET suggestions": listing(modelPickerVM(true, [{ name: "cloud", local: false }])) });
+  const why = doc.getElementById("suggest-model-why");
+  const vm = modelPickerVM(true, [{ name: "cloud", local: false }]);
+  assert.equal(why.textContent, `${vm.hint} Contents (your own model): ${vm.options[2]!.why}`, "the words are unchanged");
+  assert.deepEqual([...why.querySelectorAll("a")].map((a: any) => [a.textContent, a.getAttribute("href")]), [["Settings › Models", "/mandu/settings#models"]]);
+  // Picked away from Off, the reasons are not listed, and with them the link.
+  pick(doc, "names");
+  assert.equal(why.textContent, vm.hint);
+  assert.equal(why.querySelector("a"), null);
+});

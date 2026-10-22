@@ -23,11 +23,16 @@
  * A finished scan's line names Settings › Sensitivity labels as a link (the
  * server's `summaryParts`): a plain click opens Settings at that card, a
  * modifier click is the browser's, and a line without parts is its text.
+ * The card's line says whether any key waits (§4.25r *The closed card says
+ * whether any wait*): where they were found; with none, that a scan runs,
+ * when this dashboard's last scan looked and what it found, or how to look;
+ * neither before the first read or while the list cannot be read; and it
+ * follows the 3 s poll as a scan ends.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { load, tick, FILES_URL, FILES_ROUTES, choose } from "./home-js-fixtures.js";
+import { load, tick, FILES_URL, FILES_ROUTES, CLOCK, HTML, choose } from "./home-js-fixtures.js";
 import { scanSummary, scanSummaryParts, suggestionRows, type SuggestionWire, type SuggestPolicyWire } from "../../../src/view-model/suggestions.js";
 
 const REPO = "/home/u/proj";
@@ -488,4 +493,93 @@ test("a scan line without parts (an older server) is its text; a place the page 
   assert.equal(line.textContent, "Set it in <b>Elsewhere</b><i>c</i>");
   assert.equal(line.querySelector("a, b, i"), null);
   assert.equal(line.querySelector("code").textContent, "<i>c</i>");
+});
+
+const line = (doc: any) => doc.getElementById("suggested-line");
+const PRESS = "None waiting. Press Review, then Scan for keys, to look through the projects your agents worked in.";
+const NEUTRAL = "Mandu looks for keys in your projects that no rule covers yet.";
+const NOTHING = "Scanned the git history of ~/proj and 4 files. Nothing new to review.";
+const finished = (over: Record<string, unknown> = {}) => ({ running: false, roots: ["~/proj"], finishedAt: Date.now() - 1000, summary: NOTHING, summaryParts: null, error: null, ...over });
+/** The 3 s re-read while a scan runs is held, so a scan that never ends
+ *  does not keep the test reading. */
+const holdPolls = (timers: Array<() => void>) => (w: any) => {
+  const real = w.setTimeout.bind(w);
+  w.setTimeout = (fn: () => void, ms: number) => (ms === 3000 ? (timers.push(fn), 0) : real(fn, ms));
+};
+const closedCard = async (answer: unknown) => {
+  const page = load({ url: FILES_URL, routes: { ...FILES_ROUTES, "GET suggestions": answer }, before: holdPolls([]) });
+  await tick();
+  assert.equal(page.doc.getElementById("files-suggested-view").hidden, true, "the card is closed");
+  return page;
+};
+
+test("the closed card's line says whether any key waits: none and never looked, a scan running, none and when Mandu last looked, or where they were found", async () => {
+  assert.match(HTML, new RegExp(`<p class="note" id="suggested-line">${NEUTRAL}</p>`), "before the first read the line claims neither keys nor none");
+  const never = await closedCard(listing([]));
+  assert.equal(line(never.doc).textContent, PRESS);
+  assert.equal(never.doc.getElementById("files-suggested-count").textContent, "", "no badge");
+  const running = await closedCard(listing([], { running: true, roots: ["~/proj"], finishedAt: null, summary: null, error: null }));
+  assert.equal(line(running.doc).textContent, "Scanning now… This can take a minute.");
+  const looked = await closedCard(listing([], finished()));
+  assert.match(line(looked.doc).textContent, new RegExp(`^None waiting\\. Mandu last looked at ${CLOCK} · just now: ${NOTHING.replace(/[.~]/g, "\\$&")}$`));
+  const at = line(looked.doc).querySelector("time.when");
+  assert.ok(at, "the moment is the page's own (whenNode), kept fresh by the poll");
+  assert.equal(Date.parse(at.getAttribute("datetime")) <= Date.now(), true);
+  // A failed scan, or one with no time, is no scan the page knows: no time is invented.
+  const failed = await closedCard(listing([], finished({ summary: null, error: "The scan did not finish: boom" })));
+  assert.equal(line(failed.doc).textContent, PRESS);
+  const untimed = await closedCard(listing([], finished({ finishedAt: null })));
+  assert.equal(line(untimed.doc).textContent, PRESS);
+  // Keys waiting: where they were found, whatever the scan says.
+  const waiting = await closedCard(listing([KEY], finished()));
+  assert.equal(line(waiting.doc).textContent, "Possible keys in this project's git history that no rule covers yet.");
+  assert.equal(waiting.doc.getElementById("files-suggested-count").textContent, "1");
+  // A list that cannot be read (no admin session) says neither.
+  const refused = await closedCard({ status: 403, body: { error: "Sign in" } });
+  assert.equal(line(refused.doc).textContent, NEUTRAL);
+});
+
+test("the closed card's line draws the summary's parts as the scan line does: the link stays a link, server text is text", async () => {
+  const page = await closedCard(listing([], finished({ summary: scanSummary(DOCS_SCAN, "/home/u"), summaryParts: scanSummaryParts(DOCS_SCAN, "/home/u") })));
+  assert.match(line(page.doc).textContent, new RegExp(`^None waiting\\. Mandu last looked at ${CLOCK} · just now: Scanned 1 file in ~/docs\\. Nothing new to review\\.`));
+  assert.ok(line(page.doc).textContent.endsWith(DOCS_LINE));
+  const links = [...line(page.doc).querySelectorAll("a")] as any[];
+  assert.deepEqual(links.map((a) => [a.textContent, a.getAttribute("href")]), [["Settings › Sensitivity labels", "/mandu/settings#sensitivity-labels"]]);
+  const odd = await closedCard(listing([], finished({ summary: "x", summaryParts: [{ kind: "text", text: "<b>Found</b> " }, { kind: "code", text: "<i>c</i>" }] })));
+  assert.match(line(odd.doc).textContent, /: <b>Found<\/b> <i>c<\/i>$/);
+  assert.equal(line(odd.doc).querySelector("b, i"), null);
+  assert.equal(line(odd.doc).querySelector("code").textContent, "<i>c</i>");
+});
+
+test("the closed card's line follows the poll: a scan that ends with nothing found turns Scanning now into None waiting, with no click", async () => {
+  let reads = 0;
+  const timers: Array<() => void> = [];
+  const page = load({
+    url: FILES_URL,
+    routes: { ...FILES_ROUTES, "GET suggestions": () => (++reads === 1 ? listing([], { running: true, roots: ["~/proj"], finishedAt: null, summary: null, error: null }) : listing([], finished())) },
+    before: holdPolls(timers),
+  });
+  await tick();
+  assert.equal(line(page.doc).textContent, "Scanning now… This can take a minute.");
+  assert.equal(timers.length, 1, "a scan running: read again in 3 s");
+  timers.shift()!();
+  await tick();
+  assert.equal(reads, 2);
+  assert.match(line(page.doc).textContent, /^None waiting\. Mandu last looked at /);
+  assert.equal(page.doc.getElementById("files-suggested-view").hidden, true, "still closed");
+});
+
+test("Scan for keys' own POST: the card's line says a scan runs while it waits, and goes back when the scan is refused", async () => {
+  let answer: (v: unknown) => void = () => {};
+  const { doc } = await openSuggestedView({
+    "GET suggestions": listing([]),
+    "POST suggestions/scan": () => new Promise((r) => { answer = r; }),
+  });
+  assert.equal(line(doc).textContent, PRESS);
+  doc.getElementById("suggest-form").dispatchEvent(new doc.defaultView.Event("submit", { cancelable: true }));
+  await tick();
+  assert.equal(line(doc).textContent, "Scanning now… This can take a minute.");
+  answer({ status: 400, body: { error: "No project is known yet.", needsRoot: true } });
+  await tick();
+  assert.equal(line(doc).textContent, PRESS);
 });

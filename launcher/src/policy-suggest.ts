@@ -119,8 +119,11 @@ export interface SuggestionViewWire {
    *  path, no finding entry and `evidence.label`. "model-names" (§14.10): a
    *  rule the names-only model shaped; its facts in `model`, its evidence
    *  one path and no finding. "model-contents" (§14.11): a document your own
-   *  model read; one path, `model` facts, `humanOnly` below no-model. */
-  source: "git-history" | "workspace" | "sensitivity-label" | "model-names" | "model-contents";
+   *  model read; one path, `model` facts, `humanOnly` below no-model.
+   *  "past-sessions" (plan 17 §3 item 13): a file whose key `mandu scan`
+   *  found in the agents' past sessions; one path, no finding entry,
+   *  `evidence.pastSessions`, `rotate: true`. */
+  source: "git-history" | "workspace" | "sensitivity-label" | "model-names" | "model-contents" | "past-sessions";
   repoRoot: string;
   edits: SuggestionEditWire[];
   sentence: string;
@@ -128,6 +131,8 @@ export interface SuggestionViewWire {
     paths: string[]; blobs: string[]; findings: SuggestionFindingWire[]; historyOnly: boolean;
     /** S4: the label and the MAPPING's name for it (never the file's). */
     label?: { id: string; site: string | null; name: string; level: string; adminFile?: string };
+    /** past-sessions: the key names and the scan's counts. */
+    pastSessions?: { names: string[]; sessions: number; last: string | null };
   };
   impact: { historicalVersions: number; workingTreeChanges: boolean; files: string[] };
   historyOnly: boolean;
@@ -486,6 +491,18 @@ export function renderSuggestion(v: SuggestionViewWire, i: number, n: number, op
     L.push(`${INDENT}${LABEL_SOURCE_LINE}${lab ? `: ${clean(lab.name)}${lab.adminFile ? ` (mapped by your administrator)` : ""}` : ""}`);
     L.push(`${INDENT}${WORKSPACE_IMPACT_LINE}`);
     L.push(`${INDENT}${c.dim(LABEL_LOWER_LINE)}`);
+    return L.join("\n") + "\n";
+  }
+  if (v.source === "past-sessions") {
+    // A file whose key reached the AI in a past session (plan 17 §3 item
+    // 13): the names, how many sessions, the file as the impact, and the
+    // full rotation advice (the key did leave the machine).
+    const ps = v.evidence.pastSessions;
+    const names = (ps?.names ?? []).slice(0, 3).map(clean).join(", ");
+    const sessions = ps ? `${plural(ps.sessions, "past session", "past sessions")}` : "a past session";
+    L.push(`${INDENT}found by mandu scan: ${names || "a key in it"} reached the AI in ${sessions}`);
+    L.push(`${INDENT}${WORKSPACE_IMPACT_LINE}`);
+    L.push(`${INDENT}${c.warn(ROTATE_LINE)}`);
     return L.join("\n") + "\n";
   }
   if (v.source === "workspace") {

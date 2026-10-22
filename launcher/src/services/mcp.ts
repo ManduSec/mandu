@@ -138,6 +138,8 @@ export function inspectMcpConfigDoc(input: InspectMcpInput, layout: Layout): {
   if (input.ullm.model) env["MANDU_ULLM_MODEL"] = input.ullm.model;
   if (input.ullmEndpointTimeoutMs !== undefined) env[ULLM_ENDPOINT_TIMEOUT_ENV] = String(input.ullmEndpointTimeoutMs);
   if (input.ullm.mode === "cli") env["MANDU_ULLM_BINARY"] = input.ullm.binary ?? "claude";
+  // The CLI by its path, past the session's `claude` shim (Ullm.binaryPath).
+  if (input.ullm.mode === "cli" && input.ullm.binaryPath) env["MANDU_ULLM_BINARY_PATH"] = input.ullm.binaryPath;
   // The quarantined `codex exec` signs in from the agent's CODEX_HOME, which
   // Codex does not pass to a stdio MCP server on its own.
   if (input.ullm.mode === "cli" && input.ullm.binary === "codex" && input.ullm.codexHome) env["CODEX_HOME"] = input.ullm.codexHome;

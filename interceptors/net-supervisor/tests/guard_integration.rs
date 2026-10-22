@@ -7217,3 +7217,141 @@ fn a_program_written_through_the_guard_runs_at_once() {
     }
     eprintln!("HANDOVER PASS: the guard's write descriptor is closed before the tracee resumes");
 }
+
+// ── rootless §12.2 "The cgroup": the guard's own cgroup out of reach ─────────
+
+/// The test process's cgroup v2 directory under `/sys/fs/cgroup` (it is the
+/// guard here: the supervisor thread runs in it), when its own
+/// `cgroup.procs` is writable to this uid: a user-owned cgroup, the only
+/// place the refusal is the guard's and not the kernel's. None to SKIP.
+fn user_owned_own_cgroup() -> Option<std::path::PathBuf> {
+    let text = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    let rel = net_supervisor::cgroup_guard::own_cgroup_path(&text)?;
+    let dir = std::path::Path::new("/sys/fs/cgroup").join(rel.trim_start_matches('/'));
+    writable(&dir.join("cgroup.procs")).then_some(dir)
+}
+
+/// `access(W_OK)`: the kernel would let this uid open `p` for writing.
+fn writable(p: &std::path::Path) -> bool {
+    let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) else { return false };
+    // SAFETY: access with a NUL-terminated path.
+    unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
+}
+
+#[test]
+#[ignore]
+fn a_write_open_that_could_freeze_or_move_the_guard_is_refused() {
+    // DEFENSIVE ONLY: the tracee performs OPENS and expects the guard's
+    // refusal; nothing is ever written to a cgroup file, and an open the
+    // guard wrongly allowed is closed unwritten. Every case is one the
+    // kernel itself would allow (this uid may write the file: `writable`),
+    // so an EACCES is the guard's.
+    let Some(own) = user_owned_own_cgroup() else {
+        eprintln!("SKIP: this process's cgroup is not user-owned (no delegated cgroup here, as under an SSH session-N.scope; the CI guest delegates one)");
+        return;
+    };
+    check_cgroup_verdicts(&own);
+    let mut refuse: Vec<std::path::PathBuf> = Vec::new();
+    for leaf in ["cgroup.freeze", "cgroup.kill", "cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "cpu.max", "memory.max", "pids.max"] {
+        refuse.push(own.join(leaf));
+    }
+    // Every cgroup above it the user owns: freeze, kill, its task list.
+    let mut up = own.parent();
+    while let Some(dir) = up.filter(|d| d.starts_with("/sys/fs/cgroup") && writable(&d.join("cgroup.procs"))) {
+        for leaf in ["cgroup.freeze", "cgroup.kill", "cgroup.procs"] {
+            refuse.push(dir.join(leaf));
+        }
+        up = dir.parent();
+    }
+    let above = refuse.len() - 8;
+    // A cgroup beside the guard's, whose common ancestor with it is the
+    // user's: its task list could take the guard in.
+    let sibling = own.parent().and_then(|p| std::fs::read_dir(p).ok()).and_then(|mut it| {
+        it.find_map(|e| {
+            let p = e.ok()?.path();
+            (p.is_dir() && p != own && writable(&p.join("cgroup.procs"))).then_some(p)
+        })
+    });
+    if let Some(s) = &sibling {
+        refuse.push(s.join("cgroup.procs"));
+        refuse.push(s.join("cgroup.threads"));
+    }
+    let refuse: Vec<std::path::PathBuf> = refuse.into_iter().filter(|p| p.exists() && writable(p)).collect();
+    let read_controls = [own.join("cgroup.procs"), own.join("cgroup.freeze"), own.join("cgroup.events")];
+    let tree = OpenTree::new("cgroup");
+    let report = tree.dir.join("report.txt");
+    let code = run_guarded(&tree, || {
+        let mut log = String::new();
+        let mut failed = 0;
+        let try_open = |p: &std::path::Path, flags: i32| -> i32 {
+            let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+            // SAFETY: open with a NUL-terminated path; closed at once, unwritten.
+            let fd = unsafe { libc::open(c.as_ptr(), flags | libc::O_CLOEXEC) };
+            if fd >= 0 {
+                unsafe { libc::close(fd) };
+                0
+            } else {
+                std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+            }
+        };
+        for p in &refuse {
+            for (how, flags) in [("O_WRONLY", libc::O_WRONLY), ("O_RDWR", libc::O_RDWR)] {
+                let e = try_open(p, flags);
+                let ok = e == libc::EACCES;
+                log.push_str(&format!("{} {how} {}: errno {e}\n", if ok { "ok refused" } else { "FAIL not refused" }, p.display()));
+                failed += (!ok) as i32;
+            }
+        }
+        for p in &read_controls {
+            let e = try_open(p, libc::O_RDONLY);
+            log.push_str(&format!("{} O_RDONLY {}: errno {e}\n", if e == 0 { "ok read" } else { "FAIL read" }, p.display()));
+            failed += (e != 0) as i32;
+        }
+        let _ = std::fs::write(&report, &log);
+        failed
+    });
+    let Some(code) = code else { eprintln!("SKIP: seccomp NEW_LISTENER denied here"); return };
+    let seen = std::fs::read_to_string(&report).unwrap_or_default();
+    eprintln!("{seen}");
+    assert!(!refuse.is_empty(), "the own cgroup's files are writable to this uid, so some open was judged");
+    assert_eq!(code, Some(0), "{seen}");
+    eprintln!(
+        "CGROUP PASS: {} write-capable opens refused (own cgroup, {above} files above it, a sibling's task list: {}); reads pass",
+        refuse.len() * 2,
+        sibling.is_some()
+    );
+}
+
+/// The verdict behind the guard's refusal, on descriptors this process
+/// opens itself (DEFENSIVE ONLY: opened, judged, closed unwritten), so an
+/// EACCES under the guard is known to be this rule's and not another's.
+fn check_cgroup_verdicts(own: &std::path::Path) {
+    use net_supervisor::cgroup_guard::Refusal;
+    let verdict = |p: &std::path::Path, flags: i32| -> Option<Option<Refusal>> {
+        let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).ok()?;
+        // SAFETY: open with a NUL-terminated path; closed below, unwritten.
+        let fd = unsafe { libc::open(c.as_ptr(), flags | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return None;
+        }
+        let v = net_supervisor::cgroup_guard_kernel::refusal(fd, flags);
+        unsafe { libc::close(fd) };
+        Some(v)
+    };
+    assert_eq!(verdict(&own.join("cgroup.freeze"), libc::O_WRONLY), Some(Some(Refusal::OwnOrAbove)));
+    assert_eq!(verdict(&own.join("cgroup.procs"), libc::O_RDWR), Some(Some(Refusal::OwnOrAbove)));
+    assert_eq!(verdict(&own.join("cgroup.procs"), libc::O_RDONLY), Some(None), "a read is never judged");
+    if let Some(parent) = own.parent().filter(|p| writable(&p.join("cgroup.freeze"))) {
+        assert_eq!(verdict(&parent.join("cgroup.freeze"), libc::O_WRONLY), Some(Some(Refusal::OwnOrAbove)));
+    }
+    let sibling = own.parent().and_then(|p| std::fs::read_dir(p).ok()).and_then(|mut it| {
+        it.find_map(|e| {
+            let p = e.ok()?.path();
+            (p.is_dir() && p != own && writable(&p.join("cgroup.procs"))).then_some(p)
+        })
+    });
+    if let Some(s) = sibling {
+        assert_eq!(verdict(&s.join("cgroup.procs"), libc::O_WRONLY), Some(Some(Refusal::MoveReachesGuard)), "{}", s.display());
+    }
+    eprintln!("CGROUP VERDICT PASS: own and above refused as such, a sibling's task list as a move");
+}
