@@ -306,7 +306,7 @@ import { documentBlockText } from "../policy/document-blocks.js";
 import { documentNameRows, envRowVariable, isOwnTextRow, isRegisteredFileRow, ownTextTwinFor, registerSecret, registeredDocumentText, registeredDocumentTwin, twinMatchOf, fileRegisteredAsIs, listSecretRegistry, registerEnvSecret, registeredFileSymbols, registeredFilePaths, registeredFileTwin, structuredTwinFor, structuredTwinWithSecretsFor, structuredTwinOfField, wholeFileTwinFor, wholeFileTwinOfBase, wireServableTwin, wireReleaseScheme, type RegisteredTwin } from "../secret-registry/registry.js";
 import { WhyPreview } from "./why-preview.js";
 import { declaredBindingsReader, issuerSourceOf, ownWireHost, releaseRestsOnWireGrant, syncCurrentBindings, syncEnvBindings, syncRegisteredBindings } from "../secret-registry/current-bindings.js";
-import { mcpConfigKind } from "../policy/mcp-config.js";
+import { mcpConfigLike } from "../policy/mcp-config.js";
 import { issuerOfHost, issuerRelease, type Issuer } from "../policy/issuer-bindings.js";
 import { siblingDeclaredBindings, valueSourceLevel, valueSourceView, type ValueSourceOptions } from "../secret-registry/value-sources.js";
 import {
@@ -3796,7 +3796,7 @@ export class ArbiterServer {
   private keptRowWireHost(name: string, entry: SymbolEntry): string | null {
     let host = this.keptWireHostMemo.get(name);
     if (host === undefined) {
-      host = mcpConfigKind(entry.origin ?? "") === null ? null : ownWireHost(this.symbolMap, name, entry, this.labelLookup);
+      host = !mcpConfigLike(entry.origin ?? "") ? null : ownWireHost(this.symbolMap, name, entry, this.labelLookup);
       if (this.keptWireHostMemo.size >= 1024) this.keptWireHostMemo.clear();
       this.keptWireHostMemo.set(name, host);
     }
@@ -3812,7 +3812,10 @@ export class ArbiterServer {
    * generation.
    */
   private keptMcpValues(kept: readonly string[]): ReadonlyMap<string, string | null> {
-    const configs = kept.filter((p) => mcpConfigKind(p) !== null);
+    // An MCP config by its name, or a `config.toml` (Codex's where
+    // CODEX_HOME moved it: the only `config.toml` sessionMcpConfigPaths
+    // names).
+    const configs = kept.filter((p) => mcpConfigLike(p));
     if (configs.length === 0) return EMPTY_KEPT_VALUES;
     const key = `${symbolMapGeneration(this.symbolMap)}\u0001${this.symbolMap.symbols.size}\u0001${configs.join("\u0000")}`;
     const memo = this.keptMcpValuesMemo;

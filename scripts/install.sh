@@ -2,7 +2,7 @@
 # Mandu installer (docs/design/distribution/packaging.md §3, comparisons.md §3.1).
 #
 #   curl -fsSL <host>/install.sh | sh
-#   curl -fsSL <host>/install.sh | sh -s -- --package ./mandusec-mandu-0.2.0-beta.7.tgz
+#   curl -fsSL <host>/install.sh | sh -s -- --package ./mandusec-mandu-0.2.0-beta.8.tgz
 #   sh install.sh --package https://<host>/mandusec-mandu-<v>.tgz --sha256 <hex>
 #
 # A release's own copy of this script names that release's tarball and its

@@ -546,20 +546,27 @@ session, and their values are still masked in what reaches the AI.
 **MCP and editor config files.** An MCP config whose servers hold a
 credential (a token in a server's `env`, a bearer in its `headers`, a
 database URL's password in its `args`) is protected with no label of
-yours: `.mcp.json`, `~/.claude.json`, Codex's `~/.codex/config.toml`,
-`~/.cursor/mcp.json` and `.cursor/mcp.json`, `.vscode/mcp.json` and VS
-Code's user `mcp.json`, Claude Desktop's and Windsurf's configs. The AI
+yours: `.mcp.json`, `~/.claude.json`, Codex's `~/.codex/config.toml`
+(and the one `CODEX_HOME` points to), `~/.cursor/mcp.json` and
+`.cursor/mcp.json`, `.vscode/mcp.json` and VS Code's user `mcp.json`,
+Claude Desktop's and Windsurf's configs, OpenCode's `opencode.json`
+(`~/.config/opencode/` and a project's), Goose's
+`~/.config/goose/config.yaml`, Gemini CLI's `settings.json` (`~/.gemini/`
+and a project's `.gemini/`), Zed's `settings.json`, and Continue's
+`config.yaml` and `.continue/mcpServers/` blocks. The AI
 sees each value as a placeholder however it reads the file. The config of
 the agent you launch stays readable to it, so your MCP servers start and
 log in as without Mandu: Claude Code's `~/.claude.json` and the project's
-`.mcp.json` under `mandu claude`, Codex's `config.toml` under `mandu codex`
-(the launch says so in one line per file). The other programs the agent
+`.mcp.json` under `mandu claude`, Codex's `config.toml` under `mandu codex`,
+OpenCode's `opencode.json` under `mandu opencode`, Goose's `config.yaml`
+under `mandu goose` (the launch says so in one line per file). The other programs the agent
 runs read the project's `.mcp.json` as a placeholder copy (where the guard
 runs), and every other MCP config always. An HTTP server's `Authorization`
 credential goes only to the host its own entry's `url` names; from the
 placeholder copy of an editor's config in your home, the egress proxy puts
 it back there. A config that only names variables (`"GITHUB_TOKEN":
-"${GITHUB_TOKEN}"`) is left as it is. `mandu why <file>` names the rule.
+"${GITHUB_TOKEN}"`, OpenCode's `{env:VAR}`, Continue's
+`${{ secrets.X }}`, Gemini CLI's `$VAR`) is left as it is. `mandu why <file>` names the rule.
 What this does not cover, such as a stdio server that runs commands with
 its token in its environment: guarantees.md §3, "MCP servers hold their
 tokens".

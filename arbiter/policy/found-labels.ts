@@ -109,7 +109,7 @@ import { CONTENT_RULE } from "./secret-catalog.js";
 import { authName, fieldLastName, passwordKind, shortCredentialValue } from "./credential-names.js";
 import { detectSecretShapes, looksLikeSecretValue } from "./secret-detectors.js";
 import { extractSecretSpans, type SecretSpan } from "./secret-extract.js";
-import { mcpConfigKind, mcpServerEntries, type McpConfigKind } from "./mcp-config.js";
+import { mcpConfigKind, mcpConfigKindOf, mcpReference, mcpServerEntries, type McpConfigKind } from "./mcp-config.js";
 
 export { CONTENT_RULE };
 
@@ -328,10 +328,13 @@ export function credentialInDataFile(path: string, text: string): string | null 
 export const MCP_CONFIG_PROBE_MAX_BYTES = 2 * 1024 * 1024;
 
 /** The MCP config kinds a WORKSPACE walk reads where it meets them: a
- *  project's own (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`). The
- *  per-user files are read at their places in HOME (`mcpHomeConfigPaths`,
- *  the walk's MCP pass), wherever a prune would have kept them out. */
-const WORKSPACE_MCP_KINDS: ReadonlySet<McpConfigKind> = new Set<McpConfigKind>(["claude-project", "cursor", "vscode"]);
+ *  project's own (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`;
+ *  since 2026-10-22 OpenCode's `opencode.json(c)`, Gemini CLI's
+ *  `.gemini/settings.json`, Zed's `.zed/settings.json` and Continue's
+ *  `.continue/` configs and blocks). The per-user files are read at their
+ *  places in HOME (`mcpHomeConfigPaths`, the walk's MCP pass), wherever a
+ *  prune would have kept them out. Goose has no project config. */
+const WORKSPACE_MCP_KINDS: ReadonlySet<McpConfigKind> = new Set<McpConfigKind>(["claude-project", "cursor", "vscode", "opencode", "gemini", "zed", "continue"]);
 
 /**
  * Does the walk read this file as an MCP config (`rel`: its segments below
@@ -370,21 +373,45 @@ function tokenWords(v: string): string[] {
  * (`spanIsCredential`), when it is a vendor format, or when one of its
  * words reads as a token (`looksLikeSecretValue`: `Bearer <token>`, an API
  * key under a name that says nothing, a header set in a variable). A
- * reference the client expands (`${GITHUB_TOKEN}`) never is, so a config
- * that only names its variables stays public and every program reads it as
- * written. Pure.
+ * reference the client expands (`${GITHUB_TOKEN}`, `{env:X}`,
+ * `${{ secrets.X }}`, `$X`: mcp-config.ts `mcpReference`) never is, so a
+ * config that only names its variables stays public and every program
+ * reads it as written.
+ *
+ * A Goose or Continue YAML config whose server section this reader cannot
+ * read in full (its twin is then the whole file) is decided on its words
+ * instead (`unreadableYamlCredential`): fail-closed, a word anywhere in it
+ * that reads as a credential labels it. Pure.
  */
 export function mcpConfigCredential(path: string, text: string): string | null {
   const entries = mcpServerEntries(path, text);
-  if (entries === null || entries.length === 0) return null;
+  if (entries === null) return unreadableYamlCredential(path, text);
+  if (entries.length === 0) return null;
   const x = extractSecretSpans(path, text);
   if (x.shape === null || x.spans.length === 0) return null;
   for (const s of x.spans) {
     for (const p of [s, ...(s.parts ?? [])]) {
       const e = entries.find((en) => p.start >= en.start && p.end <= en.end);
-      if (e === undefined || /\$\{[^}]*\}/.test(p.value)) continue;
+      if (e === undefined || mcpReference(p.value)) continue;
       if (spanIsCredential(p) || vendorCredential(p.value) || tokenWords(p.value).some((w) => looksLikeSecretValue(w) && !referenceValue(w))) return `${e.name}.${p.key}`;
     }
+  }
+  return null;
+}
+
+/** A Goose or Continue YAML config whose server section the positional
+ *  reader gave up on (mcp-config.ts `yamlServerEntries`): `<unread>.<n>`
+ *  when one of its words is a vendor credential or reads as a token (and
+ *  is no reference), else null. Null for every other kind (a JSON or TOML
+ *  config that does not parse is the generic rules' business). Pure. */
+function unreadableYamlCredential(path: string, text: string): string | null {
+  const kind = mcpConfigKindOf(path, text);
+  if ((kind !== "goose" && kind !== "continue") || !/\.ya?ml$/i.test(path)) return null;
+  const words = tokenWords(text);
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    if (mcpReference(w) || referenceValue(w)) continue;
+    if (vendorCredential(w) || looksLikeSecretValue(w)) return `<unread>.${i}`;
   }
   return null;
 }

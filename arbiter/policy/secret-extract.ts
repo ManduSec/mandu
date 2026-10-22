@@ -64,7 +64,7 @@ import { locateBareSecretTokens } from "./egress-fingerprint.js";
 import { passwordKind } from "./credential-names.js";
 import { DOCUMENT_TWIN_EXTRACT, documentLineLabel, documentNameField } from "./personal-documents.js";
 import { isIP } from "node:net";
-import { codexTomlReading, mcpConfigKind, mcpServerEntries, mcpUrlHost, type McpServerEntry } from "./mcp-config.js";
+import { codexTomlReading, mcpConfigKindOf, mcpReference, mcpServerEntries, mcpUrlHost, mcpWholeReference, type McpServerEntry } from "./mcp-config.js";
 
 export interface SecretSpan {
   /** Field name for the symbol (`KEY`, `default.aws_secret_access_key`,
@@ -597,19 +597,17 @@ function extractCodexToml(content: string): SecretExtraction {
  *  entry sets is masked (it is set by hand to authenticate). */
 const BENIGN_HEADER_RE = /^(?:content-type|accept(?:-[a-z-]+)?|user-agent|origin|referer|cache-control|connection|mcp-protocol-version|[a-z0-9-]*-version)$/i;
 
-/** A value the client expands before use (`${GITHUB_TOKEN}`, VS Code's
- *  `${input:token}` and `${env:X}`): the reference, not the secret. */
-const MCP_REFERENCE_RE = /\$\{[^}]*\}/;
-
 /** An MCP config's spans less every one whose whole value is a reference
  *  the client expands (`"GITHUB_TOKEN": "${GITHUB_TOKEN}"`, which the key
- *  rule takes for a secret-named key): a placeholder there would replace
- *  the reference the server's value comes from with one that names
- *  nothing, and the variable itself is masked where it is set (the
+ *  rule takes for a secret-named key; since 2026-10-22 also OpenCode's
+ *  `{env:X}` / `{file:p}`, Continue's `${{ secrets.X }}` and Gemini CLI's
+ *  `$X`, mcp-config.ts `mcpWholeReference`): a placeholder there would
+ *  replace the reference the server's value comes from with one that
+ *  names nothing, and the variable itself is masked where it is set (the
  *  launch's environment masking). A span that merged others is kept. */
 function withoutMcpReferences(x: SecretExtraction): SecretExtraction {
-  if (x.shape === null || !x.spans.some((s) => s.parts === undefined && /^\$\{[^}]*\}$/.test(s.value))) return x;
-  return { ...x, spans: x.spans.filter((s) => s.parts !== undefined || !/^\$\{[^}]*\}$/.test(s.value)) };
+  if (x.shape === null || !x.spans.some((s) => s.parts === undefined && mcpWholeReference(s.value))) return x;
+  return { ...x, spans: x.spans.filter((s) => s.parts !== undefined || !mcpWholeReference(s.value)) };
 }
 
 /**
@@ -626,18 +624,21 @@ function withoutMcpReferences(x: SecretExtraction): SecretExtraction {
  *     there to authenticate;
  *   - `bearer_token` (Codex): the value.
  *
- * Never a reference the client expands (`${…}`), an empty value, or a URL
- * (its password is the key rules', its query the credential belt's). Field
+ * Never a reference the client expands (`${…}`, `{env:…}`, `${{ secrets.… }}`,
+ * `$VAR`: mcp-config.ts `mcpReference`), an empty value, or a URL (its
+ * password is the key rules', its query the credential belt's). Field
  * names: the variable's or header's name (`json-keys`, as the key rules
  * name them), `mcp_servers.<server>.<table>.<name>` (`toml`, as the INI
- * reading does). A value a `keyed` span already covers is left to it. Pure.
+ * reading does), the value's dotted path (`yaml-keys`, as the YAML key
+ * rules name theirs). A value a `keyed` span already covers is left to it.
+ * Pure.
  */
-function mcpEntrySpans(entries: readonly McpServerEntry[], keyed: readonly SecretSpan[], shape: "json-keys" | "toml"): SecretSpan[] {
+function mcpEntrySpans(entries: readonly McpServerEntry[], keyed: readonly SecretSpan[], shape: "json-keys" | "toml" | "yaml-keys"): SecretSpan[] {
   const covered = (a: number, b: number): boolean => keyed.some((s) => s.start < b && a < s.end);
   const out: SecretSpan[] = [];
   for (const e of entries) {
     for (const v of e.values) {
-      if (v.raw === "" || MCP_REFERENCE_RE.test(v.raw) || covered(v.start, v.end)) continue;
+      if (v.raw === "" || mcpReference(v.raw) || covered(v.start, v.end)) continue;
       let secret = false;
       if (v.role === "env") {
         if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v.raw)) continue;
@@ -649,7 +650,7 @@ function mcpEntrySpans(entries: readonly McpServerEntry[], keyed: readonly Secre
       }
       if (!secret) continue;
       const table = v.role === "env" ? "env" : v.role === "header" ? "http_headers" : "";
-      const key = shape === "toml" ? (table === "" ? `mcp_servers.${e.name}.${v.name}` : `mcp_servers.${e.name}.${table}.${v.name}`) : v.name;
+      const key = shape === "toml" ? (table === "" ? `mcp_servers.${e.name}.${v.name}` : `mcp_servers.${e.name}.${table}.${v.name}`) : shape === "yaml-keys" ? (v.field ?? v.name) : v.name;
       out.push({ key, start: v.start, end: v.end, value: v.raw });
     }
   }
@@ -917,12 +918,15 @@ export function npmrcProxyBypassKeys(content: string): string[] {
  *  gh's hosts.yml). Nested keys are prefixed by their parents' names. The
  *  string items of every sequence (`- --api-key`, `args: [-y, pkg]`) are
  *  judged by `listItemSpans` (`yamlLists`). */
-function extractYamlKeys(content: string): SecretExtraction {
+function extractYamlKeys(content: string, extra: (keyed: readonly SecretSpan[]) => SecretSpan[] = () => []): SecretExtraction {
   const keyed = yamlKeySpans(content);
-  if (keyed.length === 0) return { shape: "yaml-keys", spans: [] }; // whole-file twin, as before
+  // An MCP config's server values (secret-discovery.md §2.10: Goose's,
+  // Continue's).
+  const more = extra(keyed);
+  if (keyed.length === 0 && more.length === 0) return { shape: "yaml-keys", spans: [] }; // whole-file twin, as before
   const lists = yamlLists(content);
   if (lists === null) return NONE; // a flow list that never closes, or nested past MAX_LIST_DEPTH
-  const merged = finishMerged("yaml-keys", [...keyed, ...lists.flatMap((l) => listItemSpans(content, l))], content);
+  const merged = finishMerged("yaml-keys", [...keyed, ...more, ...lists.flatMap((l) => listItemSpans(content, l))], content);
   return { shape: "yaml-keys", spans: quotedPlainFlowItems(content, merged.spans, lists) };
 }
 
@@ -3592,6 +3596,9 @@ export function secretFileShape(path: string): string | null {
   if (/\.(toml|tfvars)$/i.test(base)) return "toml";
   if (/\.(xml|config)$/i.test(base)) return "xml-keys";
   if (/\.tfstate(\.backup)?$/.test(base)) return "json-keys";
+  // JSON with comments (`opencode.jsonc`, 2026-10-22): the JSON reading,
+  // whose key rules and comment grammar already read a JSONC text.
+  if (/\.jsonc$/i.test(base)) return "json-keys";
   if (/\.(ya?ml)$/i.test(base)) return "yaml-keys";
   if (/\.json$/i.test(base)) return "json-keys";
   return null;
@@ -3614,7 +3621,7 @@ export function extractSecretSpans(
   }
   const shape = secretFileShape(path);
   const x = withCredentialBelt(withSettledParts(extractShape(path, content), content), content, shape === null ? null : COMMENT_GRAMMARS[shape] ?? null);
-  return mcpConfigKind(path) === null ? x : withMcpWire(path, content, x);
+  return mcpConfigKindOf(path, content) === null ? x : withMcpWire(path, content, x);
 }
 
 /** A personal document's twin (DOCUMENT_TWIN_EXTRACT) with each span that
@@ -3951,11 +3958,19 @@ function withCredentialBelt(x: SecretExtraction, content: string, grammar: Comme
 function extractShape(path: string, content: string): SecretExtraction {
   // MCP and editor configs (secret-discovery.md §2.10): the shape's reading
   // plus each server entry's values.
-  const mcp = mcpConfigKind(path);
+  const mcp = mcpConfigKindOf(path, content);
   if (mcp === "codex") return withoutMcpReferences(extractCodexToml(content));
   if (mcp !== null && secretFileShape(path) === "json-keys") {
     const entries = mcpServerEntries(path, content) ?? [];
     return withoutMcpReferences(extractJsonKeys(content, (keyed) => mcpEntrySpans(entries, keyed, "json-keys")));
+  }
+  // Goose's and Continue's YAML (2026-10-22): a server section this reader
+  // cannot read in full makes the whole-file twin (the fail-safe, as an
+  // unreadable Codex inline table does).
+  if (mcp !== null && secretFileShape(path) === "yaml-keys") {
+    const entries = mcpServerEntries(path, content);
+    if (entries === null) return NONE;
+    return withoutMcpReferences(extractYamlKeys(content, (keyed) => mcpEntrySpans(entries, keyed, "yaml-keys")));
   }
   switch (secretFileShape(path)) {
     case "dotenv": return extractDotenv(content, path.slice(path.lastIndexOf("/") + 1) === ".envrc");

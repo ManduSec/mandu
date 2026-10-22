@@ -2829,6 +2829,36 @@ Choices worth stating:
   probe. A separate absent-candidate case asserts a final `null` sandbox
   without invoking any runner. Real confinement stays in the kernel and
   macOS live suites (§12.2); no production probe is bypassed.
+- **A stack test whose subject depends on the launch's wall probes the host
+  the way the launcher does** (2026-10-23). With no file guard
+  (`MANDU_NO_KERNEL=1`), only the bind wrap walls a launch off from the
+  human plane, and the wrap needs a bubblewrap that can make a user
+  namespace, which this runner's AppArmor restriction refuses (§12.2). A
+  launch with no wall has every report it makes stored as a claim
+  ([`arbiter-human-plane.md`](../architecture/arbiter-human-plane.md) §10.1),
+  and Home counts no claim. So `tests/stack/session-end-kept-line.test.ts`
+  asks the launcher's own facts (`systemBwrapBin` and `probeUserns`) which
+  host it is on: where the wrap can go up, it requires the walled record and
+  the line that counts the `.env`; here it requires the host's gap, every
+  event a claim, and the line that matches Home's count of none. The branch
+  follows the probe, never the launch's output, so a walled host whose
+  launch lost its wall still fails. GitHub's run of the snapshot before
+  beta.8 (2026-10-22) failed this test before the probe was added.
+- **A browser's teardown waits for its whole process group** (2026-10-23).
+  Chromium's helpers (zygote, renderers, the GPU and network services, the
+  crash handler) keep writing into the profile for a moment after the main
+  process exits. A profile removed when only the main process was gone
+  failed with `ENOTEMPTY` (`settings-notify-off`, the same run; an earlier
+  release run was retried for the same thing). `scripts/tour-screenshots.mjs`
+  `startBrowser` now starts the browser as the leader of its own process
+  group, and `stopProc` sends the group SIGTERM, then SIGKILL, and returns
+  only once no process of the group is left (a group still alive when the
+  test process exits is killed then); `removeProfile` removes the directory
+  with retries. Every stack test that drives a page through it gets this;
+  `tests/lib/chromium.ts` `stopChromium` waits for the group the same way.
+  `tests/lib/teardown.ts` `withTeardown` runs a test's teardown steps
+  without letting a failing one replace the test's own error, as a throwing
+  `finally` does.
 
 **macOS, before it moved off GitHub.** A `macos-latest` workflow ran
 `scripts/test-all.sh --kind unit,component,stack,sandbox`, which on darwin
@@ -3219,3 +3249,14 @@ the declared ranges, applied in the same change: js-yaml 4.2.0 to 4.3.2
 7.30.0 (fifteen advisories), seroval 1.5.6 to 1.6.9 (one critical, one
 high), source-map-js 1.2.1 to 1.2.2 and solid-js 1.9.15 to 1.9.17 (the
 vendored asciinema player is prebuilt, untouched).
+
+**An advisory between two nightlies (2026-10-22).** GHSA-rxp7-6hxx-x8q5
+(`ip-address` up to 10.7.3: a zone identifier matched in quadratic time;
+moderate) was published at 16:19 UTC, sixteen minutes after that day's
+GitLab nightly had run the audit green. The first audit to run after it was
+GitHub's, on the snapshot before beta.8 that evening: `tests/fixtures/agent-sdk-host`
+holds the only copy, a transitive dependency of the Claude Agent SDK's
+`express-rate-limit` (`^10.2.0`). `npm audit fix --package-lock-only
+--ignore-scripts` moved it to 10.7.4 and changed nothing else in the lock;
+no allow-list entry. The GitLab audit runs the same two entries, so the
+next nightly would have failed the same way.

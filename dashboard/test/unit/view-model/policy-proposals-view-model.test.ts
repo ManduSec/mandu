@@ -56,7 +56,7 @@ const EVERY_OP: Array<[Record<string, unknown>, RegExp]> = [
   [{ op: "trust-origin", kind: "dir", pattern: "/srv/docs" }, /^Trust files under \/srv\/docs/],
   [{ op: "distrust-origin", kind: "channel", pattern: "C123" }, /^Always mask messages from C123$/],
   [{ op: "release", from: { host: "docs.python.org" }, to: { host: "api.example.com" }, mode: "allow" }, /^Always allow sending masked data from docs\.python\.org to api\.example\.com$/],
-  [{ op: "release", to: { host: "pastebin.com" }, mode: "block", expires: "2026-12-01T00:00:00Z" }, /^Always block sending masked data from anywhere to pastebin\.com until 2026-12-01/],
+  [{ op: "release", to: { host: "pastebin.com" }, mode: "block", expires: "2026-12-01T00:00:00Z" }, /^Always block sending masked data from anywhere to pastebin\.com until 2026-12-01T00:00:00Z$/],
   [{ op: "release", id: "r-0001", to: { host: "*" }, mode: "audit" }, /^Change rule r-0001: only count masked data sent from anywhere to anywhere, which still needs your OK$/],
   [{ op: "retire-rule", id: "r-0002" }, /^Remove rule r-0002$/],
   [{ op: "set-disposition", rule: "egress:untrusted-destination", mode: "block" }, /^Always block, without asking, what the built-in rule untrusted destination stops$/],
@@ -93,6 +93,26 @@ test("every op renders a plain sentence from the grammar; an unknown op says it 
   }
   assert.match(text(editRow({ op: "rm-rf" })), /^A change this page cannot describe \(rm-rf\)$/);
   assert.match(text(editRow(null)), /cannot describe/);
+});
+
+test("§4.25u a send rule's end is a moment (a time part), not code; text that is no date stays code", () => {
+  // Until 2026-10-23 the end was a code part: "until `2026-12-01T00:00:00Z`"
+  // on Approvals, in UTC and the code font (dashboard.md §4.25u, *A rule
+  // with an end date says when*). The page words the time part in the
+  // reader's own clock.
+  const parts = editRow({ op: "release", to: { host: "pastebin.com" }, mode: "block", expires: "2026-12-01T00:00:00Z" });
+  assert.deepEqual(parts.slice(-2), [{ kind: "text", text: " until " }, { kind: "time", text: "2026-12-01T00:00:00Z" }]);
+  assert.deepEqual(parts.filter((p) => p.kind === "code").map((p) => p.text), ["pastebin.com"], "the end is no code part");
+  // A date alone, and an offset, are moments too.
+  assert.equal(editRow({ op: "release", to: { host: "a.example" }, mode: "allow", expires: "2026-12-01" }).at(-1)?.kind, "time");
+  assert.equal(editRow({ op: "release", to: { host: "a.example" }, mode: "allow", expires: "2026-12-01T09:00:00+09:00" }).at(-1)?.kind, "time");
+  // Anything else is shown as the code it is, never as a moment: words, a
+  // token, a date that is not one.
+  for (const bad of ["next friday", "Tue Dec 01 2026 $MDU:x[abcd]", "2026-13-45T00:00:00Z"]) {
+    assert.deepEqual(editRow({ op: "release", to: { host: "a.example" }, mode: "allow", expires: bad }).at(-1), { kind: "code", text: bad }, bad);
+  }
+  // No end: no "until".
+  assert.doesNotMatch(text(editRow({ op: "release", to: { host: "a.example" }, mode: "allow" })), /until/);
 });
 
 test("values ride as code parts, so the page renders them as text, never as markup", () => {

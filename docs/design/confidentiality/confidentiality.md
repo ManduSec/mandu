@@ -282,8 +282,9 @@ mandu.db, field row → host, symbol-table.ts `recordWireGrant`; the launch
 HOME's own `.npmrc` / pip.conf only, `isHomeWireFile`, and since
 2026-10-21 an editor's MCP config in that HOME, whose HTTP server's
 Authorization credential goes to its entry's own host
-([`secret-discovery.md`](./secret-discovery.md) §2.10; never
-`~/.claude.json`, Codex's `config.toml` or a workspace config), and only for a
+([`secret-discovery.md`](./secret-discovery.md) §2.10; since 2026-10-22
+Gemini CLI's, Zed's and Continue's too; never `~/.claude.json`, Codex's,
+OpenCode's or Goose's config or a workspace config), and only for a
 registration on the human plane, below), and rule 1 adds a
 field's wire host when, and only when, the record names it and the field's
 own text still names that host. The precedence is explicit:

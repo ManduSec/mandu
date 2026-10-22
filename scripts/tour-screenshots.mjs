@@ -263,7 +263,8 @@ export class Cdp {
 }
 
 /** Start the browser; answer `{ proc, wsUrl }`. Retries once with
- *  --no-sandbox when the kernel refuses Chromium's sandbox. */
+ *  --no-sandbox when the kernel refuses Chromium's sandbox. The browser
+ *  leads a process group of its own (see stopProc). */
 export async function startBrowser(path, dataDir, env) {
   const base = [
     "--headless", "--remote-debugging-port=0", `--user-data-dir=${dataDir}`, "--hide-scrollbars",
@@ -271,7 +272,8 @@ export async function startBrowser(path, dataDir, env) {
     "--force-color-profile=srgb", "--lang=en-US", "about:blank",
   ];
   for (const extra of [[], ["--no-sandbox"]]) {
-    const proc = spawn(path, [...extra, ...base], { env, stdio: ["ignore", "ignore", "pipe"] });
+    const proc = spawn(path, [...extra, ...base], { env, stdio: ["ignore", "ignore", "pipe"], detached: true });
+    trackGroup(proc);
     let err = "";
     const wsUrl = await new Promise((ok) => {
       const timer = setTimeout(() => ok(null), 20_000);
@@ -293,13 +295,74 @@ export async function startBrowser(path, dataDir, env) {
   throw new Error("the browser did not start");
 }
 
-export function stopProc(proc) {
-  return new Promise((done) => {
-    if (proc.exitCode !== null || proc.signalCode !== null) return done();
-    const kill = setTimeout(() => { try { proc.kill("SIGKILL"); } catch { /* gone */ } }, 3000);
-    proc.once("exit", () => { clearTimeout(kill); done(); });
-    try { proc.kill("SIGTERM"); } catch { clearTimeout(kill); done(); }
-  });
+// Chromium's helpers (zygote, renderers, the GPU and network services, the
+// crash handler) write into the profile too, and outlive the main process by
+// a moment: a profile removed when only the main process has exited fails
+// with ENOTEMPTY as a helper writes into it (GitHub CI, 2026-10-22). So
+// startBrowser makes the browser the leader of its own process group, and
+// stopProc ends the whole group and returns only once none of it is left.
+// A group still running when this process exits is killed then.
+const liveGroups = new Set();
+let exitHooked = false;
+
+function trackGroup(proc) {
+  if (proc.pid === undefined) return;
+  if (!exitHooked) {
+    exitHooked = true;
+    process.on("exit", () => {
+      for (const pid of liveGroups) { try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ } }
+    });
+  }
+  liveGroups.add(proc.pid);
+}
+
+/** Some process of the group `pid` leads is still there. */
+export function groupAlive(pid) {
+  try { process.kill(-pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
+}
+
+/**
+ * Stop `proc` and, when it leads a process group (startBrowser's browser),
+ * every process of the group: SIGTERM, SIGKILL after `graceMs`, and resolve
+ * once the process has exited and none of its group is left (at most
+ * `waitMs` more after the SIGKILL). A process that leads no group is
+ * stopped alone, as before.
+ */
+export async function stopProc(proc, { graceMs = 3000, waitMs = 10_000 } = {}) {
+  const pid = proc.pid;
+  const group = pid !== undefined && liveGroups.has(pid);
+  const exited = proc.exitCode !== null || proc.signalCode !== null
+    ? Promise.resolve()
+    : new Promise((r) => proc.once("exit", () => r()));
+  const signal = (sig) => {
+    if (group) { try { process.kill(-pid, sig); return; } catch { /* the group is gone */ } }
+    try { proc.kill(sig); } catch { /* gone */ }
+  };
+  const gone = async (ms) => {
+    const end = Date.now() + ms;
+    let done = false;
+    void exited.then(() => { done = true; });
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 25));
+      if (done && !(group && groupAlive(pid))) return true;
+      if (Date.now() >= end) return false;
+    }
+  };
+  signal("SIGTERM");
+  if (!(await gone(graceMs))) {
+    signal("SIGKILL");
+    if (!(await gone(waitMs))) {
+      throw new Error(`the browser (pid ${pid}) or a process of its group outlived SIGKILL by ${waitMs} ms`);
+    }
+  }
+  if (group) liveGroups.delete(pid);
+}
+
+/** Remove a browser's profile (or the directory holding it) once stopProc
+ *  has returned: with retries, for a file system that answers ENOTEMPTY or
+ *  EBUSY for a moment after the last writer is gone. */
+export function removeProfile(dir) {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 /** One browser tab, signed in to the dashboard at `base`. */
@@ -424,7 +487,7 @@ async function main() {
     while (cleanup.length) {
       try { await cleanup.pop()(); } catch (e) { console.error(`tour-screenshots: cleanup: ${e.message}`); }
     }
-    rmSync(tmp, { recursive: true, force: true });
+    removeProfile(tmp);
   };
   const onSignal = () => { void stopAll().finally(() => process.exit(130)); };
   process.once("SIGINT", onSignal);

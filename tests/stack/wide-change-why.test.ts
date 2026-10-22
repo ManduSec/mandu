@@ -22,6 +22,12 @@
  *       approved and leaves the pending list; Not now on the other denies it;
  *   W5  the oracle: no page or answer read here carries the file's value or
  *       a minted token.
+ *   W6  (2026-10-23, *A rule with an end date says when*) a send rule
+ *       proposed with an end 30 days out: its Approvals card reads "until"
+ *       a moment in local clock words (a <time> whose datetime is the end),
+ *       never a `T…Z` timestamp; after its Allow, Rules › Sending data
+ *       reads "Always allowed until …", the same moment. W5's oracle covers
+ *       these reads.
  *
  * Axes: secrets (stated).
  */
@@ -149,6 +155,55 @@ test("Approvals over the real arbiter: a wide change's foot names what it opens;
     const statuses = new Map((JSON.parse(allBody) as { proposals: Array<{ id: string; status: string }> }).proposals.map((p) => [p.id, p.status]));
     assert.equal(statuses.get(connect.proposalId), "approved", "Allow approved the connect change");
     assert.equal(statuses.get(send.proposalId), "denied", "Not now denied the send");
+
+    // W6: a send rule with an end date says when, on its card and on Rules.
+    const end = new Date(Date.now() + 30 * 86_400_000);
+    end.setUTCSeconds(0, 0);
+    const endIso = end.toISOString();
+    const timed = await agent.policyPropose({ edits: [{ op: "release", to: { host: "uploads.example" }, mode: "allow", expires: endIso }], reason: "share for a month", sessionKey: "s-wide" });
+    assert.ok(!timed.applied && "proposalId" in timed, `a send rule waits for the person: ${JSON.stringify(timed)}`);
+    const clockOf = (iso: string) => {
+      const d = new Date(iso);
+      const pad = (k: number) => String(k).padStart(2, "0");
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const year = d.getFullYear() === new Date().getFullYear() ? "" : `, ${d.getFullYear()}`;
+      return `${months[d.getMonth()]} ${d.getDate()}${year}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+    const ISO_TEXT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+    await servedProductPage(base, "/approvals", (doc: Doc) => !!card(doc, timed.proposalId), async (doc: Doc) => {
+      const win = doc.defaultView;
+      const c = card(doc, timed.proposalId);
+      const row = c.querySelector(".proposal-rows li");
+      const time = row.querySelector("time");
+      assert.ok(time, "the end is a moment on the card");
+      assert.equal(time.getAttribute("datetime"), endIso);
+      assert.equal(row.textContent.replace(/\s+/g, " ").trim(), `Always allow sending masked data from anywhere to uploads.example until ${clockOf(endIso)}`);
+      assert.doesNotMatch(c.textContent, ISO_TEXT, "no T…Z timestamp on the card");
+      assert.equal([...row.querySelectorAll("code")].map((x: Doc) => x.textContent).join(), "uploads.example", "the end is no code");
+      noValue(doc.body.textContent, "the rendered Approvals card with an end");
+      // Allow it (typing ALLOW first if the server holds it wide).
+      const input = c.querySelector(".proposal-confirm");
+      if (input) {
+        input.value = "ALLOW";
+        input.dispatchEvent(new win.Event("input"));
+      }
+      c.querySelector(".proposal-allow").click();
+      await waitWhile(() => !!card(doc, timed.proposalId));
+    }, { headers: signedIn, css: "" });
+    const panel = await pageFetch(`${base}/api/policy/panel`, { headers: CSRF_ADMIN });
+    const panelBody = await panel.text();
+    noValue(panelBody, "the policy panel with a rule that ends");
+    const sendRow = (doc: Doc) => ([...doc.querySelectorAll("#rules-list .row.rule")] as Doc[]).find((r) => r.querySelector(".rule-text")?.title === "uploads.example");
+    await servedProductPage(base, "/rules", (doc: Doc) => !!sendRow(doc), async (doc: Doc) => {
+      const row = sendRow(doc);
+      const effect = row.querySelector(".rule-effect");
+      assert.ok(effect, "the rule's effect carries its end");
+      const words = (effect.querySelector("select")?.options[0].textContent ?? effect.querySelector(".outcome").textContent).trim();
+      assert.equal(`${words} ${effect.querySelector(".rule-until").textContent}`, `Always allowed until ${clockOf(endIso)}`);
+      assert.equal(effect.querySelector(".rule-until time").getAttribute("datetime"), endIso);
+      assert.doesNotMatch(row.textContent, ISO_TEXT, "no T…Z timestamp on Rules");
+      noValue(doc.body.textContent, "the rendered Rules page");
+    }, { headers: signedIn, css: "" });
   } finally {
     await dashboard.close();
     wired.close();

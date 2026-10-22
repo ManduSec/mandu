@@ -302,7 +302,7 @@ function callSentence(step: Pick<DualToolStep, "tool" | "input">, label: ItemLab
   // card's words, each value as code (its masked items chips, cut).
   const policy = manduPolicyTool(tool);
   if (policy) {
-    const sentence = policyToolSentence(policy, a, home).flatMap((p) => (p.kind === "code" ? codeParts(p.text, label, POLICY_VALUE_CAP) : [t(maskTokens(p.text))]));
+    const sentence = policyToolSentence(policy, a, home).flatMap((p): StoryPart[] => (p.kind === "code" ? codeParts(p.text, label, POLICY_VALUE_CAP) : p.kind === "time" ? [{ kind: "time", text: p.text, clock: true }] : [t(maskTokens(p.text))]));
     return { icon: "shield", sentence };
   }
   return { icon: "tool", sentence: [t("Used "), c(tool.replace(/^mcp__/, "").replace(/__/g, " "))] };

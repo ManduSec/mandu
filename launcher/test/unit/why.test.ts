@@ -95,6 +95,13 @@ test("renderWhyPath: an agent's login is raw only where that agent runs, a place
   assert.match(toml, /read it as it is \(but for its MCP servers', below\)/);
   assert.ok(!/its values are not registered/.test(toml), "never that its values are not registered");
   assert.match(s, /its values are not registered/, "another store file keeps the line");
+  // 2026-10-22: OpenCode's and Goose's configs, labelled as found, say whose
+  // MCP config they are; Gemini CLI's (no supported agent reads it) does not.
+  const found = { ...codex, rule: "content:secret-key", agentFile: undefined };
+  assert.match(renderWhyPath({ ...found, path: "/h/.config/opencode/opencode.json" }, "/h"), /MCP config OpenCode's MCP servers too[\s\S]*a session that runs OpenCode leaves the file/);
+  assert.match(renderWhyPath({ ...found, path: "/w/p/opencode.jsonc" }, "/h"), /MCP config OpenCode's MCP servers too/);
+  assert.match(renderWhyPath({ ...found, path: "/h/.config/goose/config.yaml" }, "/h"), /MCP config Goose's MCP servers too/);
+  assert.ok(!/MCP config/.test(renderWhyPath({ ...found, path: "/h/.gemini/settings.json" }, "/h")), "no supported agent reads Gemini CLI's");
 });
 
 // 2026-10-09: the line said "each value is a placeholder" of every file

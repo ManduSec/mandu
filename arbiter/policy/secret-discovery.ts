@@ -72,7 +72,7 @@
  *
  * Mandu-new (no reference origin).
  */
-import { readdirSync, readFileSync, realpathSync, statSync, lstatSync, accessSync, constants } from "fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, lstatSync, accessSync, constants } from "fs";
 import { homedir } from "os";
 import * as path from "path";
 import { fileURLToPath } from "url";
@@ -113,7 +113,7 @@ export function documentFileVerdict(path: string, r: DocumentTextRead): Document
 }
 import { catalogPrefixesUnder, CONTENT_RULE, DOCUMENT_RULE, isContentRule, GOOSE_DATA_SHAPE_RE, normalizedPrefixes, OPENCODE_DATA_SHAPE_RE, pathConfidentiality, type LabelLookup, type SecretCatalogMatch } from "./secret-catalog.js";
 import { CONTENT_PROBE_MAX_FILES, CONTENT_PROBE_MAX_TOTAL, contentProbeCandidate, credentialInDataFile, MCP_CONFIG_PROBE_MAX_BYTES, mcpConfigCandidate, mcpConfigCredential, readCandidate, type ProbeTier } from "./found-labels.js";
-import { mcpConfigKind, mcpConfigReader, mcpHomeConfigPaths } from "./mcp-config.js";
+import { mcpConfigKind, mcpConfigReader, mcpHomeConfigPaths, type McpConfigKind, type McpConfigReader } from "./mcp-config.js";
 import { isSecret, maxConfidentiality, type ConfidentialityLevel } from "../symbol-table/confidentiality.js";
 import { getSymbolPattern, hasSymbols } from "../symbol-table/symbol-table.js";
 
@@ -317,22 +317,55 @@ export function parseSessionLogins(raw: unknown): SessionLogins | null {
 }
 
 /**
+ * The agents whose own MCP configs a launch leaves readable to them
+ * (secret-discovery.md §2.10): the kept logins' owners (`keptLoginOwners`:
+ * Claude Code, Codex, OpenCode), and Goose under `mandu goose` (Goose has
+ * no login file this module keys, so it is named here), or every one for
+ * an absent or unknown target, as `keptLoginOwners` keeps every login.
+ * Pure.
+ */
+export function keptMcpReaders(target: string | undefined, ullmBinary?: string): ReadonlySet<McpConfigReader> {
+  const out = new Set<McpConfigReader>(keptLoginOwners(target, ullmBinary));
+  if (target === undefined || !KNOWN_TARGETS.has(target) || target === "goose") out.add("goose");
+  return out;
+}
+
+/** The kind of an MCP config at one of `mcpHomeConfigPaths`' places: by
+ *  its name, or Codex's for `$CODEX_HOME/config.toml` (an absolute
+ *  `CODEX_HOME` that moved it out of `.codex`). Pure. */
+export function homeMcpConfigKind(p: string, env: Readonly<Record<string, string | undefined>>): McpConfigKind | null {
+  const k = mcpConfigKind(p);
+  if (k !== null) return k;
+  const dir = env["CODEX_HOME"];
+  return typeof dir === "string" && dir.startsWith("/") && plainPath(p) === path.posix.join(plainPath(dir), "config.toml") ? "codex" : null;
+}
+
+/**
  * The MCP configs a kept agent reads in its own process, by this session's
- * keying (secret-discovery.md §2.10): Codex's `config.toml` (HOME's, and
- * `$CODEX_HOME`'s) when Codex is kept, and each of the session's
- * `mcpConfigs` whose reader is a kept agent (a `.mcp.json` for Claude
- * Code). Claude Code's `.claude.json` is a login file already. Pure.
+ * keying (secret-discovery.md §2.10): the per-user ones at their HOME
+ * places whose reader is kept (`keptMcpReaders`; under
+ * MANDU_OTHER_AGENT_LOGINS=raw every login's owner): Codex's `config.toml`
+ * (HOME's, and `$CODEX_HOME`'s), OpenCode's global `opencode.json(c)`,
+ * Goose's `config.yaml`; and each of the session's `mcpConfigs` whose
+ * reader is a kept agent (a `.mcp.json` for Claude Code, an
+ * `opencode.json(c)` for OpenCode). Claude Code's `.claude.json` is a login
+ * file already, and `~/.mcp.json` is a project's. Pure.
  */
 export function sessionMcpConfigPaths(s: SessionLogins): string[] {
-  const owners = s.otherLoginsRaw === true ? new Set(LOGIN_OWNERS) : keptLoginOwners(s.target, s.ullmBinary);
+  const readers = new Set<McpConfigReader>(keptMcpReaders(s.target, s.ullmBinary));
+  if (s.otherLoginsRaw === true) for (const o of LOGIN_OWNERS) readers.add(o);
+  const env = s.loginEnv ?? {};
   const out = new Set<string>();
-  if (owners.has("codex")) {
-    for (const p of mcpHomeConfigPaths(s.home, s.loginEnv ?? {})) if (mcpConfigKind(p) === "codex" || p.endsWith("/config.toml")) out.add(plainPath(p));
+  for (const p of mcpHomeConfigPaths(s.home, env)) {
+    const kind = homeMcpConfigKind(p, env);
+    if (kind === null || kind === "claude" || kind === "claude-project") continue;
+    const reader = mcpConfigReader(kind);
+    if (reader !== null && readers.has(reader)) out.add(plainPath(p));
   }
   for (const p of s.mcpConfigs ?? []) {
     const kind = mcpConfigKind(p);
     const reader = kind === null ? null : mcpConfigReader(kind);
-    if (reader !== null && owners.has(reader)) out.add(plainPath(p));
+    if (reader !== null && readers.has(reader)) out.add(plainPath(p));
   }
   return [...out];
 }
@@ -406,6 +439,10 @@ export const SKIP_DIRS: ReadonlySet<string> = new Set([
   "__pycache__", ".cache", ".next",
   ".ccache", ".npm", ".nvm", ".rustup", ".vscode-server", ".vscode-server-insiders",
 ]);
+
+/** A repository's metadata entry: where OpenCode stops looking up for a
+ *  project `opencode.json` (secret-discovery.md §2.10). */
+const REPO_META = ".git";
 
 /**
  * macOS HOME folders never walked (2026-09-29), as DIRECT CHILDREN OF HOME
@@ -754,11 +791,13 @@ export interface DiscoveredSecret {
   agentLogin?: LoginOwner;
   /** THIS launch's agent's own MCP config (secret-discovery.md §2.10:
    *  Claude Code's `.claude.json` and the `.mcp.json` at a walk root,
-   *  Codex's `config.toml`), holding a server's credential: the launcher
+   *  Codex's `config.toml`, since 2026-10-22 also where `CODEX_HOME` moved
+   *  it, OpenCode's global and project `opencode.json(c)`, Goose's
+   *  `config.yaml`), holding a server's credential: the launcher
    *  registers it (its values are known to the model gates and the
    *  tripwire) and leaves it readable to the agent, which starts its MCP
    *  servers from it and keeps its own state in it. */
-  agentConfig?: "claude" | "codex";
+  agentConfig?: McpConfigReader;
 }
 
 /**
@@ -1363,6 +1402,11 @@ export function discoverSecretsReport(
   // The MCP configs the walk's probe read (§2.10): the MCP pass reads the
   // rest of the HOME places.
   const mcpProbed = new Set<string>();
+  // The agents whose own MCP configs this launch leaves readable to them.
+  const keptReaders = keptMcpReaders(opts.target, opts.ullmBinary);
+  // `$CODEX_HOME/config.toml` when CODEX_HOME moved it out of `.codex`.
+  const movedCodexHome = typeof loginEnv["CODEX_HOME"] === "string" && loginEnv["CODEX_HOME"].startsWith("/") ? plainPath(loginEnv["CODEX_HOME"]) : null;
+  const movedCodexToml = movedCodexHome === null || mcpConfigKind(path.posix.join(movedCodexHome, "config.toml")) !== null ? null : path.posix.join(movedCodexHome, "config.toml");
   // The document tier's project test (personal-documents.ts
   // `inSoftwareProject`): each directory's names, listed once.
   const listings = new Map<string, ReadonlySet<string>>();
@@ -1383,6 +1427,11 @@ export function discoverSecretsReport(
     const base = tier === "home" ? home : root;
     if (!isSelfOrAncestor(base, full) || full === base) return null;
     const rel = full.slice(base.endsWith("/") ? base.length : base.length + 1).split("/");
+    // Codex's config where CODEX_HOME moved it (§2.10, 2026-10-22): judged
+    // by the MCP pass below, as `~/.codex/config.toml` is, never by the
+    // generic content tier (which would label it with no regard for the
+    // launch, and so twin it under `mandu codex` too).
+    if (movedCodexToml !== null && full === movedCodexToml) return null;
     // An MCP or editor config (§2.10): read for its servers' values, with a
     // cap of its own (`.claude.json`-sized files are not read here, and the
     // HOME places a prune hides are read by the MCP pass below).
@@ -1663,7 +1712,7 @@ export function discoverSecretsReport(
   if (contentOn && rootList.includes(plainPath(home))) {
     for (const p of mcpHomeConfigPaths(home, loginEnv)) {
       if (out.has(p) || cleared.has(p) || mcpProbed.has(p)) continue;
-      const kind = mcpConfigKind(p);
+      const kind = homeMcpConfigKind(p, loginEnv);
       if (kind === null || kind === "claude-project") continue; // `~/.mcp.json`: the HOME root's walk reads it as a project's
       let st: ReturnType<typeof statSync> | undefined;
       try { st = statSync(p, { throwIfNoEntry: false }); } catch { st = undefined; }
@@ -1699,7 +1748,12 @@ export function discoverSecretsReport(
       // The launched agent's own (`kept` login, or its `store`): left
       // readable to it. A store of an agent this launch does not run
       // (Codex's `config.toml` under claude) is twinned like any secret.
-      const ownConfig = owned && (agent?.kind === "kept" || kept.has(reader!));
+      // Since 2026-10-22 an agent's own config outside its login and store
+      // (OpenCode's and Goose's under `~/.config`, Codex's where CODEX_HOME
+      // moved it) is labelled as an editor's is (found, above), and left
+      // readable to its agent's launch: the label still gates every other
+      // program's open where the guard runs.
+      const ownConfig = reader !== null && (owned ? agent?.kind === "kept" || kept.has(reader as LoginOwner) : keptReaders.has(reader));
       out.set(p, { path: p, level: match.level, rule: match.rule ?? CONTENT_RULE, ...(ownConfig ? { agentConfig: reader! } : {}) });
     }
   }
@@ -1709,6 +1763,32 @@ export function discoverSecretsReport(
   if (kept.has("claude")) {
     for (const [p, f] of out) {
       if (mcpConfigKind(p) === "claude-project" && rootList.includes(path.posix.dirname(p)) && f.agentLogin === undefined) out.set(p, { ...f, agentConfig: "claude" });
+    }
+  }
+  // OpenCode's and Goose's own configs (2026-10-22) the walk's probe read
+  // and labelled: OpenCode's global ones and an `opencode.json(c)` in a walk
+  // root or a directory above one (OpenCode reads its working directory's
+  // and every one up to the git root), Goose's `config.yaml`; under a
+  // launch that keeps that agent each is its own config too.
+  if (keptReaders.has("opencode") || keptReaders.has("goose")) {
+    /** The directory OpenCode stops at looking up from `dir`: the nearest
+     *  one holding a repository's metadata directory, or `/` (OpenCode's
+     *  own `findUp` to its worktree). */
+    const repoTop = (dir: string): string => {
+      for (let d = dir; ; d = path.posix.dirname(d)) {
+        try { if (existsSync(path.posix.join(d, REPO_META))) return d; } catch { /* unreadable: keep looking up */ }
+        if (path.posix.dirname(d) === d) return "/";
+      }
+    };
+    const homePlaces = new Set(mcpHomeConfigPaths(home, loginEnv));
+    for (const [p, f] of out) {
+      if (f.agentLogin !== undefined || f.agentConfig !== undefined) continue;
+      const kind = mcpConfigKind(p);
+      if (kind !== "opencode" && kind !== "goose") continue;
+      if (!keptReaders.has(kind)) continue;
+      const dir = path.posix.dirname(p);
+      const own = homePlaces.has(p) || (kind === "opencode" && /^opencode\.jsonc?$/.test(path.posix.basename(p)) && rootList.some((r) => isSelfOrAncestor(dir, r) && isSelfOrAncestor(repoTop(r), dir)));
+      if (own) out.set(p, { ...f, agentConfig: kind });
     }
   }
 

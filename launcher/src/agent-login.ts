@@ -40,7 +40,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { codexTalksToModel } from "./codex-argv.js";
 import { readGooseArgv } from "./goose-argv.js";
 import { gooseCompatSpec, gooseConfigDir, gooseConfigScalars, gooseRoutePlan, type GooseRoutedProvider } from "./goose-route.js";
@@ -277,7 +277,8 @@ export interface SessionLogins {
   loginEnv?: Record<string, string>;
   /** The project MCP configs the session's agent reads in its own process
    *  (secret-discovery.md §2.10): Claude Code's `.mcp.json` in the
-   *  directories it runs in, those that exist at the launch. */
+   *  directories it runs in, OpenCode's `opencode.json(c)` there and up to
+   *  the repository's top, those that exist at the launch. */
   mcpConfigs?: string[];
 }
 
@@ -287,19 +288,40 @@ export interface SessionLogins {
  *  for `claude`; the arbiter keeps a path only when a kept agent reads it. */
 const CLAUDE_MCP_TARGETS: ReadonlySet<string> = new Set(["claude", "shell", "openclaw"]);
 
+/** A repository's metadata entry: where OpenCode stops looking up. */
+const REPO_META = ".git";
+
+/** How many directories up `sessionMcpConfigs` looks for OpenCode's. */
+const MAX_OPENCODE_UP = 32;
+
 /**
  * The project MCP configs the session's agent reads in its own process
  * (secret-discovery.md §2.10): `<dir>/.mcp.json` for the human's and the
- * agent's directories, those that exist (`exists`), when the target runs
- * Claude Code. Pure but for `exists`.
+ * agent's directories when the target runs Claude Code; under `mandu
+ * opencode` (2026-10-22) `opencode.json` and `opencode.jsonc` in those
+ * directories and each one above, up to the first that holds a
+ * repository (OpenCode's own lookup, which stops at its worktree's top);
+ * those that exist (`exists`). Pure but for `exists`.
  */
 export function sessionMcpConfigs(
   plan: { target: string; cwd?: string; humanCwd?: string },
   exists: (p: string) => boolean = existsSync,
 ): string[] {
-  if (!CLAUDE_MCP_TARGETS.has(plan.target)) return [];
   const dirs = [...new Set([plan.humanCwd, plan.cwd].filter((d): d is string => typeof d === "string" && d.startsWith("/")))];
-  return dirs.map((d) => join(d, ".mcp.json")).filter((p) => exists(p));
+  if (CLAUDE_MCP_TARGETS.has(plan.target)) return dirs.map((d) => join(d, ".mcp.json")).filter((p) => exists(p));
+  if (plan.target !== "opencode") return [];
+  const out = new Set<string>();
+  for (const start of dirs) {
+    let d = start;
+    for (let n = 0; n < MAX_OPENCODE_UP; n++) {
+      for (const f of ["opencode.json", "opencode.jsonc"]) if (exists(join(d, f))) out.add(join(d, f));
+      if (exists(join(d, REPO_META))) break;
+      const up = dirname(d);
+      if (up === d) break;
+      d = up;
+    }
+  }
+  return [...out];
 }
 
 /**

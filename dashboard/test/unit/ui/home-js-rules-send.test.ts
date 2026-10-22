@@ -24,6 +24,14 @@
  *       expired, audit or off rule keeps the grey ring;
  *   S7  under the served styles the two "Always blocked" dots are one
  *       colour, and an expired rule's is not filled.
+ *   S8  (2026-10-23, *A rule with an end date says when*) a send rule with
+ *       an end still to come (`plain.until`) reads "Always allowed until
+ *       Dec 1, 09:00", the moment a <time> whose datetime is the ISO, in
+ *       the reader's clock, the full date on hover; the opened row says
+ *       it again with how long is left; Find finds it by those words;
+ *       a rule without `until` draws no such line;
+ *   S9  an Approvals row with a time part draws a <time>, not a code; a
+ *       part kind this page does not know still draws its text.
  *
  * Drives the PRODUCT page script in jsdom over the shared fetch stub
  * (home-js-fixtures.ts); across the real arbiter and dashboard,
@@ -233,4 +241,66 @@ test("S7: under the served styles both \"Always blocked\" dots are the same red,
   assert.notEqual(rule.backgroundColor, old.backgroundColor, "a filled dot, not the ring");
   assert.notEqual(allowed.backgroundColor, rule.backgroundColor, "allowed is not blocked's colour");
   assert.notEqual(allowed.backgroundColor, old.backgroundColor, "allowed is filled too");
+});
+
+/** "Dec 1, 09:00" in this process's own clock, with the year when it is not
+ *  this year, as the page says it. */
+function clock(iso: string): string {
+  const d = new Date(iso);
+  const pad = (k: number) => String(k).padStart(2, "0");
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const year = d.getFullYear() === new Date().getFullYear() ? "" : `, ${d.getFullYear()}`;
+  return `${months[d.getMonth()]} ${d.getDate()}${year}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+test("S8: a send rule with an end still to come reads \"Always allowed until <moment>\", again with how long is left when opened", async () => {
+  const until = new Date(Date.now() + 9 * 86_400_000 + 3_600_000).toISOString();
+  const later = sendRule("r-0007", "pastebin.com", null, true);
+  const ends = { ...later, plain: { ...later.plain, until } };
+  const { doc, window: win } = page([ends, sendRule("r-0002", "b.example", null, true)], []);
+  await tick();
+  const row = rowOf(doc, "pastebin.com");
+  const line = row.querySelector(".rule-effect .rule-until");
+  assert.ok(line, "the end is drawn under the effect");
+  assert.equal(row.querySelector(".rule-effect select").options[0].textContent, "Always allowed", "the menu keeps its words");
+  assert.equal(line.textContent, `until ${clock(until)}`);
+  assert.match(line.textContent, /^until [A-Z][a-z]{2} \d{1,2}(, \d{4})?, \d{2}:\d{2}$/, "clock words, never the ISO");
+  const time = line.querySelector("time");
+  assert.equal(time.getAttribute("datetime"), until);
+  assert.match(time.title, /^[A-Z][a-z]+day, [A-Z][a-z]{2} \d{1,2}, \d{4}, \d{2}:\d{2}$/, "the full date on hover");
+  assert.doesNotMatch(row.textContent, /T\d{2}:\d{2}/, "no ISO on the row");
+  // A rule without an end: no line, the effect where it was.
+  assert.equal(rowOf(doc, "b.example").querySelector(".rule-until, .rule-effect"), null);
+  // Opened: the row's words again, and how long is left.
+  row.querySelector(".file-more").click();
+  await tick();
+  const ends9 = doc.querySelector("#rules-list .rule-detail .rule-ends");
+  assert.equal(ends9.textContent, `Always allowed until ${clock(until)}, ends in 9 days.`);
+  assert.equal(ends9.querySelector("time").getAttribute("datetime"), until);
+  // Find reads the words the row draws.
+  const find = doc.getElementById("rules-find");
+  {
+    find.value = clock(until).split(",")[0];
+    find.dispatchEvent(new win.Event("input"));
+    await tick();
+    assert.deepEqual(rows(doc).map((r) => r.querySelector(".rule-text").title), ["pastebin.com"], "Find matches the end's words");
+  }
+});
+
+test("S9: an Approvals row with a time part draws a <time>, not code; an unknown part kind draws its text", async () => {
+  const until = "2026-12-01T00:00:00Z";
+  const proposal = {
+    id: "pp-000031", status: "pending", requester: "Your agent", createdAt: Date.now() - 60_000,
+    rows: [[t("Always allow sending masked data from anywhere to "), c("pastebin.com"), t(" until "), { kind: "time", text: until }, { kind: "sparkle", text: " (soon)" }]],
+    wouldLet: [], capped: false, overBroad: false, reason: "share",
+  };
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/approvals", routes: { "GET policy/proposals?status=pending": { proposals: [proposal] } } });
+  await tick();
+  const li = doc.querySelector('#approvals-proposals [data-id="pp-000031"] .proposal-rows li');
+  assert.ok(li, "the row is drawn");
+  assert.deepEqual([...li.querySelectorAll("code")].map((x: any) => x.textContent), ["pastebin.com"], "the end is no code");
+  const time = li.querySelector("time");
+  assert.equal(time.getAttribute("datetime"), until);
+  assert.equal(time.textContent, clock(until));
+  assert.equal(li.textContent, `Always allow sending masked data from anywhere to pastebin.com until ${clock(until)} (soon)`);
 });

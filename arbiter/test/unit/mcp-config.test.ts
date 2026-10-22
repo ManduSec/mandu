@@ -185,7 +185,10 @@ test("Codex's config.toml twins in place, its inline tables included; an Authori
   // The generic TOML reading twins a file with an inline table whole; outside
   // an MCP server's table it still does.
   assert.equal(extractSecretSpans("/h/.codex/config.toml", `${CODEX_TOML}\n[model_providers.x]\nauth = { key = "v" }\n`).shape, null, "an inline table elsewhere: whole-file");
-  assert.equal(extractSecretSpans("/w/p/config.toml", CODEX_TOML).shape, null, "not Codex's: the generic reading, whole-file");
+  // A `config.toml` anywhere that holds `[mcp_servers.…]` tables is Codex's
+  // by its text (a CODEX_HOME that moved it out of `.codex`, 2026-10-22).
+  assert.deepEqual(extractSecretSpans("/w/p/config.toml", CODEX_TOML).spans.map((s) => s.value), x.spans.map((s) => s.value), "Codex's by its tables: read as Codex's");
+  assert.equal(extractSecretSpans("/w/p/config.toml", 'model = "o3"\n[profiles.x]\nauth = { key = "v" }\n').shape, null, "no MCP table: the generic reading, whole-file");
 });
 
 test("mcpUrlHost: an http(s) URL's host and port, never a reference the client expands", () => {
@@ -323,7 +326,7 @@ test("a session's exempt MCP configs: Codex's config.toml when Codex is kept, a 
   assert.deepEqual(of({ home: H, target: "codex" }), [`${H}/.codex/config.toml`]);
   assert.deepEqual(of({ home: H, target: "codex", loginEnv: { CODEX_HOME: "/srv/cx" } }), [`${H}/.codex/config.toml`, "/srv/cx/config.toml"]);
   assert.deepEqual(of({ home: H, target: "claude", mcpConfigs: ["/w/.mcp.json", "/w/.cursor/mcp.json", "/w/x.json"] }), ["/w/.mcp.json"], "a kind Claude Code reads only");
-  assert.deepEqual(of({ home: H, target: "goose", mcpConfigs: ["/w/.mcp.json"] }), [], "no kept agent reads it");
+  assert.deepEqual(of({ home: H, target: "goose", mcpConfigs: ["/w/.mcp.json"] }), [`${H}/.config/goose/config.yaml`], "no kept agent reads the .mcp.json; Goose's own config.yaml (2026-10-22)");
   const many = Array.from({ length: 40 }, (_, i) => `/w${i}/.mcp.json`);
   assert.equal(of({ home: H, target: "claude", mcpConfigs: many }).length, 16, "bounded");
   assert.ok(sessionLoginPaths(parseSessionLogins({ home: H, target: "claude", mcpConfigs: ["/w/.mcp.json"] })!).includes("/w/.mcp.json"));

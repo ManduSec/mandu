@@ -41,7 +41,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -56,6 +56,7 @@ import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
 import { stateAxes } from "../lib/axes.js";
 import { humanSockIn } from "../lib/human-plane.js";
+import { withTeardown } from "../lib/teardown.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF
 
@@ -69,6 +70,7 @@ const tour = (await import(pathToFileURL(join(REPO, "scripts", "tour-screenshots
   probeBrowser: (o?: object) => string | null;
   startBrowser: (path: string, dataDir: string, env: NodeJS.ProcessEnv) => Promise<{ proc: unknown; wsUrl: string }>;
   stopProc: (proc: unknown) => Promise<void>;
+  removeProfile: (dir: string) => void;
   Cdp: { connect(url: string): Promise<Cdp> };
 };
 const browser = tour.probeBrowser({});
@@ -136,7 +138,7 @@ async function stack() {
       wired.close();
       gate.close();
       await arbiter.close();
-      rmSync(tmp, { recursive: true, force: true });
+      tour.removeProfile(tmp); // the browser's profile is in it: stopProc has ended its whole group
     },
   };
 }
@@ -199,7 +201,7 @@ test("in a real Chromium: Turn off in Settings, a real ask is counted and seen b
   const s = await stack();
   const { proc, wsUrl } = await tour.startBrowser(browser as string, join(s.tmp, "chrome"), process.env);
   const cdp = await tour.Cdp.connect(wsUrl);
-  try {
+  await withTeardown(async () => {
     await cdp.send("Browser.grantPermissions", { origin: s.base, permissions: ["notifications"] });
     const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
@@ -271,11 +273,7 @@ test("in a real Chromium: Turn off in Settings, a real ask is counted and seen b
     // T4: the oracle.
     for (const t of texts) oracle("a page", t);
     for (const n of on.notes) oracle("a notification", n.title + n.body);
-  } finally {
-    cdp.close();
-    await tour.stopProc(proc);
-    await s.close();
-  }
+  }, () => cdp.close(), () => tour.stopProc(proc), () => s.close());
 });
 
 test("served page: Send a test shows one notification in fixed words; a constructor that throws makes the row say this browser cannot show them (secrets axes, explicit)", { timeout: 120_000 }, async () => {
@@ -318,7 +316,7 @@ test("in a real Chromium: Send a test, pressed with Enter, shows one notificatio
   const s = await stack();
   const { proc, wsUrl } = await tour.startBrowser(browser as string, join(s.tmp, "chrome"), process.env);
   const cdp = await tour.Cdp.connect(wsUrl);
-  try {
+  await withTeardown(async () => {
     await cdp.send("Browser.grantPermissions", { origin: s.base, permissions: ["notifications"] });
     const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
@@ -379,9 +377,5 @@ test("in a real Chromium: Send a test, pressed with Enter, shows one notificatio
     assert.equal(r.focused, true, "the button keeps the focus");
     assert.deepEqual(r.notes, [{ title: TEST_TITLE, body: TEST_BODY, tag: "mandu-test" }], "one notification, in fixed words");
     oracle("a page", r.text);
-  } finally {
-    cdp.close();
-    await tour.stopProc(proc);
-    await s.close();
-  }
+  }, () => cdp.close(), () => tour.stopProc(proc), () => s.close());
 });

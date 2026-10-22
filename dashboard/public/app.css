@@ -675,6 +675,8 @@ h1 .help { margin-left: 4px; vertical-align: 6px; }
 .row.answered > .ask-error { grid-column: 1 / -1; }
 .row.rule { grid-template-columns: 28px minmax(0, 1fr) 260px 32px; gap: 12px; padding: 8px 16px; }
 .row.rule.open { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+/* A send rule with an end: its menu or words, and "until Dec 1, 09:00" under them. */
+.rule-effect { display: grid; gap: 2px; justify-items: start; min-width: 0; }
 /* A rule's subject chip is as wide as its words, and a long host breaks
    inside it. A flex column stretches its items, so until 2026-10-08 a host's
    chip was a grey bar across the column, like an empty field (dashboard.md
@@ -1504,7 +1506,7 @@ button.file-warn-mark { padding: 0; border: 0; background: none; font: inherit; 
 @media (max-width: 720px) {
   .row.rule { grid-template-columns: 28px minmax(0, 1fr) 32px; }
   .row.rule .file-more { grid-column: 3; grid-row: 1; }
-  .row.rule > .label-pick, .row.rule > .outcome, .row.rule > .sub { grid-column: 2 / -1; }
+  .row.rule > .label-pick, .row.rule > .outcome, .row.rule > .sub, .row.rule > .rule-effect { grid-column: 2 / -1; }
   .rule-detail { padding-left: 16px; }
   .files-selected .level-buttons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

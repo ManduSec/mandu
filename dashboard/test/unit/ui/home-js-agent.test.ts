@@ -566,6 +566,24 @@ test("Your secrets: a line's moment draws as the viewer's clock in a <time>, nev
   assert.equal(line.querySelector("time").textContent, hhmm);
 });
 
+test("§4.25u a proposed send rule's end in a step draws its day and time (clock), not the clock time alone, in a <time>", async () => {
+  const end = "2026-12-01T00:00:00Z";
+  const step = { kind: "action", id: "pp1", ts: "", icon: "shield", outcome: "plain", note: null, split: null,
+    sentence: [T("Asked Mandu to always allow sending masked data from anywhere to "), { kind: "code", text: "pastebin.com" }, T(" until "), { kind: "time", text: end, clock: true }] };
+  const agent = { ...AGENT, story: [{ ...AGENT.story[1], steps: [step] }] };
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": agent } });
+  await tick();
+  const time = doc.querySelector(`#agent-story time[datetime="${end}"]`);
+  assert.ok(time, "the end is a <time>");
+  const d = new Date(end);
+  const pad = (k: number) => String(k).padStart(2, "0");
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const year = d.getFullYear() === new Date().getFullYear() ? "" : `, ${d.getFullYear()}`;
+  assert.equal(time.textContent, `${months[d.getMonth()]} ${d.getDate()}${year}, ${pad(d.getHours())}:${pad(d.getMinutes())}`);
+  assert.match(time.title, /\d{4}, \d{2}:\d{2}$/, "the full date on hover");
+  assert.match(time.closest(".what").textContent, /to pastebin\.com until [A-Z][a-z]{2} \d/);
+});
+
 test("Your secrets: the level's tag agrees with the card: green only where the level held, amber since when for a read before the label, never green unknown (§4.25b)", async () => {
   const since = "2026-10-05T01:42:05.942Z";
   const card = (saw: unknown, extra: Record<string, unknown> = {}) => ({ what: [T("The file "), { kind: "code", text: "/w/x" }], level: "No AI", ...(saw === undefined ? {} : { saw }), ...extra, lines: [] });

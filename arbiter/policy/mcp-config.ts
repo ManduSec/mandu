@@ -30,7 +30,35 @@
  *                   `Code/User/mcp.json`
  *   claude-desktop  `Claude/claude_desktop_config.json`
  *   windsurf        `.codeium/windsurf/mcp_config.json`
- *   codex           `.codex/config.toml` (`[mcp_servers.<name>]`)
+ *   codex           `.codex/config.toml` (`[mcp_servers.<name>]`); a
+ *                   `config.toml` a `CODEX_HOME` moved is read as one by
+ *                   its content (`mcpConfigKindOf`: a `[mcp_servers.…]`
+ *                   table) and visited at `$CODEX_HOME/config.toml`
+ *
+ * Since 2026-10-22 (secret-discovery.md §2.10, "The other agents' and
+ * tools' configs"):
+ *
+ *   opencode        `opencode.json` / `opencode.jsonc` (a project's, and
+ *                   the global `~/.config/opencode/`, with its older
+ *                   `config.json`): the `mcp` map, `environment`,
+ *                   `headers`; `{env:VAR}` and `{file:path}` are references
+ *   goose           `.config/goose/config.yaml`: the `extensions` map,
+ *                   `envs` (alias `env`), `headers`, `uri`; `env_keys`
+ *                   names keys of Goose's secret store (keyring or
+ *                   `secrets.yaml`), so no value is read from it
+ *   gemini          `.gemini/settings.json` (user and project):
+ *                   `mcpServers`, `env`, `headers`, `url` / `httpUrl`;
+ *                   `$VAR` and `${VAR}` are references
+ *   zed             `.config/zed/settings.json`, a project's
+ *                   `.zed/settings.json`: `context_servers`, `env` (beside
+ *                   `command`, or the older `command.env`), an extension
+ *                   server's `settings`, `url`, `headers`
+ *   continue        `.continue/config.yaml` / `config.json` and the
+ *                   `.continue/mcpServers/*.yaml|*.json` blocks: the
+ *                   `mcpServers` list (YAML) or map (JSON), `env`, `with`,
+ *                   `requestOptions.headers`, `url`; the deprecated
+ *                   `config.json`'s `experimental.modelContextProtocolServers`
+ *                   (`transport.env`); `${{ secrets.X }}` is a reference
  *
  * ── THE ENTRIES ─────────────────────────────────────────────────────────────
  *
@@ -44,21 +72,39 @@
  * `env_http_headers` sub-tables, and single-line inline tables of those
  * names (`env = { K = "v" }`), each value with its offsets; an inline table
  * it cannot read in full (multi-line, nested) makes the whole reading null,
- * and the extractor then twins the file whole (its fail-safe).
+ * and the extractor then twins the file whole (its fail-safe). YAML (Goose,
+ * Continue): a positional reader of the block subset those tools write
+ * (`yamlServerEntries`), over the server section only; an anchor, an alias,
+ * a tag, a multi-line plain or flow value in it, or a block scalar where a
+ * value is read, makes the reading null (the extractor then twins the file
+ * whole, and the content decision falls back to the file's words).
  *
  * Every walk here is linear in the text and bounded in depth.
  *
  * Mandu-new (no reference origin).
  */
 
-/** The MCP config files Mandu knows, by what reads them. */
-export type McpConfigKind = "claude" | "claude-project" | "cursor" | "vscode" | "claude-desktop" | "windsurf" | "codex";
+import { looksLikeSecretValue } from "./secret-detectors.js";
+import type { Agent, ScanOnlyAgent } from "../src/generated/agents.js";
+
+/** The supported agents that read an MCP config in their own process: every
+ *  agent of the registry (its generated copy) but OpenClaw, which keeps no
+ *  MCP config of its own (it runs Claude Code's and Codex's logins). */
+export type McpConfigReader = Exclude<Agent, "openclaw">;
+
+/** The MCP config files Mandu knows, by what reads them: each reader's own
+ *  (named by its agent), Claude Code's project `.mcp.json`, the editors'
+ *  and apps', and two tools the past-sessions scan knows (Cursor, Gemini
+ *  CLI) whose configs no supported agent reads. */
+export type McpConfigKind =
+  | McpConfigReader | "claude-project" | "vscode" | "claude-desktop" | "windsurf" | "zed" | "continue"
+  | Extract<ScanOnlyAgent, "cursor" | "gemini">;
 
 /**
  * Which MCP config `path` is, by its name alone (no file is read), or null.
- * A name only: `.mcp.json` and `.claude.json` anywhere, the others by their
- * directory. A Codex config a `CODEX_HOME` moved out of `.codex` is read as
- * any TOML file (the generic rules mask its secret-named keys). Pure.
+ * A name only: `.mcp.json`, `.claude.json` and `opencode.json(c)` anywhere,
+ * the others by their directory. A Codex config a `CODEX_HOME` moved out of
+ * `.codex` is known by its content (`mcpConfigKindOf`). Pure.
  */
 export function mcpConfigKind(path: string): McpConfigKind | null {
   const parts = path.split("/");
@@ -72,17 +118,87 @@ export function mcpConfigKind(path: string): McpConfigKind | null {
   if (base === "claude_desktop_config.json" && parent === "Claude") return "claude-desktop";
   if (base === "mcp_config.json" && parent === "windsurf" && grand === ".codeium") return "windsurf";
   if (base === "config.toml" && parent === ".codex") return "codex";
+  if (base === "opencode.json" || base === "opencode.jsonc") return "opencode";
+  if (base === "config.json" && parent === "opencode" && grand === ".config") return "opencode";
+  if (base === "config.yaml" && parent === "goose" && grand === ".config") return "goose";
+  if (base === "settings.json" && parent === ".gemini") return "gemini";
+  if (base === "settings.json" && (parent === ".zed" || (parent === "zed" && grand === ".config"))) return "zed";
+  if ((base === "config.yaml" || base === "config.json") && parent === ".continue") return "continue";
+  if (/\.(?:ya?ml|json)$/.test(base) && parent === "mcpServers" && grand === ".continue") return "continue";
   return null;
+}
+
+/** A `[mcp_servers.<name>]` table header (Codex's MCP servers). */
+const CODEX_MCP_TABLE_RE = /^[ \t]*\[[ \t]*(?:mcp_servers|"mcp_servers")[ \t]*\./m;
+
+/**
+ * `mcpConfigKind`, and a `config.toml` by its content: one that holds a
+ * `[mcp_servers.…]` table is Codex's (the file a `CODEX_HOME` moved out of
+ * `.codex`, which no name tells; no other tool writes such a table into a
+ * `config.toml`). Reading it as Codex's masks more of it, never less (the
+ * generic TOML reading plus the server values). Pure.
+ */
+export function mcpConfigKindOf(path: string, content: string): McpConfigKind | null {
+  const k = mcpConfigKind(path);
+  if (k !== null) return k;
+  return path.endsWith("/config.toml") || path === "config.toml" ? (CODEX_MCP_TABLE_RE.test(content) ? "codex" : null) : null;
+}
+
+/** May `path` be an MCP config (`mcpConfigKind`, or any `config.toml`, which
+ *  `mcpConfigKindOf` judges by its content)? For a caller that holds no
+ *  text, before it re-reads one. Pure. */
+export function mcpConfigLike(path: string): boolean {
+  return mcpConfigKind(path) !== null || path.endsWith("/config.toml");
 }
 
 /** The supported agent that reads a config of `kind` in its OWN process to
  *  start its MCP servers (Claude Code: `.claude.json`, `.mcp.json`; Codex:
- *  `config.toml`), or null for an editor's or an app's config that no
- *  supported agent reads. Pure. */
-export function mcpConfigReader(kind: McpConfigKind): "claude" | "codex" | null {
+ *  `config.toml`; OpenCode: `opencode.json`; Goose: `config.yaml`), or null
+ *  for an editor's, an app's or another tool's config that no supported
+ *  agent reads (Gemini CLI, Zed and Continue are none of Mandu's agents).
+ *  Pure. */
+export function mcpConfigReader(kind: McpConfigKind): McpConfigReader | null {
   if (kind === "claude" || kind === "claude-project") return "claude";
   if (kind === "codex") return "codex";
+  if (kind === "opencode") return "opencode";
+  if (kind === "goose") return "goose";
   return null;
+}
+
+/** A reference token a client expands before use: `${VAR}` (Claude Code,
+ *  Cursor, VS Code's `${input:…}` and `${env:…}`, Gemini CLI), Continue's
+ *  `${{ secrets.X }}`, OpenCode's `{env:VAR}` and `{file:path}`. */
+const REF_TOKEN_RE = /\$\{\{[^{}]*\}\}|\$\{[^{}]*\}|\{(?:env|file):[^{}]*\}/g;
+/** A whole value that is one reference: a token above, or Gemini CLI's bare
+ *  `$VAR` (upper-case, as environment names are written), optionally after
+ *  an auth scheme word (`Bearer $TOKEN`). */
+const WHOLE_REF_RE = /^(?:(?:bearer|basic|token)\s+)?(?:\$\{\{[^{}]*\}\}|\$\{[^{}]*\}|\{(?:env|file):[^{}]*\}|\$[A-Z_][A-Z0-9_]*)$/i;
+
+/** Is `raw` exactly one reference (`mcpReference`'s whole form): what a
+ *  generic key rule may have taken for a secret-named key's value
+ *  (`"GITHUB_TOKEN": "${GITHUB_TOKEN}"`). The bare `$VAR` form only in
+ *  upper case. Pure. */
+export function mcpWholeReference(raw: string): boolean {
+  const v = raw.trim();
+  if (!WHOLE_REF_RE.test(v)) return false;
+  // `$VAR` bare: upper case only (WHOLE_REF_RE is case-blind for the scheme).
+  const bare = /\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(v);
+  return bare === null || v.endsWith("}") || bare[1] === bare[1]!.toUpperCase();
+}
+
+/**
+ * Is `raw` a value the client expands from somewhere else, not a secret
+ * itself: a whole reference (`mcpWholeReference`), or text holding a
+ * reference token (`Bearer ${TOKEN}`, `{env:KEY}`, `${{ secrets.X }}`)
+ * whose rest has no word that reads as a credential (a token written
+ * beside a reference is still a token). Pure.
+ */
+export function mcpReference(raw: string): boolean {
+  if (mcpWholeReference(raw)) return true;
+  REF_TOKEN_RE.lastIndex = 0;
+  if (!REF_TOKEN_RE.test(raw)) return false;
+  const rest = raw.replace(REF_TOKEN_RE, " ");
+  return !rest.split(/[\s"'{}:,=\\]+/).some((w) => looksLikeSecretValue(w));
 }
 
 /**
@@ -90,7 +206,10 @@ export function mcpConfigReader(kind: McpConfigKind): "claude" | "codex" | null 
  * places `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move Claude Code's and Codex's
  * to: only absolute values count). The walk visits each directly, wherever
  * a prune would have kept it out (`~/.codex` is an agent store, `~/Library`
- * a pruned macOS folder). Pure.
+ * a pruned macOS folder). Since 2026-10-22 also OpenCode's, Goose's,
+ * Gemini CLI's, Zed's and Continue's per-user files at their default
+ * places (an `XDG_CONFIG_HOME`, `GOOSE_PATH_ROOT` or `OPENCODE_CONFIG`
+ * that moves one is not followed: secret-discovery.md §2.10). Pure.
  */
 export function mcpHomeConfigPaths(home: string, env: Readonly<Record<string, string | undefined>> = {}): string[] {
   const h = home.replace(/\/+$/, "");
@@ -104,6 +223,14 @@ export function mcpHomeConfigPaths(home: string, env: Readonly<Record<string, st
     `${h}/.config/Code/User/mcp.json`,
     `${h}/Library/Application Support/Code/User/mcp.json`,
     `${h}/.codex/config.toml`,
+    `${h}/.config/opencode/opencode.json`,
+    `${h}/.config/opencode/opencode.jsonc`,
+    `${h}/.config/opencode/config.json`,
+    `${h}/.config/goose/config.yaml`,
+    `${h}/.gemini/settings.json`,
+    `${h}/.config/zed/settings.json`,
+    `${h}/.continue/config.yaml`,
+    `${h}/.continue/config.json`,
   ];
   const abs = (v: string | undefined): string | null => (typeof v === "string" && v.startsWith("/") ? v.replace(/\/+$/, "") : null);
   const claudeDir = abs(env["CLAUDE_CONFIG_DIR"]);
@@ -127,6 +254,10 @@ export interface McpValue {
   end: number;
   /** The text as written (escapes kept, as the extractor's values are). */
   raw: string;
+  /** The value's dotted path in the file (YAML: `extensions.github.envs.X`,
+   *  the field name the twin gives it, as the YAML key rules name theirs);
+   *  absent for JSON and TOML, which name a value by `name`. */
+  field?: string;
 }
 
 /** One configured MCP server. */
@@ -145,9 +276,11 @@ export interface McpServerEntry {
 /** The entries of `content`, read as the config `path` names, or null when
  *  `path` is no MCP config or the content cannot be read in full. Pure. */
 export function mcpServerEntries(path: string, content: string): McpServerEntry[] | null {
-  const kind = mcpConfigKind(path);
+  const kind = mcpConfigKindOf(path, content);
   if (kind === null) return null;
-  return kind === "codex" ? tomlServerEntries(content) : jsonServerEntries(content, kind);
+  if (kind === "codex") return tomlServerEntries(content);
+  if (/\.ya?ml$/i.test(path)) return kind === "goose" || kind === "continue" ? yamlServerEntries(content, kind) : null;
+  return jsonServerEntries(content, kind);
 }
 
 /** The host (`host[:port]`, lower case) of an `http(s)://` URL, or null.
@@ -260,10 +393,19 @@ function field(o: JNode | undefined, key: string): JNode | undefined {
   return found;
 }
 
-/** The server maps of a JSON MCP config (each `{name: entry}` object). */
-function jsonServerMaps(root: JNode, kind: McpConfigKind): JNode[] {
-  const maps: JNode[] = [];
-  const add = (m: JNode | undefined): void => { if (m?.t === "obj") maps.push(m); };
+/** The server entries of a JSON MCP config, each `[name, object]`: every
+ *  `{name: entry}` map, and (Continue) every object of a server list. */
+function jsonServerNodes(root: JNode, kind: McpConfigKind): Array<[string, JNode]> {
+  const out: Array<[string, JNode]> = [];
+  const add = (m: JNode | undefined): void => {
+    if (m?.t === "obj") for (const e of m.entries) out.push([e.key, e.value]);
+    else if (m?.t === "arr" && kind === "continue") {
+      m.items.forEach((it, i) => {
+        const n = field(it, "name");
+        out.push([n?.t === "str" ? n.raw : `#${i}`, it]);
+      });
+    }
+  };
   add(field(root, "mcpServers"));
   add(field(root, "servers"));
   add(field(field(root, "mcp"), "servers"));
@@ -271,7 +413,23 @@ function jsonServerMaps(root: JNode, kind: McpConfigKind): JNode[] {
     const projects = field(root, "projects");
     if (projects?.t === "obj") for (const p of projects.entries) add(field(p.value, "mcpServers"));
   }
-  return maps;
+  // OpenCode: `mcp: {<name>: {type, command, environment, url, headers}}`
+  // (opencode.ai/docs/mcp-servers). A `servers` key there is VS Code's
+  // settings form, read above; OpenCode names no server `servers`.
+  if (kind === "opencode") {
+    const mcp = field(root, "mcp");
+    if (mcp?.t === "obj") for (const e of mcp.entries) if (e.key !== "servers") out.push([e.key, e.value]);
+  }
+  // Zed: `context_servers: {<name>: {command, args, env} | {url, headers}}`
+  // (zed.dev/docs/ai/mcp).
+  if (kind === "zed") add(field(root, "context_servers"));
+  // Continue's deprecated config.json: `experimental.modelContextProtocolServers:
+  // [{transport: {type, command, args, env, url}}]`.
+  if (kind === "continue") {
+    const legacy = field(field(root, "experimental"), "modelContextProtocolServers");
+    if (legacy?.t === "arr") legacy.items.forEach((it, i) => out.push([`#${i}`, it]));
+  }
+  return out;
 }
 
 /** The string pairs of an object node. */
@@ -288,27 +446,343 @@ function jsonServerEntries(content: string, kind: McpConfigKind): McpServerEntry
   const root = parseJsonPositions(content);
   if (root === null || root.t !== "obj") return null;
   const out: McpServerEntry[] = [];
-  for (const map of jsonServerMaps(root, kind)) {
-    if (map.t !== "obj") continue;
-    for (const { key: name, value: entry } of map.entries) {
-      if (entry.t !== "obj") continue;
-      const values: McpValue[] = [];
-      for (const p of stringPairs(field(entry, "env"))) values.push({ role: "env", name: p.key, start: p.value.start, end: p.value.end, raw: p.value.raw });
-      for (const p of stringPairs(field(entry, "headers"))) values.push({ role: "header", name: p.key, start: p.value.start, end: p.value.end, raw: p.value.raw });
-      let url: string | null = null;
-      for (const k of ["url", "serverUrl", "httpUrl"]) {
-        const u = field(entry, k);
-        if (u?.t === "str") {
-          url = u.raw;
-          values.push({ role: "url", name: k, start: u.start, end: u.end, raw: u.raw });
-        }
+  for (const [name, node] of jsonServerNodes(root, kind)) {
+    if (node.t !== "obj") continue;
+    // Continue's deprecated form keeps the server in `transport`.
+    const t = field(node, "transport");
+    const entry = kind === "continue" && t?.t === "obj" ? t : node;
+    const values: McpValue[] = [];
+    const envMaps = [field(entry, "env")];
+    // OpenCode's `environment`; Zed's older `command: {path, args, env}`
+    // and an extension server's `settings` (its own keys, a token among
+    // them); Continue's `with` (a hub block's inputs).
+    if (kind === "opencode") envMaps.push(field(entry, "environment"));
+    if (kind === "zed") envMaps.push(field(field(entry, "command"), "env"), field(entry, "settings"));
+    if (kind === "continue") envMaps.push(field(entry, "with"));
+    for (const m of envMaps) for (const p of stringPairs(m)) values.push({ role: "env", name: p.key, start: p.value.start, end: p.value.end, raw: p.value.raw });
+    const headerMaps = [field(entry, "headers")];
+    if (kind === "continue") headerMaps.push(field(field(entry, "requestOptions"), "headers"));
+    for (const m of headerMaps) for (const p of stringPairs(m)) values.push({ role: "header", name: p.key, start: p.value.start, end: p.value.end, raw: p.value.raw });
+    let url: string | null = null;
+    for (const k of ["url", "serverUrl", "httpUrl"]) {
+      const u = field(entry, k);
+      if (u?.t === "str") {
+        url = u.raw;
+        values.push({ role: "url", name: k, start: u.start, end: u.end, raw: u.raw });
       }
-      const type = field(entry, "type") ?? field(entry, "transport");
-      const remote = url !== null || (type?.t === "str" && REMOTE_TYPE_RE.test(type.raw));
-      out.push({ name, start: entry.start, end: entry.end, transport: remote ? "http" : "stdio", url, values });
     }
+    const tf = field(entry, "type");
+    const type = tf ?? (entry === node ? t : undefined);
+    const remote = url !== null || (type?.t === "str" && REMOTE_TYPE_RE.test(type.raw));
+    out.push({ name, start: node.start, end: node.end, transport: remote ? "http" : "stdio", url, values });
   }
   return out;
+}
+
+// ── YAML, with positions (Goose's config.yaml, Continue's) ──────────────────
+
+type YNode =
+  | { t: "map"; start: number; end: number; entries: Array<{ key: string; keyStart: number; value: YNode | null }> }
+  | { t: "seq"; start: number; end: number; items: Array<YNode | null> }
+  | { t: "str"; start: number; end: number; raw: string }
+  /** A block scalar (`|`, `>`): skipped, its text never placed. */
+  | { t: "block"; start: number; end: number };
+
+/** A line of the section: its offset, indent and text after the indent. */
+interface YLine { at: number; ind: number; body: string }
+
+class YamlUnread extends Error {}
+
+/** How deep a YAML section nests at most before the reading gives up. */
+const MAX_YAML_DEPTH = 32;
+
+/** A mapping key at the start of `s` and the text after its `:`, or null. */
+function yamlKey(s: string): { key: string; rest: string; restAt: number } | null {
+  const m = /^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)'|([^\s#'"{}[\],&*!|>%@`?:-][^#:]*?|-[^\s#:][^#:]*?))[ \t]*:(?=[ \t]|$)/.exec(s);
+  if (m === null) return null;
+  const key = m[1] !== undefined ? m[1].replace(/\\(.)/g, "$1") : m[2] !== undefined ? m[2].replace(/''/g, "'") : m[3]!.trimEnd();
+  let restAt = m[0].length;
+  while (restAt < s.length && (s[restAt] === " " || s[restAt] === "\t")) restAt++;
+  return { key, rest: s.slice(restAt), restAt };
+}
+
+/** A scalar at the start of `s` (absolute offset `at`), alone on its line
+ *  but for a comment: its text between the quotes (or the plain text). */
+function yamlScalar(s: string, at: number): { t: "str"; start: number; end: number; raw: string } {
+  const c = s[0];
+  if (c === '"' || c === "'") {
+    let j = 1;
+    for (; j < s.length; j++) {
+      if (c === '"' && s[j] === "\\") { j++; continue; }
+      if (s[j] === c) {
+        if (c === "'" && s[j + 1] === "'") { j++; continue; }
+        break;
+      }
+    }
+    if (j >= s.length || !/^[ \t]*(?:#.*)?$/.test(s.slice(j + 1))) throw new YamlUnread("an unclosed or trailed quoted scalar");
+    return { t: "str", start: at + 1, end: at + j, raw: s.slice(1, j) };
+  }
+  if (c === "&" || c === "*" || c === "!" || c === "%" || c === "@" || c === "`") throw new YamlUnread("an anchor, alias, tag or reserved indicator");
+  const hash = s.search(/[ \t]#/);
+  const text = (hash < 0 ? s : s.slice(0, hash)).trimEnd();
+  return { t: "str", start: at, end: at + text.length, raw: text };
+}
+
+/** A one-line flow collection at the start of `s` (`{}`, `[a, "b"]`,
+ *  `{ K: v }`, nested ones up to MAX_YAML_DEPTH); one that does not close
+ *  on its line, or holds an anchor, alias or tag, is not read. */
+function yamlFlow(s: string, at: number): YNode {
+  let i = 0;
+  const skip = (): void => { while (i < s.length && (s[i] === " " || s[i] === "\t")) i++; };
+  const scalar = (stops: string): { t: "str"; start: number; end: number; raw: string } => {
+    skip();
+    const c = s[i];
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      for (; j < s.length; j++) {
+        if (c === '"' && s[j] === "\\") { j++; continue; }
+        if (s[j] === c) { if (c === "'" && s[j + 1] === "'") { j++; continue; } break; }
+      }
+      if (j >= s.length) throw new YamlUnread("an unclosed quoted flow scalar");
+      const node = { t: "str" as const, start: at + i + 1, end: at + j, raw: s.slice(i + 1, j) };
+      i = j + 1;
+      return node;
+    }
+    if (c === "&" || c === "*" || c === "!") throw new YamlUnread("an anchor, alias or tag");
+    let j = i;
+    while (j < s.length && !stops.includes(s[j]!)) j++;
+    const text = s.slice(i, j).trimEnd();
+    const node = { t: "str" as const, start: at + i, end: at + i + text.length, raw: text };
+    i = j;
+    return node;
+  };
+  const value = (stops: string, depth: number): YNode => {
+    skip();
+    return s[i] === "{" || s[i] === "[" ? collection(depth + 1) : scalar(stops);
+  };
+  const collection = (depth: number): YNode => {
+    if (depth > MAX_YAML_DEPTH) throw new YamlUnread("nested past the depth bound");
+    const start = at + i;
+    const open = s[i]!;
+    const close = open === "{" ? "}" : "]";
+    i++;
+    const entries: Array<{ key: string; keyStart: number; value: YNode | null }> = [];
+    const items: Array<YNode | null> = [];
+    for (;;) {
+      skip();
+      if (s[i] === close) { i++; break; }
+      if (i >= s.length) throw new YamlUnread("a flow collection that does not close on its line");
+      if (open === "{") {
+        const keyStart = at + i;
+        const k = scalar(":,{}[]");
+        skip();
+        if (s[i] !== ":") throw new YamlUnread("a flow mapping entry with no value");
+        i++;
+        skip();
+        const v = s[i] === "," || s[i] === "}" ? null : value(",{}[]", depth);
+        entries.push({ key: k.raw, keyStart, value: v });
+      } else {
+        items.push(value(",{}[]", depth));
+      }
+      skip();
+      if (s[i] === ",") { i++; continue; }
+      if (s[i] === close) { i++; break; }
+      throw new YamlUnread("a flow collection this reader cannot read");
+    }
+    return open === "{" ? { t: "map", start, end: at + i, entries } : { t: "seq", start, end: at + i, items };
+  };
+  const root = collection(0);
+  if (!/^[ \t]*(?:#.*)?$/.test(s.slice(i))) throw new YamlUnread("text after a flow collection");
+  return root;
+}
+
+/**
+ * The block YAML of `lines` (blank and comment-only lines removed) as a
+ * node tree with offsets: block mappings and sequences (a sequence item's
+ * mapping on the dash's line included, and a sequence at its key's indent),
+ * one-line scalars (plain, single- and double-quoted) and one-line flow
+ * collections. A block scalar is skipped as a `block` node. Anything else
+ * (an anchor, alias or tag, a multi-line plain scalar or flow collection, a
+ * complex key, a tab in an indent) throws YamlUnread. Linear in the lines,
+ * bounded in depth.
+ */
+function parseYamlBlock(lines: YLine[]): YNode | null {
+  let i = 0;
+  const lineEnd = (l: YLine): number => l.at + l.ind + l.body.length;
+  /** The value after a key's or a dash's `:` / `-`, on the line `l`. */
+  const inlineValue = (rest: string, restAt: number, ind: number, depth: number, fromKey: boolean): YNode | null => {
+    if (rest === "" || rest.startsWith("#")) {
+      const next = lines[i];
+      if (next === undefined) return null;
+      if (next.ind > ind) return node(next.ind, depth + 1);
+      // A sequence at its key's own indent (`key:\n- a`).
+      if (fromKey && next.ind === ind && (next.body === "-" || next.body.startsWith("- "))) return node(ind, depth + 1);
+      return null;
+    }
+    if (/^[|>][0-9+-]*[ \t]*(?:#.*)?$/.test(rest)) {
+      let end = restAt + rest.length;
+      while (i < lines.length && lines[i]!.ind > ind) end = lineEnd(lines[i++]!);
+      return { t: "block", start: restAt, end };
+    }
+    if (rest[0] === "{" || rest[0] === "[") return yamlFlow(rest, restAt);
+    const s = yamlScalar(rest, restAt);
+    if (i < lines.length && lines[i]!.ind > ind) throw new YamlUnread("a multi-line plain scalar");
+    return s;
+  };
+  const node = (ind: number, depth: number): YNode | null => {
+    if (depth > MAX_YAML_DEPTH) throw new YamlUnread("nested past the depth bound");
+    const first = lines[i];
+    if (first === undefined || first.ind !== ind) return null;
+    if (first.body === "-" || first.body.startsWith("- ")) {
+      const items: Array<YNode | null> = [];
+      const start = first.at + first.ind;
+      let end = start;
+      while (i < lines.length && lines[i]!.ind === ind && (lines[i]!.body === "-" || lines[i]!.body.startsWith("- "))) {
+        const l = lines[i]!;
+        let off = 1;
+        while (off < l.body.length && l.body[off] === " ") off++;
+        const rest = l.body.slice(off);
+        if (rest !== "" && !rest.startsWith("#") && yamlKey(rest) !== null) {
+          // A mapping that starts on the dash's line: its first key there,
+          // the rest at that key's column.
+          lines[i] = { at: l.at, ind: l.ind + off, body: rest };
+          items.push(node(l.ind + off, depth + 1));
+        } else {
+          i++;
+          items.push(inlineValue(rest, l.at + l.ind + off, ind, depth, false));
+        }
+        end = i > 0 ? lineEnd(lines[i - 1]!) : end;
+      }
+      return { t: "seq", start, end, items };
+    }
+    const entries: Array<{ key: string; keyStart: number; value: YNode | null }> = [];
+    const start = first.at + first.ind;
+    let end = start;
+    while (i < lines.length && lines[i]!.ind === ind) {
+      const l = lines[i]!;
+      const k = yamlKey(l.body);
+      if (k === null) {
+        if (l.body === "-" || l.body.startsWith("- ")) break; // handled by the caller (a key's same-indent sequence)
+        throw new YamlUnread("a line that is no key");
+      }
+      i++;
+      entries.push({ key: k.key, keyStart: l.at + l.ind, value: inlineValue(k.rest, l.at + l.ind + k.restAt, ind, depth, true) });
+      end = lineEnd(lines[i - 1]!);
+    }
+    if (i < lines.length && lines[i]!.ind > ind) throw new YamlUnread("an indent this reader cannot place");
+    return { t: "map", start, end, entries };
+  };
+  const root = node(lines[0]?.ind ?? 0, 0);
+  if (i !== lines.length) throw new YamlUnread("text after the section");
+  return root;
+}
+
+/** The lines of `content` from the top-level `key:` line through its
+ *  block (every following line indented, or a top-level `- ` item), blank
+ *  and comment-only lines left out; null when there is no such key. */
+function yamlSection(content: string, key: string): YLine[] | null {
+  const out: YLine[] = [];
+  let at = 0;
+  let inSection = false;
+  for (const rawLine of content.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    const lineAt = at;
+    at += rawLine.length + 1;
+    const lead = /^[ \t]*/.exec(line)![0];
+    const body = line.slice(lead.length);
+    if (body === "" || body.startsWith("#")) continue;
+    if (!inSection) {
+      if (lead === "") {
+        const k = yamlKey(body);
+        if (k !== null && k.key === key) { inSection = true; out.push({ at: lineAt, ind: 0, body }); }
+      }
+      continue;
+    }
+    if (lead === "" && !(body === "-" || body.startsWith("- "))) break;
+    if (lead.includes("\t")) throw new YamlUnread("a tab in an indent");
+    out.push({ at: lineAt, ind: lead.length, body });
+  }
+  return inSection ? out : null;
+}
+
+function ymap(n: YNode | null | undefined, key: string): YNode | null | undefined {
+  if (n?.t !== "map") return undefined;
+  let found: YNode | null | undefined;
+  for (const e of n.entries) if (e.key === key) found = e.value;
+  return found;
+}
+
+/** The string values of a mapping node, with their keys; a block scalar
+ *  among them cannot be placed, so the reading gives up (YamlUnread). */
+function yamlStringPairs(n: YNode | null | undefined): Array<{ key: string; value: { start: number; end: number; raw: string } }> {
+  if (n?.t !== "map") return [];
+  const out: Array<{ key: string; value: { start: number; end: number; raw: string } }> = [];
+  for (const e of n.entries) {
+    if (e.value?.t === "block") throw new YamlUnread("a block scalar where a server's value is read");
+    if (e.value?.t === "str") out.push({ key: e.key, value: e.value });
+  }
+  return out;
+}
+
+const YAML_REMOTE_TYPE_RE = /^(?:sse|streamable[_-]?http|http|https|websocket|ws)$/i;
+
+/**
+ * The server entries of Goose's `config.yaml` (`extensions:`, a map of
+ * `<name>: {type, cmd, args, envs | env, env_keys, uri, headers}`; Goose's
+ * ExtensionConfig) or of a Continue YAML config or block (`mcpServers:`, a
+ * list of `{name, type, command, args, env, url, requestOptions.headers,
+ * with}`), or null when the section holds something this reader cannot
+ * read (the extractor then twins the file whole). A file with no such
+ * section has no entry. Goose's `env_keys` names keys of its secret store
+ * (the keyring or `secrets.yaml`), never a value. Pure.
+ */
+export function yamlServerEntries(content: string, kind: "goose" | "continue"): McpServerEntry[] | null {
+  try {
+    const sectionKey = kind === "goose" ? "extensions" : "mcpServers";
+    const lines = yamlSection(content, sectionKey);
+    if (lines === null) return [];
+    const root = parseYamlBlock(lines);
+    const section = ymap(root, sectionKey);
+    if (section === null || section === undefined) return [];
+    const servers: Array<{ name: string; node: YNode | null; start: number }> = [];
+    if (section.t === "map") for (const e of section.entries) servers.push({ name: e.key, node: e.value, start: e.keyStart });
+    else if (section.t === "seq") {
+      section.items.forEach((it, idx) => {
+        const n = ymap(it, "name");
+        servers.push({ name: n?.t === "str" ? n.raw : `#${idx}`, node: it, start: it?.start ?? 0 });
+      });
+    } else return [];
+    const out: McpServerEntry[] = [];
+    for (const s of servers) {
+      if (s.node?.t !== "map") continue;
+      const values: McpValue[] = [];
+      const push = (role: McpValueRole, table: string, pairs: ReturnType<typeof yamlStringPairs>): void => {
+        for (const p of pairs) values.push({ role, name: p.key, start: p.value.start, end: p.value.end, raw: p.value.raw, field: `${sectionKey}.${s.name}.${table}.${p.key}` });
+      };
+      if (kind === "goose") {
+        push("env", "envs", yamlStringPairs(ymap(s.node, "envs")));
+        push("env", "env", yamlStringPairs(ymap(s.node, "env")));
+      } else {
+        push("env", "env", yamlStringPairs(ymap(s.node, "env")));
+        push("env", "with", yamlStringPairs(ymap(s.node, "with")));
+        push("header", "requestOptions.headers", yamlStringPairs(ymap(ymap(s.node, "requestOptions"), "headers")));
+      }
+      push("header", "headers", yamlStringPairs(ymap(s.node, "headers")));
+      let url: string | null = null;
+      const u = ymap(s.node, kind === "goose" ? "uri" : "url");
+      if (u?.t === "str" && u.raw !== "") {
+        url = u.raw;
+        values.push({ role: "url", name: kind === "goose" ? "uri" : "url", start: u.start, end: u.end, raw: u.raw, field: `${sectionKey}.${s.name}.${kind === "goose" ? "uri" : "url"}` });
+      }
+      const type = ymap(s.node, "type");
+      const remote = url !== null || (type?.t === "str" && YAML_REMOTE_TYPE_RE.test(type.raw));
+      out.push({ name: s.name, start: Math.min(s.start, s.node.start), end: s.node.end, transport: remote ? "http" : "stdio", url, values });
+    }
+    return out;
+  } catch (e) {
+    if (e instanceof YamlUnread) return null;
+    throw e;
+  }
 }
 
 // ── TOML (Codex's config.toml) ──────────────────────────────────────────────

@@ -364,8 +364,10 @@ test("a session's kept logins: its login files only (the walk's keying, or every
   assert.deepEqual(s({ home: H, target: "codex", loginEnv: { CODEX_HOME: "/srv/cx", OPENAI_API_KEY: "sk-x" } }), [`${H}/.codex/auth.json`, `${H}/.codex/config.toml`, `${H}/.openai`, "/srv/cx/auth.json", "/srv/cx/config.toml"]);
   assert.deepEqual(s({ home: H, target: "claude" }), [`${H}/.anthropic`, `${H}/.claude.json`, `${H}/.claude/.credentials.json`]);
   assert.deepEqual(s({ home: H, target: "openclaw" }), [`${H}/.anthropic`, `${H}/.claude.json`, `${H}/.claude/.credentials.json`, `${H}/.codex/auth.json`, `${H}/.codex/config.toml`, `${H}/.openai`]);
-  assert.deepEqual(s({ home: H, target: "goose" }), [], "a goose session without the helper keeps none of these");
-  assert.equal(s({ home: H, target: "claude", otherLoginsRaw: true }).length, 7, "the opt-out: every agent's login");
+  // Goose keeps no login here; its own MCP config since 2026-10-22 (§2.10).
+  assert.deepEqual(s({ home: H, target: "goose" }), [`${H}/.config/goose/config.yaml`], "a goose session without the helper keeps none of the logins, only its own config.yaml");
+  assert.deepEqual(s({ home: H, target: "opencode" }), [`${H}/.config/opencode/config.json`, `${H}/.config/opencode/opencode.json`, `${H}/.config/opencode/opencode.jsonc`, `${H}/.local/share/opencode/auth.json`]);
+  assert.equal(s({ home: H, target: "claude", otherLoginsRaw: true }).length, 10, "the opt-out: every agent's login, and the MCP configs Codex and OpenCode read");
   // A project's MCP configs (§2.10): only a kind a kept agent reads.
   assert.deepEqual(s({ home: H, target: "claude", mcpConfigs: ["/w/p/.mcp.json", "/w/p/.vscode/mcp.json", "relative/.mcp.json", "/w/p/.env"] }), [`${H}/.anthropic`, `${H}/.claude.json`, `${H}/.claude/.credentials.json`, "/w/p/.mcp.json"]);
   assert.deepEqual(s({ home: H, target: "codex", mcpConfigs: ["/w/p/.mcp.json"] }), [`${H}/.codex/auth.json`, `${H}/.codex/config.toml`, `${H}/.openai`], "a codex session does not read a .mcp.json");

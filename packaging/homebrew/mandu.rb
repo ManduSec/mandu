@@ -8,7 +8,7 @@
 class Mandu < Formula
   desc "Keep an AI agent's secrets from its model, at the OS level"
   homepage "https://example.invalid/mandu"
-  url "https://example.invalid/mandu/mandusec-mandu-0.2.0-beta.7.tgz"
+  url "https://example.invalid/mandu/mandusec-mandu-0.2.0-beta.8.tgz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "Apache-2.0"
 

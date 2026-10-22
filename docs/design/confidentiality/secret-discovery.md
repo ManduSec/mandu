@@ -2303,6 +2303,114 @@ and named there. The model reads a config with no credential as written, a twin'
 keys and layout, and the agent's own config masked whole by a Read (its
 programs show it the twin under the guard).
 
+**The other agents' and tools' configs (2026-10-22).** The leftovers of
+the first cut, built the same way (`mcp-config.ts`; the formats checked
+against each tool's own documentation or source on 2026-10-22, cited
+below; where a shape was unsure, the reader misses a value rather than
+invent a place for one):
+
+| Kind | Files | Servers, values | References (kept as written) | Read by |
+|---|---|---|---|---|
+| `opencode` | `opencode.json` / `opencode.jsonc` anywhere (a project's, `~/.config/opencode/`, and its older `config.json` there) | `mcp.<name>`: `environment`, `headers`, `url` (`type: remote`) | `{env:VAR}`, `{file:path}` | OpenCode, in its own process |
+| `goose` | `~/.config/goose/config.yaml` | `extensions.<name>`: `envs` (alias `env`), `headers`, `uri` (`type: streamable_http` / `sse`); `env_keys` names keys of Goose's secret store, never a value | `${VAR}` | Goose, in its own process |
+| `gemini` | `.gemini/settings.json` (HOME's and a project's) | `mcpServers`: `env`, `headers`, `url` / `httpUrl` | `$VAR` (upper case), `${VAR}` | no supported agent |
+| `zed` | `~/.config/zed/settings.json`, a project's `.zed/settings.json` | `context_servers.<name>`: `env` beside `command`, the older `command: {path, args, env}`, an extension server's `settings`, `url`, `headers` | `${VAR}` | no supported agent |
+| `continue` | `.continue/config.yaml` / `config.json`, `.continue/mcpServers/*.yaml` / `*.json` | `mcpServers` (a YAML list, a JSON map): `env`, `with`, `requestOptions.headers`, `url`; the deprecated `config.json`'s `experimental.modelContextProtocolServers[].transport.env` | `${{ secrets.X }}` | no supported agent |
+| `codex` | `$CODEX_HOME/config.toml` | as `~/.codex/config.toml`, known by its `[mcp_servers.…]` tables (`mcpConfigKindOf`) | | Codex |
+
+Sources: opencode.ai docs/mcp-servers and docs/config (the `mcp` key, the
+`local`/`remote` types, `environment`, `headers`, the substitutions, the
+global and project places); Goose's `ExtensionConfig`
+(crates/goose/src/agents/extension.rs: `envs` with its `env` alias,
+`env_keys`, `headers`, `uri`, and `merge_environments`, which resolves
+`env_keys` from the environment and then Goose's secret store); Gemini
+CLI's docs/tools/mcp-server.md (the two places, `env` references
+`$VAR` / `${VAR}`, `url` / `httpUrl` / `headers`); zed.dev docs/ai/mcp
+(`context_servers`, `command` / `args` / `env`, a remote `url` with
+`headers`); docs.continue.dev (the `mcpServers` list, block files with
+`name` / `version` / `schema`, JSON configs copied into
+`.continue/mcpServers/`, `${{ secrets.X }}`, `requestOptions.headers`).
+
+- *References.* `mcpReference`: a value that holds a reference token
+  (`${…}`, `${{ … }}`, `{env:…}`, `{file:…}`) and no other word that reads
+  as a credential, or is a bare upper-case `$VAR` (Gemini CLI), optionally
+  after an auth scheme (`Bearer $TOKEN`). A token written beside a
+  reference is still a token. `withoutMcpReferences` drops a key rule's
+  span whose whole value is one reference, in every syntax.
+- *YAML* (`yamlServerEntries`). A positional reader of the block subset
+  Goose (serde_yaml) and Continue write, over the server section only:
+  block mappings and sequences (a sequence item's mapping on its dash's
+  line, a list at its key's indent), one-line plain and quoted scalars,
+  one-line flow collections (nested ones too), block scalars skipped
+  (Goose's multi-line `description`). An anchor, alias or tag, a
+  multi-line plain scalar or flow collection, a tab in an indent, or a
+  block scalar where a value is read makes the reading null: the twin is
+  then the whole file (`extractShape`), and the content decision falls
+  back to the file's words (`found-labels.ts` `unreadableYamlCredential`:
+  a vendor format or a word that reads as a token anywhere labels it),
+  fail-closed. The twin of a readable one parses (js-yaml) to the same
+  structure with each masked value its placeholder.
+- *The launch posture.* OpenCode's and Goose's own configs are not in
+  their agent's login or store, so the walk labels them as found (as an
+  editor's) and tags `agentConfig` under the launch of their reader
+  (`keptMcpReaders`: the kept logins' owners, and Goose under `mandu
+  goose`): OpenCode's global ones, and an `opencode.json(c)` in a walk
+  root or a directory above one up to the repository's top (OpenCode's own
+  lookup); Goose's `config.yaml`. The launcher registers each and leaves it
+  readable, as `.mcp.json` under `mandu claude`: its servers start with
+  the real values, and where the guard runs every other program reads its
+  twin (the found label gates the open; the agent's own process is not
+  gated). A `config.toml` that `CODEX_HOME` moved the same way under
+  `mandu codex`: the walk's probe leaves it to the MCP pass (before, the
+  content tier could label it with no regard for the launch, twinning it
+  under `mandu codex` too), which labels it and tags it. In every other
+  launch each is twinned. Gemini CLI's, Zed's and Continue's are twinned in
+  every launch (no supported agent reads them).
+- *The bindings.* Gemini CLI's, Zed's and Continue's HOME configs join
+  `HOME_WIRE_FILES`: their HTTP server's Authorization credential is a
+  recorded wire grant to its entry's host (twinned in every launch, so
+  nothing in the agent's world writes the real file). OpenCode's and
+  Goose's do not, for `.claude.json`'s reason (their launch leaves them
+  writable to its world). In the owning session the tripwire exempts
+  their stdio values everywhere and their HTTP credential at its entry's
+  host only (`sessionMcpConfigPaths`: the kept readers' HOME configs, and
+  the session's `mcpConfigs`, which the launcher fills with the project
+  `opencode.json(c)` OpenCode reads under `mandu opencode`; `mcpConfigLike`
+  lets the moved Codex config's row narrow its host as `.codex`'s does).
+- *Not covered here.* A variable that moves a config (`XDG_CONFIG_HOME`,
+  `GOOSE_PATH_ROOT`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`: the arbiter
+  receives only LOGIN_ENV's names); OpenCode's `.opencode/` directory and
+  its inline `OPENCODE_CONFIG_CONTENT`; Goose's tokens in the system
+  keyring (`env_keys`; Mandu never reads the keyring; one in `secrets.yaml`
+  is a login the launcher keys); Gemini CLI's extensions'
+  `gemini-extension.json` and its system settings; Continue's deprecated
+  `transport` headers; Zed's and Gemini CLI's project files are twinned
+  for every program, as a workspace config's are.
+
+**The two behavioural leftovers (2026-10-22): left, with the reason.**
+
+- *A workspace config's HTTP credential is put back nowhere for a program
+  that reads its twin.* Putting it back needs a grant from the file's own
+  `url`, and a workspace file is one the agent can write: its own write
+  tool writes the real file (the agent's process is not gated), so a
+  session the model steered could point an entry's `url` at a host of its
+  choosing, and the next launch's registration would grant the real
+  credential there. A grant read only for the session from the launch's
+  text has the same hole one session later, and the issuer bindings
+  (confidentiality.md §2.3) already cover a credential whose format names
+  its service. No sound fix without a record of the URL the human wrote,
+  so it stays a question (it asks).
+- *`claude mcp add -s project` from a shell writes into the copy.* The
+  `claude` it runs is not the agent's process, so the guard serves it the
+  twin and keeps its write in the copy. Writing through would let any
+  program write placeholders over the real tokens (it read the twin and
+  writes the file back whole), which the copy exists to prevent. A merge
+  at the session's end that turns the copy's placeholders back into
+  values would let a program move any registered value into a server
+  entry the model chose (an `env` of a `command` of its choosing), so it
+  is not sound either. It stays: add the server outside the session, or
+  with `-s user` (`~/.claude.json`, readable to its world).
+
 **What stays open (not covered).**
 
 - *A stdio server holds its values raw, and is not tracked as a holder*,
@@ -2319,16 +2427,15 @@ programs show it the twin under the guard).
   backstop stand between it and the model, as for `~/.claude.json` and
   `config.toml` in every posture.
 - A workspace config's HTTP credential is put back nowhere for a program
-  that reads the twin (no grant, §11.6); it asks.
-- A `config.toml` a `CODEX_HOME` moved out of `.codex` is read as any TOML
-  file (its secret-named keys only); a `.mcp.json` named by
-  `--mcp-config <file>` is a project file like any other (twinned unless at
-  the launch's directory).
-- Other agents' and tools' MCP configs: OpenCode's `opencode.json`
-  (`mcp.*.environment`, `headers`), Goose's `config.yaml` extensions
-  (`envs`), Gemini CLI's `settings.json`, Zed's `context_servers`,
-  Continue's YAML. They stay in the content tier's exclusion; their
-  launches' own posture (point 3) would need their readers modelled.
+  that reads the twin (no grant, §11.6); it asks. Left (above, "The two
+  behavioural leftovers").
+- `claude mcp add -s project` run as a command writes into the twin. Left
+  (above).
+- A `.mcp.json` named by `--mcp-config <file>` is a project file like any
+  other (twinned unless at the launch's directory).
+- The places a variable moves the other tools' configs to, OpenCode's
+  `.opencode/` and inline config, Goose's keyring (above, "Not covered
+  here").
 - A secret written into one of these files during a session is found by the
   next launch's walk.
 
@@ -2364,6 +2471,23 @@ back; a stdio server's token in its own session, also after the model read
 the config, and refused in the other; the arbiter gone fails closed);
 `tests/stack/other-agent-logins.test.ts` (updated: a plain command
 registers `~/.claude.json`'s server token and leaves the file readable).
+Since 2026-10-22: `arbiter/test/unit/mcp-config-agents.test.ts` (each new
+kind and its reader, a moved Codex config by its text, the references in
+every syntax, each format's entries with offsets and its twin (comments,
+references and empty maps kept; the YAML twin parses to the same
+structure), the wire marks, an unreadable YAML section's whole-file twin
+and fail-closed label, the negatives, the walk per launch, the grants, a
+session's exempt paths); launcher `agent-login.test.ts` (OpenCode's
+project configs up to the repository's top) and `why.test.ts`; and the
+e2e `tests/stack/mcp-config-agents.test.ts` (the real arbiter, the
+launcher's secret setup for `mandu opencode`, `mandu goose`, `mandu
+codex` with a moved `CODEX_HOME` and `mandu claude`, the production
+model-proxy wiring and each session's real net-proxy: a server spawned
+from the config its agent reads gets the real value, every other config
+is twinned with no value in it, OpenCode's and Goose's HTTP credentials at
+their own host only, Gemini CLI's placeholder put back at its host and
+refused elsewhere, no value at the model, the arbiter gone fails
+closed).
 
 ## 3. The git-history secret scan
 

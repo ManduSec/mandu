@@ -11966,6 +11966,12 @@ grammar; `home-js-rules.test.ts` the rendered row and confirmation.
   code (2026-10-16, §4.25u *Rules names what a send covers*).
 - **Send rules say "any"** ("sending any masked data [from X]"), so a rule and
   an answer read as the contrast they are.
+- **A send rule with an end says when** (2026-10-23, §4.25u *A rule with an
+  end date says when*): an allow or block rule whose `expires` is still to
+  come reads "Always allowed" (or "Always blocked") with "until Dec 1,
+  09:00" under it, the moment in the reader's own clock, and its opened row
+  "Always allowed until Dec 1, 09:00, ends in 9 days." Once passed it reads
+  "Expired, no longer used".
 - **The term *Your answer***: "Your choice when Mandu asked and you picked
   always. For sending, it covers only the data you were asked about, going to
   that one place. Other data sent there still needs your OK."
@@ -15112,6 +15118,54 @@ key (retired by §4.25v), attributes and element ids were unchanged.
       edits and an allowed `*` over the real route; the listings signed in
       and out and the served Approvals page; no value, no token, the
       waiting change not on disk).
+  - **A rule with an end date says when (2026-10-23).** A send rule
+    (`release`) can carry `expires`, an ISO date-time set by an agent's
+    `policyPropose`, *Describe what you want* or a hand edit of
+    policy.yaml. `editWords` drew it as a code part, so every reader of
+    those words (the Approvals card and *Answered earlier*, Describe's
+    suggestions, the session page's `mandu_policy_propose` step) read
+    "… to `pastebin.com` until `2026-12-01T00:00:00Z`": a UTC timestamp in
+    the code font, on the card where the person decides. And Rules showed
+    no end while the rule was in force: `sendWords` said only "Expired, no
+    longer used" once it had passed, so until then the row read "Always
+    allowed", like a rule with no end.
+
+    Now:
+    - the proposal parts have a third kind, `{kind: "time", text: ISO}`.
+      `editWords` sends it for an `expires` that is an ISO date or
+      date-time (`isMoment`: digits, dashes, colons and a zone only, and a
+      real date); anything else stays the code it was;
+    - the page draws a time part as `momentNode`: `<time datetime=ISO>`
+      in the reader's own clock, as `clockWords` says every moment ("Dec
+      1, 09:00", the year when it is not this year), the full date with
+      its weekday and year on hover. `rowList`, `askCellWords`,
+      `textParts` and Describe's rows draw it through one `partNode`; a
+      kind the page does not know still draws its text;
+    - the session page keeps it as a story `time` part with `clock: true`
+      (a turn's `time` draws only HH:MM), so the step reads "… until Dec 1,
+      09:00";
+    - Rules › *Sending data*: a live allow or block send rule with an end
+      carries `plain.until` (`policy-panel.ts`), drawn under its effect
+      ("Always allowed" over "until Dec 1, 09:00", §4.25e). The opened
+      row says it again with how long is left: "Always allowed until Dec
+      1, 09:00, ends in 9 days." Find reads the same words. An expired
+      rule keeps "Expired, no longer used" and no `until`; an audit or off
+      rule keeps its own words (it never decides, so "until" would
+      misread); a rule with no end reads as before.
+    - The moment is drawn in the browser, not the server, so it is the
+      reader's own clock.
+    - Presentation only: what is proposed, posted and enforced, the typed
+      ALLOW (`isOverBroad`), the delta, the routes and the arbiter are
+      unchanged.
+    - Tests: `policy-proposals-view-model.test.ts` (the time part, no code;
+      what stays code), `policy-panel.test.ts` (`until` for a future end,
+      none past, none without an end or for audit), `agent-page.test.ts`
+      and `home-js-agent.test.ts` (the session page step),
+      `home-js-rules-send.test.ts` S8 and S9 (the Rules row and its
+      opened line, Find, an Approvals row's `<time>`, an unknown kind),
+      and stack `tests/stack/wide-change-why.test.ts` W6 (a real arbiter
+      and dashboard: the card's "until" in clock words with no `T…Z`,
+      then Rules after its Allow; W5's oracle on every read).
   - **Rules names a connection in words (2026-10-16).** Rules › *Programs
     and connections* drew each `destinations:` allowance as one code built
     from the compiled entry: `*:2222`, `*.example.org:*`, and
@@ -17279,7 +17333,13 @@ the facts nor the line, control characters, the vocabulary),
 `test/unit/sign-in.test.ts` (the op beside the sign-in op, its answers and
 refusals, no exposure asked), and the stack test
 `tests/stack/session-end-kept-line.test.ts` (the real launcher, arbiter and
-dashboard: the line on stderr with the agent page's count).
+dashboard: the line on stderr with the agent page's count). A launch with
+no wall around the human plane (no guard, and no bind wrap where the host's
+bubblewrap cannot make a user namespace, as on GitHub's runner) has every
+report stored as a claim ([`arbiter-human-plane.md`](../architecture/arbiter-human-plane.md)
+§10.1); the story counts no claim, so its line says Home's count of none.
+The stack test asserts that form on such a host, chosen by the launcher's
+own probe (continuous-integration.md §12.1).
 
 #### 4.25ai What already left before Mandu: the last scan on Home and the Scan page (2026-10-21)
 

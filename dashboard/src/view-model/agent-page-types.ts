@@ -51,6 +51,10 @@ export interface StoryPart {
    *  (secret-story.ts, *A time opens its step*). An id, never a value.
    *  Absent: no step on the page shows it. */
   step?: string;
+  /** A "time" part that is a day as well as a time (a send rule's end, in a
+   *  `mandu_policy_propose` step): the page draws the whole moment ("Dec 1,
+   *  09:00"), not only the clock time a turn's moment reads. */
+  clock?: true;
   /** A "text" part that names this session's detailed trace ("Open the
    *  detailed trace"): the page draws its text as a link to the developer
    *  view's trace of the session it shows, in a new tab like its *Detailed

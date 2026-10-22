@@ -612,6 +612,31 @@ const DOC_EXT = {
   policyFile: { path: "/home/u/.config/mandu/policy.yaml", found: true, valid: true, problems: [], loadedAt: 1, refusedAt: null },
 };
 
+test("§4.25u a send rule with an end still to come carries plain.until; a past one says Expired, with none; no end, neither", () => {
+  const soon = new Date(Date.now() + 9 * 86_400_000).toISOString();
+  const doc = {
+    ...DOC_EXT.document,
+    userRules: [
+      { id: "ur-a", kind: "release", from: null, to: ["pastebin.com"], mode: "allow", expires: soon },
+      { id: "ur-b", kind: "release", from: ["docs.python.org"], to: ["*"], mode: "block", expires: soon },
+      { id: "ur-c", kind: "release", from: null, to: ["x.example"], mode: "allow", expires: "2020-01-01T00:00:00Z" },
+      { id: "ur-d", kind: "release", from: null, to: ["y.example"], mode: "allow", expires: null },
+      // An audit or off rule keeps its own words: it never decides, so
+      // "until" would misread.
+      { id: "ur-e", kind: "release", from: null, to: ["z.example"], mode: "audit", expires: soon },
+    ],
+  };
+  const vm = toPolicyPanelViewModel({ ...BARE, ...EXT, ...DOC_EXT, document: doc } as PolicySnapshot);
+  const plain = (id: string) => vm.yourRules!.find((r) => r.id === id)!.plain!;
+  assert.deepEqual([plain("ur-a").effect, plain("ur-a").until], ["Always allowed", soon]);
+  assert.deepEqual([plain("ur-b").effect, plain("ur-b").until], ["Always blocked", soon]);
+  assert.equal(plain("ur-c").effect, "Expired, no longer used");
+  assert.equal("until" in plain("ur-c"), false, "an expired rule has no until");
+  assert.equal(plain("ur-d").effect, "Always allowed");
+  assert.equal("until" in plain("ur-d"), false, "a rule with no end has no until");
+  assert.equal("until" in plain("ur-e"), false, "an audit rule has no until");
+});
+
 test("stage 5b: yourRules projects locks, trusted origins, user rules and dispositions in ONE row grammar", () => {
   const vm = toPolicyPanelViewModel({ ...BARE, ...EXT, ...DOC_EXT } as PolicySnapshot);
   assert.ok(vm.yourRules, "present when the snapshot carries a document");

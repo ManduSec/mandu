@@ -1692,6 +1692,20 @@ test("a call to Mandu's own rule tools says what was asked and what Mandu answer
   assert.equal(same.step.noteParts, undefined);
 });
 
+test("§4.25u a proposed send rule's end is a moment with its day on the session page, not code; text that is no date stays code", () => {
+  const PROPOSE = "mcp__mandu-policy__mandu_policy_propose";
+  const answer = JSON.stringify({ tool: "mandu_policy_propose", applied: false, proposalId: "pp-000009", relaxes: [] });
+  const until = { edits: [{ op: "release", to: { host: "pastebin.com" }, mode: "allow", expires: "2026-12-01T00:00:00Z" }] };
+  const { step } = policyPage(PROPOSE, until, answer);
+  assert.deepEqual(step.sentence.slice(-2), [{ kind: "text", text: " until " }, { kind: "time", text: "2026-12-01T00:00:00Z", clock: true }]);
+  assert.equal(step.sentence.filter((p) => p.kind === "code").map((p) => p.text).join(), "pastebin.com", "the end is no code");
+  // A string that is no date: code, its token a chip, never raw.
+  const tok = "$MDU:secret_ENV[1a2b]";
+  const odd = policyPage(PROPOSE, { edits: [{ op: "release", to: { host: "pastebin.com" }, mode: "allow", expires: `soon ${tok}` }] }, answer);
+  assert.equal(odd.step.sentence.some((p) => p.kind === "time"), false);
+  assert.doesNotMatch(JSON.stringify(odd.step.sentence), /\$MDU:/);
+});
+
 test("Mandu's rule tools claim nothing they cannot back: another server's tool, a masked or missing answer; a token in a path is a chip", () => {
   const lock = { edits: [{ op: "lock-path", path: "/home/u/ws/.env", level: "no-model" }] };
   const applied = JSON.stringify({ tool: "mandu_policy_propose", applied: true, changeId: "pc-000001", tightens: [{ facet: "paths", subject: "/home/u/ws/.env" }] });

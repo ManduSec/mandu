@@ -392,9 +392,14 @@ export function agentStoreLines(agent: string, mcpConfig = false): string[] {
 
 /** `mandu why` on Claude Code's `.claude.json` or Codex's `config.toml`
  *  (secret-discovery.md §2.10): also the agent's MCP config, whose servers'
- *  credentials every launch registers. Empty for any other path. */
+ *  credentials every launch registers; since 2026-10-22 also OpenCode's
+ *  `opencode.json(c)` and Goose's `config.yaml`. Empty for any other path. */
 export function agentMcpConfigLines(path: string): string[] {
-  const agent = /(?:^|\/)\.claude\.json$/.test(path) ? "claude" : /(?:^|\/)\.codex\/config\.toml$/.test(path) ? "codex" : null;
+  const agent = /(?:^|\/)\.claude\.json$/.test(path) ? "claude"
+    : /(?:^|\/)\.codex\/config\.toml$/.test(path) ? "codex"
+    : /(?:^|\/)opencode\.jsonc?$/.test(path) || /(?:^|\/)\.config\/opencode\/config\.json$/.test(path) ? "opencode"
+    : /(?:^|\/)\.config\/goose\/config\.yaml$/.test(path) ? "goose"
+    : null;
   if (agent === null) return [];
   const name = agentDisplayName(agent);
   return [
@@ -447,6 +452,7 @@ export function renderWhyPath(a: WhyPathAnswer, home: string, send?: { host: str
     L.push(...agentStoreLines(agent.agent, mcp.length > 0), ...mcp);
   } else if (a.level !== "public") {
     if (agent?.kind === "login") L.push(...agentLoginLines(agent.agent), ...agentMcpConfigLines(a.path));
+    else L.push(...agentMcpConfigLines(a.path));
     L.push(`  the AI     sees ${twinWords(a)}`);
     const inert = a.readersAdmitNothing ?? [];
     const nameOf = (r: unknown): string => {

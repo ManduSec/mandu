@@ -34,7 +34,7 @@ import { declassifySymbol } from "./declassify-symbol.js";
 const JSONRPC_VERSION = "2.0";
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const SERVER_NAME = "mandu-inspect-symbol";
-const SERVER_VERSION = "0.2.0-beta.7"; // one product version: scripts/set-version.sh rewrites this line
+const SERVER_VERSION = "0.2.0-beta.8"; // one product version: scripts/set-version.sh rewrites this line
 
 // JSON-RPC error codes (subset).
 const ERR_PARSE = -32700;

@@ -101,6 +101,31 @@ internal pilot and was never published.)
   gives it the plain address only, never a password or sign-in link. With
   no browser to open (an SSH session, no screen) it prints the address,
   and over SSH the `ssh -L` line that forwards the dashboard's port.
+- The dashboard's Scan page is in colour: red for what left your
+  computer (your secrets that reached the AI, sends to a host Mandu cannot
+  tie to the key), green for what Mandu keeps, amber for what is worth a
+  look, each with a mark or a word beside the colour. At the top, a
+  figure shows what happened (the key leaves its file, goes through your
+  agent and reaches the AI model as it is) and what Mandu does instead
+  (the key becomes a mask at Mandu's border, the model sees only the mask,
+  your agent still works), with the file, agent and provider of your own
+  newest finding. Home's scan card shows the same in one line each. On a
+  phone the figure stacks; with reduced motion it stays still.
+- A long scan opens at once: the Scan page reads the top of each section
+  first and the rest when you open it, and "Find one" searches the whole
+  section on the server. A failed read tries again by itself.
+- `mandu scan` finds more of the ways a secret was sent on: over ssh,
+  scp, sftp or rsync (to the remote host), by git with a credential in
+  the URL or an `http.extraheader` (`git push`, `clone`, `fetch`, `remote
+  add`), by an inline script (`python -c`, `node -e`, a here-document fed
+  to an interpreter) that calls an HTTP library with a literal URL, and as
+  an MCP tool's input in Claude Code and Codex.
+- `mandu scan` lists values that look like made-up test values
+  (`…-test-…`, `…-dummy-…`, long runs of one character, documented example
+  keys) apart from the others and does not count them as leaked. A secret
+  found in your own files is never marked so.
+- `mandu scan`'s short report cuts a long command between its arguments,
+  keeping a path's start and its file name (`cat ~/.config/some-cli/…/credential.json`).
 - `mandu scan` now knows more of your own secrets as yours ("rotate
   this"), where it used to list some only as values that "look like keys
   but are not in your files now": the GitHub CLI's and glab's tokens for
@@ -142,6 +167,15 @@ internal pilot and was never published.)
   copy of every other MCP config, and an HTTP server's `Authorization`
   credential goes only to the host its own entry names. A config whose values only name variables
   (`"${GITHUB_TOKEN}"`) is left as it is.
+- The same protection covers more MCP configs: OpenCode's `opencode.json`
+  (global and per project), Goose's `~/.config/goose/config.yaml`, Gemini
+  CLI's `settings.json`, Zed's `settings.json`, Continue's `config.yaml`
+  and its `.continue/mcpServers/` blocks, and a Codex `config.toml` that
+  `CODEX_HOME` moved out of `~/.codex`. `mandu opencode` and `mandu goose`
+  keep reading their own config as it is, as `mandu codex` now does where
+  `CODEX_HOME` points. References such as OpenCode's `{env:VAR}`,
+  Continue's `${{ secrets.X }}` and Gemini CLI's `$VAR` are left as they
+  are.
 
 ### New in 0.2.0-beta.7
 

@@ -5,19 +5,23 @@
  * recorded tour as it seeds it (moved to now, the temp home folder, the
  * tour's wording), the second session it builds (no real value, one session),
  * the clip of a page region, and the check that refuses a picture showing a
- * fake secret's value. The run itself needs a browser and is not a suite.
+ * fake secret's value, and the browser's teardown (stopProc ends its whole
+ * process group, over a stand-in browser). The run itself needs a browser
+ * and is not a suite.
  *
  * Run:  node --test scripts/test/tour-screenshots.test.mjs
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   FAKE_VALUES, RECORDED_HOME, STAGING_SESSION, TOUR_SESSION, WIDTH,
-  clipFor, leakedValues, movedTour, parseArgs, probeBrowser, stagingSession,
+  clipFor, groupAlive, leakedValues, movedTour, parseArgs, probeBrowser, removeProfile, stagingSession,
+  startBrowser, stopProc,
 } from "../tour-screenshots.mjs";
 
 const FIXTURE = fileURLToPath(new URL(`../../dashboard/test/fixtures/tour-${TOUR_SESSION}.ndjson`, import.meta.url));
@@ -106,4 +110,39 @@ test("parseArgs: the defaults, --only checked against the four pictures", () => 
   assert.throws(() => parseArgs(["--only", "sent"]), /unknown picture/);
   assert.throws(() => parseArgs(["--out"]), /needs a value/);
   assert.throws(() => parseArgs(["--bogus"]), /unknown argument/);
+});
+
+/** A stand-in browser: says the DevTools line, starts a helper that ignores
+ *  SIGTERM and keeps writing into the profile (as Chromium's helpers write
+ *  after the main process is told to stop), then waits as the main process. */
+const FAKE_BROWSER = `#!/bin/sh
+dir=""
+for a in "$@"; do case "$a" in --user-data-dir=*) dir="\${a#--user-data-dir=}";; esac; done
+mkdir -p "$dir/Default"
+( trap '' TERM; i=0; while :; do i=$((i + 1)); echo x > "$dir/Default/f$((i % 20))"; sleep 0.02; done ) &
+echo "DevTools listening on ws://127.0.0.1:9/devtools/browser/stand-in" >&2
+exec sleep 60
+`;
+
+test("stopProc ends the browser's whole process group before it returns, so its profile comes off at once and stays off", { skip: process.platform === "win32" ? "process groups" : false, timeout: 30_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-tour-group-"));
+  try {
+    const bin = join(dir, "browser");
+    writeFileSync(bin, FAKE_BROWSER, { mode: 0o755 });
+    const profile = join(dir, "profile");
+    const { proc, wsUrl } = await startBrowser(bin, profile, process.env);
+    assert.equal(wsUrl, "ws://127.0.0.1:9/devtools/browser/stand-in");
+    for (const end = Date.now() + 5_000; !existsSync(join(profile, "Default", "f1")) && Date.now() < end;) await new Promise((r) => setTimeout(r, 20));
+    assert.ok(existsSync(join(profile, "Default", "f1")), "the helper writes into the profile");
+    assert.ok(groupAlive(proc.pid), "the browser leads a process group of its own");
+    await stopProc(proc, { graceMs: 300 });
+    assert.notEqual(proc.exitCode ?? proc.signalCode, null, "the browser exited");
+    assert.equal(groupAlive(proc.pid), false, "no process of its group is left (the helper ignored SIGTERM: SIGKILL ended it)");
+    rmSync(profile, { recursive: true }); // no retries: nothing writes into it any more
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(existsSync(profile), false, "nothing writes it back");
+    await stopProc(proc); // a second stop of a stopped browser returns at once
+  } finally {
+    removeProfile(dir);
+  }
 });

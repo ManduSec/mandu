@@ -82,7 +82,7 @@ inputs:
   mandu-version:
     description: The @mandusec/mandu version to install from npm.
     required: false
-    default: 0.2.0-beta.7
+    default: 0.2.0-beta.8
   agent-version:
     description: "The agent CLI version to install from npm (default: the newest Mandu was tested with); `none` uses the one already on PATH."
     required: false

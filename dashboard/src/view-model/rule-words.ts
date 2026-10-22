@@ -63,6 +63,12 @@ export interface PlainRule {
    *  `reach`. Absent when the reach names nothing. */
   reachParts?: HomeTextPart[];
   effect: string;
+  /** A send rule that allows or blocks until a moment still to come: that
+   *  moment (ISO, the rule's `expires`), which the page draws after
+   *  `effect` in the reader's own clock ("Always allowed until Dec 1,
+   *  09:00", dashboard.md §4.25u *A rule with an end date says when*).
+   *  Absent with no end, and once it has passed ("Expired, no longer used"). */
+  until?: string;
   /** A file rule: which programs may open the real file (`opensWords`). */
   opens?: string;
   /** A file rule with `values:` (plan 13 §5.2): where each value may be

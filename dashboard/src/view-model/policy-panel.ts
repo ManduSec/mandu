@@ -52,7 +52,7 @@ import type {
 import type { DetailItem, DetailSection } from "./detail.js";
 import { describeAsk, holderSendOf } from "./ask-words.js";
 import { pathOpeners } from "./rules-by-who.js";
-import { connectWords } from "./policy-proposals.js";
+import { connectWords, isMoment } from "./policy-proposals.js";
 import {
   lawSourceVM, postureChips, ruleDetail, ruleOutcome, verdictDetail, verdictFamily, verdictOutcome, whereLabel,
 } from "./policy-panel-detail.js";
@@ -673,6 +673,7 @@ function yourRuleRowsVM(snapshot: PolicySnapshot, files: ReadonlySet<string>): A
         reach: sendRuleReach(r.from ? from : null),
         ...(r.from && r.from.length ? { reachParts: sendRuleReachParts(r.from) } : {}),
         effect: sendWords(r.mode, expired),
+        ...(r.expires && !expired && isMoment(r.expires) && (r.mode === "allow" || r.mode === "block") ? { until: r.expires } : {}),
       },
       effect, source: "policy.yaml", reach: `from ${from} to ${to === "*" ? "any destination" : to}`,
       relaxes: r.mode === "allow" && !expired,

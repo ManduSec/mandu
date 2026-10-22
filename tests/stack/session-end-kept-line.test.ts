@@ -28,6 +28,21 @@
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON). No kernel
  * layer (MANDU_NO_KERNEL=1): the subject is the launcher's teardown and the
  * dashboard's projection, not the guard.
+ *
+ * Two hosts, one test. With no guard, the launch is walled off from the
+ * human plane only by the bind wrap, which needs a bubblewrap that can make
+ * a user namespace (`WALLED`, the launcher's own facts: confinement-posture
+ * resolveHostPosture's `bwrap && userns`). A walled launch's record is
+ * believed, and the line counts the `.env` (L1 as above). GitHub's
+ * ubuntu-24.04 runner restricts unprivileged user namespaces (AppArmor;
+ * continuous-integration.md §12.2), so there the launch is GATED with no
+ * wall: every report on the human socket is a claim
+ * (arbiter-human-plane.md §10.1), Home counts no claim, and the line says
+ * what Home says. There L1 asserts that instead: the posture's gap is the
+ * host's, EVERY event of the launch is stored as a claim (a believed one
+ * would be the §10.1 regression), and the line is still stderr's last line
+ * with Home's count. The branch is chosen by the probe, never by what the
+ * launch printed, so a walled host whose launch lost its wall fails.
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -49,8 +64,16 @@ import { runChildToExit } from "../lib/child-run.js";
 import { LAUNCHER_MAIN, LAUNCHER_TSX, REPO_ROOT, STACK_TENANT } from "../lib/launcher-live.js";
 import { assertStackPackages } from "../lib/stack-preflight.js";
 import { stateAxes } from "../lib/axes.js";
+import { systemBwrapBin } from "../../launcher/src/bwrap-path.js";
+import { probeUserns } from "../../launcher/src/userns.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the product default, the axis under test
+
+/** The bind wrap can go up here, so a launch with no guard is walled off
+ *  from the human plane (see the header). The launcher's own facts. */
+const WALLED = systemBwrapBin() !== null && probeUserns();
+/** The gaps of a host whose bubblewrap cannot make the namespace. */
+const UNWALLED_GAPS = ["apparmor-userns", "userns-off", "no-bwrap"];
 
 const VALUE = `sk_live_keptLine_${process.pid}_0000000000`;
 const AGENT_WORD = "STAND-IN-AGENT-DONE";
@@ -192,18 +215,43 @@ test("L1+L2: the session ends with what Mandu kept, on stderr only, in Home's co
   assert.match(seen.join("\n"), /\$MDU:[A-Za-z]+_Read\[[0-9a-f]+\]/, "the model got the key's placeholder");
   noValue(r.stdout, "stdout");
   noValue(r.stderr, "stderr");
-  // L1: on stderr, the session's last line; never on stdout.
-  assert.match(lastLine(r.stderr), LINE_RE, diag);
   assert.equal(r.stdout.trim(), AGENT_WORD, "stdout holds only the agent's own output");
   assert.doesNotMatch(r.stdout, /mandu:|masked before the AI/);
-  // Home's count for the same session: the agent page's tile, served by the same dashboard.
+  // The launch's record, as the dashboard serves it: the posture and whether
+  // each event is believed.
   assert.match(r.scope, /^\d+-\d+$/);
+  const evRes = await pageFetch(`${dashUrl}/api/events?session=${encodeURIComponent(r.scope)}`);
+  assert.equal(evRes.status, 200);
+  const evText = await evRes.text();
+  noValue(evText, "/api/events");
+  const events = (JSON.parse(evText) as { events: { kind: string; claimed?: boolean; secrets?: { posture?: string; gap?: string } }[] }).events;
+  const posture = events.find((e) => e.kind === "launch_posture")?.secrets;
+  assert.ok(posture, `the launch recorded its posture: ${diag}`);
+  // Home's count for the same session: the agent page's tile, served by the same dashboard.
   const page = await pageFetch(`${dashUrl}/api/home/agent?session=${encodeURIComponent(r.scope)}`);
   assert.equal(page.status, 200);
   const text = await page.text();
   noValue(text, "/api/home/agent");
   const vm = JSON.parse(text) as AgentPageVM;
-  assert.deepEqual(vm.secrets.counts, { masked: 1, early: 0 }, "the line's count is the page's tile");
+  if (WALLED) {
+    // The bind wrap is up (no guard: gated, gap guard-off) and walls the
+    // human plane, so the record is believed.
+    assert.deepEqual(posture, { posture: "gated", gap: "guard-off" }, `this host can mount the bind wrap: ${diag}`);
+    assert.deepEqual(events.filter((e) => e.claimed === true).map((e) => e.kind), [], "a walled launch's reports are believed");
+    // L1: on stderr, the session's last line; never on stdout.
+    assert.match(lastLine(r.stderr), LINE_RE, diag);
+    assert.deepEqual(vm.secrets.counts, { masked: 1, early: 0 }, "the line's count is the page's tile");
+  } else {
+    // No wall (GitHub's runner): every report is a claim, Home believes
+    // none, and the line says Home's count, still stderr's last line.
+    assert.equal(posture.posture, "gated", diag);
+    assert.ok(UNWALLED_GAPS.includes(posture.gap ?? ""), `the host's gap, not the guard's: ${JSON.stringify(posture)}`);
+    assert.ok(events.length >= 2, `the proxy's reports are in the record: ${events.map((e) => e.kind).join(" ")}`);
+    assert.deepEqual(events.filter((e) => e.claimed !== true).map((e) => e.kind), [],
+      "an unwalled launch's reports are all claims (arbiter-human-plane.md §10.1)");
+    assert.deepEqual(vm.secrets.counts, { masked: 0, early: 0 }, "Home counts no claim");
+    assert.equal(lastLine(r.stderr), "mandu: no secret came up in this session, so Mandu had nothing to mask", diag);
+  }
 });
 
 test("L3: opt-out by env and by flag: no line, the same session", { timeout: 250_000 }, async () => {

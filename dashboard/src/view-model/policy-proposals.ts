@@ -26,8 +26,20 @@ import { needsHostHint } from "../model-probe.js";
 import { endpointPlacement } from "./model-endpoints.js";
 import { tildePath } from "./rule-words.js";
 
-/** A sentence part: plain text, or a value shown as code (paths, hosts). */
-export type Part = { kind: "text"; text: string } | { kind: "code"; text: string };
+/** A sentence part: plain text, a value shown as code (paths, hosts), or a
+ *  moment (`time`, its text an ISO date-time: a send rule's end), which the
+ *  page draws in the reader's own clock (dashboard.md §4.25u, *A rule with
+ *  an end date says when*). */
+export type Part = NamePart | { kind: "time"; text: string };
+/** A part that is words or a name, never a moment. */
+export type NamePart = { kind: "text"; text: string } | { kind: "code"; text: string };
+
+/** An ISO date or date-time a page can draw as a moment: digits, dashes,
+ *  colons and a zone only (so never a token or other words), and a real
+ *  date. Anything else is shown as the code it is. */
+export function isMoment(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})?)?$/.test(s) && Number.isFinite(Date.parse(s));
+}
 
 /** The arbiter's proposal wire shape (arbiter/ipc/protocol.ts PolicyProposalWire), structurally. */
 export interface PolicyProposalRow {
@@ -136,8 +148,8 @@ export interface ChangeRowVM {
   proposalId?: string;
 }
 
-const t = (text: string): Part => ({ kind: "text", text });
-const c = (text: string): Part => ({ kind: "code", text: String(text) });
+const t = (text: string): NamePart => ({ kind: "text", text });
+const c = (text: string): NamePart => ({ kind: "code", text: String(text) });
 
 /** Names in a row (a rule's hosts, a list's entries): one code each, ", "
  *  between, so the page keeps each short one whole and a line breaks
@@ -166,7 +178,7 @@ function hostPort(host: unknown, port: unknown): string {
  *  port is never dropped. A named host keeps its code, with its port
  *  (`db.internal:5432`). No port: the edit's own words (the arbiter's
  *  default port shows in the *This would let* line). */
-export function connectTarget(host: unknown, port: unknown): Part[] {
+export function connectTarget(host: unknown, port: unknown): NamePart[] {
   const anyHost = str(host) === "*";
   const hasPort = port !== undefined && port !== null && str(port) !== "";
   if (hasPort && str(port) === "*") return [anyHost ? t("any address") : c(str(host)), t(" on any port")];
@@ -179,7 +191,7 @@ export function connectTarget(host: unknown, port: unknown): Part[] {
  *  " over UDP" for a UDP one: the Rules row of the rule an Approvals card
  *  asked for reads as the card did (dashboard.md §4.25u, *Rules names a
  *  connection in words*). New parts on every call. */
-export function connectWords(host: unknown, port: unknown, proto: unknown): Part[] {
+export function connectWords(host: unknown, port: unknown, proto: unknown): NamePart[] {
   return [...connectTarget(host, port), ...(str(proto) === "udp" ? [t(" over UDP")] : [])];
 }
 
@@ -282,7 +294,9 @@ export function editWords(edit: unknown, home: string): Part[] {
       if (typeof e.id === "string" && e.id) parts.push(t("Change rule "), c(e.id), t(": "));
       parts.push(t(parts.length ? verb.charAt(0).toLowerCase() + verb.slice(1) : verb));
       parts.push(from ? c(from) : t("anywhere"), t(" to "), to === "*" ? t("anywhere") : c(to));
-      if (typeof e.expires === "string" && e.expires) parts.push(t(" until "), c(e.expires));
+      // The end as a moment the page words in the reader's own clock; a
+      // string that is no date stays the code it was.
+      if (typeof e.expires === "string" && e.expires) parts.push(t(" until "), isMoment(e.expires) ? { kind: "time", text: e.expires } : c(e.expires));
       if (e.mode === "audit") parts.push(t(", which still needs your OK"));
       return parts;
     }

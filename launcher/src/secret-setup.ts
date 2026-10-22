@@ -108,7 +108,7 @@ import { cachedProbe } from "./probe-cache.js";
 import { publishFile } from "./safe-file.js";
 import type { StepSpans } from "./launch-timings.js";
 import { gooseRoutedKeyVars } from "./goose-route.js";
-import { AGENT_LOGIN_NAMES, LOGIN_ENV, launchLoginKeying, loginEnvOf, otherAgentLoginsRaw } from "./agent-login.js";
+import { AGENT_LOGIN_NAMES, agentDisplayName, LOGIN_ENV, launchLoginKeying, loginEnvOf, otherAgentLoginsRaw } from "./agent-login.js";
 
 /** What `discoverSecrets` answers since 2026-09-24 (arbiter protocol
  *  DiscoverSecretsResultWire; secret-discovery.md §1.3): the files
@@ -1768,7 +1768,7 @@ async function applySecretTwinsInner(
       // state (`~/.claude.json`, Codex's `config.toml`). Where the guard
       // runs, a project's `.mcp.json` is still its twin to every other
       // program (its open is gated by its label; the agent's is not).
-      deps.log(`mandu: ${f.path} is ${loginName(f.agentConfig)}'s MCP config: left readable to it, so its MCP servers start with their real values; those values are masked in what reaches the model`);
+      deps.log(`mandu: ${f.path} is ${agentDisplayName(f.agentConfig)}'s MCP config: left readable to it, so its MCP servers start with their real values; those values are masked in what reaches the model`);
       continue;
     }
     if (f.agentLogin !== undefined && otherLoginsRaw) {

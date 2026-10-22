@@ -482,6 +482,15 @@ test("sessionLogins' mcpConfigs (secret-discovery.md §2.10): the project .mcp.j
   assert.deepEqual(sessionMcpConfigs({ target: "shell", humanCwd: "/w/human" }, exists), ["/w/human/.mcp.json"], "a plain command keeps Claude Code's");
   assert.deepEqual(sessionMcpConfigs({ target: "codex", humanCwd: "/w/human", cwd: "/w/agent" }, exists), [], "Codex does not read .mcp.json");
   assert.deepEqual(sessionMcpConfigs({ target: "claude", humanCwd: "relative" }, () => true), [], "absolute directories only");
+  // OpenCode (2026-10-22): its opencode.json(c) in the session's
+  // directories and each one above, up to the repository's top (OpenCode's
+  // own lookup).
+  const tree = new Set(["/r/opencode.json", "/r/.git", "/r/a/opencode.jsonc", "/r/a/b/.mcp.json", "/opencode.json"]);
+  const inTree = (p: string): boolean => tree.has(p);
+  assert.deepEqual(sessionMcpConfigs({ target: "opencode", humanCwd: "/r/a/b", cwd: "/r/a/b" }, inTree), ["/r/a/opencode.jsonc", "/r/opencode.json"], "up to the repository's top, never above it, never a .mcp.json");
+  assert.deepEqual(sessionMcpConfigs({ target: "opencode", humanCwd: "/x/y" }, inTree), ["/opencode.json"], "no repository: up to /");
+  assert.deepEqual(sessionMcpConfigs({ target: "claude", humanCwd: "/r/a" }, inTree), [], "Claude Code reads no opencode.json");
+  assert.deepEqual(sessionMcpConfigs({ target: "goose", humanCwd: "/r/a" }, inTree), [], "Goose has no project config");
   assert.deepEqual(sessionLogins({ target: "claude", writeMcp: true, ullm: cli("claude"), humanCwd: "/w/human", cwd: "/w/human" }, {}, "/h", exists),
     { home: "/h", target: "claude", ullmBinary: "claude", mcpConfigs: ["/w/human/.mcp.json"] });
   const without = sessionLoginsKey({ home: "/h", target: "claude", ullmBinary: "claude" });

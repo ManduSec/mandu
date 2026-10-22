@@ -68,7 +68,7 @@ import { isSecret, parseConfidentialityLevel } from "../symbol-table/confidentia
 import { confidentialityForOrigin, pathConfidentiality, type LabelLookup, type SecretCatalogMatch } from "../policy/secret-catalog.js";
 import { oneValueBindings, valueBindings, valueKeyMatches } from "../policy/value-bindings.js";
 import { extractSecretSpans, secretFileShape } from "../policy/secret-extract.js";
-import { mcpConfigKind } from "../policy/mcp-config.js";
+import { mcpConfigLike } from "../policy/mcp-config.js";
 import { envRowVariable, isRegisteredFileRow } from "./registry.js";
 import { sourceLabel } from "../symbol-table/source-label.js";
 
@@ -129,7 +129,9 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
 export function ownWireHost(symbolMap: SymbolMap, name: string, row: SymbolEntry, label: LabelLookup | undefined): string | null {
   if (row.field === null || typeof row.origin !== "string") return null;
   const shape = secretFileShape(row.origin);
-  if (shape !== "npmrc" && shape !== "pip-conf" && mcpConfigKind(row.origin) === null) return null;
+  // An MCP config by its name, or a `config.toml` (Codex's where
+  // CODEX_HOME moved it, known by its text below).
+  if (shape !== "npmrc" && shape !== "pip-conf" && !mcpConfigLike(row.origin)) return null;
   const dot = name.indexOf(".");
   if (dot < 0) return null;
   const base = symbolMap.symbols.get(name.slice(0, dot));

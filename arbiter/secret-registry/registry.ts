@@ -526,11 +526,15 @@ function mintFields(
  *  `config.toml`: the launch of their agent leaves them readable and
  *  writable to its world (its own state files), so a host a session wrote
  *  there would be granted to the next launch; nor a workspace `.mcp.json`,
- *  `.vscode/mcp.json` or `.cursor/mcp.json` (§11.6). */
+ *  `.vscode/mcp.json` or `.cursor/mcp.json` (§11.6). Since 2026-10-22 the
+ *  per-user configs of Gemini CLI, Zed and Continue too (no supported agent
+ *  reads them); NOT OpenCode's or Goose's, which their agent's launch
+ *  leaves writable to its world, as `.claude.json`. */
 const HOME_WIRE_FILES: readonly string[] = [
   ".npmrc", ".config/pip/pip.conf", ".pip/pip.conf",
   ".cursor/mcp.json", ".config/Claude/claude_desktop_config.json", "Library/Application Support/Claude/claude_desktop_config.json",
   ".codeium/windsurf/mcp_config.json", ".config/Code/User/mcp.json", "Library/Application Support/Code/User/mcp.json",
+  ".gemini/settings.json", ".config/zed/settings.json", ".continue/config.yaml", ".continue/config.json",
 ];
 
 /** Is `path` one of the launch HOME's own wire files (`HOME_WIRE_FILES`:

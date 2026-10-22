@@ -28,16 +28,25 @@ export function chromiumBinary(): string | null {
  *  read of the body in between throws. */
 export const READY = "location.protocol.startsWith('http') && !!document.body && document.readyState === 'complete'";
 
-/** Kill it and wait for the exit, then remove its profile: Chromium keeps
- *  writing into the profile until it is gone, so a removal before the exit
- *  leaves files behind. */
+/** Some process of the group `pid` leads is still there. */
+function groupAlive(pid: number): boolean {
+  try { process.kill(-pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
+/** Kill it and wait until its whole process group is gone, then remove its
+ *  profile: Chromium's helpers keep writing into the profile until they are
+ *  gone, and they outlive the main process by a moment, so a removal after
+ *  the main process's exit alone can fail with ENOTEMPTY. */
 export async function stopChromium(proc: ChildProcess | null, profile: string): Promise<void> {
-  if (proc !== null && proc.exitCode === null && proc.signalCode === null) {
-    const exited = new Promise<void>((r) => proc.once("exit", () => r()));
+  if (proc !== null && proc.pid !== undefined) {
+    const pid = proc.pid;
+    const running = proc.exitCode === null && proc.signalCode === null;
+    const exited = running ? new Promise<void>((r) => proc.once("exit", () => r())) : Promise.resolve();
     // Its whole process group (startChromium spawns it as a group leader):
     // the renderer, GPU and crash-handler helpers write into the profile too.
-    try { if (proc.pid !== undefined) process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); }
+    try { process.kill(-pid, "SIGKILL"); } catch { if (running) proc.kill("SIGKILL"); }
     await Promise.race([exited, new Promise((r) => setTimeout(r, 5_000))]);
+    for (const end = Date.now() + 5_000; groupAlive(pid) && Date.now() < end;) await new Promise((r) => setTimeout(r, 25));
   }
   rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

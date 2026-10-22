@@ -430,7 +430,7 @@ function keepNamesWhole(node) {
 function askCellWords(parts, text) {
   if (!Array.isArray(parts) || !parts.length) return document.createTextNode(text == null ? '' : String(text));
   const frag = document.createDocumentFragment();
-  for (const p of parts) frag.append(p.kind === 'code' ? nameCode(p.text) : countWords(p.text));
+  for (const p of parts) frag.append(partNode(p, nameCode, countWords));
   return frag;
 }
 /** A name in a line whose column can be narrower than WHOLE_MAX characters
@@ -496,7 +496,7 @@ function countWords(text) {
 function textParts(parts, text) {
   if (!Array.isArray(parts) || !parts.length) return countWords(text);
   const frag = document.createDocumentFragment();
-  for (const p of parts) frag.append(p.kind === 'code' ? ownCode(p.text) : p.kind === 'link' ? placeLink(p) : countWords(p.text));
+  for (const p of parts) frag.append(p.kind === 'link' ? placeLink(p) : partNode(p, ownCode, countWords));
   return frag;
 }
 /** A link part names a place, never an address (dashboard.md §4.25, *The
@@ -854,10 +854,11 @@ function sentenceNode(parts, cls, md, at) {
       if (!code && list[i + 1] && list[i + 1].kind === 'code') code = s.appendChild(el('code'));
       (code || s).append(maskChip(p));
     } else if (p.kind === 'time') {
-      // A moment (ISO): the local clock time, as each turn's time is drawn.
+      // A moment (ISO): the local clock time, as each turn's time is drawn;
+      // with `clock` (the end of a send rule) its day too, as momentNode.
       // With `step` (a Your secrets card), a link to the step that shows it.
       code = null;
-      const time = el('time', { datetime: p.text, text: hhmm(p.text) || p.text });
+      const time = p.clock ? momentNode(p.text) : el('time', { datetime: p.text, text: hhmm(p.text) || p.text });
       s.append(p.step ? stepLink(p.step, time) : time);
     } else if (p.ask) {
       // The Approvals row Mandu filed ("…asked for your OK in Approvals").
@@ -1113,6 +1114,39 @@ function clockWords(ms, nowMs) {
   const pad = (k) => String(k).padStart(2, '0');
   const year = d.getFullYear() === now.getFullYear() ? '' : ', ' + d.getFullYear();
   return MONTHS[d.getMonth()] + ' ' + d.getDate() + year + ', ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+/** A moment as a full date for a hover: "Tuesday, Dec 1, 2026, 09:00", in
+ *  the local clock, the year always named. */
+function fullClockWords(ms) {
+  const d = new Date(ms);
+  const pad = (k) => String(k).padStart(2, '0');
+  return WEEKDAYS[d.getDay()] + ', ' + MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear() + ', ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+/** A moment a server part names (`{kind: 'time', text: ISO}`, the end of a
+ *  send rule; dashboard.md §4.25u, *A rule with an end date says when*):
+ *  <time datetime="ISO" title="Tuesday, Dec 1, 2026, 09:00">Dec 1, 09:00</time>,
+ *  in the reader clock as clockWords says it (the year when it is not this
+ *  year), the full date on hover. Text that is no date stays its text. */
+function momentNode(iso) {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return document.createTextNode(iso == null ? '' : String(iso));
+  return el('time', { class: 'moment', datetime: String(iso), title: fullClockWords(ms), text: clockWords(ms) });
+}
+/** How long until `ms`: "ends in 9 days", "ends in 5 hours", "ends in 1
+ *  minute", "ends in under a minute". */
+function endsIn(ms) {
+  const m = Math.round(Math.max(0, ms - Date.now()) / 60_000);
+  if (m < 1) return 'ends in under a minute';
+  if (m < 60) return 'ends in ' + n(m, 'minute', 'minutes');
+  const h = Math.round(m / 60);
+  if (h < 24) return 'ends in ' + n(h, 'hour', 'hours');
+  return 'ends in ' + n(Math.round(h / 24), 'day', 'days');
+}
+/** One part of a server sentence: a name as `code` draws it, a moment as
+ *  momentNode, any other kind (words, or a kind this page does not know)
+ *  as `words` draws its text. */
+function partNode(p, code, words) {
+  return p.kind === 'code' ? code(p.text) : p.kind === 'time' ? momentNode(p.text) : words(p.text);
 }
 /** When something happened, absolute and relative (dashboard.md §4.25u):
  *  <time datetime="ISO">Sep 30, 14:12 · 2 days ago</time>, text only, in
@@ -4874,7 +4908,7 @@ function rowList(rows, cls) {
   const ul = el('ul', { class: cls });
   for (const r of rows || []) {
     const li = el('li');
-    for (const p of r) li.append(p.kind === 'code' ? nameCode(p.text) : document.createTextNode(p.text));
+    for (const p of r) li.append(partNode(p, nameCode, (text) => document.createTextNode(text)));
     ul.append(li);
   }
   return ul;
@@ -5538,7 +5572,7 @@ function ruleWords(r) {
       r.opens && r.level !== 'public' ? r.opens : null,
       ...(r.bindings || []), ...(r.values || []).flatMap((v) => [v.key, ...(v.bindings || [])])];
   }
-  return [r.subject, r.reach, r.effect];
+  return [r.subject, r.reach, r.effect, r.until ? untilWords(r.until) : null];
 }
 /** Does row `r` hold the text `q` (findText) in the words it draws? */
 function ruleMatches(r, q) {
@@ -5659,6 +5693,9 @@ function renderRules() {
         reach: words.reach,
         reachParts: partsOf(words.reachParts),
         effect: words.effect,
+        // A send rule with an end still to come: that moment (ISO), drawn
+        // after its effect (§4.25u, *A rule with an end date says when*).
+        until: typeof words.until === 'string' && words.until ? words.until : null,
         // The menu of a send rule has the dot an answer with the same words
         // has (§4.25u, the dot of a send rule): red for Always blocked,
         // green for Always allowed; expired, audit or off, grey. A connection
@@ -5934,8 +5971,21 @@ function ruleSubject(r) {
   return el('span', { class: 'rule-subject' }, fitWords(parts, r.subject));
 }
 
-/** The effect of a rule: a menu when it can be turned around, else words. */
+/** The effect of a rule, and under it, for a rule with an end still to
+ *  come, the line "until Dec 1, 09:00" (§4.25u, *A rule with an end date
+ *  says when*), so the row reads "Always allowed until Dec 1, 09:00". */
 function effectCell(r, row) {
+  const cell = effectWords(r, row);
+  if (!r.until) return cell;
+  return el('div', { class: 'rule-effect' }, cell, el('div', { class: 'dim rule-until' }, 'until ', momentNode(r.until)));
+}
+/** "until Dec 1, 09:00", as the row draws it, for Find. */
+function untilWords(iso) {
+  const ms = Date.parse(iso);
+  return 'until ' + (Number.isFinite(ms) ? clockWords(ms) : iso);
+}
+/** The effect of a rule: a menu when it can be turned around, else words. */
+function effectWords(r, row) {
   const cls = r.effectClass === 'ok' ? 'allow' : r.effectClass === 'bad' ? 'block' : 'none';
   if (r.flip) {
     const sel = el('select', { class: 'effect-select', 'aria-label': 'What happens for ' + r.subject });
@@ -5961,6 +6011,11 @@ function effectCell(r, row) {
 function ruleDetail(r) {
   const box = el('div', { class: 'rule-detail', role: 'listitem', 'aria-label': 'About ' + r.subject });
   if (r.asked) box.append(askedLine(r.asked));
+  // A rule with an end: the row words again, and how long is left.
+  if (r.until) {
+    const ms = Date.parse(r.until);
+    box.append(el('div', { class: 'rule-ends' }, r.effect + ' until ', momentNode(r.until), Number.isFinite(ms) ? ', ' + endsIn(ms) + '.' : '.'));
+  }
   if (r.origin) box.append(originLine(r.origin));
   if (r.used) box.append(el('div', { class: 'dim', text: r.used }));
   if (r.sourceNote) box.append(el('div', { class: 'dim rule-source-note', text: r.sourceNote }));
@@ -9094,7 +9149,7 @@ function renderSuggestion(s) {
   const ul = el('ul', { class: 'proposal-rows suggestion-rows' });
   rows.forEach((row, i) => {
     const li = el('li', { class: row.loosens ? 'loosens' : '' });
-    for (const p of row.parts || []) li.append(p.kind === 'code' ? nameCode(p.text) : document.createTextNode(p.text));
+    for (const p of row.parts || []) li.append(partNode(p, nameCode, (text) => document.createTextNode(text)));
     if (row.loosens) li.append(el('span', { class: 'tag-loosens', text: 'loosens protection' }));
     // A wide row says so beside its words; the foot says what it opens.
     if (row.overBroad) li.append(el('span', { class: 'tag-loosens tag-wide', text: 'Wide: type ALLOW' }));
