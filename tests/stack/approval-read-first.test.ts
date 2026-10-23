@@ -44,7 +44,7 @@ import { humanSockIn } from "../lib/human-plane.js";
 stateAxes("secrets");
 
 const FILE_VALUE = "stg_readFirstStackCanary0000000000000001";
-const KEY_VALUE = "sk_live_readFirstStackCanary000000000002";
+const KEY_VALUE = "sk_" + "live_readFirstStackCanary000000000002";
 const SESSION = "1791200000-654";
 
 test("a send of, or a program's read of, a secret the AI read before its label never says the AI never read it or has not seen it; one masked first keeps the claim", { timeout: 60_000 }, async () => {

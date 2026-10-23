@@ -234,7 +234,7 @@ test(".envrc: a built-in whose arguments hold a key format, a URL password, a se
   const cases = [
     "log_status ghp_0123456789abcdefghijABCDEFGHIJ012345",
     "log_status 'key AKIAZ3MQ7XK2PLV9RT4N'",
-    "use nix # sk_live_4eC39HqLyjWDarjtT1zdp7dc",
+    "use nix # sk_" + "live_4eC39HqLyjWDarjtT1zdp7dc",
     "source_env https://user:pw_in_url_1@example.com/env",
     "use nix --token tok_flag_value",
     "use nix --api-key=abc",

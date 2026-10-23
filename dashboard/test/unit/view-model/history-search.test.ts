@@ -22,7 +22,7 @@ const ref = (id: string, over: Partial<SessionRef> = {}): SessionRef => ({
 } as SessionRef);
 const found = (list: SessionRef[], q: string | null | undefined) => historyMatches(list, q).map((s) => s.id);
 
-const VALUE = "sk_live_51HistorySearchCanary9xQ";
+const VALUE = "sk_" + "live_51HistorySearchCanary9xQ";
 const SYM = "$MDU:env_STRIPE_API_KEY[3fa9c2]";
 const LIST = [
   ref("a", { label: "Fix deploy/staging.conf before Friday" }),

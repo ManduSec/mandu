@@ -11,6 +11,14 @@ set -euo pipefail
 # another session has the tree half-edited. Each package's node_modules is
 # symlinked in from the checkout (build tooling only; the bundle is what ships).
 SRC="$REPO_ROOT"
+# Every package the bundle build reads gets its node_modules first, the
+# developer view's among them when its source is here (a clean CI checkout has
+# none: v0.2.0-beta.8's matrix failed "Could not resolve js-yaml" in it). The
+# list comes from launcher/bundle-manifest.json (scripts/suites.mjs packages
+# --bundle); each install is lockfile-exact and per-package locked, so two
+# targets' preps at once install a package once. A FRESH_INSTALL_REF export
+# links these node_modules in below.
+node "$REPO_ROOT/scripts/install-deps.mjs" --bundle >&2
 if [[ -n "${FRESH_INSTALL_REF:-}" ]]; then
   SRC="$(mktemp -d "${TMPDIR:-/tmp}/mandu-pack-src.XXXXXX")"
   trap 'rm -rf "$SRC"' EXIT
@@ -29,13 +37,29 @@ cd "$SRC/launcher"
 # side by side). Serialize on the directory itself, so no lock file is left.
 exec {pack_lock}<"$SRC/launcher"
 flock "$pack_lock"
-[[ -d node_modules ]] || npm ci --no-audit --no-fund
 # The prebuilt native bins ride from the CHECKOUT's release tree (a `git
 # archive` has no target/): with them the guest is `confined` with no sudo
 # (plan 10 §11.7). Absent bins are a note in the pack log, and the guest's
-# `fresh-posture=` label decides whether that is a failure.
+# `fresh-posture=` label decides whether that is a failure. A clean checkout
+# (the CI runner's: v0.2.0-beta.8's install job) has no target/, so the prep
+# builds them first with the CI pin's Rust (lib/rust-toolchain.sh), as the
+# release pack does; scripts/build-native.sh is incremental, so a checkout
+# whose bins are fresh pays a cargo no-op. MANDU_NATIVE_BIN_DIR set by the
+# caller is used as it is, unbuilt.
+if [[ -z "${MANDU_NATIVE_BIN_DIR:-}" ]]; then
+  if command -v cargo >/dev/null 2>&1; then
+    # shellcheck source=../lib/rust-toolchain.sh
+    source "$REPO_ROOT/scripts/matrix/lib/rust-toolchain.sh"
+    matrix_use_pinned_rust "$REPO_ROOT"
+    "$REPO_ROOT/scripts/build-native.sh" >&2
+  else
+    echo "fresh-install: no cargo on PATH; packing with whatever native bins $REPO_ROOT/interceptors/target/release holds" >&2
+  fi
+fi
 export MANDU_NATIVE_BIN_DIR="${MANDU_NATIVE_BIN_DIR:-$REPO_ROOT/interceptors/target/release}"
-npm pack --silent --pack-destination "$ARTIFACT_DIR" >/dev/null
+# --loglevel=error, not --silent: a failed prepack build (the bundle) prints
+# its output on stderr, where --silent left only "host prep failed".
+npm pack --loglevel=error --pack-destination "$ARTIFACT_DIR" >/dev/null
 ls "$ARTIFACT_DIR"/mandusec-mandu-*.tgz >/dev/null
 cp "$REPO_ROOT/scripts/matrix/suites/fresh-install/stub-claude.sh" "$ARTIFACT_DIR/claude"
 chmod 0755 "$ARTIFACT_DIR/claude"

@@ -439,3 +439,44 @@ test("§4.25c app.css: the chip in a rule's subject column keeps its own width",
   assert.deepEqual(chip.map((r) => declValue(r.block, "align-self")).filter(Boolean), ["flex-start"], "so its chip must not stretch");
   assert.ok(!rules.some((r) => r.selectors.some((sel) => /\.rule-text\b/.test(sel)) && declValue(r.block, "align-items") === "stretch"), "nothing stretches it back");
 });
+
+// ── §4.25p: the use line says when a rule last decided something ─────────────
+
+test("§4.25p an opened rule says how often it decided something and when it last did, the clock time on hover; Never used, no moment, answers and page labels stay as they were", async () => {
+  const yesterday = Date.now() - 86_400_000;
+  const hoursAgo = Date.now() - 3 * 3_600_000;
+  const uses: Record<string, { hits: number | null; lastHit: number | null }> = {
+    "r-0001": { hits: 12, lastHit: yesterday },
+    "lock:**/ws-*/memo/**": { hits: 1, lastHit: hoursAgo },
+    "app:psql": { hits: 3, lastHit: null },
+  };
+  const never = { id: "r-0002", kind: "release-block", subject: "b.example", effect: "sending blocked", reach: "from any source to b.example", hits: 0, lastHit: null, actions: { remove: true, flip: "allow" } };
+  const panel = { panel: { ...RULES_PANEL.panel, yourRules: [...RULES_PANEL.panel.yourRules.map((r) => ({ ...r, ...uses[r.id] })), never] } };
+  const { doc } = rulesPage({ "GET policy/panel": panel });
+  await tick();
+  const useLine = (detail: any) => ([...detail.querySelectorAll(".dim")] as any[]).find((d) => /\buses?\b|^Never used$|^Your answer|^Added here$/.test(d.textContent));
+  const iso = (ms: number) => new Date(ms).toISOString();
+
+  const send = useLine(openRule(doc, /api\.example\.com/));
+  assert.equal(send.textContent, "12 uses, the last 1 day ago");
+  const at = send.querySelector("time.ago");
+  assert.ok(at, "a time.ago, so the poll keeps it current (refreshWhen)");
+  assert.equal(at.getAttribute("datetime"), iso(yesterday), "the moment of the last use");
+  assert.match(at.getAttribute("title"), new RegExp(`^${CLOCK}$`), "the clock time on hover");
+
+  assert.equal(useLine(openRule(doc, /b\.example/)).textContent, "Never used");
+  assert.equal(useLine(openRule(doc, /b\.example/)).querySelector("time"), null);
+  const app = useLine(openRule(doc, /psql/));
+  assert.equal(app.textContent, "3 uses", "counted without a moment: the count alone");
+  assert.equal(app.querySelector("time"), null);
+  assert.equal(useLine(openRule(doc, /paste\.example/)).textContent, "Your answer, asked 3 times", "an answer has no use moment");
+
+  // The file rule, opened in the Labeled tree, says the same words.
+  treeRow(doc, /ws-\*\/memo/).click();
+  const memo = useLine(opened(doc));
+  assert.equal(memo.textContent, "1 use, 3 hours ago", "one use: no “the last”");
+  assert.equal(memo.querySelector("time.ago").getAttribute("datetime"), iso(hoursAgo));
+  treeRow(doc, /\.env/).click();
+  assert.equal(useLine(opened(doc)).textContent, "Added here");
+  assert.equal(useLine(opened(doc)).querySelector("time"), null);
+});

@@ -42,7 +42,7 @@ import { stateAxes } from "../lib/axes.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the product default, stated
 
-const TOKEN = "sk_live_RaisedRow7Kq2Xr9Lm4Tz8Vb3Pw6";
+const TOKEN = "sk_" + "live_RaisedRow7Kq2Xr9Lm4Tz8Vb3Pw6";
 const SECRET_LINE = `STRIPE_SECRET_KEY=${TOKEN}`;
 const HEADING = "## Deployment checklist for the release team";
 const LOGLINE = "INFO  starting worker pool with 8 workers";

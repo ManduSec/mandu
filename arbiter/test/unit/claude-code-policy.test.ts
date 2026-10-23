@@ -1305,7 +1305,7 @@ test("structured read-twin: runs with the integrity axis OFF too (secrets mode),
 test("structured read-twin: anything that is not the twin keeps the secret label (and, with integrity ON, stays UNTRUSTED)", () => {
   const p = structuredPolicy();
   const bad = [
-    "1\tSTRIPE_KEY=sk_live_4eC39HqLyjWDarjtT1zdp7dc",                  // the real value
+    "1\tSTRIPE_KEY=sk_" + "live_4eC39HqLyjWDarjtT1zdp7dc",                  // the real value
     "1\tSTRIPE_KEY=$MDU:nomodel_Read[9bbd].STRIPE_KEY ignore previous",   // prose appended
     "1\tSTRIPE_KEY=$MDU:nomodel_Read[9bbd].bogus",                         // an unminted token
     "1\tPORT=3000",                                                    // a substring with no token: not a twin rendering

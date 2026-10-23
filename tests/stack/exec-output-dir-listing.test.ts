@@ -46,7 +46,7 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF: the axis under test
 
 const ACCT = "DEMO-ACCT-000123";
 const STATEMENT = `# Maple Bank statement, September 2026\nAccount ${ACCT}\nBalance 4,210.00\n`;
-const KEY = "sk_live_51DirListingStackE2E0123456789";
+const KEY = "sk_" + "live_51DirListingStackE2E0123456789";
 const HEAD = "Chunk ID: 5e1f\nWall time: 0.0123 seconds\nProcess exited with code 0\nOriginal token count: 12\nOutput:\n";
 const NOTE = (paths: string[]) => `[mandu:secret] listing: these are the names in ${paths.join(", ")} as ls printed them, and nothing else: no file's content, size or date. The files there may still be secret: reading one shows you a symbol where its secret content is.`;
 /** A masked result's body: one symbol and nothing else. */

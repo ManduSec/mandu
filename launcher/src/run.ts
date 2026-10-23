@@ -941,6 +941,11 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
   // human-plane directories (one of the two walls `humanPlaneWalled` reads).
   let humanDenied = false;
   let launchRecord: LaunchRecord | null = null;
+  // Whether the launch's claim said the agent's world is walled off from
+  // the human plane (undefined: no claim was made). Rides the
+  // `launch_posture` event so the session's last line can say Mandu could
+  // not check a record its agent could have written (dashboard.md §4.25ah).
+  let humanPlaneWalledAtLaunch: boolean | undefined;
   // §10.1.1: the human-plane watch of a walled launch (human-plane-watch.ts).
   let humanWatch: HumanPlaneWatch | null = null;
   // Plan 10 §11.17: the watch that follows the agent's MCP config.
@@ -1795,6 +1800,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     // An unwalled launch waits for its link first, or its own record could
     // reach the arbiter before the dashboard asks and cost it the link. A
     // walled one records nothing that stops minting, so the two overlap.
+    humanPlaneWalledAtLaunch = claim.humanPlaneWalled === true;
     if (claim.humanPlaneWalled !== true) await signInAsk.catch(() => null);
     launchRecord = await beginLaunchRecord(plan.arbiterHumanSock, claim, cacheEpochDeps);
     const unrecorded = unrecordedExposureRefusal(plan.arbiterHumanSock, claim, launchRecord, { bestEffort: plan.bestEffort });
@@ -1930,6 +1936,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     ...(secretResult && secretResult.posture !== "off"
       ? { secrets: { posture: secretResult.posture, ...(secretResult.gap ? { gap: secretResult.gap } : {}) } }
       : {}),
+    ...(humanPlaneWalledAtLaunch !== undefined ? { humanPlaneWalled: humanPlaneWalledAtLaunch } : {}),
     protection: {
       mode: modeOf(plan.effectiveAxes),
       ...plan.effectiveAxes,

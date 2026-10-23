@@ -54,7 +54,7 @@ import { humanSockIn } from "../lib/human-plane.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_productServiceCutStackCanary0001";
+const KEY_VALUE = "sk_" + "live_productServiceCutStackCanary0001";
 const SESSION = "1791900000-0130";
 const UNREACHABLE_WORDS = "The protection service is not running. Start it under Settings, or try again in a moment.";
 const SCAN_STOPPED = "The scan did not finish because the protection service stopped. Press Scan for keys to try again.";

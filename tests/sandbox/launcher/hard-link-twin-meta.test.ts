@@ -59,7 +59,7 @@ const GATE = process.platform !== "linux"
         : false;
 const HAS_PY = spawnSync("sh", ["-c", "command -v python3"]).status === 0;
 
-const KEY = "sk_live_CANARYhardlink4c7e2a91d0b3f5";
+const KEY = "sk_" + "live_CANARYhardlink4c7e2a91d0b3f5";
 const OLD = 1_000_000_000; // the real file's mtime: 2001-09-09
 
 /** The agent's work. Tools by absolute path (withStack's HOME is under

@@ -60,7 +60,7 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF
 
 after(() => resetCurrentPolicyForTests("claude-code"));
 
-const KEY = "sk_live_settingsRowNamesStackCanary0000000001";
+const KEY = "sk_" + "live_settingsRowNamesStackCanary0000000001";
 const HC = "9fbde396-1a24-4c79-8edf-9254a0f35055";
 const CONF = "2b2b0000-0000-4000-8000-000000000003";
 

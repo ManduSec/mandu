@@ -1317,6 +1317,10 @@ export interface AgentPageInput {
   /** The view-model of the BELIEVED events only (null: none), for the claims
    *  "Your secrets" makes; absent in pure use = `vm`. */
   believedVm?: SessionViewModel | null;
+  /** Mandu could not check the session's record (event-model.ts
+   *  `recordUnchecked`; dashboard.md §4.25ah): "Your secrets" says so
+   *  rather than that no secret came up. Absent = checked. */
+  unchecked?: boolean;
   /** The person's home folder: "Your secrets" and a step's words name a
    *  file under it `~/…` (the route's; absent in pure use = paths as
    *  recorded). */
@@ -1775,7 +1779,7 @@ export function buildAgentPage(input: AgentPageInput): AgentPageVM {
     // check may still take it away. A card's time opens a step only when
     // the story below draws it (an action step, home.js `data-step-id`).
     secrets: pageSecrets(vm, input.events ?? [], input.believedVm, input.home, shown, later,
-      { dev, ...(show.secrets ? { cap: SECRET_ALL_CAP } : {}) }),
+      { dev, ...(show.secrets ? { cap: SECRET_ALL_CAP } : {}), ...(input.unchecked ? { unchecked: true } : {}) }),
     ...(show.secrets ? { allSecrets: true as const } : {}),
     finding: vm ? leakFinding(vm, all, shown) : null,
     browser: browserStory(input.events ?? []),

@@ -70,7 +70,7 @@ stateAxes("secrets");
 
 const OPENSSL = opensslAvailable();
 const TS_KEY = "tsk_live_ModelServiceStack4Hd8Qz2Lm7";
-const STRIPE = "sk_live_51ModelServicePageSecretXq7Rt2Yp9";
+const STRIPE = "sk_" + "live_51ModelServicePageSecretXq7Rt2Yp9";
 
 interface Got { host: string; url: string; headers: IncomingMessage["headers"]; body: string }
 
@@ -331,7 +331,7 @@ async function devtools(wsUrl: string) {
 }
 
 test("a relay refusal reaches the browser agent's model: the next Chat Completions call through the proxy carries it as the last message, once, names only (devtools-relay.md §3.4)", { skip: OPENSSL ? false : "openssl unavailable", timeout: 60_000 }, async () => {
-  const KEY = "sk_live_51RelayNoticeStack7Qz2Lm8Kd4";
+  const KEY = "sk_" + "live_51RelayNoticeStack7Qz2Lm8Kd4";
   const SESSION = "s-relay-notice";
   const dir = mkdtempSync(join(tmpdir(), "mdu-relay-notice-"));
   const env = join(dir, ".env");

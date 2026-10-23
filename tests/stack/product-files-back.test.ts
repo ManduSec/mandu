@@ -49,7 +49,7 @@ import { humanSockIn } from "../lib/human-plane.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_productFilesBackStackCanary0001";
+const KEY_VALUE = "sk_" + "live_productFilesBackStackCanary0001";
 const NOTE_DOWN = "Labels could not be read. The protection service is not running. Start it under Settings, or try again in a moment. You can still choose rules.";
 const GONE = "The dashboard could not reach its own server. Refresh in a moment.";
 

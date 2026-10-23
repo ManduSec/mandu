@@ -14,17 +14,14 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createServer, type Server } from "node:net";
+import type { ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { once } from "node:events";
-import { pollUntil, SERVER_TEST_TIMEOUT_MS, START_DEADLINE_MS, waitForPort } from "./server-up.js";
+import { pollUntil, SERVER_TEST_TIMEOUT_MS, silentArbiter, spawnServer, START_DEADLINE_MS, stopServer, waitForExit, waitForPort } from "./server-up.js";
 
 const PKG_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const TSX = join(PKG_DIR, "node_modules", ".bin", "tsx");
 const SERVER_MAIN = join(PKG_DIR, "src", "server-main.ts");
 const UID = process.getuid?.() ?? 0;
 
@@ -32,7 +29,7 @@ interface Rig {
   root: string;
   base: string;
   arbSock: string;
-  arb: Server;
+  arb: { close: () => Promise<void> };
   cleanup: () => Promise<void>;
 }
 
@@ -40,12 +37,10 @@ async function rig(): Promise<Rig> {
   const root = realpathSync(mkdtempSync(join(existsSync("/tmp") ? "/tmp" : tmpdir(), "mdu-dfb-")));
   mkdirSync(join(root, "T".repeat(70))); // the long TMPDIR (tsx caches under it)
   const arbSock = join(root, "arbiter.sock"); // a stand-in arbiter, pinned explicitly
-  const arb = createServer((s) => s.on("data", () => {}));
-  arb.listen(arbSock);
-  await once(arb, "listening");
+  const arb = await silentArbiter(arbSock);
   return {
     root, base: join(root, `mandu-${UID}`), arbSock, arb,
-    cleanup: async () => { arb.close(); rmSync(root, { recursive: true, force: true }); },
+    cleanup: async () => { await arb.close(); rmSync(root, { recursive: true, force: true }); },
   };
 }
 
@@ -65,14 +60,9 @@ function launch(r: Rig): { child: ChildProcess; stderr: () => string } {
   delete env["MANDU_RUNTIME_DIR"];
   delete env["XDG_RUNTIME_DIR"];
   delete env["DASHBOARD_HOST"];
-  const child = spawn(TSX, [SERVER_MAIN], { cwd: PKG_DIR, env, stdio: ["ignore", "ignore", "pipe"] });
+  const child = spawnServer(SERVER_MAIN, { cwd: PKG_DIR, env, stdio: ["ignore", "ignore", "pipe"] });
   child.stderr!.on("data", (d: Buffer) => { stderr += d.toString(); });
   return { child, stderr: () => stderr };
-}
-
-async function exited(child: ChildProcess, ms = 5000): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((r) => { child.once("exit", () => r()); setTimeout(r, ms).unref(); });
 }
 
 test("absent fallback: created 0700 and the dashboard registers inside it", { timeout: SERVER_TEST_TIMEOUT_MS }, async () => {
@@ -89,8 +79,7 @@ test("absent fallback: created 0700 and the dashboard registers inside it", { ti
     assert.equal(statSync(r.base).mode & 0o777, 0o700, "created private");
     assert.equal(existsSync(join(r.root, "T".repeat(70), "mandu")), false, "nothing under the long TMPDIR");
   } finally {
-    child.kill("SIGTERM");
-    await exited(child);
+    await stopServer(child);
     await r.cleanup();
   }
 });
@@ -101,14 +90,13 @@ test("a SHARED (0755) fallback: the dashboard refuses to start — exit 1, never
   chmodSync(r.base, 0o755);
   const { child, stderr } = launch(r);
   try {
-    await exited(child, START_DEADLINE_MS); // a deadline: returns at the exit
+    await waitForExit(child); // a deadline: returns at the exit
     assert.equal(child.exitCode, 1, `exit 1 (stderr: ${stderr()})`);
     assert.match(stderr(), /\[dashboard\] fatal: the Mandu runtime dir .*mandu-\d+ is shared \(mode 0755/);
     assert.equal(existsSync(join(r.root, "port")), false, "it never listened");
     assert.deepEqual(readdirSync(r.base), [], "no registry entry in a dir it does not trust");
   } finally {
-    child.kill("SIGKILL");
-    await exited(child);
+    await stopServer(child);
     await r.cleanup();
   }
 });

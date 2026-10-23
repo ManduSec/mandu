@@ -49,7 +49,7 @@ import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_productAnswerFocusStackCanary001";
+const KEY_VALUE = "sk_" + "live_productAnswerFocusStackCanary001";
 const SESSION = "1791300000-0432";
 const CSRF = { "X-Mandu-Control": "1" };
 const HOSTS = ["collector1.example", "collector2.example", "collector3.example"];

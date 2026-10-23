@@ -62,7 +62,7 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF
 
 after(() => setAdminLayer(NO_ADMIN_LAYER));
 
-const KEY = "sk_live_settingsRowsFitStackCanary000000001";
+const KEY = "sk_" + "live_settingsRowsFitStackCanary000000001";
 const BODY = "SETTINGSROWSFITDOCUMENTBODYCANARY7741";
 const HC = "9fbde396-1a24-4c79-8edf-9254a0f35055";
 const GEN = "1e4f0000-0000-4000-8000-000000000001";

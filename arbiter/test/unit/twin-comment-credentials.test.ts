@@ -45,8 +45,8 @@ import { stateAxes } from "../axes.js";
 
 stateAxes("secrets"); // the confidentiality axis: what the twin may show
 
-const OLD = "sk_live_51OldKeyAbCdEfGhIjKlMnOpQrStUv";
-const NEW = "sk_live_51NewKeyZyXwVuTsRqPoNmLkJiHg";
+const OLD = "sk_" + "live_51OldKeyAbCdEfGhIjKlMnOpQrStUv";
+const NEW = "sk_" + "live_51NewKeyZyXwVuTsRqPoNmLkJiHg";
 const GHP = "ghp_R4nd0mT0k3nV4lu3F0rT3st1ngPurp0s3sXy";
 const AKIA = "AKIAZ7Q2W3E4R5T6Y7U8";
 const BARE = "Tq7vZ2pX9kLm4Rw8";

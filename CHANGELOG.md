@@ -157,6 +157,15 @@ internal pilot and was never published.)
   and hosts only, never a value; printed after the agent's screen is gone,
   so `claude -p --output-format json` output stays clean.
   `--no-session-summary` or `MANDU_SESSION_SUMMARY=0` turns it off.
+- On a computer where Mandu cannot keep the agent away from its own
+  controls (no bubblewrap that can make a user namespace and no file
+  guard, as on GitHub's Ubuntu runner, where the launch says "credential
+  files GATED, not masked"), the session's last line no longer says "no
+  secret came up": Mandu cannot check what such a session recorded, so it
+  says ``mandu: Mandu could not check this session's record (on this
+  computer the agent could reach Mandu's own controls), so it shows no
+  count · why: `mandu doctor` and `mandu log` ``. The session's page in the
+  dashboard says the same under Your secrets.
 - Your MCP servers' tokens are protected with no label of yours: an MCP or
   editor config whose servers hold a credential (`.mcp.json`,
   `~/.claude.json`, Codex's `~/.codex/config.toml`, `~/.cursor/mcp.json`,

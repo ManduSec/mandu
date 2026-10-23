@@ -49,11 +49,43 @@ for deps in "none" "cargo" "node" "cargo node"; do
   bash -n "$d/guest-runner.sh" && pass "deps='$deps': rendered guest script parses" || fail "deps='$deps': guest script syntax"
 done
 d="$WORK/r-cargo"
+# The guest's Rust is the CI pin (scripts/ci/pins.env RUST_VERSION), not
+# `stable` (os-test-matrix.md §4.1).
+pin="$(sed -n 's/^RUST_VERSION=//p' "$HERE/../ci/pins.env")"
+n_pin="$(grep -cF -- "--default-toolchain \"$pin\"" "$d/guest-runner.sh")"
+[[ "$n_pin" -ge 1 ]] && ! grep -q 'default-toolchain stable' "$d/guest-runner.sh" \
+  && pass "guest rustup installs the pinned toolchain $pin" || fail "guest toolchain: $(grep -n default-toolchain "$d/guest-runner.sh")"
+grep -qE '@(RUST|RUN_AS)@' "$d/guest-runner.sh" && fail "@RUST@/@RUN_AS@ left unsubstituted" || pass "@RUST@ and @RUN_AS@ substituted"
+grep -q '^RUN_AS=""$' "$d/guest-runner.sh" && pass "a suite with no run-as header runs as root" || fail "run-as: $(grep -n '^RUN_AS=' "$d/guest-runner.sh")"
+# A `# run-as:` suite (os-test-matrix.md §4.2): its user, its own copy and rustup.
+printf '#!/usr/bin/env bash\n# deps: cargo node\n# run-as: matrix\nexit 0\n' > "$WORK/as-suite.sh"
+d2="$WORK/r-as"; mkdir -p "$d2"
+( source "$MATRIX/lib/common.sh"; source "$MATRIX/lib/qemu.sh"
+  RUN_WORK="$d2" TARGET_NAME=t LABELS=l SYSCTLS="" MATRIX_DIR="$WORK/m"
+  mkdir -p "$WORK/m/suites"; cp "$WORK/as-suite.sh" "$WORK/m/suites/as.sh"
+  qemu_userdata as "cargo node" "$d2/user-data" ) >/dev/null 2>&1
+grep -q '^RUN_AS="matrix"$' "$d2/guest-runner.sh" && pass "run-as: the header's user is the guest's RUN_AS" || fail "run-as header: $(grep -n '^RUN_AS=' "$d2/guest-runner.sh" 2>&1)"
+bash -n "$d2/guest-runner.sh" && pass "run-as: the rendered guest script parses" || fail "run-as: guest script syntax"
+grep -q 'runuser -u "$RUN_AS" -- env -i HOME="/home/$RUN_AS"' "$d2/guest-runner.sh" && grep -q '^"${AS\[@\]}" MATRIX_TARGET=' "$d2/guest-runner.sh" \
+  && pass "run-as: rustup and the suite run as the user, in a clean environment" || fail "run-as: runuser lines missing"
+# The guest's .git (qemu_git_dir): one commit, the checkout's HEAD, its tree in the index.
+head="$(git -C "$HERE/../.." rev-parse HEAD 2>/dev/null || true)"
+if [[ -n "$head" ]]; then
+  ( source "$MATRIX/lib/common.sh"; source "$MATRIX/lib/qemu.sh"; RUN_WORK="$WORK"; qemu_git_dir "$WORK/g.git" ) >/dev/null 2>&1
+  g="$(git --git-dir="$WORK/g.git" rev-parse HEAD 2>/dev/null)"
+  n="$(git --git-dir="$WORK/g.git" rev-list --count HEAD 2>/dev/null)"
+  t="$(git --git-dir="$WORK/g.git" write-tree 2>/dev/null)"
+  [[ "$g" == "$head" && "$n" == 1 && "$t" == "$(git -C "$HERE/../.." rev-parse 'HEAD^{tree}')" && ! -d "$WORK/g.git/hooks" ]] \
+    && pass "qemu_git_dir: a one-commit copy at HEAD, its index HEAD's tree, no hooks" || fail "qemu_git_dir: head=$g count=$n tree=$t"
+  grep -q 'cp -a /mnt/artifacts/.mandu-git "$WORK/.git"' "$d/guest-runner.sh" && pass "the guest's copy gets that .git" || fail "guest .git copy missing"
+else
+  pass "qemu_git_dir: not a git checkout here (skipped)"
+fi
 out="$(env -u HOME -u USER bash -c "$(grep -m1 '^export HOME=' "$d/guest-runner.sh"); echo \"\$HOME \$USER\"")"
 [[ "$out" == "/root root" ]] && pass "guest runner sets HOME/USER when cloud-init gives none" || fail "HOME/USER not set: '$out'"
 g_line="$(grep -n 'provisioning: all declared packages present' "$d/guest-runner.sh" | cut -d: -f1)"
 r_line="$(grep -n '=== running suite' "$d/guest-runner.sh" | cut -d: -f1)"
-c_line="$(grep -n 'rustup.rs' "$d/guest-runner.sh" | cut -d: -f1)"
+c_line="$(grep -n -m1 'rustup.rs' "$d/guest-runner.sh" | cut -d: -f1)"
 [[ -n "$g_line" && "$g_line" -lt "$c_line" && "$g_line" -lt "$r_line" ]] \
   && pass "gate runs before toolchain install and before the suite" || fail "gate order: gate=$g_line rustup=$c_line suite=$r_line"
 

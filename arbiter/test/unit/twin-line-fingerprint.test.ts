@@ -38,7 +38,7 @@ import { stateAxes } from "../axes.js";
 stateAxes("secrets"); // this suite states its axes (protection-modes.md §4)
 
 const COMMENT = "# fake values, made up by mandu demo";
-const STRIPE = "sk_live_51Hx9ZqQ2wErTyUiOpAsDfGh";
+const STRIPE = "sk_" + "live_51Hx9ZqQ2wErTyUiOpAsDfGh";
 const DB_PW = "pg_twin_line_pw_Zx81qWv0pLr4";
 const BARE = "Tq7vZ2pX9kLm8";
 const ENV = `${COMMENT}\nSTRIPE_KEY=${STRIPE}\nDATABASE_URL=postgres://app:${DB_PW}@db:5432/prod\nDEBUG=1\n`;

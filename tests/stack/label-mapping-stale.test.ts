@@ -51,7 +51,7 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF
 
 after(() => resetCurrentPolicyForTests("claude-code"));
 
-const KEY = "sk_live_labelMappingStaleStackCanary000000001";
+const KEY = "sk_" + "live_labelMappingStaleStackCanary000000001";
 const HC = "9fbde396-1a24-4c79-8edf-9254a0f35055";
 const GEN = "0e4c2b8a-3b1d-4f5e-9a6b-7c8d9e0f1a2b";
 

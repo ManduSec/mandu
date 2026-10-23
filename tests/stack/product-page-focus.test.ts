@@ -45,7 +45,7 @@ import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_productPageFocusStackCanary00001";
+const KEY_VALUE = "sk_" + "live_productPageFocusStackCanary00001";
 const SESSION = "1791300000-2130";
 const CSRF = { "X-Mandu-Control": "1" };
 

@@ -85,6 +85,12 @@ export interface LaunchPostureInput {
   /** The secret-confinement posture (confinement-posture.ts): first-class on
    *  the event so the dashboard chip never has to parse a banner line. */
   secrets?: { posture: string; gap?: string };
+  /** Whether the agent's world was walled off from the human-plane socket
+   *  (the launch's claim, human-plane.ts `humanPlaneWalled`; absent: no
+   *  claim was made). Display only, and only ever read to say LESS: false
+   *  makes the session's last line say Mandu could not check its record
+   *  (dashboard.md §4.25ah), so a forged copy can only hide a count. */
+  humanPlaneWalled?: boolean;
   /** The protection mode this session runs under (mode.ts effectiveAxes):
    *  first-class so the dashboard never infers it from classify reasons.
    *  `reported` = the attached arbiter answered with both axes itself; false
@@ -136,6 +142,7 @@ export function launchPostureEvent(input: LaunchPostureInput): Record<string, un
     dropped,
     ...(input.launcherVersion ? { launcherVersion: input.launcherVersion } : {}),
     ...(input.secrets ? { secrets: input.secrets } : {}),
+    ...(typeof input.humanPlaneWalled === "boolean" ? { humanPlaneWalled: input.humanPlaneWalled } : {}),
     ...(input.protection ? { protection: input.protection } : {}),
     ...(input.agentVersion ? { agentVersion: input.agentVersion } : {}),
     ...(input.timings ? { timings: input.timings } : {}),

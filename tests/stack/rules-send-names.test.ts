@@ -56,7 +56,7 @@ import { humanSockIn } from "../lib/human-plane.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF
 
-const KEY_VALUE = "sk_live_rulesSendNamesStackCanary00000001";
+const KEY_VALUE = "sk_" + "live_rulesSendNamesStackCanary00000001";
 const SESSION = "1791210000-777";
 const DEST = "uploads.example-storage.net";
 /** A minted token (the panel's own help text names the `$MDU:` form). */

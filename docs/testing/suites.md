@@ -52,6 +52,7 @@ One function or module; every push and MR, blocking.
 | `scripts.drill-tree` | off | `.` | `node --test scripts/test/drill-tree.test.mjs` | node |  |  |  | [design/testing/test-organization.md](../design/testing/test-organization.md) |
 | `scripts.fresh-agents-fake-model` | off | `.` | `node --test scripts/test/fresh-agents-fake-model.test.mjs` | node |  |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
 | `scripts.fresh-agents-host` | off | `.` | `node --test scripts/test/fresh-agents-host.test.mjs` | node |  |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
+| `scripts.fresh-install-host` | off | `.` | `node --test scripts/test/fresh-install-host.test.mjs` | node |  |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
 | `scripts.github-rules` | off | `.` | `node --test scripts/test/github-rules.test.mjs` | node |  |  |  | [design/testing/continuous-integration.md](../design/testing/continuous-integration.md) |
 | `scripts.install-deps` | off | `.` | `node --test scripts/test/install-deps.test.mjs` | node |  |  |  | [development.md](../development.md) |
 | `scripts.mandu-paths` | off | `.` | `node --test scripts/test/mandu-paths.test.mjs` | node |  |  |  | [design/architecture/on-disk-layout.md](../design/architecture/on-disk-layout.md) |
@@ -124,6 +125,7 @@ One Mandu package through its real interface (its socket, HTTP server or CLI), t
 | `scripts.matrix-provision` | off | `.` | `bash scripts/test/matrix-provision.test.sh` | bash |  |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
 | `scripts.matrix-reboot` | off | `.` | `bash scripts/test/matrix-reboot.test.sh` | bash |  |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
 | `scripts.matrix-record` | off | `.` | `bash scripts/test/matrix-record.test.sh` | bash |  |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
+| `scripts.matrix-rust-toolchain` | off | `.` | `bash scripts/test/matrix-rust-toolchain.test.sh` | bash |  |  |  | [design/testing/os-test-matrix.md](../design/testing/os-test-matrix.md) |
 | `scripts.ready-deadline` | off | `.` | `bash scripts/test/ready-deadline.test.sh` | bash, node |  |  |  | [design/architecture/runtime-instances.md](../design/architecture/runtime-instances.md) |
 | `scripts.require-userns` | off | `.` | `bash scripts/test/require-userns.test.sh` | bash |  |  |  | [design/testing/docker-e2e.md](../design/testing/docker-e2e.md) |
 | `scripts.test-all-lanes` | off | `.` | `bash scripts/test/test-all-lanes.test.sh` | bash, node |  |  |  | [design/testing/test-organization.md](../design/testing/test-organization.md) |

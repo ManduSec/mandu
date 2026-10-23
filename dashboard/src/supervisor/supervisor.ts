@@ -95,6 +95,8 @@ export class Supervisor {
    *  wipe earlier output. The file is still fresh per dashboard PROCESS. */
   private readonly truncatedLogs = new Set<ServiceId>();
   private readonly services: Record<ServiceId, ServiceRuntime>;
+  /** Set by close(): no service is spawned any more. */
+  private closed = false;
 
   constructor(opts: SupervisorOptions) {
     const log = opts.log ?? ((m: string) => console.error(`[supervisor] ${m}`));
@@ -703,9 +705,22 @@ export class Supervisor {
     return this.status();
   }
 
-  /** Stop everything (dashboard exit). Best-effort; never throws. */
+  /** Stop everything (Stop services, and close()). Best-effort; never throws. */
   async shutdownAll(): Promise<void> {
     await Promise.allSettled(SERVICE_IDS.map((id) => this.stop(id)));
+  }
+
+  /** Stop everything FOR GOOD: the dashboard is exiting (a signal, the test
+   *  owner gone, a self-restart). From here on no service is spawned: a
+   *  start still under way (the autostart awaits a hello probe, up to 1.5 s,
+   *  before each proxy's spawn) is refused at its spawn, which would
+   *  otherwise come while this stop waits on another service and outlive
+   *  the dashboard, a detached orphan in its own process group that nothing
+   *  stops (dashboard.md §4.8, *A start under way when the dashboard
+   *  exits*, 2026-10-23). Best-effort; never throws. */
+  async close(): Promise<void> {
+    this.closed = true;
+    await this.shutdownAll();
   }
 
   // ── launch / readiness ──────────────────────────────────────────────────────
@@ -733,6 +748,16 @@ export class Supervisor {
 
   private launch(id: ServiceId, extraEnv: NodeJS.ProcessEnv = {}, def: ServiceDefinition = this.services[id].def): Promise<void> {
     const svc = this.services[id];
+    // close() ran while this start was awaiting (a probe, the bundle check):
+    // spawning now would leave a child nobody stops. Checked synchronously
+    // before the spawn below, so a child either exists before close()'s stop
+    // looks for it or is never made.
+    if (this.closed) {
+      svc.state = "stopped";
+      svc.lastError = "not started: the dashboard is shutting down";
+      this.opts.log(`${id}: not started: the dashboard is shutting down`);
+      return Promise.reject(new Error(`${id}: not started: the dashboard is shutting down`));
+    }
 
     svc.state = "starting";
     svc.lastError = null;

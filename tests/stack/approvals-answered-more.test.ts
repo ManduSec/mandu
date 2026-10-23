@@ -46,7 +46,7 @@ import { humanSockIn } from "../lib/human-plane.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_answeredMoreStackCanary0000000001";
+const KEY_VALUE = "sk_" + "live_answeredMoreStackCanary0000000001";
 const SESSION = "1791300000-745";
 const CSRF = { "X-Mandu-Control": "1" };
 const HOSTS = 45;

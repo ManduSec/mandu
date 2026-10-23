@@ -400,6 +400,7 @@ const scriptTests = [
   scriptTest("bootstrap-empty-arrays", "scripts/test/bootstrap-empty-arrays.test.mjs", { doc: "docs/development.md" }),
   scriptTest("fresh-agents-fake-model", "scripts/test/fresh-agents-fake-model.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
   // The host prep's agents are the agent registry's npm agents.
+  scriptTest("fresh-install-host", "scripts/test/fresh-install-host.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
   scriptTest("fresh-agents-host", "scripts/test/fresh-agents-host.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
   scriptTest("node-major", "scripts/test/node-major.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
   // The npm release gate's host prep (what the guest installs, which
@@ -411,6 +412,7 @@ const scriptTests = [
   // The one path table: fails when a generated copy differs from it.
   scriptTest("mandu-paths", "scripts/test/mandu-paths.test.mjs", { doc: "docs/design/architecture/on-disk-layout.md" }),
   scriptTest("matrix-provision", "scripts/test/matrix-provision.test.sh", { doc: "docs/design/testing/os-test-matrix.md" }),
+  scriptTest("matrix-rust-toolchain", "scripts/test/matrix-rust-toolchain.test.sh", { doc: "docs/design/testing/os-test-matrix.md" }),
   scriptTest("matrix-reboot", "scripts/test/matrix-reboot.test.sh", { doc: "docs/design/testing/os-test-matrix.md" }),
   scriptTest("matrix-record", "scripts/test/matrix-record.test.sh", { doc: "docs/design/testing/os-test-matrix.md" }),
   // The qemu guests every VM harness registers for `mandu reap`.

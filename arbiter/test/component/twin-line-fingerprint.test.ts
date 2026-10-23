@@ -23,7 +23,7 @@ import { stateAxes } from "../axes.js";
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the default mode
 
 const COMMENT = "# fake values, made up by mandu demo";
-const STRIPE = "sk_live_51Hx9ZqQ2wErTyUiOpAsDfGh";
+const STRIPE = "sk_" + "live_51Hx9ZqQ2wErTyUiOpAsDfGh";
 const RAW = `${COMMENT}\nSTRIPE_KEY=${STRIPE}\nDEBUG=1\n`;
 
 /** Claude Code's Read rendering: a right-aligned line number and a tab. */

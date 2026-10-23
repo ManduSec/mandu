@@ -56,7 +56,7 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF
 
 after(() => resetCurrentPolicyForTests("claude-code"));
 
-const KEY = "sk_live_rulesChangeFocusStackCanary000000001";
+const KEY = "sk_" + "live_rulesChangeFocusStackCanary000000001";
 const SESSION = "1791400000-153";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

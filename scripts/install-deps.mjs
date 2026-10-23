@@ -18,6 +18,9 @@
 //   node ../../scripts/install-deps.mjs            # cwd = the package (../ from tests/)
 //   node scripts/install-deps.mjs <package-dir>    # from the repo root
 //   node scripts/install-deps.mjs --reach <dir>    # print the siblings its imports reach
+//   node scripts/install-deps.mjs --bundle         # every package the launcher's bundle build
+//                                                  # reads (suites.mjs packages --bundle), e.g.
+//                                                  # before `npm pack` in a clean checkout
 // A package counts as installed when its node_modules exists (test-all.sh's
 // rule). A missing one gets `npm ci` (a lockfile exists) or `npm install`.
 // MANDU_NO_AUTO_INSTALL=1 only reports what is missing (exit 1). Concurrent
@@ -129,10 +132,16 @@ function defaultRun(cmd, cwd) {
  * still being written, and the run waits for it. Returns the dirs it
  * installed; throws on a failed install.
  */
-export function installMissing(root, pkgDir, { run = defaultRun, lockRoot, log = (m) => process.stderr.write(`${m}\n`) } = {}) {
+export function installMissing(root, pkgDir, opts = {}) {
   missingDirs(root, pkgDir); // validates the declared siblings before any lock
+  return installDirs(root, [pkgDir, ...declaredSiblings(pkgDir).map((s) => resolve(root, s))], opts);
+}
+
+/** installMissing's loop over a given list of package dirs (absolute or
+ *  root-relative), each under its lock: the `--bundle` mode's. */
+export function installDirs(root, dirs, { run = defaultRun, lockRoot, log = (m) => process.stderr.write(`${m}\n`) } = {}) {
   const done = [];
-  for (const dir of [pkgDir, ...declaredSiblings(pkgDir).map((s) => resolve(root, s))]) {
+  for (const dir of dirs.map((d) => resolve(root, d))) {
     const release = acquireLock(dir, { lockRoot });
     try {
       if (existsSync(join(dir, "node_modules"))) continue;
@@ -220,7 +229,27 @@ export function reachedPackages(root, pkgDir) {
   return [...pkgs].sort();
 }
 
-function main(argv) {
+async function main(argv) {
+  if (argv[0] === "--bundle") {
+    // Every package the launcher's bundle build reads, exactly those
+    // (scripts/suites.mjs bundlePackageDirs): what `npm pack` of the launcher
+    // needs in a clean checkout. The OS test matrix's host prep and wrapper
+    // suite run it (os-test-matrix.md §10.3.2).
+    const { bundlePackageDirs } = await import("./suites.mjs");
+    const dirs = bundlePackageDirs(REPO_ROOT);
+    if (process.env.MANDU_NO_AUTO_INSTALL === "1") {
+      const missing = dirs.filter((d) => !existsSync(join(REPO_ROOT, d, "node_modules")));
+      for (const d of missing) process.stderr.write(`install-deps: ${d}: node_modules missing (MANDU_NO_AUTO_INSTALL=1: not installing)\n`);
+      return missing.length ? 1 : 0;
+    }
+    try {
+      installDirs(REPO_ROOT, dirs);
+      return 0;
+    } catch (e) {
+      process.stderr.write(`install-deps: ${e.message}\n`);
+      return 1;
+    }
+  }
   if (argv[0] === "--reach") {
     const dir = resolve(argv[1] ?? ".");
     for (const p of reachedPackages(REPO_ROOT, dir)) process.stdout.write(`${p}\n`);
@@ -246,5 +275,5 @@ function main(argv) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exit(main(process.argv.slice(2)));
+  process.exit(await main(process.argv.slice(2)));
 }

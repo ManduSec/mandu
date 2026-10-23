@@ -14,26 +14,17 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createServer, type Server } from "node:net";
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { once } from "node:events";
-import { SERVER_TEST_TIMEOUT_MS, waitForPort } from "./server-up.js";
+import { SERVER_TEST_TIMEOUT_MS, silentArbiter, spawnServer, stopServer, waitForPort } from "./server-up.js";
 import type { DataLocations } from "../../src/data-locations.js";
 import { tmpDir } from "../unit/tmp-dir.js";
 
 const PKG_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const TSX = join(PKG_DIR, "node_modules", ".bin", "tsx");
 const SERVER_MAIN = join(PKG_DIR, "src", "server-main.ts");
 
 const basic = (u: string, p: string): string => `Basic ${Buffer.from(`${u}:${p}`).toString("base64")}`;
-
-async function exited(child: ChildProcess, ms = 5000): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((r) => { child.once("exit", () => r()); setTimeout(r, ms).unref(); });
-}
 
 test("GET /api/data-locations: behind the auth, the server's MANDU_HOME with the home as ~, owner-only per store, no contents", { timeout: SERVER_TEST_TIMEOUT_MS }, async () => {
   const dir = tmpDir("mandu-dataloc-e2e-");
@@ -48,11 +39,9 @@ test("GET /api/data-locations: behind the auth, the server's MANDU_HOME with the
   mkdirSync(join(mandu, "dev"), { mode: 0o700 }); // a developer's place, there; `runs` is left absent
 
   const arbSock = join(dir, "arbiter.sock");
-  const arb: Server = createServer((s) => s.on("data", () => {}));
-  arb.listen(arbSock);
-  await once(arb, "listening");
+  const arb = await silentArbiter(arbSock);
   let stderr = "";
-  const child = spawn(TSX, [SERVER_MAIN], {
+  const child = spawnServer(SERVER_MAIN, {
     cwd: PKG_DIR,
     env: {
       ...process.env,
@@ -67,6 +56,7 @@ test("GET /api/data-locations: behind the auth, the server's MANDU_HOME with the
       MANDU_PORT_FILE: join(dir, "port"),
       MANDU_RUNTIME_DIR: join(dir, "rt"),
       MANDU_TEST_DASHBOARD: "",
+      DASHBOARD_AUTOSTART: "0", // no stack: the locations are the server's own
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -111,9 +101,8 @@ test("GET /api/data-locations: behind the auth, the server's MANDU_HOME with the
     const post = await fetch(`${base}/api/data-locations`, { method: "POST", headers: { Authorization: basic("alice", "pw"), "X-Mandu-Control": "1" } });
     assert.notEqual(post.status, 200, "GET only");
   } finally {
-    child.kill("SIGTERM");
-    await exited(child);
-    arb.close();
+    await stopServer(child);
+    await arb.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

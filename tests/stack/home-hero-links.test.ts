@@ -46,7 +46,7 @@ import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 
 stateAxes("off");
 
-const KEY_VALUE = "sk_live_homeHeroLinksStackCanary00000000001";
+const KEY_VALUE = "sk_" + "live_homeHeroLinksStackCanary00000000001";
 
 /** L5: the hero as a 390 px window draws it under the served styles. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

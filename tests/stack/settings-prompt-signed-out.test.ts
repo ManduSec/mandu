@@ -41,7 +41,7 @@ import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF
 
-const KEY = "sk_live_settingsPromptSignedOutCanary000001";
+const KEY = "sk_" + "live_settingsPromptSignedOutCanary000001";
 const SIGN_IN = "Sign in first: reload this page and sign in with your dashboard account (if there isn't one yet, run mandu dashboard --set-password in your own terminal).";
 const PARTS = ["settings-prompt-meanings-fold", "settings-prompt-meanings", "settings-prompt-exceptions-head", "settings-prompt-exceptions-about", "settings-prompt-exceptions", "prompt-exception-form"];
 

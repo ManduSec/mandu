@@ -513,7 +513,7 @@ function textParts(parts, text) {
  *  Rules (`rule`, its `path`: the row opened, else Your rules). The page
  *  builds the link; a place it does not know is plain text. */
 function placeLink(p) {
-  if (p.to === 'settings') return el('a', { href: routeHref('settings'), 'data-page-link': 'settings', text: p.text });
+  if (p.to === 'settings' || p.to === 'history') return el('a', { href: routeHref(p.to), 'data-page-link': p.to, text: p.text });
   if (p.to === 'agent' && typeof p.session === 'string' && p.session !== '') {
     return el('a', { href: routeHref('agent', p.session), 'data-page-link': 'agent', 'data-session': p.session, text: p.text });
   }
@@ -1644,7 +1644,8 @@ function pollRefocus(place) {
 //                         where Mandu stepped in
 //   /agents/<sessionId>   the agent page; `?ask=<askId>` marks a moment,
 //                         `?only=stepped-in` shows only where Mandu stepped in
-//   /rules#<key>  /settings#<key>  that page at one of its cards (SECTIONS)
+//   /approvals#<key>  /rules#<key>  /settings#<key>  that page at one of
+//                         its cards (SECTIONS)
 //   /rules?file=<path>    Rules with Add a rule's file browser opened at one
 //                         file (a Your secrets card's or a scan finding's
 //                         link); dropped once used
@@ -1655,11 +1656,20 @@ const PAGES = ['home', 'approvals', 'rules', 'settings', 'agent', 'history', 'sc
  *  where Mandu stepped in*, *Only the sessions where Mandu stepped in*);
  *  any other value reads as off. */
 const ONLY_STEPPED_IN = 'stepped-in';
-/** The cards of Rules and Settings, each with its address (dashboard.md
- *  §4.25 *Section links*): `[key, the card's id, the words of its link]`.
- *  The row under each page's title links them in this order, and
- *  `/rules#<key>` opens Rules at that card. */
+/** The cards of Approvals, Rules and Settings, each with its address
+ *  (dashboard.md §4.25 *Section links*): `[key, the card's id, the words of
+ *  its link, whether the card hides while empty]`. The row under each
+ *  page's title links them in this order, and `/rules#<key>` opens Rules at
+ *  that card. A card that hides while empty has no link while hidden
+ *  (followSectionLinks). */
 const SECTIONS = {
+  approvals: [
+    ['keys-found', 'approvals-suggestions-block', 'Keys Mandu found', true],
+    ['asked-for', 'approvals-proposals-block', 'Rule changes asked for', true],
+    ['waiting', 'approvals-waiting-block', 'Waiting'],
+    ['answered', 'approvals-answered-block', 'Answered earlier'],
+    ['rule-changes', 'approvals-rule-history-block', 'Rule changes', true],
+  ],
   rules: [
     ['describe', 'describe-block', 'Describe'],
     ['your-rules', 'rules-block', 'Your rules'],
@@ -1709,8 +1719,9 @@ function routeHref(page, id, ask, go) {
 const AGENT_GO = ['blocked', 'sent', 'secrets'];
 
 /** The page a URL names: { page, session, ask } (on Approvals `ask` is the
- *  question, the rule change or the change made it opens at), and on Rules and Settings
- *  the card its hash names (`section`, only a key SECTIONS knows); on Rules
+ *  question, the rule change or the change made it opens at), and on
+ *  Approvals with none, Rules and Settings the card its hash names
+ *  (`section`, only a key SECTIONS knows; one item opened wins); on Rules
  *  a non-empty `?file=` is the file Add a rule opens at (`file`), which
  *  wins over a card; on an agent page a known `?go=` is where it goes once
  *  drawn (`go`, AGENT_GO). A retired
@@ -1736,7 +1747,8 @@ function parseRoute(pathname, search, hash) {
   if (first === 'approvals' && second === undefined) {
     // The search of Answered earlier (§4.25 *Finding an answer*), if any.
     const words = historyQuery(q.get('q'));
-    return { page: 'approvals', session: null, ask: null, ...(words ? { q: words } : {}) };
+    const section = sectionOf(first, hash);
+    return { page: 'approvals', session: null, ask: null, ...(words ? { q: words } : {}), ...(section ? { section } : {}) };
   }
   if (first === 'approvals' && second) return { page: 'approvals', session: null, ask: second };
   if (first === 'scan' && second === undefined) return { page: 'scan', session: null, ask: null };
@@ -1770,7 +1782,7 @@ function stateHref() {
     const href = routeHref('agent', S.agentId, S.agentAsk);
     return S.agentOnly ? href + (href.includes('?') ? '&' : '?') + 'only=' + ONLY_STEPPED_IN : href;
   }
-  if (S.page === 'approvals') return routeHref('approvals', S.approvalsAsk) + (S.answeredQ && !S.approvalsAsk ? '?q=' + enc(S.answeredQ) : '');
+  if (S.page === 'approvals') return routeHref('approvals', S.approvalsAsk) + (S.answeredQ && !S.approvalsAsk ? '?q=' + enc(S.answeredQ) : '') + (S.section && !S.approvalsAsk ? '#' + S.section : '');
   if (S.page === 'history' && (S.historyQ || S.historyOnly)) return routeHref('history') + '?' + historyParams(S.historyQ, S.historyOnly);
   if (S.section && SECTIONS[S.page]) return routeHref(S.page) + '#' + S.section;
   return routeHref(S.page);
@@ -1827,7 +1839,7 @@ function setPage(page, push, sessionId, askId, nav = push, restore = null, land 
   // So does the agent page's switch (§4.25ae *Only where Mandu stepped in*):
   // a link to a session opens it whole.
   S.agentOnly = S.page === 'agent' && !push && currentRoute().only === true;
-  // And Rules' and Settings' card (§4.25 *Section links*): a typed address,
+  // And the card of Approvals, Rules or Settings (§4.25 *Section links*): a typed address,
   // a new tab or a Back with no place opens at the card its hash names (a
   // place Back hands back wins, landAtSection); a link opens the page at
   // its top (openAtCard names its card after).
@@ -1887,8 +1899,8 @@ function setPage(page, push, sessionId, askId, nav = push, restore = null, land 
   S.approvalsPlace = !!back && S.page === 'approvals';
   if (S.page === 'agent') agentBack();
   if (nav) focusPage();
-  // Rules and Settings return their reads, done once drawn: a link to one of
-  // their cards scrolls there then (openAtCard). Rules' include the folder
+  // Approvals, Rules and Settings return their reads, done once drawn: a
+  // link to one of their cards scrolls there then (openAtCard). Rules' include the folder
   // Add a rule opens with on its first read, when it was left open.
   let load = null;
   if (S.page === 'rules') load = loadRules().then(() => F.listing);
@@ -1898,7 +1910,9 @@ function setPage(page, push, sessionId, askId, nav = push, restore = null, land 
   // 20, as a link to History does; Back keeps the rows you had brought.
   if (S.page === 'approvals' && !back) startPastOver();
   if (S.page === 'approvals') answeredSearchNow();
-  if (S.page === 'approvals') keepPlace(loadRuleHistory(), back);
+  // Rule changes is the last read of Approvals: a card its address names
+  // waits for it (landAtSection), as a place Back hands back does.
+  if (S.page === 'approvals') { load = loadRuleHistory(); keepPlace(load, back); }
   if (S.page === 'approvals' && S.home) markApprovalsAsk();
   if (S.page === 'settings') load = loadSettings();
   // Back to Rules or Settings: where you were once its reads have drawn,
@@ -3797,7 +3811,12 @@ function whenLine(cls, verb, iso) {
   if (!Number.isFinite(ms)) return null;
   const cut = verb.lastIndexOf(' ') + 1;
   return el('div', { class: cls }, cut ? verb.slice(0, cut) : null,
-    el('span', { class: 'when-phrase' }, verb.slice(cut) + ' ', el('time', { class: 'ago', datetime: new Date(ms).toISOString(), title: clockWords(ms), text: ago(ms) })));
+    el('span', { class: 'when-phrase' }, verb.slice(cut) + ' ', agoNode(ms)));
+}
+/** A moment in relative words, the clock time on hover, kept current by
+ *  refreshWhen: <time class="ago" datetime="ISO" title="Sep 30, 14:12">3 hours ago</time>. */
+function agoNode(ms) {
+  return el('time', { class: 'ago', datetime: new Date(ms).toISOString(), title: clockWords(ms), text: ago(ms) });
 }
 
 /** A Home row's counts in the words and numbers of the tiles on the page
@@ -5119,6 +5138,7 @@ function renderProposals() {
     ? { id: active.closest('.proposal').dataset.id, start: active.selectionStart, end: active.selectionEnd } : null;
   clear(host);
   block.hidden = S.proposals.length === 0;
+  followSectionLinks();
   document.getElementById('approvals-proposals-head').textContent = S.proposals.every(askedByAgent)
     ? 'Rule changes your agent asked for' : 'Rule changes waiting for you';
   for (const p of S.proposals) {
@@ -5178,6 +5198,7 @@ async function loadRuleHistory(more) {
   const changes = all.slice(0, st.want);
   clear(host);
   block.hidden = changes.length === 0;
+  followSectionLinks();
   if (st.last && st.last.patternsHidden && changes.length) host.append(el('div', { class: 'empty patterns-hidden', text: PATTERNS_HIDDEN_NOTE }));
   for (const c of changes) {
     // Its state: whether Undo is on it, so the words of a refused Undo go
@@ -5704,6 +5725,10 @@ function renderRules() {
         // coloured as its answer).
         effectClass: ruleTone(r),
         used: r.hits === null || r.hits === undefined ? '' : r.hits === 0 ? 'Never used' : n(r.hits, 'use', 'uses'),
+        // When it last decided something (useLine): an arbiter that counts
+        // without a moment, or a rule never used, has none.
+        hits: r.hits,
+        lastHit: r.hits > 0 && Number.isFinite(r.lastHit) ? r.lastHit : null,
         flip: acts.flip ? { text: acts.flip === 'allow' ? 'Always allowed' : 'Always blocked', run: (row) => changeRule(r, acts.flip, row) } : null,
         remove: acts.remove ? (row) => changeRule(r, 'remove', row) : null,
         note: acts.flip || acts.remove ? null : 'Set in policy.yaml',
@@ -6004,6 +6029,16 @@ function effectWords(r, row) {
   return eff;
 }
 
+/** The use line of an opened rule (dashboard.md §4.25p): how often it
+ *  decided something and, when the arbiter keeps the moment, when it last
+ *  did, "12 uses, the last 3 hours ago" or "1 use, 3 hours ago", so a rule
+ *  still at work reads apart from one last used months ago before Remove.
+ *  Never used, an answer or a label saved here: the words alone. */
+function useLine(r) {
+  if (!Number.isFinite(r.lastHit)) return [r.used];
+  return [r.used + (r.hits === 1 ? ', ' : ', the last '), agoNode(r.lastHit)];
+}
+
 /** Under an opened rule: when and where it was made, how often it was used,
  *  its policy.yaml lines, and Remove. Each button names its row, its own
  *  words first (dashboard.md §4.25 *A label chosen in Your rules keeps the
@@ -6017,7 +6052,7 @@ function ruleDetail(r) {
     box.append(el('div', { class: 'rule-ends' }, r.effect + ' until ', momentNode(r.until), Number.isFinite(ms) ? ', ' + endsIn(ms) + '.' : '.'));
   }
   if (r.origin) box.append(originLine(r.origin));
-  if (r.used) box.append(el('div', { class: 'dim', text: r.used }));
+  if (r.used) box.append(el('div', { class: 'dim' }, ...useLine(r)));
   if (r.sourceNote) box.append(el('div', { class: 'dim rule-source-note', text: r.sourceNote }));
   const links = el('div', { class: 'detail-links' });
   const lines = el('div', { class: 'detail-source' });
@@ -7557,7 +7592,7 @@ function detailFacts(e) {
     if (r.warning) out.push(el('p', { class: 'rule-warn', role: 'note' }, warningWords(r)));
     if (r.sourceNote) out.push(el('p', { class: 'dim detail-note', text: r.sourceNote }));
     if (r.origin) out.push(originLine(r.origin));
-    if (r.used) out.push(el('p', { class: 'dim detail-note', text: r.used }));
+    if (r.used) out.push(el('p', { class: 'dim detail-note' }, ...useLine(r)));
     const links = el('div', { class: 'detail-links' });
     if (r.sourceId) {
       const lines = el('div', { class: 'detail-source' });
@@ -8365,6 +8400,7 @@ function renderSuggestionCard() {
   clear(host);
   const count = G.rows.length;
   block.hidden = count === 0;
+  followSectionLinks();
   if (!count) return;
   const where = suggestionWhere(G.rows);
   const card = el('div', { class: 'ask expanded suggestion-card' });
@@ -8411,7 +8447,8 @@ async function openAtCard(page, id, opened, focus) {
 /** Scrolls the card `id` of the page shown to the top once `load` (the
  *  page's reads) has drawn, and gives `focus(card)` the focus, by default
  *  the card's heading; unless the person scrolled, pressed a key or tapped
- *  meanwhile, or another page opened. */
+ *  meanwhile, or another page opened. A card still hidden then (an empty
+ *  Rule changes) leaves the page at its top. */
 async function landAtCard(load, id, focus = (card) => card && card.querySelector('h2')) {
   const visit = S.visit;
   let moved = false;
@@ -8422,28 +8459,57 @@ async function landAtCard(load, id, focus = (card) => card && card.querySelector
   for (const k of kinds) window.removeEventListener(k, theirs, true);
   if (moved || S.visit !== visit) return;
   const card = document.getElementById(id);
-  if (card && card.scrollIntoView) card.scrollIntoView({ block: 'start' });
+  if (!card || card.hidden) return;
+  if (card.scrollIntoView) card.scrollIntoView({ block: 'start' });
   focusMarked(focus(card), true);
 }
 
-/** The row of links under the titles of Rules and Settings, one per card
- *  (dashboard.md §4.25 *Section links*). A click scrolls its card to the
+/** Each row drawn: its links, each with the card it follows when that
+ *  card hides while empty (SECTIONS), else none. */
+const SECTION_ROWS = [];
+/** The row of links under the titles of Approvals, Rules and Settings,
+ *  one per card (dashboard.md §4.25 *Section links*). A click scrolls its card to the
  *  top, gives the card's heading the focus and puts the card's key in the
  *  address, replaced, so Back still leaves the page. A modifier click is
  *  the browser's: the page at that card, in a new tab or window. */
 function drawSectionLinks() {
+  SECTION_ROWS.length = 0;
   for (const nav of document.querySelectorAll('nav.section-links[data-sections]')) {
     const page = nav.dataset.sections;
     const list = el('ul');
-    for (const [key, id, words] of SECTIONS[page] || []) {
-      list.append(el('li', null, el('a', { href: routeHref(page) + '#' + key, 'data-section': key, text: words, onclick: (e) => {
+    const items = [];
+    for (const [key, id, words, hides] of SECTIONS[page] || []) {
+      const li = el('li');
+      items.push({ li, card: hides ? document.getElementById(id) : null });
+      list.append(li);
+      li.append(el('a', { href: routeHref(page) + '#' + key, 'data-section': key, text: words, onclick: (e) => {
         if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
         e.preventDefault();
         goToSection(page, key, id);
-      } })));
+      } }));
     }
     clear(nav);
     nav.append(list);
+    SECTION_ROWS.push(items);
+  }
+  followSectionLinks();
+}
+/** Each link to a card that hides while empty (Approvals' Keys Mandu
+ *  found, asked-for rule changes and Rule changes) shows only while its
+ *  card does, so the row never offers a link that goes nowhere. Called
+ *  where those cards are drawn. The row is changed in place, never drawn
+ *  again: a poll moves neither the focus nor the scroll. The last link
+ *  shown is marked `end`, which has no "·" after it. */
+function followSectionLinks() {
+  for (const items of SECTION_ROWS) {
+    let last = null;
+    for (const { li, card } of items) {
+      const hide = !!card && card.hidden;
+      if (li.hidden !== hide) li.hidden = hide;
+      li.classList.remove('end');
+      if (!hide) last = li;
+    }
+    if (last) last.classList.add('end');
   }
 }
 /** The card `id` of the page shown, scrolled to the top with its heading
@@ -9536,8 +9602,11 @@ function drawAgentPage(vm, id, failure) {
       name.textContent = 'Session not loaded';
       sub.append(...cannotCheck('This session could not be loaded.', failure, true));
     } else {
+      // An old link, a bookmark, a session past its 90 days: say so in the
+      // page's words and lead to History, where past sessions are found.
       name.textContent = 'Session not found';
-      sub.textContent = 'It may have been deleted, or it belongs to the other tenant. Mandu keeps a session\'s record for 90 days.';
+      sub.append('Mandu has no record of this session. Records are kept for 90 days, so it may be older than that, or the link may be wrong. Look for it in ',
+        placeLink({ text: 'History', to: 'history' }), '.');
     }
     const valuesNote = document.getElementById('agent-values-note');
     if (valuesNote) valuesNote.hidden = true;
@@ -10068,6 +10137,11 @@ function renderAgentBrowser(b) {
       (s.masked.length ? ', with ' + names(s.masked) + ' masked in ' + (s.requests === 1 ? 'it' : 'them') : '') + '.');
   }
 }
+/** "Your secrets" over a record Mandu could not check (dashboard.md
+ *  §4.25ah, `story.unchecked`): every report of the session is the agent's
+ *  word, so the block never says no secret came up. */
+const UNCHECKED_SECRETS_WORDS = ownWords('Mandu could not check this session\'s record: on this computer the agent could reach Mandu\'s own controls, so this page counts no secret from it. Run ', ['mandu doctor'], ' to see why.');
+const UNCHECKED_REST_WORDS = ownWords('Mandu could not check the rest of this session\'s record: on this computer the agent could reach Mandu\'s own controls. Run ', ['mandu doctor'], ' to see why.');
 function renderAgentSecrets(story, all) {
   const block = document.getElementById('agent-secrets-block');
   const list = document.getElementById('agent-secrets');
@@ -10077,9 +10151,16 @@ function renderAgentSecrets(story, all) {
   if (!story) { block.hidden = true; return; }
   block.hidden = false;
   const count = story.secrets.length + story.more;
-  intro.textContent = count
-    ? n(count, 'secret you registered or labeled', 'secrets you registered or labeled') + ' came up in this session. Each line below comes from what Mandu recorded.'
-    : 'No secret you registered or labeled came up in this session.';
+  if (story.unchecked === true) {
+    // Never "no secret came up" over a record the agent could have written.
+    clear(intro);
+    if (count) intro.append(n(count, 'secret you registered or labeled', 'secrets you registered or labeled') + ' came up in this session. Each line below comes from what Mandu recorded. ');
+    intro.append(words(count ? UNCHECKED_REST_WORDS : UNCHECKED_SECRETS_WORDS));
+  } else {
+    intro.textContent = count
+      ? n(count, 'secret you registered or labeled', 'secrets you registered or labeled') + ' came up in this session. Each line below comes from what Mandu recorded.'
+      : 'No secret you registered or labeled came up in this session.';
+  }
   for (const s of story.secrets) {
     const what = sentenceNode(s.what, 'secret-what');
     const card = el('div', { class: 'secret-card' },

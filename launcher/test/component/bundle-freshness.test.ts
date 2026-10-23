@@ -229,6 +229,18 @@ test("build-bundle.mjs: a clean build is recorded fresh over the inputs esbuild 
   }
   assert.ok("mandu.mjs" in rec.outputs && "exec-shim.mjs" in rec.outputs, "the outputs are recorded");
   assert.ok(!existsSync(join(dist, ".build.lock")), "the lock is released");
+  // Every package whose files (or node_modules) the build read is one
+  // `suites.mjs packages --bundle` lists: what the OS test matrix's host prep
+  // installs in a clean checkout before `npm pack` (os-test-matrix.md §10.3.2).
+  const listed = spawnSync("node", [join(REPO_ROOT, "scripts", "suites.mjs"), "packages", "--bundle"], { cwd: REPO_ROOT, encoding: "utf8" });
+  assert.equal(listed.status, 0, listed.stderr);
+  const bundlePkgs = new Set(listed.stdout.split("\n").filter(Boolean));
+  for (const rel of Object.keys(rec.inputs)) {
+    let pkg: string | null = null;
+    if (rel.includes("/node_modules/")) pkg = rel.slice(0, rel.indexOf("/node_modules/"));
+    else for (let d = dirname(rel); d !== "." && d !== ""; d = dirname(d)) if (existsSync(join(REPO_ROOT, d, "package.json"))) { pkg = d; break; }
+    if (pkg !== null) assert.ok(bundlePkgs.has(pkg), `${rel}: its package ${pkg} is not in \`suites.mjs packages --bundle\` (${[...bundlePkgs].join(", ")})`);
+  }
 
   simulateEdit(dist, "interceptors/exec-wrap/src/wrap.ts");
   const stale = fresh(dist);

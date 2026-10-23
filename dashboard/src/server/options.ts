@@ -33,7 +33,8 @@ export interface DashboardServerOptions {
    * Control plane: the process supervisor for arbiter + Track-A proxies. When
    * provided, the `/api/control/*` routes are enabled; when undefined those
    * routes answer 404 `{error:"control plane disabled"}`. The dashboard reaps
-   * the supervised children on close() (shutdownAll).
+   * the supervised children on close() (Supervisor.close: shutdownAll, and
+   * no spawn after it).
    */
   supervisor?: Supervisor;
   /**

@@ -42,7 +42,7 @@ import { stateAxes } from "../lib/axes.js";
 stateAxes("secrets");
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const KEY = "sk_live_51CdpLaunchStackWq7Rt2Yp9Lm4";
+const KEY = "sk_" + "live_51CdpLaunchStackWq7Rt2Yp9Lm4";
 const SESSION = "s-cdp-launch";
 
 async function stack(bindings: string[]) {

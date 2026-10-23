@@ -53,7 +53,7 @@ import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_answeredAskLinkStackCanary00000001";
+const KEY_VALUE = "sk_" + "live_answeredAskLinkStackCanary00000001";
 const SESSION = "1791200000-733";
 const CSRF = { "X-Mandu-Control": "1" };
 

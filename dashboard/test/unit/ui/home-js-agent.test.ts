@@ -14,7 +14,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { waitWhile } from "../page-wait.js";
-import { M, T, AGENT, CLOCK, home, load, tick, rulesPage, openRule, list, WS_LIST, RULES_PANEL, rowFor } from "./home-js-fixtures.js";
+import { M, T, AGENT, CLOCK, HTML, JS, home, load, tick, rulesPage, openRule, list, WS_LIST, RULES_PANEL, rowFor } from "./home-js-fixtures.js";
 
 test("Details opens the agent page in place: one card per turn, split halves, reveal on click, secrets never", async () => {
   const { doc, calls, window } = load();
@@ -722,6 +722,20 @@ test("Your secrets: none came up; Off says Mandu only watched; no page, no block
   assert.equal(gone.doc.getElementById("agent-secrets-block").hidden, true);
 });
 
+test("Your secrets over a record Mandu could not check: never 'none came up'; why, with the command as code (dashboard.md §4.25ah)", async () => {
+  const none = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, secrets: { mode: "secrets", flagged: false, more: 0, secrets: [], counts: { masked: 0, early: 0 }, unchecked: true } } } });
+  await tick();
+  const intro = none.doc.getElementById("agent-secrets-intro");
+  assert.equal(intro.textContent, "Mandu could not check this session's record: on this computer the agent could reach Mandu's own controls, so this page counts no secret from it. Run mandu doctor to see why.");
+  assert.doesNotMatch(intro.textContent, /No secret .* came up/);
+  assert.equal(intro.querySelector("code")?.textContent, "mandu doctor", "the command is code");
+  const some = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, secrets: { mode: "secrets", flagged: false, more: 2, secrets: [], counts: { masked: 2, early: 0 }, unchecked: true } } } });
+  await tick();
+  assert.equal(some.doc.getElementById("agent-secrets-intro").textContent,
+    "2 secrets you registered or labeled came up in this session. Each line below comes from what Mandu recorded. " +
+    "Mandu could not check the rest of this session's record: on this computer the agent could reach Mandu's own controls. Run mandu doctor to see why.");
+});
+
 // ── The moments data leaves this machine (dashboard.md §4.25b) ──────────────
 // ── The tiles (dashboard.md §4.25, the per-agent page) ──────────────────────
 /** The agent page's tiles as "<big> <label>", with each one's class. */
@@ -1179,8 +1193,27 @@ test("an agent page that cannot be read says why, never \"Session not found\"; a
   const gone = load({ url: AGENT_URL, routes: { "GET home/agent?session=s1": { found: false } } });
   await tick();
   assert.equal(gone.doc.getElementById("agent-name").textContent, "Session not found");
-  assert.equal(gone.doc.getElementById("agent-sub").textContent, "It may have been deleted, or it belongs to the other tenant. Mandu keeps a session's record for 90 days.");
+  // Since 2026-10-23 (#90) in the page's words, leading to History: until
+  // then "It may have been deleted, or it belongs to the other tenant."
+  const goneSub = gone.doc.getElementById("agent-sub");
+  assert.equal(goneSub.textContent, "Mandu has no record of this session. Records are kept for 90 days, so it may be older than that, or the link may be wrong. Look for it in History.");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  assert.deepEqual([...goneSub.querySelectorAll("a")].map((a: any) => [a.textContent, a.getAttribute("href"), a.dataset.pageLink]), [["History", "/mandu/history", "history"]]);
+  assert.doesNotMatch(gone.doc.getElementById("page-agent").textContent, /tenant|deleted/);
   assertNothingShown(gone.doc, "found: false");
+  // The link opens History in place.
+  goneSub.querySelector("a").click();
+  await tick();
+  assert.equal(gone.doc.getElementById("page-history").hidden, false);
+  assert.equal(gone.doc.getElementById("page-agent").hidden, true);
+  assert.equal(gone.window.location.pathname, "/mandu/history");
+});
+
+test("no product string says \"tenant\": the developer view's test store never reaches the product page", () => {
+  // A tenant is the inspector's word (server/tenant.ts); the product page is
+  // always served from the live store. Only a comment line may say it.
+  assert.deepEqual(JS.split("\n").filter((l) => /tenant/i.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)), []);
+  assert.doesNotMatch(HTML, /tenant/i);
 });
 
 test("an agent page left open when the protection service stops says so at the next poll, with no question left to answer, and shows the session again once it is back", async () => {

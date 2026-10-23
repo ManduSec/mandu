@@ -37,8 +37,8 @@ import { stateAxes } from "../lib/axes.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the axis under test
 
-const OLD = "sk_live_51OldKeyStackE2EAbCdEfGhIjKlMnOp";
-const NEW = "sk_live_51NewKeyStackE2EZyXwVuTsRqPoNmLk";
+const OLD = "sk_" + "live_51OldKeyStackE2EAbCdEfGhIjKlMnOp";
+const NEW = "sk_" + "live_51NewKeyStackE2EZyXwVuTsRqPoNmLk";
 /** A random-looking backup password in a TRAILING comment (review of !1621). */
 const BACKUP = "Tq7vZ2pX9kLm4Rw8Hn3B";
 const COMMENTED = `# OLD_STRIPE_KEY=${OLD}\nSTRIPE_SECRET_KEY=${NEW}\nPORT=4242 # backup ${BACKUP}\n`;

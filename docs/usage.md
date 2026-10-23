@@ -434,7 +434,13 @@ mandu: in this session: 2 secrets masked before the AI saw them (DB_PASSWORD in 
 It names each secret by its name and file and each send by its host, never
 a value. A session that touched no secret ends with `mandu: no secret came
 up in this session, so Mandu had nothing to mask`; one in `off` mode says
-protection was off and that Mandu masked nothing. The line goes to stderr
+protection was off and that Mandu masked nothing. Where Mandu cannot keep
+the agent away from its own controls (no file guard and no bubblewrap that
+can make a user namespace, the launch's "GATED" line), it cannot check what
+the session recorded, and the line says so instead of counting: ``mandu:
+Mandu could not check this session's record (on this computer the agent
+could reach Mandu's own controls), so it shows no count · why: `mandu
+doctor` and `mandu log` ``. The line goes to stderr
 after the agent (and its screen) is gone, so it never mixes into what the
 agent prints, such as `claude -p --output-format json`. It needs a running
 dashboard (the one `mandu` starts with its services); without one, or if it

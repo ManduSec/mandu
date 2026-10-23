@@ -127,7 +127,12 @@ test("mandu codex with bwrap hidden: ONE warning line with the fix (restricted h
     const notes = r.lines.filter((l) => BOX_LINE.test(l));
     if (restricted && !manduBwrap) {
       assert.equal(notes.length, 1, JSON.stringify(r.lines));
-      assert.match(notes[0]!, /^mandu: WARNING — .*fix: sudo apt install bubblewrap, then mandu setup/);
+      // A launch prints each notice on one line, `mandu: WARNING: …`, cut
+      // short with "(more: `mandu log`)" where the log holds the rest, the
+      // fix included (only a restricted host reaches this branch: the OS test
+      // matrix's 26.04 guest, 2026-10-23; CI's guest lifts the restriction).
+      assert.match(notes[0]!, /^mandu: WARNING( —|:) Codex's own sandbox cannot run commands/);
+      assert.match(notes[0]!, /fix: sudo apt install bubblewrap, then mandu setup|\(more: `mandu log`\)$/);
     } else {
       assert.equal(notes.length, 0, JSON.stringify(notes));
     }

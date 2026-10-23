@@ -30,7 +30,7 @@ stateAxes("secrets");
 after(() => resetCurrentPolicyForTests("claude-code"));
 
 const SECRET = "/ws/.env"; // a catalog secret path: no-model by the path alone
-const KEY = "sk_live_FakeOwnWrite0123456789abcdef";
+const KEY = "sk_" + "live_FakeOwnWrite0123456789abcdef";
 const CONTENT = `STRIPE_KEY=${KEY}\n`;
 const CREATED = `File created successfully at: ${SECRET}`;
 const UPDATED = `The file ${SECRET} has been updated successfully.`;

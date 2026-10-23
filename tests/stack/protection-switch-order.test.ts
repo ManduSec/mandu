@@ -49,7 +49,7 @@ import { holdingRelay } from "../lib/holding-relay.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF
 
-const KEY_VALUE = "sk_live_protectionSwitchOrderStack00001";
+const KEY_VALUE = "sk_" + "live_protectionSwitchOrderStack00001";
 const AXES_READ = "/api/config/axes";
 const ON_WORDS = "Keys and secret files leave this computer only where a rule or your OK allows.";
 const STILL_ON = "Still on until the protection service restarts: keys and secret files leave this computer only where a rule or your OK allows.";

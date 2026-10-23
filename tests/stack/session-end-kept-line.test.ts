@@ -37,12 +37,16 @@
  * ubuntu-24.04 runner restricts unprivileged user namespaces (AppArmor;
  * continuous-integration.md §12.2), so there the launch is GATED with no
  * wall: every report on the human socket is a claim
- * (arbiter-human-plane.md §10.1), Home counts no claim, and the line says
- * what Home says. There L1 asserts that instead: the posture's gap is the
- * host's, EVERY event of the launch is stored as a claim (a believed one
- * would be the §10.1 regression), and the line is still stderr's last line
- * with Home's count. The branch is chosen by the probe, never by what the
- * launch printed, so a walled host whose launch lost its wall fails.
+ * (arbiter-human-plane.md §10.1), and no claim raises a count. There L1
+ * asserts instead: the posture's gap is the host's, EVERY event of the
+ * launch is stored as a claim (a believed one would be the §10.1
+ * regression), the launch recorded that its agent was not walled off, Home
+ * counts no claim, and stderr's last line says Mandu could not check the
+ * record and where to read why, never "no secret came up" (dashboard.md
+ * §4.25ah), as the session page's Your secrets does. The branch is chosen
+ * by the probe, never by what the launch printed, so a walled host whose
+ * launch lost its wall fails. A walled-host run can take the other branch
+ * with a `bwrap` and an `unshare` that exit 1 first on PATH.
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -80,6 +84,10 @@ const AGENT_WORD = "STAND-IN-AGENT-DONE";
 // The launch's secret walk finds the file in the home folder, so the AI's
 // copy of it is masked whole ("the file …"); a key-level mask names the key.
 const LINE_RE = /^mandu: in this session: 1 secret masked before the AI saw it \((?:STRIPE_KEY in |the file )~\/elsewhere\/\.env\) · details: `mandu dashboard`$/;
+/** The line of a session whose record Mandu could not check. */
+const UNCHECKED_LINE = "mandu: Mandu could not check this session's record (on this computer the agent could reach Mandu's own controls), so it shows no count · why: `mandu doctor` and `mandu log`";
+/** Any form of the session's last line (L3, L4: none of them). */
+const ANY_LINE_RE = /in this session|nothing to mask|could not check this session/;
 
 let tmp: string;
 let base: string; // the launch's runtime base: <XDG_RUNTIME_DIR>/mandu
@@ -224,8 +232,9 @@ test("L1+L2: the session ends with what Mandu kept, on stderr only, in Home's co
   assert.equal(evRes.status, 200);
   const evText = await evRes.text();
   noValue(evText, "/api/events");
-  const events = (JSON.parse(evText) as { events: { kind: string; claimed?: boolean; secrets?: { posture?: string; gap?: string } }[] }).events;
-  const posture = events.find((e) => e.kind === "launch_posture")?.secrets;
+  const events = (JSON.parse(evText) as { events: { kind: string; claimed?: boolean; secrets?: { posture?: string; gap?: string }; humanPlaneWalled?: boolean }[] }).events;
+  const postureEvent = events.find((e) => e.kind === "launch_posture");
+  const posture = postureEvent?.secrets;
   assert.ok(posture, `the launch recorded its posture: ${diag}`);
   // Home's count for the same session: the agent page's tile, served by the same dashboard.
   const page = await pageFetch(`${dashUrl}/api/home/agent?session=${encodeURIComponent(r.scope)}`);
@@ -238,19 +247,25 @@ test("L1+L2: the session ends with what Mandu kept, on stderr only, in Home's co
     // human plane, so the record is believed.
     assert.deepEqual(posture, { posture: "gated", gap: "guard-off" }, `this host can mount the bind wrap: ${diag}`);
     assert.deepEqual(events.filter((e) => e.claimed === true).map((e) => e.kind), [], "a walled launch's reports are believed");
+    assert.equal(postureEvent?.humanPlaneWalled, true, "the launch recorded its wall");
     // L1: on stderr, the session's last line; never on stdout.
     assert.match(lastLine(r.stderr), LINE_RE, diag);
     assert.deepEqual(vm.secrets.counts, { masked: 1, early: 0 }, "the line's count is the page's tile");
+    assert.equal(vm.secrets.unchecked, undefined, "a checked record: Your secrets says nothing about checking");
   } else {
     // No wall (GitHub's runner): every report is a claim, Home believes
-    // none, and the line says Home's count, still stderr's last line.
+    // none, and the line says Mandu could not check the record, still
+    // stderr's last line.
     assert.equal(posture.posture, "gated", diag);
     assert.ok(UNWALLED_GAPS.includes(posture.gap ?? ""), `the host's gap, not the guard's: ${JSON.stringify(posture)}`);
+    assert.equal(postureEvent?.humanPlaneWalled, false, "the launch recorded that its agent was not walled off");
     assert.ok(events.length >= 2, `the proxy's reports are in the record: ${events.map((e) => e.kind).join(" ")}`);
     assert.deepEqual(events.filter((e) => e.claimed !== true).map((e) => e.kind), [],
       "an unwalled launch's reports are all claims (arbiter-human-plane.md §10.1)");
     assert.deepEqual(vm.secrets.counts, { masked: 0, early: 0 }, "Home counts no claim");
-    assert.equal(lastLine(r.stderr), "mandu: no secret came up in this session, so Mandu had nothing to mask", diag);
+    assert.equal(vm.secrets.unchecked, true, "the session page's Your secrets says Mandu could not check the record");
+    assert.equal(lastLine(r.stderr), UNCHECKED_LINE, diag);
+    assert.doesNotMatch(r.stderr, /no secret came up|nothing to mask/, "never 'nothing came up' over a record Mandu could not check");
   }
 });
 
@@ -260,7 +275,7 @@ test("L3: opt-out by env and by flag: no line, the same session", { timeout: 250
     const diag = `stderr:\n${r.stderr}`;
     assert.equal(r.code, 0, diag);
     assert.equal(r.status, 200, diag);
-    assert.doesNotMatch(r.stderr, /in this session|nothing to mask/, `${name}: no line`);
+    assert.doesNotMatch(r.stderr, ANY_LINE_RE, `${name}: no line`);
     assert.equal(r.stdout.trim(), AGENT_WORD);
   }
 });
@@ -271,6 +286,6 @@ test("L4: the dashboard's socket gone: the session ends cleanly, no line", { tim
   const r = await launch("no-dashboard");
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.status, 200, r.stderr);
-  assert.doesNotMatch(r.stderr, /in this session|nothing to mask/);
+  assert.doesNotMatch(r.stderr, ANY_LINE_RE);
   assert.equal(r.stdout.trim(), AGENT_WORD);
 });

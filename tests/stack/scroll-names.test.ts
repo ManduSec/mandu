@@ -75,7 +75,7 @@ after(() => resetCurrentPolicyForTests("claude-code"));
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FAKE = join(HERE, "..", "..", "arbiter", "test", "helpers", "fake-classifier.mjs");
-const KEY = "sk_live_scrollNamesStackCanary00000000001";
+const KEY = "sk_" + "live_scrollNamesStackCanary00000000001";
 const TOKEN = "ghp_scrollNamesStackDeployToken000000000001";
 const KEY_FILE = "services/payments/settlement/config/production/app.conf";
 

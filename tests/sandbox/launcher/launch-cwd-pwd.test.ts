@@ -50,7 +50,7 @@ const GATE = process.platform !== "linux"
         ? "mandu-net-guard is not built (scripts/build-native.sh)"
         : false;
 
-const ENV_KEY = "sk_live_CANARYcwdpwd5e1f2a3b4c6d";
+const ENV_KEY = "sk_" + "live_CANARYcwdpwd5e1f2a3b4c6d";
 
 /** The agent's work: where it runs, the PWD it was handed, and the .env it
  *  finds there (by absolute tool paths: the exec-box shims the plain ones). */

@@ -15,21 +15,27 @@
  *   - the same bind WITH the account (a file, or DASHBOARD_BASIC_AUTH moved
  *     into one) comes up, and the default remote allowlist is EMPTY (no lab
  *     peer baked in).
+ *
+ * Each server runs with no autostarted stack, as the spawned process itself
+ * (server-up.ts spawnServer), and is stopped and awaited (stopServer:
+ * SIGTERM, SIGKILL after a deadline); the stand-in arbiter ends its
+ * connections when it closes. A release run of this file passed every test
+ * and then stayed alive until the suite's 900 s deadline: a proxy its
+ * server's autostart spawned during the server's exit outlived it, still
+ * connected to this file's stand-in arbiter (dashboard.md §4.8, *A start
+ * under way when the dashboard exits*, 2026-10-23).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createServer, type Server } from "node:net";
+import type { ChildProcess } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { makeAccount, writeAccount } from "../../src/account.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { once } from "node:events";
-import { pollUntil, SERVER_TEST_TIMEOUT_MS, START_DEADLINE_MS, waitForPort } from "./server-up.js";
+import { pollUntil, SERVER_TEST_TIMEOUT_MS, silentArbiter, spawnServer, START_DEADLINE_MS, stopServer, waitForExit, waitForPort } from "./server-up.js";
 import { tmpDir } from "../unit/tmp-dir.js";
 
 const PKG_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const TSX = join(PKG_DIR, "node_modules", ".bin", "tsx");
 const SERVER_MAIN = join(PKG_DIR, "src", "server-main.ts");
 
 function launch(dir: string, arbSock: string, extra: Record<string, string>): { child: ChildProcess; stderr: () => string } {
@@ -49,31 +55,28 @@ function launch(dir: string, arbSock: string, extra: Record<string, string>): { 
     // may be the host's (test-organization.md §8.4).
     MANDU_HOME: join(dir, "home"),
     MANDU_TEST_DASHBOARD: "",
+    // No stack: what is under test is the bind and the sign-in gate. The
+    // autostart would start a test arbiter and three proxies per server, each
+    // one more process to stop at the end.
+    DASHBOARD_AUTOSTART: "0",
     ...extra,
   };
   // The point under test is the DEFAULT: make sure no inherited value decides it.
   delete env["DASHBOARD_HOST"];
   Object.assign(env, extra);
-  const child = spawn(TSX, [SERVER_MAIN], { cwd: PKG_DIR, env, stdio: ["ignore", "ignore", "pipe"] });
+  const child = spawnServer(SERVER_MAIN, { cwd: PKG_DIR, env, stdio: ["ignore", "ignore", "pipe"] });
   child.stderr!.on("data", (d: Buffer) => { stderr += d.toString(); });
   return { child, stderr: () => stderr };
-}
-
-async function exited(child: ChildProcess, ms = 5000): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((r) => { child.once("exit", () => r()); setTimeout(r, ms).unref(); });
 }
 
 async function withArbiter<T>(fn: (dir: string, arbSock: string) => Promise<T>): Promise<T> {
   const dir = tmpDir("mandu-dashbind-");
   const arbSock = join(dir, "arbiter.sock");
-  const arb: Server = createServer((s) => s.on("data", () => {}));
-  arb.listen(arbSock);
-  await once(arb, "listening");
+  const arb = await silentArbiter(arbSock);
   try {
     return await fn(dir, arbSock);
   } finally {
-    arb.close();
+    await arb.close();
     rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -117,8 +120,7 @@ test("no DASHBOARD_HOST → the server binds loopback and says so", { timeout: S
       const auth = { Authorization: `Basic ${Buffer.from("alice:a long enough password").toString("base64")}` };
       assert.equal((await fetch(`http://127.0.0.1:${port}/api/tenants`, { headers: auth })).status, 200, "served on loopback with the account");
     } finally {
-      child.kill("SIGTERM");
-      await exited(child);
+      await stopServer(child);
     }
   });
 });
@@ -127,13 +129,12 @@ test("DASHBOARD_HOST=0.0.0.0 with no authenticator refuses to start (exit 2, nev
   await withArbiter(async (dir, arbSock) => {
     const { child, stderr } = launch(dir, arbSock, { DASHBOARD_HOST: "0.0.0.0" });
     try {
-      await exited(child, START_DEADLINE_MS); // a deadline: returns at the exit
+      await waitForExit(child); // a deadline: returns at the exit
       assert.equal(child.exitCode, 2, `exit 2 (stderr: ${stderr()})`);
       assert.match(stderr(), /refusing to bind 0\.0\.0\.0: a non-loopback bind needs the dashboard account/);
       assert.ok(!existsSync(join(dir, "port")), "it never listened");
     } finally {
-      child.kill("SIGKILL");
-      await exited(child);
+      await stopServer(child);
     }
   });
 });
@@ -146,13 +147,12 @@ for (const [label, extra] of [
     await withArbiter(async (dir, arbSock) => {
       const { child, stderr } = launch(dir, arbSock, { DASHBOARD_HOST: "0.0.0.0", ...extra });
       try {
-        await exited(child, START_DEADLINE_MS);
+        await waitForExit(child); // a deadline: returns at the exit
         assert.equal(child.exitCode, 2, `exit 2 (stderr: ${stderr()})`);
         assert.match(stderr(), /needs the dashboard account/);
         if ("DASHBOARD_PASSWORD" in extra) assert.match(stderr(), /NOTICE: DASHBOARD_PASSWORD is no longer used and is ignored/);
       } finally {
-        child.kill("SIGKILL");
-        await exited(child);
+        await stopServer(child);
       }
     });
   });
@@ -170,8 +170,7 @@ test("a pinned DASHBOARD_ADMIN_TOKEN (the suites' seam) gets through the fail-cl
       assert.equal((await fetch(`http://127.0.0.1:${port}/api/tenants`)).status, 401, "without it, still closed");
       assert.match(await waitFor(stderr, /DASHBOARD_ADMIN_TOKEN is pinned/), /a test seam/);
     } finally {
-      child.kill("SIGTERM");
-      await exited(child);
+      await stopServer(child);
     }
   });
 });
@@ -190,8 +189,7 @@ for (const [label, extra, account] of [
         const notice = /non-loopback bind: remote clients limited to \(none — every remote client is denied; set DASHBOARD_ALLOW_HOSTS\)/;
         assert.match(await waitFor(stderr, notice), notice, "no lab peer is admitted by default");
       } finally {
-        child.kill("SIGTERM");
-        await exited(child);
+        await stopServer(child);
       }
     });
   });

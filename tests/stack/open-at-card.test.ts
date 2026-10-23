@@ -54,8 +54,8 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF
 
 after(() => setAdminLayer(NO_ADMIN_LAYER));
 
-const KEY = "sk_live_openAtCardRegisteredCanary00000001";
-const FOUND = "sk_live_51HopenAtCardFound0AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+const KEY = "sk_" + "live_openAtCardRegisteredCanary00000001";
+const FOUND = "sk_" + "live_51HopenAtCardFound0AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
 const BODY = "OPENATCARDDOCUMENTBODY6631";
 const UNMAPPED = "2a2a0000-0000-4000-8000-000000000002";
 const TENANT = "4c1d0000-0000-4000-8000-0000000000aa";

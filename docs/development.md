@@ -391,7 +391,10 @@ lockfile exists), one npm per package at a time under a per-user lock in
 works in a fresh worktree with no install step first. `MANDU_NO_AUTO_INSTALL=1` makes it only report what is
 missing. `scripts.install-deps` fails when a package imports another's
 sources without listing it; `node scripts/install-deps.mjs --reach <dir>`
-prints what a package reaches. A package whose tests *run* another package
+prints what a package reaches. `node scripts/install-deps.mjs --bundle`
+installs every package the launcher's bundle build reads (`node
+scripts/suites.mjs packages --bundle`, from `launcher/bundle-manifest.json`),
+what `npm pack` in `launcher/` needs in a clean checkout. A package whose tests *run* another package
 without importing it lists it too: the dashboard's component tests start the real
 arbiter (`arbiter/ipc/server-main.ts`), so `dashboard` lists `arbiter`; and
 `tests`, whose sandbox and live suites start the launcher from source,

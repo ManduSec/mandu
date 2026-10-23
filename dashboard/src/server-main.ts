@@ -393,11 +393,12 @@ async function main(): Promise<void> {
         // Reap the services THIS process spawned before exiting. Their
         // stdout/stderr are pipes into THIS process (supervisor launch()), so
         // leaving them running hands the successor a stack that dies with
-        // EPIPE on its next log line. shutdownAll() by design skips ADOPTED
+        // EPIPE on its next log line. close() (shutdownAll, and no spawn
+        // after it: a start still under way is refused) by design skips ADOPTED
         // instances (no child pid) — anything started outside this dashboard
         // survives and is re-adopted by the successor.
         try {
-          await supervisor?.shutdownAll();
+          await supervisor?.close();
         } catch (err) {
           console.error(`[dashboard] self-restart: shutdown error (continuing): ${(err as Error).message}`);
         }
@@ -740,7 +741,7 @@ async function main(): Promise<void> {
     joinTimer.unref();
   }
 
-  // server.close() reaps the supervised children (shutdownAll) + cancels runs
+  // server.close() reaps the supervised children (Supervisor.close) + cancels runs
   // (cancelAll), so exit cleanly on a signal instead of orphaning the arbiter.
   const bye = async (code = 0): Promise<void> => {
     if (registryEntry) unregisterDashboard(registryEntry);

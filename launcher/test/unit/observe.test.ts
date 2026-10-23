@@ -105,6 +105,12 @@ test("launchPostureEvent: the protection mode rides first-class when given, abse
   assert.equal(launchPostureEvent({ scopeId: "s", target: "claude", argv0: "claude", notes: [] })["protection"], undefined);
 });
 
+test("launchPostureEvent: whether the human plane was walled rides as given, either way; absent when no claim was made", () => {
+  assert.equal(launchPostureEvent({ scopeId: "s", target: "claude", argv0: "claude", notes: [], humanPlaneWalled: false })["humanPlaneWalled"], false);
+  assert.equal(launchPostureEvent({ scopeId: "s", target: "claude", argv0: "claude", notes: [], humanPlaneWalled: true })["humanPlaneWalled"], true);
+  assert.equal("humanPlaneWalled" in launchPostureEvent({ scopeId: "s", target: "claude", argv0: "claude", notes: [] }), false);
+});
+
 /** A one-op NDJSON server that answers `emit` (or refuses it) and records it. */
 async function emitServer(path: string, name: string, ok: boolean, got: string[]): Promise<Server> {
   const srv = createServer((c) => {

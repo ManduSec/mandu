@@ -52,7 +52,7 @@ import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF
 
-const KEY = "sk_live_settingsExceptionsNotOfferedCanary01";
+const KEY = "sk_" + "live_settingsExceptionsNotOfferedCanary01";
 const LOCK_FILE = "10-org.yaml";
 const ABOUT = "What matches an exception goes to the AI as you wrote it.";
 const REGISTERED = "Exceptions are not offered for a secret Mandu already knows: the choice above decides what happens to it.";

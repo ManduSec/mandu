@@ -870,3 +870,17 @@ export function coerceEvent(v: unknown): ManduEvent | null {
 export function believedEvents<T extends { claimed?: unknown }>(events: readonly T[]): T[] {
   return events.filter((e) => e.claimed !== true);
 }
+
+/** Whether Mandu could not check a session's record (dashboard.md §4.25ah,
+ *  *A record Mandu could not check*): it holds events and EVERY one is a
+ *  claim (a launch with no wall around the human plane,
+ *  arbiter-human-plane.md §10.1, or one with no human socket), or the
+ *  launch said its agent's world was not walled off from the human plane
+ *  (`launch_posture.humanPlaneWalled === false`). Only ever read to say
+ *  LESS (a count is never raised by it, and a forged posture can only hide
+ *  one), so it may read a claim. Pure. */
+export function recordUnchecked(events: readonly { claimed?: unknown; kind?: unknown }[]): boolean {
+  if (!events.length) return false;
+  if (events.every((e) => e.claimed === true)) return true;
+  return events.some((e) => e.kind === "launch_posture" && (e as { humanPlaneWalled?: unknown }).humanPlaneWalled === false);
+}

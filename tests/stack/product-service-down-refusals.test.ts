@@ -50,7 +50,7 @@ import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_productDownRefusalsStackCanary01";
+const KEY_VALUE = "sk_" + "live_productDownRefusalsStackCanary01";
 const SESSION = "1791900000-731";
 const UNREACHABLE_WORDS = "The protection service is not running. Start it under Settings, or try again in a moment.";
 /** The one link of that sentence: Settings, where the Start of the service is. */

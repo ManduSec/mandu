@@ -173,13 +173,16 @@ code.code-whole { white-space: nowrap; }
 .page-head h1 { font-weight: 650; font-size: 30px; line-height: 1.15; letter-spacing: -0.02em; }
 .page-head p { margin: 0; color: var(--ink-3); }
 /* Section links (dashboard.md §4.25 "Section links"): under the title of
-   Rules and Settings, a link per card, "·" between them. One row that
+   Approvals, Rules and Settings, a link per card, "·" between them. One row that
    wraps on a phone, in the page's flow: it never sticks over the page. A
    link keeps its words together (a "Who may get your secrets" breaks only
-   between links), and the "·" ends a line rather than starting the next. */
+   between links), and the "·" ends a line rather than starting the next.
+   A link to a list hidden while empty is hidden too; the last one shown
+   (`.end`) has no "·" after it. */
 .section-links ul { display: flex; flex-wrap: wrap; gap: 4px 0; margin: 4px 0 0; padding: 0; list-style: none; font-size: 14px; }
 .section-links li { white-space: nowrap; }
-.section-links li:not(:last-child)::after { content: "·"; margin: 0 8px; color: var(--ink-3); }
+.section-links li[hidden] { display: none; }
+.section-links li:not(:last-child):not(.end)::after { content: "·"; margin: 0 8px; color: var(--ink-3); }
 /* A page change gives the focus to the page's heading, or to the card or
    step the page scrolls to (dashboard.md §4.25 *A page change moves the
    focus*): not controls, so no ring; a marked card or step keeps its mark.

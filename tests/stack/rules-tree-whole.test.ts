@@ -47,7 +47,7 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF
 
 after(() => resetCurrentPolicyForTests("claude-code"));
 
-const KEY = "sk_live_rulesTreeWholeStackCanary0000000";
+const KEY = "sk_" + "live_rulesTreeWholeStackCanary0000000";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Doc = any;

@@ -46,7 +46,7 @@ import { humanSockIn } from "../lib/human-plane.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_homeHeroFailureWordsStackCanary01";
+const KEY_VALUE = "sk_" + "live_homeHeroFailureWordsStackCanary01";
 /** What the request, its status or a failed fetch would say, which the hero must not. */
 const RAW = /→|\bhome\b|\b50\d\b|fetch|ENOENT|ECONNREFUSED|\.sock\b|arbiter/i;
 

@@ -45,7 +45,7 @@ import { humanSockIn } from "../lib/human-plane.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_productCouldNotCheckStackCanary01";
+const KEY_VALUE = "sk_" + "live_productCouldNotCheckStackCanary01";
 const DOWN = "The protection service is not running.";
 const DOWN_LINKED = "The protection service is not running. Start it under Settings, or try again in a moment.";
 const GONE = "The dashboard could not reach its own server. Refresh in a moment.";

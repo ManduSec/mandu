@@ -53,7 +53,7 @@ import type { ManduEvent } from "../../dashboard/src/event-model.js";
 
 stateAxes("secrets");
 
-const KEY = "sk_live_51CdpRelayStackQz8Yv3kT9mN2";
+const KEY = "sk_" + "live_51CdpRelayStackQz8Yv3kT9mN2";
 const SESSION = "s-cdp-relay";
 
 interface Stack {

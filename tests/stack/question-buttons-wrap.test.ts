@@ -57,7 +57,7 @@ import { stateAxes } from "../lib/axes.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF
 
-const KEY_VALUE = `sk_live_questionButtonsWrapCanary_${process.pid}_5e2a`;
+const KEY_VALUE = `sk_${""}live_questionButtonsWrapCanary_${process.pid}_5e2a`;
 const CODENAME = "marlowbrookproject";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type El = any;

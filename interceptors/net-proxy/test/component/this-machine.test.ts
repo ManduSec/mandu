@@ -193,7 +193,10 @@ test("TLS inspection on: a loopback CONNECT is refused before termination; a nam
         if (idx === -1) return;
         raw.off("data", onData);
         if (!/^HTTP\/1\.1 200/.test(head)) return resolve(head.split("\r\n")[0]!);
-        const tls = tlsConnect({ socket: raw, servername: host, ca: caPem }, () => {
+        // The client's own name check is not under test (the proxy's CA is
+        // pinned): a newer Node (22.2x) refuses a numeric host like this one
+        // before any byte is sent, "Host is a non-canonical IP address".
+        const tls = tlsConnect({ socket: raw, servername: host, ca: caPem, checkServerIdentity: () => undefined }, () => {
           tls.write(`GET /api/events HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
         });
         let out = "";

@@ -2148,6 +2148,38 @@ removed on deliberate exit, dead entries swept at boot), so `mandu status` and
 `mandu reap` see forgotten dashboards like every other Mandu daemon
 (runtime-instances.md §10).
 
+**A start under way when the dashboard exits (2026-10-23).** The dashboard's
+exit (a SIGTERM or SIGINT, its test owner gone, the self-restart) stops the
+supervised services with `Supervisor.close()`, not `shutdownAll()`: close()
+marks the supervisor closed, then stops every service it spawned, and from
+then on `launch()` refuses to spawn (the start rejects with "not started:
+the dashboard is shutting down", the row reads stopped). The check sits
+right before the spawn, synchronously, so a child either exists when the
+stop looks for it or is never made. Before, a start still waiting for its
+spawn was invisible to the stop: the autostart awaits a hello probe (up to
+1.5 s) before each proxy's spawn, a SIGTERM inside that wait found no child
+to stop, the spawn came while the stop still waited on another service (the
+test arbiter), and the dashboard exited over a detached proxy in its own
+process group that nothing stopped. A release run of
+`bind-default.test.ts` passed every test and then stayed alive until the
+suite's 900 s deadline: two orphaned proxies held a connection to the
+test's stand-in arbiter socket, and lived on because the test that owned
+them never ended (they do not watch the test owner, runtime-instances.md
+§8a). *Stop services* (`stopAll`) keeps `shutdownAll()`: it is not final,
+and a start pressed beside it may still run. The component suites that
+start the real `server-main` start it as the spawned process itself (`node
+--import tsx`: the tsx CLI SIGKILLs its child when the child does not
+report a relayed signal within 30 ms, so a loaded run skipped the exit path
+and orphaned every service), with no autostarted stack where the stack is
+not what they test, stop and await it (SIGTERM, then SIGKILL after a
+deadline), and close their stand-in arbiter with its connections
+(`test/component/server-up.ts`). Tests:
+`test/unit/supervisor/supervisor-close.test.ts` (a start held before its
+spawn by the bundle check: close() refuses it and spawns nothing, stops the
+running service, refuses a later start; `shutdownAll()` alone lets the
+spawn through) and `test/component/server-close-start.test.ts` (the same
+over the real `DashboardServer.close()`).
+
 ### 4.9 Per-tool-call policy modal — schema-first, per-field trust
 
 Each tool card (§4.2f) carries a **⚖** button opening a centered modal,
@@ -6953,6 +6985,24 @@ empty and fallback states, so they follow the rest of the page:
       the error's status or the hero's words for no answer. The 503
       `unreachable` keeps its "Not connected" words, and `found: false`
       is still "Session not found".
+    - **A session Mandu has no record of (2026-10-23).** Under "Session
+      not found" the line said "It may have been deleted, or it belongs
+      to the other tenant. Mandu keeps a session's record for 90 days.",
+      with no way on but *Back to home*. A tenant is the developer view's
+      test store (`server/tenant.ts`); the product page is always served
+      from the live store, so a user never has "the other tenant", and
+      nothing on the product page deletes a session. It now reads
+      "Mandu has no record of this session. Records are kept for 90
+      days, so it may be older than that, or the link may be wrong. Look
+      for it in History.", *History* a page link (`placeLink` `to:
+      'history'`) that opens History in place, where a past session is
+      found. Tests: `home-js-agent.test.ts` (the words, the one link and
+      its click; no home.js string outside a comment, nor index.html,
+      says "tenant") and `tests/stack/agent-page-missing.test.ts` (a real
+      arbiter at `secrets` with a session that read a `no-model` file,
+      the real dashboard, signed in: `/agents/<an unknown id>` names no
+      tenant, links History, and no page or answer carries the file's
+      value or a token).
     - **Settings › Protection** said "The protection settings could not
       be read." alone, also with the dashboard gone. `loadProtection` now
       keeps why (`S.axesFailure`), and the row adds the cause: an error
@@ -13696,8 +13746,20 @@ list and a set of rules read down a column.
   label in words and its source, the change waiting, the hosts field, notes
   (set in the rules file; a folder covers what is inside; a link covers its
   file), Remove my rule, the local-model warning (§4.25l), where it is kept,
-  the origin line (§4.25i), the use count, Show in policy.yaml (§4.25g), Show
-  in its folder, and Why (§4.25m).
+  the origin line (§4.25i), the use count and the last use, Show in
+  policy.yaml (§4.25g), Show in its folder, and Why (§4.25m).
+- **The use line says when the rule last decided something** (2026-10-23):
+  "12 uses, the last 3 hours ago", "1 use, just now", the clock time on hover
+  (a `time.ago`, which `refreshWhen` keeps current), from the row's `lastHit`
+  (the arbiter's `rule_hits.last_hit`). Someone tidying their rules judges
+  whether a rule still does anything before pressing Remove: "40 uses" read
+  the same for a rule used an hour ago and one last used in August. The same
+  line closes a rule of the other groups opened with its ⋯. "Never used" stays
+  as it is; a count without a moment (an arbiter that keeps none) stays the
+  count alone; an answer ("Your answer, asked 3 times") and a label saved here
+  ("Added here") carry no use moment. `home-js-rules.test.ts` and
+  `tests/stack/dashboard-rules-page.test.ts` (a rule decides one send over the
+  real arbiter; the served page says "1 use, just now").
 - **Ticked rows** (All files) get a bar (`files-selected`): one button per
   label, the hosts field, Remove my rules where every ticked item has a rule
   of yours, and Clear.
@@ -14081,14 +14143,30 @@ sub-menu and `#<key>` address, §4.34). Now:
   may get your secrets · Keys Mandu found · Built-in protections*.
   Settings: *Protection · Models · Sensitivity labels · Prompt filters ·
   Notifications · Appearance · About* (*Appearance* since 2026-10-18,
-  *About* since 2026-10-20). The developer-only *Developer view* card has none. The
+  *About* since 2026-10-20). Approvals (since 2026-10-23): *Keys Mandu
+  found · Rule changes asked for · Waiting · Answered earlier · Rule
+  changes*. The developer-only *Developer view* card has none. The
   row wraps on a phone, a "·" ending a line rather than starting the
   next. It stays in the page's flow and never sticks, so it never covers
   the focus.
-- **An address per card.** `/rules#describe`, `#your-rules`, `#who`,
+- **A hidden list has no link** (Approvals, 2026-10-23). *Keys Mandu
+  found*, the rule changes asked for and *Rule changes* hide while empty,
+  and so does each one's link (`followSectionLinks`, called where those
+  lists are drawn), so the row never offers a link that goes nowhere. The
+  row is changed in place, never drawn again, so a poll moves neither the
+  focus nor the scroll; the last link shown (`.end`) has no "·" after it.
+  Rules' and Settings' links never hide. Approvals had no row before:
+  *Rule changes*, which holds the only *Undo* of a rule change, came after
+  Answered earlier's rows and every *Show more*, and *Waiting for your
+  answer* could start under a 340 px rule-change card.
+- **An address per card.** `/approvals#keys-found`, `#asked-for`,
+  `#waiting`, `#answered`, `#rule-changes`; `/rules#describe`,
+  `#your-rules`, `#who`,
   `#keys-found`, `#built-in`; `/settings#protection`, `#models`,
   `#sensitivity-labels`, `#prompt-filters`, `#notifications`,
-  `#appearance`, `#about`. The keys
+  `#appearance`, `#about`. An address that opens one item of Approvals
+  (`/approvals/<id>`, *Details*) wins: its hash is not read and goes from
+  the address. The keys
   are not element ids, so the browser's own jump to a fragment does
   nothing and the page decides. `parseRoute` reads a key only on its own
   page. Any other hash opens the page at its top, and `setPage`'s
@@ -14099,14 +14177,18 @@ sub-menu and `#<key>` address, §4.34). Now:
   (`popstate` → `setPage`). Back still leaves the page. A modifier click
   is left to the browser, and the `href` carries the key, so a new tab
   opens at the card. If the card is hidden (*Who may get your secrets*
-  before the rules are read), the page stays where it is.
+  before the rules are read), the page stays where it is. So does an
+  address naming a card still hidden once the reads have drawn
+  (`/approvals#rule-changes` with no rule change): the page opens at its
+  top.
 - **Opening an address with a key** (a typed address, a new tab, a
   reload; Back or Forward only when the entry holds no place, since
   2026-10-22: the place you left wins, §4.25 *Back and Forward keep your
   place*) lands on that card as a link does
   (`landAtSection` → `landAtCard`, the code `openAtCard` now shares). It
-  waits for the page's reads and, on the first load, for Home's first
-  read too, which draws *Built-in protections* and the top bar. In a
+  waits for the page's reads (on Approvals, Rule changes') and, on the
+  first load, for Home's first read too, which draws *Built-in
+  protections*, the top bar and Approvals' other lists. In a
   headless Chromium over a real arbiter, landing before that read left
   `/rules#who` 117 px down: the page grew under it after the scroll. The
   focus goes from the page's heading to the card's heading. The person's
@@ -14138,7 +14220,15 @@ DevTools plumbing of `scripts/tour-screenshots.mjs`; self-SKIP without a
 browser). `/rules#who` and `/settings#prompt-filters` at 1280×800 and
 390×844 open with the card's heading focused and in view, the card at the
 top or the page at its end. The row is static, five links inside the
-page's width, and no page carries the registered key or a token.
+page's width, and no page carries the registered key or a token. Since
+2026-10-23 the net-proxy on its production client also stops two sends
+of a file's key, one answered Block over the real route:
+`/approvals#answered` lands on Answered earlier with its heading focused,
+the row showing only *Waiting* and *Answered earlier*, and
+`/approvals#rule-changes` with no rule change opens the top. The jsdom
+half (`home-js-section-links.test.ts`) pins Approvals' keys and ids, a
+hidden list's link coming and going on a poll with the focus kept, a
+click, the landing after Rule changes' read, and `/approvals/<id>#…`.
 
 **The line says which documents the label read left unchecked**
 (2026-10-08). The label read has its own budgets (`labels.limits`: 2,000
@@ -17314,7 +17404,48 @@ deadline):
   event holds it (an observe-first report would need `off` to record what
   it finds, a separate decision). With nothing to say, one short line:
   "no secret came up in this session, so Mandu had nothing to mask" (why it
-  is said rather than left out: packaging.md §5).
+  is said rather than left out: packaging.md §5), but never over a record
+  Mandu could not check (next item).
+- **A record Mandu could not check (2026-10-23).** A launch with no wall
+  around the human plane (no guard, and no bind wrap where the host's
+  bubblewrap cannot make a user namespace, as on GitHub's runner or under
+  `MANDU_NO_KERNEL=1` without bubblewrap) has every report stored as a
+  claim ([`arbiter-human-plane.md`](../architecture/arbiter-human-plane.md)
+  §10.1). No claim raises a count, so such a session used to end with
+  "no secret came up", though the model proxy did mask its `.env`: untrue.
+  Now `event-model.ts` `recordUnchecked` marks the record unchecked when
+  it holds events and every one is a claim, or when its launch said its
+  agent was not walled off (`launch_posture.humanPlaneWalled === false`,
+  the launch's own `humanPlaneWalled` claim, recorded since 2026-10-23).
+  It is only ever read to say less, so it may read a claim: a forged
+  posture can only hide a count, never add one. `HomeFacts` and the
+  session page's route pass it to the story (`StoryOptions.unchecked` →
+  `SecretsStory.unchecked`, `SessionKept.unchecked`). The line then says,
+  in the words of Home's notice about the same gap ("Another agent can
+  reach Mandu's own controls."):
+
+  > mandu: Mandu could not check this session's record (on this computer
+  > the agent could reach Mandu's own controls), so it shows no count ·
+  > why: `mandu doctor` and `mandu log`
+
+  (`mandu doctor` names the host's gap and its fix, `mandu log` holds the
+  launch's "GATED" line). When the believed events do count something (a
+  launch that said it was not walled off but whose reports were believed),
+  the facts are said and followed by "Mandu could not check the rest of
+  this session's record (…) · why: … · details: …". Precedence is
+  unchanged: a fired leak check, then `off`, then this. The line's blocks
+  and sends are counted over the BELIEVED story (`buildStory(believedVm)`),
+  so a claim never raises any of its counts; with no claim in the record
+  that is the row's own count, and a session with claims can count fewer
+  blocks or sends than its Home row, which draws claimed steps. The
+  session page's Your secrets says the same instead of "No secret you
+  registered or labeled came up in this session" ("Mandu could not check
+  this session's record: on this computer the agent could reach Mandu's
+  own controls, so this page counts no secret from it. Run `mandu doctor`
+  to see why."), or after its count when it has cards. A mixed record
+  (some claims, a walled launch: the agent-tree reports of §10.2) is
+  checked and its line is unchanged. Home's rows make no "nothing came
+  up" claim and are unchanged.
 - **The channel** (`sign-in.ts` `answerSessionKept`). The dashboard's
   human-plane socket (§6.x *Signing in*) answers a second op,
   `{"op":"sessionKept","session":"<id>"}`: `{ok:true, found:true, line,
@@ -17329,7 +17460,12 @@ Display only; nothing on the security path. Tests:
 `test/unit/view-model/session-kept.test.ts` (Home's counts for the same
 session, the names and hosts, the plurals and "and N more", nothing to say,
 `off`, the leak check, a planted value in the record's originals in neither
-the facts nor the line, control characters, the vocabulary),
+the facts nor the line, control characters, the vocabulary; a record of
+claims only, a mixed one, none claimed, a launch not walled off, and
+`recordUnchecked`), `test/unit/view-model/secret-story.test.ts` and
+`test/unit/ui/home-js-agent.test.ts` (Your secrets over an unchecked
+record), `launcher/test/unit/observe.test.ts` (`humanPlaneWalled` on
+`launch_posture`),
 `test/unit/sign-in.test.ts` (the op beside the sign-in op, its answers and
 refusals, no exposure asked), and the stack test
 `tests/stack/session-end-kept-line.test.ts` (the real launcher, arbiter and
@@ -17337,9 +17473,12 @@ dashboard: the line on stderr with the agent page's count). A launch with
 no wall around the human plane (no guard, and no bind wrap where the host's
 bubblewrap cannot make a user namespace, as on GitHub's runner) has every
 report stored as a claim ([`arbiter-human-plane.md`](../architecture/arbiter-human-plane.md)
-§10.1); the story counts no claim, so its line says Home's count of none.
-The stack test asserts that form on such a host, chosen by the launcher's
-own probe (continuous-integration.md §12.1).
+§10.1); the story counts no claim, and its line says Mandu could not check
+the record (above). The stack test asserts that form on such a host
+(every event a claim, `humanPlaneWalled: false` on the launch's posture,
+the page's Your secrets unchecked, the line), chosen by the launcher's own
+probe (continuous-integration.md §12.1); a walled host takes that branch
+with a `bwrap` and an `unshare` that exit 1 first on PATH.
 
 #### 4.25ai What already left before Mandu: the last scan on Home and the Scan page (2026-10-21)
 

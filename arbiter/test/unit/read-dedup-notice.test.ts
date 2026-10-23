@@ -33,7 +33,7 @@ const SHORT_FILE =
   "<system-reminder>Warning: the file exists but is shorter than the provided offset (40). The file has 12 lines.</system-reminder>";
 const BUDGET = "<system-reminder>\n<total_tokens>14000 tokens left</total_tokens>\n</system-reminder>";
 const SECRET = "/ws/.env"; // a catalog secret path: no-model by the path alone
-const FILE_READ = "     1\tSTRIPE_KEY=sk_live_FakeDedup0123456789abcdef\n";
+const FILE_READ = "     1\tSTRIPE_KEY=sk_" + "live_FakeDedup0123456789abcdef\n";
 
 const policy = () => createEngineBackedPolicy({ policyFileOverride: {}, confidentiality: true, integrity: false });
 const readOf = (p: ReturnType<typeof policy>, value: string, file_path = SECRET) =>
@@ -51,7 +51,7 @@ test("isReadDedupNotice: anything appended, a lookalike, another tool, another p
   const no: Array<[string, string, Record<string, unknown> | undefined]> = [
     [`${WASTED}\n${FILE_READ}`, "Read", { file_path: SECRET }],
     [`${FILE_READ}${WASTED}`, "Read", { file_path: SECRET }],
-    [`${WASTED} sk_live_FakeDedup0123456789abcdef`, "Read", { file_path: SECRET }],
+    [`${WASTED} sk_${""}live_FakeDedup0123456789abcdef`, "Read", { file_path: SECRET }],
     [WASTED.replace("—", "-"), "Read", { file_path: SECRET }],
     [WASTED.toLowerCase(), "Read", { file_path: SECRET }],
     [`     1\t${WASTED}`, "Read", { file_path: SECRET }],

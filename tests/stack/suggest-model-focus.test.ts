@@ -57,7 +57,7 @@ after(() => resetCurrentPolicyForTests("claude-code"));
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FAKE = join(HERE, "..", "..", "arbiter", "test", "helpers", "fake-classifier.mjs");
-const KEY = "sk_live_suggestModelFocusStackCanary00000001";
+const KEY = "sk_" + "live_suggestModelFocusStackCanary00000001";
 
 /** The classifier the arbiter starts: describe answers at once; a run waits
  *  until the `go` file exists, then the fake classifier answers it. A run

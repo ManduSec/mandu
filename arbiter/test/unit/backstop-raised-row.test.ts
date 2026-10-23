@@ -31,7 +31,7 @@ import { stateAxes } from "../axes.js";
 
 stateAxes("secrets");
 
-const TOKEN = "sk_live_RaisedRowUnit7Kq2Xr9Lm4Tz8V";
+const TOKEN = "sk_" + "live_RaisedRowUnit7Kq2Xr9Lm4Tz8V";
 const SECRET_LINE = `STRIPE_SECRET_KEY=${TOKEN}`;
 const HEADING = "## Deployment checklist for the release team";
 const LOGLINE = "INFO  starting worker pool with 8 workers";

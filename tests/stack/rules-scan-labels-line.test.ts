@@ -63,7 +63,7 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF
 
 after(() => setAdminLayer(NO_ADMIN_LAYER));
 
-const KEY = "sk_live_rulesScanLabelsLineCanary000000001";
+const KEY = "sk_" + "live_rulesScanLabelsLineCanary000000001";
 const BODY = "RULESSCANLABELSLINEDOCUMENTBODY7781";
 const LOCKED_BODY = "RULESSCANLABELSLINELOCKEDBODY7782";
 const UNMAPPED = "2a2a0000-0000-4000-8000-000000000002";

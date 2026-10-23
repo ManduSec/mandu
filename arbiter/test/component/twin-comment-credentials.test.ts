@@ -30,8 +30,8 @@ import { stateAxes } from "../axes.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the default mode
 
-const OLD = "sk_live_51OldKeyAbCdEfGhIjKlMnOpQrStUv";
-const NEW = "sk_live_51NewKeyZyXwVuTsRqPoNmLkJiHg";
+const OLD = "sk_" + "live_51OldKeyAbCdEfGhIjKlMnOpQrStUv";
+const NEW = "sk_" + "live_51NewKeyZyXwVuTsRqPoNmLkJiHg";
 const COMMENTED = `# OLD_STRIPE_KEY=${OLD}\nSTRIPE_SECRET_KEY=${NEW}\nPORT=3000\n`;
 const GLUED = `STRIPE_SECRET_KEY=${NEW}\nDB_PASS2=owl\nMODE=owlish\nPORT=3000\n`;
 

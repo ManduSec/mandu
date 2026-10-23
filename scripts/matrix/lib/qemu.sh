@@ -24,6 +24,12 @@ CACHE_DIR="${MANDU_VM_CACHE:-${TMPDIR:-/tmp}/mandu-vm-cache}"
 # guest_release (after each boot, and from run.sh's EXIT trap) stops it.
 # shellcheck source=scripts/lib/guest-registry.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../../lib/guest-registry.sh"
+# The Rust pin a guest installs (matrix_rust_version).
+# shellcheck source=rust-toolchain.sh
+. "$(dirname "${BASH_SOURCE[0]}")/rust-toolchain.sh"
+# The checkout this executor belongs to: run.sh's REPO_ROOT, else this file's
+# (a test that sources the executor alone).
+QEMU_REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 
 qemu_base_img() { echo "$CACHE_DIR/$(basename "$IMAGE_URL")"; }
 
@@ -176,6 +182,29 @@ qemu_fetch_image() {
   return 0
 }
 
+# qemu_git_dir <dest> — the guest's .git, as the CI guest gets one
+# (scripts/ci/lib.sh ci_append_git_dir, continuous-integration.md §3): a
+# one-commit shallow repository whose HEAD is the checkout's and whose index
+# is that commit's tree, so a suite that reads the repository's own state
+# (`git rev-parse HEAD`, `git status`: test-all.sh's run record, the launcher's
+# provenance tests) sees the commit under test, and a dirty checkout shows as
+# a dirty copy. Only that commit's objects travel: no history, no other refs,
+# no hooks, no config. Nothing outside a git checkout.
+qemu_git_dir() {
+  local dest="$1" sha tmp rc=0
+  sha="$(git -C "$QEMU_REPO_ROOT" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || return 0
+  tmp="$(mktemp -d "${RUN_WORK:-${TMPDIR:-/tmp}}/git.XXXXXX")" || return 1
+  { git init -q "$tmp/repo" \
+      && rm -rf "$tmp/repo/.git/hooks" \
+      && git -C "$tmp/repo" fetch -q --no-tags --depth 1 "file://$QEMU_REPO_ROOT" "$sha" \
+      && git -C "$tmp/repo" update-ref --no-deref HEAD "$sha" \
+      && git -C "$tmp/repo" read-tree "$sha" \
+      && rm -f "$tmp/repo/.git/FETCH_HEAD" \
+      && rm -rf "$dest" && mv "$tmp/repo/.git" "$dest"; } || rc=1
+  rm -rf "$tmp"
+  return $rc
+}
+
 # qemu_userdata <suite> <deps> <outfile> — generate the cloud-init user-data.
 # The guest runner is a quoted-heredoc template with @TOKEN@ substitution (no
 # shell expansion inside), then indented 6 spaces into the YAML block scalar —
@@ -183,13 +212,21 @@ qemu_fetch_image() {
 # node → NodeSource 22.x (Ubuntu apt node is too old for the TS stack).
 qemu_userdata() {
   local suite="$1" deps="$2" out="$3" pubkey="${4:-}"
-  local guest_sh="$RUN_WORK/guest-runner.sh"
+  local guest_sh="$RUN_WORK/guest-runner.sh" run_as=""
+  # The suite's `# run-as:` header (none for the provisioning and manual boots).
+  local sf="${MATRIX_DIR:-$QEMU_REPO_ROOT/scripts/matrix}/suites/$suite.sh"
+  [[ -f "$sf" ]] && run_as="$(parse_header "$sf" run-as)"
 
   cat > "$guest_sh" <<'GUEST'
 #!/usr/bin/env bash
 set -uo pipefail
 exec > >(tee -a /var/log/mandu-matrix.log) 2>&1
 SUITE="@SUITE@"; DEPS="@DEPS@"; SYSCTLS="@SYSCTLS@"
+# A suite's `# run-as: <user>` header (os-test-matrix.md §4.2): it runs as that
+# unprivileged user, as CI's guest runs every suite as `ci`, not as root.
+RUN_AS="@RUN_AS@"
+WORK=/root/work; MWORK=/root/matrix-work
+[[ -n "$RUN_AS" ]] && { WORK="/home/$RUN_AS/work"; MWORK="/home/$RUN_AS/matrix-work"; }
 # cloud-init's runcmd gives this script no HOME (nor USER). Suites that read
 # it failed as something else on 2026-09-25: docker-run.test.sh died on "HOME:
 # unbound variable", and a launcher e2e passed HOME=undefined, found no
@@ -273,27 +310,44 @@ if [[ "$SUITE" == __provision__ ]]; then
   exit 0
 fi
 
+if [[ -n "$RUN_AS" ]]; then
+  id -u "$RUN_AS" >/dev/null 2>&1 || useradd -m -s /bin/bash "$RUN_AS" || finish "fail: cannot create the user $RUN_AS"
+  # A git identity, as CI's guest has one (scripts/ci/guest/provision.sh):
+  # the suites commit in throwaway repositories.
+  git config --system user.name "mandu-matrix" && git config --system user.email "matrix@mandu.invalid"
+fi
 # Writable repo copy; EXCLUDE host build state (host-owned artifacts collide in
-# the guest and must be rebuilt for the guest anyway) and .git (suites must not
-# depend on the repo's own git state).
-mkdir -p /root/work /root/matrix-work
+# the guest and must be rebuilt for the guest anyway) and the checkout's own
+# .git: the host's one-commit copy of it (qemu_git_dir) takes its place.
+mkdir -p "$WORK" "$MWORK"
 if command -v rsync >/dev/null 2>&1; then
   rsync -a --exclude='.git/' --exclude='target/' --exclude='**/target/' \
-        --exclude='node_modules/' --exclude='**/node_modules/' /mnt/reposrc/ /root/work/
+        --exclude='node_modules/' --exclude='**/node_modules/' /mnt/reposrc/ "$WORK/"
 else
-  cp -a /mnt/reposrc/. /root/work/
-  rm -rf /root/work/.git /root/work/interceptors/target
-  find /root/work -maxdepth 3 -name node_modules -type d -exec rm -rf {} + 2>/dev/null
+  cp -a /mnt/reposrc/. "$WORK/"
+  rm -rf "$WORK/.git" "$WORK/interceptors/target"
+  find "$WORK" -maxdepth 3 -name node_modules -type d -exec rm -rf {} + 2>/dev/null
 fi
-chown -R root:root /root/work 2>/dev/null || true
-cd /root/work || finish "fail: no workspace"
+[[ -d /mnt/artifacts/.mandu-git ]] && cp -a /mnt/artifacts/.mandu-git "$WORK/.git"
+OWNER=root:root; [[ -n "$RUN_AS" ]] && OWNER="$RUN_AS:$RUN_AS"
+chown -R "$OWNER" "$WORK" "$MWORK" 2>/dev/null || true
+cd "$WORK" || finish "fail: no workspace"
 
 case " $DEPS " in *" cargo "*)
-  export RUSTUP_HOME=/root/.rustup CARGO_HOME=/root/.cargo
-  curl -sSf --retry 5 --retry-delay 10 https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
-    || finish "fail: rustup install"
-  export PATH="$CARGO_HOME/bin:$PATH"
-  rustc --version || finish "fail: rustc missing after install"
+  # The CI pin (scripts/ci/pins.env RUST_VERSION), as the suites ask for it
+  # (lib/rust-toolchain.sh), not whatever `stable` is today; the run-as user's
+  # own rustup when the suite has one.
+  if [[ -n "$RUN_AS" ]]; then
+    runuser -u "$RUN_AS" -- env -i HOME="/home/$RUN_AS" PATH=/usr/local/bin:/usr/bin:/bin bash -c \
+      'curl -sSf --retry 5 --retry-delay 10 https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "@RUST@" && "$HOME/.cargo/bin/rustc" --version' \
+      || finish "fail: rustup install"
+  else
+    export RUSTUP_HOME=/root/.rustup CARGO_HOME=/root/.cargo
+    curl -sSf --retry 5 --retry-delay 10 https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "@RUST@" \
+      || finish "fail: rustup install"
+    export PATH="$CARGO_HOME/bin:$PATH"
+    rustc --version || finish "fail: rustc missing after install"
+  fi
   ;;
 esac
 case " $DEPS " in *" node "*)
@@ -303,8 +357,8 @@ case " $DEPS " in *" node "*)
   ;;
 esac
 fi  # RESUME -eq 0
-cd /root/work || finish "fail: no workspace"
-if [[ -x /root/.cargo/bin/cargo ]]; then
+cd "$WORK" || finish "fail: no workspace"
+if [[ -z "$RUN_AS" && -x /root/.cargo/bin/cargo ]]; then
   export RUSTUP_HOME=/root/.rustup CARGO_HOME=/root/.cargo PATH="/root/.cargo/bin:$PATH"
 fi
 
@@ -313,15 +367,30 @@ fi
 # guest stays up for ssh and never runs the suite.
 if [[ "$SUITE" == __interactive__ ]]; then
   echo "interactive" > "$RESULT_FILE"; sync
-  echo "=== interactive guest ready: artifacts in /mnt/artifacts, repo copy in /root/work ==="
+  echo "=== interactive guest ready: artifacts in /mnt/artifacts, repo copy in $WORK ==="
   exit 0
 fi
 
 echo "=== running suite $SUITE ==="
 TEE_OPT=(); [[ $RESUME -eq 1 ]] && TEE_OPT=(-a)
-MATRIX_TARGET="@TARGET@" MATRIX_LABELS="@LABELS@" MATRIX_WORK=/root/matrix-work MATRIX_RESUME=$RESUME \
+# MATRIX_OUT: where a suite may leave more than its log (all.sh's per-entry
+# logs). A run-as user cannot write the share (9p hands every file it
+# creates to the host's uid, so even a directory it made is not its own):
+# it writes a directory of its own, copied into the share when it ends.
+MOUT=/mnt/out
+if [[ -n "$RUN_AS" ]]; then
+  MOUT="/home/$RUN_AS/matrix-out"
+  runuser -u "$RUN_AS" -- mkdir -p "$MOUT"
+  # The CI guest's environment for its user (scripts/ci/guest/boot.sh).
+  AS=(runuser -u "$RUN_AS" -- env -i HOME="/home/$RUN_AS" USER="$RUN_AS" LOGNAME="$RUN_AS" SHELL=/bin/bash
+      PATH="/home/$RUN_AS/.cargo/bin:/usr/local/bin:/usr/bin:/bin" LANG=C.UTF-8 TERM=dumb MATRIX_OUT="$MOUT")
+else
+  AS=(env MATRIX_OUT="$MOUT")
+fi
+"${AS[@]}" MATRIX_TARGET="@TARGET@" MATRIX_LABELS="@LABELS@" MATRIX_WORK="$MWORK" MATRIX_RESUME=$RESUME \
   bash "scripts/matrix/suites/$SUITE.sh" 2>&1 | tee "${TEE_OPT[@]}" "$LOG_FILE"
 RC=${PIPESTATUS[0]}
+[[ "$MOUT" == /mnt/out ]] || cp -r "$MOUT/." /mnt/out/ 2>/dev/null || echo "could not copy $MOUT to the out share"
 case $RC in
   75)
     mkdir -p "${RESUME_FLAG%/*}" && touch "$RESUME_FLAG" \
@@ -347,6 +416,8 @@ GUEST
     -e "s|@LABELS@|$LABELS|g" \
     -e "s|@SYSCTLS@|$SYSCTLS|g" \
     -e "s|@PKGS@|$pkg_list|g" \
+    -e "s|@RUST@|$(matrix_rust_version "$QEMU_REPO_ROOT")|g" \
+    -e "s|@RUN_AS@|$run_as|g" \
     "$guest_sh"
 
   {
@@ -424,6 +495,7 @@ executor_run() {
   # guest at /mnt/artifacts. This is how a suite tests a host-BUILT artifact
   # (the packed tarball) instead of the checkout.
   local artifact_dir="$RUN_WORK/artifacts"; mkdir -p "$artifact_dir"
+  qemu_git_dir "$artifact_dir/.mandu-git" || { err "could not prepare the guest's .git"; return 1; }
   local host_prep="$MATRIX_DIR/suites/$suite.host.sh"
   if [[ -f "$host_prep" ]]; then
     say "Host prep: $(basename "$host_prep")"
@@ -532,6 +604,7 @@ executor_interactive() {
   qemu-img create -q -f qcow2 -F qcow2 -b "$QEMU_BACKING" "$overlay" 20G >/dev/null || {
     err "overlay creation failed"; return 1; }
   local out_dir="$RUN_WORK/out" artifact_dir="$RUN_WORK/artifacts"; mkdir -p "$out_dir" "$artifact_dir"
+  qemu_git_dir "$artifact_dir/.mandu-git" || { err "could not prepare the guest's .git"; return 1; }
   if [[ -n "$suite" && -f "$MATRIX_DIR/suites/$suite.host.sh" ]]; then
     say "Host prep: $suite.host.sh"
     ARTIFACT_DIR="$artifact_dir" REPO_ROOT="$REPO_ROOT" bash "$MATRIX_DIR/suites/$suite.host.sh" \

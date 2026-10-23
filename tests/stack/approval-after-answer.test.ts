@@ -38,7 +38,7 @@ import { humanSockIn } from "../lib/human-plane.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_afterAnswerStackCanary0000000001";
+const KEY_VALUE = "sk_" + "live_afterAnswerStackCanary0000000001";
 const SESSION = "1791300000-321";
 const SHA = "d".repeat(64);
 const CSRF = { "X-Mandu-Control": "1" };

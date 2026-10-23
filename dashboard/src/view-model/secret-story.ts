@@ -117,6 +117,9 @@ export const SECRET_ALL_CAP = 200;
 export interface StoryOptions {
   cap?: number;
   dev?: boolean;
+  /** Mandu could not check the session's record (event-model.ts
+   *  `recordUnchecked`): the story says so (`SecretsStory.unchecked`). */
+  unchecked?: boolean;
 }
 
 export type SecretLineTone = "good" | "warn" | "bad" | "plain";
@@ -170,6 +173,11 @@ export interface SecretsStory {
    *  it was marked a secret". A level that lets a model read it, Off and a
    *  fired leak check count in neither: their line says why. */
   counts: { masked: number; early: number };
+  /** Mandu could not check the session's record (event-model.ts
+   *  `recordUnchecked`; dashboard.md §4.25ah): every count above is still
+   *  the believed events' alone, but "no secret came up" is not said.
+   *  Absent: the record is checked. */
+  unchecked?: true;
 }
 
 const t = (text: string): StoryPart => ({ kind: "text", text });
@@ -924,5 +932,5 @@ export function secretsStory(believed: SessionViewModel | null, events: readonly
     const saw = aiSaw(g.level, g.early !== null || g.after !== undefined, anyFlag, mode);
     if (saw === "masked" || saw === "early") counts[saw]++;
   }
-  return { mode, flagged: anyFlag, secrets, more: Math.max(0, entries.length - cap), counts };
+  return { mode, flagged: anyFlag, secrets, more: Math.max(0, entries.length - cap), counts, ...(opts.unchecked ? { unchecked: true as const } : {}) };
 }

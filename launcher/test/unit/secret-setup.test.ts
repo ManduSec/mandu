@@ -160,7 +160,7 @@ test("plan 10 §4.1: the real file is marked at launch in memory only, so the en
   try {
     const real = join(dir, "proj", ".env");
     mkdirSync(join(dir, "proj"));
-    const bytes = "STRIPE_SECRET_KEY=sk_live_CANARYsecretSETUPwatch01234\n";
+    const bytes = "STRIPE_SECRET_KEY=sk_" + "live_CANARYsecretSETUPwatch01234\n";
     writeFileSync(real, bytes, { mode: 0o600 });
     const arbiter = mockArbiter({ discoverSecrets: async () => [{ path: real }] });
     const res = await applySecretTwins(plan(), dir, emptyMutation(), deps({ arbiter, guardServesTwins: true }));

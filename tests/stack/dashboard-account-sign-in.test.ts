@@ -68,8 +68,12 @@ const forged = [{}, { "X-Mandu-Control": "1" }, { "Sec-Fetch-Site": "same-origin
 const out = [];
 for (const path of JSON.parse(pathsJson)) {
   for (const headers of forged) {
+    // The abort only keeps a wrongly served stream from holding the crawl
+    // (its status is already taken). A forged Basic header is checked with
+    // scrypt, which on a loaded CI host outlived 1.5 s: no answer (status 0)
+    // read as "not the gate's". 15 s covers it; the gate's 401 is not slower.
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 1500);
+    const timer = setTimeout(() => ac.abort(), 15000);
     let status = 0, body = "";
     try {
       const res = await fetch(base + path, { headers, signal: ac.signal });

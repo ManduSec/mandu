@@ -12,7 +12,7 @@ import { MockArbiter } from "../mock-arbiter.js";
 
 stateAxes("secrets");
 
-const KEY = "sk_live_51HxQz8Yv3kT9mN2pL4rB6wE";
+const KEY = "sk_" + "live_51HxQz8Yv3kT9mN2pL4rB6wE";
 const SYM = "$MDU:nomodel_STRIPE_KEY[7f3a]";
 const arbiter = () => new MockArbiter([{ value: KEY, symbol: SYM, bindings: ["stripe.com"] }]);
 

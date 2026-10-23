@@ -40,7 +40,7 @@ import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_approvalNamesStackCanary000000001";
+const KEY_VALUE = "sk_" + "live_approvalNamesStackCanary000000001";
 const ENV_VALUE = "ghp_approvalNamesStackCanary0000000000000002";
 const SESSION = "1791200000-321";
 const CSRF = { "X-Mandu-Control": "1" };

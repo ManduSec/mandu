@@ -120,6 +120,7 @@ import { resolveWrapBwrap } from "../../launcher/src/bwrap-grant.js";
 import { realPolicySuggestDeps, runPolicySuggest } from "../../launcher/src/policy-suggest.js";
 import type { Layout } from "../../launcher/src/services/layout.js";
 import { stateAxes } from "../lib/axes.js";
+import { GUARD_ONLY_POSTURE } from "../lib/guard-only-posture.js";
 import { pickGuard } from "../lib/native-guard.js";
 import { buildOfficeFile } from "../../arbiter/test/helpers/office-zip.js";
 import { idxLookupFile, rebuildKey } from "../../arbiter/policy/prepared-copies.js";
@@ -577,7 +578,7 @@ test("K4 (guard only, §7.2a): after lock-path, with no bind the guard answers a
       // A reader's stat (following links) and the bytes it reads agree.
       size: `for p in ${pack}; do echo "$(stat -L -c %s "$p") $(wc -c < "$p")"; done`,
     }, { guardOnly: true });
-    assert.match(after.log, /bind mount SKIPPED \(--no-secret-bind\)/, `the guard-only posture: ${after.log}`);
+    assert.match(after.log, GUARD_ONLY_POSTURE, `the guard-only posture: ${after.log}`);
     assert.notEqual(after.out.show!.status, 0, "git show of the deleted key fails");
     assert.match(after.out.show!.text, /bad object/, after.out.show!.text);
     for (const [name, o] of Object.entries(after.out)) {
@@ -624,7 +625,7 @@ test("K5 (guard only, §7.2a): after lock-blob beside a confined credential, wit
       credSize: `echo "$(stat -L -c %s '${cred}') $(wc -c < '${cred}')"`,
       size: `for p in ${pack}; do echo "$(stat -L -c %s "$p") $(wc -c < "$p")"; done`,
     }, { guardOnly: true });
-    assert.match(after.log, /bind mount SKIPPED \(--no-secret-bind\)/, `the guard-only posture: ${after.log}`);
+    assert.match(after.log, GUARD_ONLY_POSTURE, `the guard-only posture: ${after.log}`);
     assert.notEqual(after.out.show!.status, 0);
     assert.match(after.out.show!.text, /bad object/, after.out.show!.text);
     for (const [name, o] of Object.entries(after.out)) {
@@ -745,7 +746,7 @@ async function backstop(posture: "guard-only" | "bind"): Promise<string> {
       ownfetch: `git init -q '${s.ws}/own-fetch' && git -C '${s.ws}/own-fetch' -c fetch.unpackLimit=100000 fetch -q '${clean}' HEAD && git -C '${s.ws}/own-fetch' log -p FETCH_HEAD`,
       ownobj: `echo own-object | git -C '${s.ws}/own-fetch' hash-object -w --stdin | xargs git -C '${s.ws}/own-fetch' cat-file -p`,
     }, posture === "guard-only" ? { guardOnly: true } : { guard: true });
-    if (posture === "guard-only") assert.match(run.log, /bind mount SKIPPED \(--no-secret-bind\)/, run.log);
+    if (posture === "guard-only") assert.match(run.log, GUARD_ONLY_POSTURE, run.log);
     else assert.doesNotMatch(run.log, /--no-secret-bind/, run.log);
     const all = Object.entries(run.out).map(([n, o]) => `${n} [${o.status}]: ${o.text.slice(0, 300)}`).join("\n");
     for (const [name, o] of Object.entries(run.out)) {
@@ -1309,7 +1310,7 @@ async function historyRewrite(posture: "guard-only" | "bind"): Promise<void> {
       log: "git log --oneline --all",
     }, posture === "guard-only" ? { guardOnly: true } : { guard: true });
     const all = Object.entries(run.out).map(([k, v]) => `--- ${k} (exit ${v.status})\n${v.text}`).join("\n");
-    if (posture === "guard-only") assert.match(run.log, /bind mount SKIPPED \(--no-secret-bind\)/, run.log);
+    if (posture === "guard-only") assert.match(run.log, GUARD_ONLY_POSTURE, run.log);
     // The locked version is unreadable before the rewrite.
     assert.notEqual(run.out.before!.status, 0, all);
     // The rewrite and its cleanup ran, and git removed the old index too.

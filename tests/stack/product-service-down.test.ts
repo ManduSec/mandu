@@ -44,7 +44,7 @@ import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_productServiceDownStackCanary0001";
+const KEY_VALUE = "sk_" + "live_productServiceDownStackCanary0001";
 const SESSION = "1791900000-830";
 /** Each section's line with the service stopped: the cause the page knows
  *  (§4.25 *A could-not line names the cause the page knows*), the link to

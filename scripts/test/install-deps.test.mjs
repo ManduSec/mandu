@@ -13,8 +13,9 @@ import { join, relative } from "node:path";
 
 import { tmpDir } from "./lib/tmp-dir.mjs";
 import {
-  REPO_ROOT, acquireLock, declaredSiblings, installCommand, installMissing, lockPath, missingDirs, reachedPackages,
+  REPO_ROOT, acquireLock, declaredSiblings, installCommand, installDirs, installMissing, lockPath, missingDirs, reachedPackages,
 } from "../install-deps.mjs";
+import { bundlePackageDirs } from "../suites.mjs";
 
 const SCRIPT = join(REPO_ROOT, "scripts", "install-deps.mjs");
 /** The pre-script a package at `dir` runs: install-deps by its path from the package. */
@@ -203,6 +204,33 @@ test("installMissing runs npm ci where a lockfile exists, npm install otherwise,
   assert.deepEqual(calls, [["install", a], ["ci", b]]);
   assert.deepEqual(installMissing(root, a, { run, lockRoot, log: () => {} }), [], "a second run installs nothing");
   assert.equal(calls.length, 2);
+});
+
+test("installDirs installs exactly the dirs it is given (root-relative or absolute), each once, no siblings", () => {
+  const { root, pkg } = scratchRepo();
+  const a = pkg("a", { mandu: { siblings: ["c"] } });
+  const b = pkg("nested/b");
+  writeFileSync(join(b, "package-lock.json"), "{}");
+  pkg("c");
+  const lockRoot = tmpDir("mandu-install-deps-locks-");
+  const calls = [];
+  const run = (cmd, cwd) => { calls.push([cmd[1], cwd]); mkdirSync(join(cwd, "node_modules")); return 0; };
+  assert.deepEqual(installDirs(root, ["a", b], { run, lockRoot, log: () => {} }), [a, b]);
+  assert.deepEqual(calls, [["install", a], ["ci", b]], "c, a's declared sibling, is not installed");
+  assert.deepEqual(installDirs(root, ["a", "nested/b"], { run, lockRoot, log: () => {} }), [], "a second run installs nothing");
+});
+
+test("--bundle: the launcher bundle's packages (suites.mjs packages --bundle); MANDU_NO_AUTO_INSTALL=1 names the missing ones, runs no npm", () => {
+  const dirs = bundlePackageDirs(REPO_ROOT);
+  for (const d of ["arbiter", "dashboard", "launcher", "interceptors/anthropic-proxy"]) assert.ok(dirs.includes(d), d);
+  const { bin, log } = fakeNpm();
+  const r = spawnSync(process.execPath, [SCRIPT, "--bundle"], {
+    encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, MANDU_NO_AUTO_INSTALL: "1" },
+  });
+  const missing = dirs.filter((d) => !existsSync(join(REPO_ROOT, d, "node_modules")));
+  assert.equal(r.status, missing.length ? 1 : 0, r.stderr);
+  assert.deepEqual([...r.stderr.matchAll(/install-deps: (\S+): node_modules missing/g)].map((m) => m[1]), missing);
+  assert.equal(existsSync(log), false, "npm never ran");
 });
 
 test("a failed install throws and releases its lock", () => {

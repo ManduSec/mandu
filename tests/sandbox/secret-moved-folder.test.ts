@@ -40,6 +40,7 @@ import { ArbiterClientAdapter as ProxyAdapter } from "../../interceptors/anthrop
 import { MockUpstream, buildTextSse } from "../../interceptors/anthropic-proxy/test/helpers/mock-upstream.js";
 import { main } from "../../launcher/test/lib/launch-in-dir.js"; // the launch is for the env's PWD (launch-cwd.ts)
 import { stateAxes } from "../lib/axes.js";
+import { GUARD_ONLY_POSTURE } from "../lib/guard-only-posture.js";
 import { pickGuard } from "../lib/native-guard.js";
 
 stateAxes("secrets");
@@ -182,7 +183,7 @@ test("M1 (guard only, §7.2a): ~/.aws and a project folder renamed; past the 2 s
       copied: "cp ~/.aws2/credentials app2/copy.txt && cat app2/copy.txt",
     });
     const all = show(run.out);
-    assert.match(run.log, /bind mount SKIPPED \(--no-secret-bind\)/, `the guard-only posture: ${run.log}`);
+    assert.match(run.log, GUARD_ONLY_POSTURE, `the guard-only posture: ${run.log}`);
     assert.match(run.out.awsBefore!.text, /\$MDU:/, `the credential is confined before the move\n${all}`);
     assert.match(run.out.envBefore!.text, /\$MDU:/, `the workspace .env is confined before the move\n${all}`);
     for (const [name, o] of Object.entries(run.out)) assert.ok(!raw(o.text), `${name}: no raw byte of either key\n${all}`);

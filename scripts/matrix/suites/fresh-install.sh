@@ -250,7 +250,13 @@ elif [[ $SETUP == installs ]]; then
   expect_out "confined by the guard alone (no mount layer)" 'by the guard alone' /tmp/doctor1.out
   expect_out "the mount-layer gap names AppArmor" 'mount layer (unavailable|off).*[Aa]pp[Aa]rmor' /tmp/doctor1.out
   expect_out "setup is offered as the optional second layer" 'optional second layer: mandu setup' /tmp/doctor1.out
-  expect_no  "no 'fix:' line on a confined host" '^ *fix:' /tmp/doctor1.out
+  # No fix in the posture's own section ("Your secrets"). Another section may
+  # carry one: the git-sandbox row (git-hardening.md §5) is a ✗ with its fix
+  # until `mandu setup` gives bubblewrap a user namespace, an unprivileged
+  # hardening left unused, not a confinement gap (v0.2.0-beta.8's matrix).
+  sed -n '/^Your secrets/,/^$/p' /tmp/doctor1.out > /tmp/doctor1.secrets
+  expect_out "doctor has its secrets section" 'posture: ' /tmp/doctor1.secrets
+  expect_no  "no 'fix:' line in the secrets posture on a confined host" '^ *fix:' /tmp/doctor1.secrets
   expect_out "the bundled guard is what doctor found" 'connect guard: installed \(net-supervisor\)' /tmp/doctor1.out
 fi
 expect_no  "fix is never \`sudo mandu setup\`" 'sudo mandu setup' /tmp/doctor1.out
@@ -287,8 +293,9 @@ if [[ $STORY == confined && $SETUP == installs ]]; then
   # The default launch output is one line since 56b0a3c3 (the per-layer
   # "guard serves the twins by descriptor" line needs --verbose). That line
   # still tells the postures apart: "N credential files masked" when
-  # confined, "credential files GATED, not masked" when not.
-  expect_out "the launch says the credential files are masked (confined, no sudo)" 'guard serves the secret twins by descriptor|confined \(by the guard|mode secrets \([0-9]+ credential files? masked' /tmp/launch1.out
+  # confined, "credential files GATED, not masked" when not. Its wording since:
+  # "mandu: secrets mode · 1 credential file masked · dashboard …".
+  expect_out "the launch says the credential files are masked (confined, no sudo)" 'guard serves the secret twins by descriptor|confined \(by the guard|mode secrets \([0-9]+ credential files? masked|secrets mode · [0-9]+ credential files? masked' /tmp/launch1.out
   expect_no "the launch does not say GATED" 'credential files GATED' /tmp/launch1.out
 fi
 sed 's/^/        | /' /tmp/launch1.out | head -40

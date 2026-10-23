@@ -5,8 +5,10 @@
 //!
 //! `#[ignore]`d + `--features kernel`: run through `scripts/kernel-tests.sh`
 //! (an unprivileged user namespace, where the system's files are owned by
-//! an unmapped uid and so out of the agent's reach). A host where the
-//! seccomp listener cannot be installed, or without python3, SKIPs.
+//! an unmapped uid and so out of the agent's reach; run by the real root,
+//! whose namespace maps their owner, the out-of-reach check is skipped). A
+//! host where the seccomp listener cannot be installed, or without python3,
+//! SKIPs.
 //!
 //! The script: the standard library's `base64.py` run as a program
 //! (`python3 -I …/base64.py <file>` opens its file operand), a file out of
@@ -265,7 +267,13 @@ fn an_interpreters_script_is_reported_with_the_facts_its_pin_rests_on() {
     let traced_ran = code == Some(0);
     assert_eq!(got.len(), if traced_ran { n } else { n - 1 }, "one secret open per case: {got:#?}");
     let who = net_supervisor::reader_identity::Who::current();
-    let reach_meaningful = !(who.uid == 0 && who.ns_overflow.is_none());
+    // Out of reach only when the agent cannot write the stdlib: root reaches
+    // it in the initial namespace, and in a child one whose map holds the
+    // file's owner (the real root under `unshare --map-root-user`: the OS
+    // test matrix's kernel suite in a guest, where `system: false` is the
+    // right answer; first seen on ubuntu-2604, 2026-10-23).
+    let b64_owner = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&b64).unwrap());
+    let reach_meaningful = !(who.uid == 0 && who.ns_overflow.map_or(true, |overflow| b64_owner != overflow));
     let sha = net_supervisor::reader_identity::sha256_file(&b64).unwrap();
 
     // the pinned shape
@@ -278,7 +286,14 @@ fn an_interpreters_script_is_reported_with_the_facts_its_pin_rests_on() {
         assert_eq!(p["script"]["system"], true, "the stdlib's base64.py is out of the agent's reach: {p}");
     }
     assert!(p.get("scriptProblem").is_none());
-    assert_eq!(p["openerEnv"], serde_json::json!([]), "a clean environment");
+    if reach_meaningful {
+        assert_eq!(p["openerEnv"], serde_json::json!([]), "a clean environment");
+    } else {
+        // The libraries python maps are in a reaching root's reach too: D8
+        // names them as code, and nothing else (no variable).
+        let env = p["openerEnv"].as_array().cloned().unwrap_or_default();
+        assert!(env.iter().all(|v| v.as_str().is_some_and(|s| s.starts_with("code:"))), "a clean environment but its libraries: {p}");
+    }
     // inline code
     assert!(got[1].get("script").is_none(), "{}", got[1]);
     assert!(got[1]["scriptProblem"].as_str().unwrap_or("").contains("inline"), "{}", got[1]);

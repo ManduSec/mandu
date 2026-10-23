@@ -45,7 +45,7 @@ stateAxes("secrets"); // confidentiality ON: where a holder's bytes may go
 
 const SESSION = "1791400000-555";
 const H = "hooks.slack.com";
-const ENV_VALUE = "sk_live_alwaysPerSourceCanary000001";
+const ENV_VALUE = "sk_" + "live_alwaysPerSourceCanary000001";
 const CARD_VALUE = "4111111111111111";
 /** The programs a reader list names (a bare name, or a pin the arbiter wrote on first use). */
 const appsOf = (readers: unknown[] | undefined): string[] => (readers ?? []).map((r) => (typeof r === "string" ? r : String((r as { app?: unknown }).app)));

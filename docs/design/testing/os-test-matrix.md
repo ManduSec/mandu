@@ -153,13 +153,13 @@ unrestricted twin is a one-line `SYSCTLS` conf.
 | Suite | Runs | Deps declared | Notes |
 |---|---|---|---|
 | `smoke` | trivial `RESULT=pass` | none | validates driver plumbing end-to-end; cheap enough for the per-push gate |
-| `kernel` | `scripts/kernel-tests.sh` | rust | self-SKIPs per missing facility (existing semantics) — on a restricted target the SKIP is the assertion |
-| `all` | `scripts/test-all.sh` | node, rust | full TS + Rust suite; provisioning (toolchain install via cloud-init) adds minutes |
+| `kernel` | `scripts/kernel-tests.sh` | rust, node | self-SKIPs per missing facility (existing semantics) — on a restricted target the SKIP is the assertion; `node` because net-supervisor's runtime test runs node and python3 under the guard, as on every kernel lane (§10.19) |
+| `all` | `scripts/test-all.sh` | node, rust | full TS + Rust suite; provisioning (toolchain install via cloud-init) adds minutes; in a guest as the user `matrix` (§4.2), half the CPUs at a time (at most 8), as CI's pipeline |
 | `fresh-install` | the PACKED `@mandusec/mandu` tarball installed by an empty-HOME user, then doctor / launch / `mandu setup` with a real guest `sudo`; over two boots (§2.1): a reboot of the set-up host, then the Node 18 negative, the NodeSource (system-wide, `sudo npm install -g`) variant and the uninstall hygiene | none (installs Node as the user, via nvm) | §10; uses the host-prep hook below; the checkout is unmounted before the product runs |
 | `fresh-agents` | the PACKED tarball installed as the README says, then Claude Code, Codex, OpenCode and OpenClaw from npm, each run through the installed `mandu` against a scripted loopback model (default mode: a credential file; `full`: a poisoned file) and, with `FRESH_AGENTS_LIVE=1`, live Claude Code and Codex | none (nvm, as the user) | §10.14; `FRESH_AGENTS_VERSIONS=tested` (default, the launcher's tested maxima) or `latest` |
 | `release-upgrade` | on `ubuntu-2404` only and by hand (not in its `SUITES`: about 30 minutes), over three boots (§2.1): bring 24.04 up to date; install the PACKED tarball as fresh-install does, run `mandu setup` (or plant the old grants, `RELEASE_UPGRADE_FROM=legacy`) and prove it confined; run a real `do-release-upgrade` to 26.04; then check doctor, a confined launch and Ubuntu's own rules before and after `mandu setup` | none (nvm, as the user) | §10.15; `RELEASE_UPGRADE_PATH=auto` (default: the regular LTS path when Ubuntu offers it, else `-d`) \| `regular` \| `development` \| `proposed` |
 | `npm-release` | the release gate for the npm package, by hand (not in any `SUITES`): `@mandusec/mandu` from the npm REGISTRY (or the candidate tarball before publish) installed as a new user does; the basic checks; Claude Code and Codex bare, then through `mandu` in a fresh `git init` repository and, timed against bare, in a dirty, complex one; an upgrade from the previous published version; uninstall | none (nvm, as the user) | §10.18; `NPM_RELEASE_PACKAGE`, `NPM_RELEASE_LIVE=1` for the real models |
-| `wrapper` | launcher package `npm test` — fake-agent parity e2e + fail-closed arbiter-refuse | node | live on `host` + `ubuntu-2604` (`portable-wrapper.md` §6); installs the sibling packages the launcher's bundle and golden-path e2e reach into |
+| `wrapper` | launcher package `npm test` — fake-agent parity e2e + fail-closed arbiter-refuse | node | live on `host` + `ubuntu-2604` (`portable-wrapper.md` §6); first installs every package the launcher's bundle build reads (`node scripts/install-deps.mjs --bundle`, below), which its bundle and golden-path e2e reach into |
 
 **Host-prep hook.** A suite may ship `suites/<suite>.host.sh`. The qemu
 executor runs it on the host before boot with `ARTIFACT_DIR` set, and shares
@@ -168,6 +168,81 @@ suite tests a host-built artifact (the packed tarball) instead of the checkout.
 
 Suites declare their toolchain deps; each executor's preflight checks them
 (qemu: cloud-init installs; host: `command -v`; ssh later: remote probe).
+
+### 4.1 A clean checkout, under the CI runner's environment
+
+The `install` job (§6) runs every cell from the runner's own checkout of the
+tag: GitLab's fetch strategy cleans it, so no package has a `node_modules`
+and `interceptors/` has no `target/`, and the runner gives its jobs a clean
+`HOME`, whose rustup has no toolchain and no default. Each host side of the
+matrix therefore prepares what it uses itself, from the tree:
+
+- **Node packages: the bundle's, derived.** What builds the launcher's bundle
+  (the `fresh-install` and `fresh-agents` host prep's `npm pack`, the
+  `wrapper` suite's bundle e2e) needs a `node_modules` in every package
+  holding a file the build reads, since esbuild resolves a bare import from
+  the importing file's own package. `node scripts/suites.mjs packages
+  --bundle` lists them from `launcher/bundle-manifest.json` (the nearest
+  package of each service, module, asset and asset dir, and of each optional
+  entry whose source is here, plus `launcher/` for esbuild), and `node
+  scripts/install-deps.mjs --bundle` installs exactly those, lockfile-exact,
+  each under the per-package install lock. Both scripts use it; no suite keeps
+  a list of its own. The launcher's `bundle-freshness` test checks, after a
+  real build, that every package whose files the build read is on the list.
+- **Rust: the CI pin.** The suites that build Rust (`kernel`, `all`, and the
+  `fresh-install` host prep's native bins) source
+  `scripts/matrix/lib/rust-toolchain.sh`, which exports
+  `RUSTUP_TOOLCHAIN=<RUST_VERSION>` from `scripts/ci/pins.env` (the toolchain
+  the CI guest image and the GitHub workflows build with) and installs it
+  (minimal profile, `--no-self-update`: under the runner's `HOME` rustup's
+  self-update check fails after the install, so success is the toolchain
+  being there) when rustup lacks it. A qemu guest's rustup installs that pin
+  as its default (`@RUST@`), not `stable`. Nothing relies on the caller's
+  `rustup default`. A host whose cargo is not rustup's is used as it is, with
+  a note.
+- **The native bins.** The `fresh-install` host prep runs
+  `scripts/build-native.sh` (incremental) before the pack unless the caller
+  set `MANDU_NATIVE_BIN_DIR`: without the bins the bundle is not the
+  `confined` one the 24.04 and 26.04 targets declare (§10.12).
+
+Tests: `scripts/test/matrix-rust-toolchain.test.sh` (the pin, stubbed
+rustup), `scripts/test/fresh-install-host.test.mjs` (the prep's order on a
+stand-in tree), `scripts/test/install-deps.test.mjs` and
+`scripts/test/suites-manifest.test.mjs` (`--bundle`),
+`scripts/test/matrix-provision.test.sh` (`@RUST@`, `@RUN_AS@`, the guest's
+`.git`). To rehearse
+the job before a tag, run `scripts/matrix/run-matrix.sh --require
+ubuntu-2404 --require ubuntu-2604` in a fresh clone with a scratch `HOME`.
+
+### 4.2 The guest's copy: CI's shape
+
+A qemu guest copies the checkout from the read-only share, leaving out
+`node_modules/` and `target/` (the guest builds its own), and the checkout's
+own `.git`. In its place it gets the CI guest's `.git`
+([`continuous-integration.md`](./continuous-integration.md) §3,
+`scripts/ci/lib.sh` `ci_append_git_dir`): the executor's `qemu_git_dir`
+makes a one-commit shallow repository at the checkout's `HEAD`, its index
+that commit's tree, no hooks and no other refs, and shares it as
+`/mnt/artifacts/.mandu-git`. A suite that reads the repository's own state
+then sees the commit under test (`test-all.sh` records it in its summary,
+the launcher's provenance tests read it), and a dirty checkout shows as a
+dirty copy.
+
+A suite runs as root unless it declares `# run-as: <user>`. Then the guest
+creates that unprivileged user, gives it the copy (`/home/<user>/work`), its
+own rustup (the pin) when the suite needs cargo, and runs the suite with
+`runuser` in the environment CI's guest gives its `ci` user
+(`scripts/ci/guest/boot.sh`: `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`,
+`LANG`, `TERM` and nothing else), plus `MATRIX_OUT`, a directory of its own
+that the runner copies into the out share when the suite ends (9p gives every
+file a guest creates on the share to the host's uid, so the user cannot write
+there itself, not even into a directory it made). `wrapper` and `all` run as `matrix`: the launcher's
+`install.sh` tests, `safe-remove`, `dirProblem` and the secret-confinement
+tests refuse root or assert what an ordinary user may not touch, and failed
+as root on 26.04 (§10.19). `kernel` stays root: on a target whose AppArmor
+restricts unprivileged user namespaces, root is what lets
+`scripts/kernel-tests.sh` attach at all. The host executor ignores the
+header (it runs as whoever runs the matrix).
 
 **The qemu provisioning gate.** cloud-init's `packages:` module only *warns*
 when the Ubuntu mirror is unreachable, then runs the guest script anyway. A
@@ -204,7 +279,8 @@ and NodeSource downloads retry too. Unit test:
 - **The `install` kind** runs `run-matrix.sh --require ubuntu-2404 --require
   ubuntu-2604` on every `v*` tag, after the per-push run, directly on a KVM
   host (the matrix boots its own guests), and the release needs it green
-  (packaging.md §11.3). There is no scheduled matrix run;
+  (packaging.md §11.3). Its `host` cells run on the runner host itself, from
+  the job's clean checkout under the runner's clean `HOME` (§4.1). There is no scheduled matrix run;
   `release-upgrade` and `scripts/kernel-vm.sh` stay by hand.
 - **`kernel-vm.sh` stays as it is.** When a `ubuntu-2204` target is added,
   `kernel-vm.sh` becomes a thin shim over `run.sh ubuntu-2204 kernel` (a
@@ -363,8 +439,11 @@ the whole supported set (§10.9); Ubuntu 22.04 gets no leg.
 
 #### 10.3.2 The artifact under test is the packed tarball, not the checkout
 
-The host runs `npm run build:bundle && npm pack` in `launcher/` and places
-`mandusec-mandu-*.tgz` in a 9p share. The guest installs **only that file**.
+The host installs the packages the bundle build reads (`node
+scripts/install-deps.mjs --bundle`), builds the native bins
+(`scripts/build-native.sh`, the CI Rust pin; §4.1), then runs `npm pack` in
+`launcher/` (its `prepack` builds the bundle; `--loglevel=error`, so a failed
+build prints why) and places `mandusec-mandu-*.tgz` in a 9p share. The guest installs **only that file**.
 The repo share is not mounted for this suite (a `NO_REPO=1` suite header), so
 a bundle that secretly depends on a checkout path fails here instead of at a
 user's desk. The checkout-only AppArmor path was exactly this class of bug.
@@ -1358,3 +1437,90 @@ of them in `node_modules`), 402 MB plus a 29 MB `.git`, 715 `git status`
 lines, a stash. Mandu adds about 0.2 to 0.9 s to a warm launch, and up to
 3.6 s to a cold one, most of it in the dirty repository's first launch;
 `policy suggest` over that history took 3.5 to 4.1 s.
+
+### 10.19 The first tag run (`v0.2.0-beta.8`, 2026-10-23)
+
+The `install` job ran for the first time on the `v0.2.0-beta.8` tag and failed
+every cell but the `smoke` ones. Six causes, none of them in the product (each fix let the next cell run far enough to show the next one):
+
+1. **`host/kernel`: no Rust.** "rustup could not choose a version of cargo to
+   run … no default is configured": the runner's clean `HOME` has an empty
+   rustup. Fixed by the pin (§4.1); the guests install the same pin.
+2. **`host/wrapper` and every `fresh-install` / `fresh-agents` host prep: a
+   package not installed.** The bundle build read the developer view
+   (`dashboard-dev`, an `optionalModules` entry built when its source is in
+   the tree) and could not resolve its `js-yaml`: `wrapper.sh` installed a
+   hand-kept list, and the host prep only `launcher/`. On a developer's
+   checkout every `node_modules` already existed, so nothing showed it. The
+   prep's `npm pack --silent` hid the error ("host prep failed" alone). Fixed
+   by the derived list (§4.1) and `--loglevel=error`; the prep also builds the
+   native bins a clean checkout lacks.
+3. **`ubuntu-2604/kernel`: no node in the guest.** Rerun with `--keep`, the
+   serial log named the one failure:
+   `a_holders_runtimes_run_under_the_memfd_trap` panicked "node and python3
+   are on every kernel lane's PATH". The suite declared `cargo` alone, so the
+   guest had no node. Not a load flake (it fails the same way every run) and
+   not the 26.04 kernel: the suite now declares `node` too.
+4. **`ubuntu-2604/all` and `ubuntu-2604/wrapper`: not CI's shape.**
+   `run-suites: cannot resolve the commit (not a git checkout?)`: the guest's
+   copy left out `.git`; and the 42 `wrapper` failures were the bundle's
+   package (cause 2) plus tests that refuse root (`install.sh`: "run this as
+   your own user, not root"), check ownership (`safe-remove`, `dirProblem`)
+   or read the checkout's provenance. CI's guest has a one-commit `.git` and
+   runs everything as `ci`; the matrix guest now does both (§4.2).
+5. **`fresh-install`, once it could pack: two checks behind the product.**
+   With the bundle built, the 24.04 guest failed two checks that had not run
+   since the product moved on: the launch line now reads `secrets mode · 1
+   credential file masked · …` (the check knew only `mode secrets (N …`), and
+   doctor's git-sandbox row (git-hardening.md §5) is a ✗ with a `fix:` line
+   until `mandu setup` gives bubblewrap a user namespace, which the "no
+   `fix:` line on a confined host" check read as a confinement fix. The
+   check now looks at the posture's own section (`Your secrets`) only; the
+   launch check takes the new wording too. `fresh-agents` had the same kind
+   of drift: the launch prints Codex's sandbox warning as `mandu: WARNING:
+   Codex's own sandbox …`, the check wanted `WARNING — Codex's …`.
+6. **`ubuntu-2604/all`, once it ran: tests that knew only CI's guest.** As
+   `matrix` with a `.git`, entries of the full run failed where CI's
+   guest never looks: a host whose AppArmor restricts unprivileged user
+   namespaces (CI's guest lifts the restriction), the newest Node 22 (CI pins
+   22.13.0), and a git identity in the environment.
+   - `all.sh` exported `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, which override the
+     author of every commit, a cherry-pick's included: the test of a release
+     tool kept in the source repository got `mandu-matrix` for a
+     contributor. The guest now has a system identity, as CI's has, and the
+     variables are set only where git has none.
+   - `integration.kernel` (`git-history-locks`, `secret-moved-folder`): the
+     guard-only tests asked for `--no-secret-bind` and wanted its "bind mount
+     SKIPPED" line, which only a host that could bind prints; a host that
+     cannot says the guard serves the twins "instead (no bind mount …)". They
+     accept either now (`tests/lib/guard-only-posture.ts`), and then passed:
+     the guard-only posture a stock 26.04 user gets is now tested on one.
+   - `launcher.kernel` (`codex-sandbox`): the restricted-host branch wanted
+     `WARNING — … fix: …` on the line, the launch prints `WARNING: …` cut
+     with "(more: `mandu log`)".
+   - `net-proxy` (`this-machine`): Node 22.2x refuses the numeric host
+     `2130706433` in the test client's own certificate check ("non-canonical
+     IP address") before the proxy is reached; the check is not under test.
+   - `scripts.matrix-rust-toolchain`: its no-rustup case inherited the
+     `RUSTUP_TOOLCHAIN` that `all.sh` exports.
+   With those, the five passed in the guest as `matrix`; a sixth, an entry
+   of the drill suite, failed once and passed when rerun.
+
+Once the `kernel` suite had node, the next test binary ran and one more
+failed: `an_interpreters_script_is_reported_with_the_facts_its_pin_rests_on`
+asserted the stdlib's `base64.py` out of the agent's reach, but the guest
+runs the suite as the real root, whose `--map-root-user` namespace maps the
+file's owner, so `system: false` was the right answer, and so were the
+`code:` entries naming python's libraries in `openerEnv`. Where root reaches
+the file (the initial namespace, or a child one that maps its owner) the test
+now skips the out-of-reach check and accepts `code:` entries only; the
+guard's own reach rule was right. With that, every kernel test of the three
+crates passed as root in the 26.04 guest (run with `--no-fail-fast` through
+`run.sh --interactive`, since cargo stops at the first failing test binary).
+
+Then the job's own command, `scripts/matrix/run-matrix.sh --require ubuntu-2404
+--require ubuntu-2604`, in a fresh clone under the runner's environment (a
+clean `HOME`, its `PATH`, `TMPDIR` unset) passed every cell: `host` smoke,
+kernel and wrapper; smoke, fresh-install and fresh-agents on 24.04 and
+25.10; smoke, kernel, all, wrapper, fresh-install and fresh-agents on
+26.04: 15 of 15 in 49 minutes, on a loaded runner host.

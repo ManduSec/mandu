@@ -40,7 +40,7 @@ The current design keeps three properties:
 | hourly, on `master`'s head when it moved since its last finished test (the master check, §7.1) | the same per-push kinds, a run no newer commit cancels | a red master pipeline | the same VM |
 | a merge request whose diff is documentation only | the docs lane: the manifest's `docsLane` entries (§5.5) | yes | the same VM |
 | a merge request whose code paths are all in a declared scope (the drill machinery) | the scoped lane: the per-push entries that can reach it, plus the docs lane's (§5.8) | yes | the same VM |
-| release tag `v*` | the above, plus `install` (the VM matrix); the release itself is built and published from the public snapshot by the public repository's release workflow once this pipeline passed (§12, packaging.md §11.3) | yes (the release waits for it) | the VM, the matrix's own guests |
+| release tag `v*` | the above, plus `install` (the VM matrix); the release itself is built and published from the public snapshot by the public repository's release workflow once this pipeline passed (§12, packaging.md §11.3) | yes (the release waits for it) | the VM, the matrix's own guests, and the matrix's `host` cells on the runner host itself, from the job's clean checkout under the runner's clean `HOME` (`os-test-matrix.md` §4.1) |
 | nightly | `live-drill`, `env`, `eval`, in `secrets` mode only, plus every `flaky` entry | no | one VM with a network, the host's Ollama on one port and one credential kind per lane (§9); the only run that holds a credential |
 | nightly, release tag `v*`, and a merge request that changes a lockfile or the audit | the dependency audit: `deps.audit-npm`, `deps.audit-cargo` (§14.2) | yes (the release waits for it, packaging.md §11.3) | one VM like the per-push one with a network and no credential (§14.2) |
 | nightly, and release tag `v*` | the entries that need `kernel`, on Linux 7.0 | yes on a tag (the release waits for it, packaging.md §11.3); a red nightly run otherwise | one VM like the per-push one (no network, no credential), booted from the Ubuntu 26.04 image (§4.1) |
@@ -1378,7 +1378,10 @@ request and every push to `master`; the docs lane for a documentation-only
 request, §5.5; and the hourly master check, §7.1), `kernel-linux-7`
 (nightly and `v*` tags, §4.1), `install`
 (`scripts/matrix/run-matrix.sh --require ubuntu-2404 --require ubuntu-2604`
-on `v*` tags; a SKIP of either supported install target is a FAIL),
+on `v*` tags; a SKIP of either supported install target is a FAIL; no guest
+of its own: its `host` cells and every host prep run in the job's clean
+checkout, so the matrix installs the packages its bundle build reads and
+builds Rust with the `pins.env` toolchain itself, `os-test-matrix.md` §4.1),
 `audit` (the dependency audit in a guest with a network: the schedule, `v*`
 tags and a merge request that changes a lockfile, §14.2), `website-deploy` (a push to `master` that
 changes the company website's published files uploads them to Cloudflare

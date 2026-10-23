@@ -22,17 +22,14 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createServer, type Server } from "node:net";
+import type { ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { once } from "node:events";
-import { pollUntil, SERVER_TEST_TIMEOUT_MS, START_DEADLINE_MS, waitForPort } from "./server-up.js";
+import { pollUntil, SERVER_TEST_TIMEOUT_MS, silentArbiter as standInArbiter, spawnServer, START_DEADLINE_MS, stopServer, waitForExit, waitForPort } from "./server-up.js";
 import { tmpDir } from "../unit/tmp-dir.js";
 
 const PKG_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const TSX = join(PKG_DIR, "node_modules", ".bin", "tsx");
 const SERVER_MAIN = join(PKG_DIR, "src", "server-main.ts");
 
 const basic = (u: string, p: string): string => `Basic ${Buffer.from(`${u}:${p}`).toString("base64")}`;
@@ -41,7 +38,7 @@ const PASSWORD = "pw:with:colons";
 function launch(dir: string, arbSock: string, basicAuth: string): { child: ChildProcess; stderr: () => string } {
   let stderr = "";
   rmSync(join(dir, "port"), { force: true });
-  const child = spawn(TSX, [SERVER_MAIN], {
+  const child = spawnServer(SERVER_MAIN, {
     cwd: PKG_DIR,
     env: {
       ...process.env,
@@ -60,6 +57,7 @@ function launch(dir: string, arbSock: string, basicAuth: string): { child: Child
       // lands here.
       MANDU_HOME: join(dir, "home"),
       MANDU_TEST_DASHBOARD: "",
+      DASHBOARD_AUTOSTART: "0", // no stack: the sign-in is the server's own
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -67,22 +65,13 @@ function launch(dir: string, arbSock: string, basicAuth: string): { child: Child
   return { child, stderr: () => stderr };
 }
 
-async function exited(child: ChildProcess, ms = 5000): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((r) => { child.once("exit", () => r()); setTimeout(r, ms).unref(); });
-}
-
 async function stop(child: ChildProcess): Promise<void> {
-  child.kill("SIGTERM");
-  await exited(child);
+  await stopServer(child);
 }
 
-async function silentArbiter(dir: string): Promise<{ sock: string; close: () => void }> {
+async function silentArbiter(dir: string): Promise<{ sock: string; close: () => Promise<void> }> {
   const sock = join(dir, "arbiter.sock");
-  const arb: Server = createServer((s) => s.on("data", () => {}));
-  arb.listen(sock);
-  await once(arb, "listening");
-  return { sock, close: () => arb.close() };
+  return { sock, ...(await standInArbiter(sock)) };
 }
 
 test("DASHBOARD_BASIC_AUTH moves into the account; the real server shows the sign-in page, never a native prompt", { timeout: 2 * SERVER_TEST_TIMEOUT_MS }, async () => {
@@ -166,7 +155,7 @@ test("DASHBOARD_BASIC_AUTH moves into the account; the real server shows the sig
     assert.match(run.stderr(), /readable or writable by others/);
   } finally {
     await stop(run.child);
-    arb.close();
+    await arb.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -177,14 +166,14 @@ test("a malformed DASHBOARD_BASIC_AUTH refuses to start (exit 2) instead of serv
     const arb = await silentArbiter(dir);
     const { child, stderr } = launch(dir, arb.sock, bad);
     try {
-      await exited(child, START_DEADLINE_MS); // a deadline: returns at the exit
+      await waitForExit(child); // a deadline: returns at the exit
       assert.equal(child.exitCode, 2, `"${bad}": exit 2 (stderr: ${stderr()})`);
       assert.match(stderr(), /DASHBOARD_BASIC_AUTH must be "user:password"/);
       assert.ok(!existsSync(join(dir, "port")), `"${bad}": never listened`);
       assert.ok(!existsSync(join(dir, "home", "state", "dashboard-account.json")), `"${bad}": no account written`);
     } finally {
       await stop(child);
-      arb.close();
+      await arb.close();
       rmSync(dir, { recursive: true, force: true });
     }
   }

@@ -12,6 +12,8 @@
 //        --native-bins  only the entries that run the kernel-feature bins
 //                     (replay-drill, sandbox, or needs native-bins; usesNativeBins)
 //   node scripts/suites.mjs packages [--kind a,b]   # dirs with a package.json to `npm ci`
+//   node scripts/suites.mjs packages --bundle       # the package dirs the launcher's bundle build
+//                                                   # reads (scripts/install-deps.mjs --bundle installs them)
 //   node scripts/suites.mjs check [--json]          # the completeness check (exit 1 on an error),
 //                                                   # a stale docs/testing/suites.md included
 //   node scripts/suites.mjs doc [--check]           # write docs/testing/suites.md from the public
@@ -496,6 +498,35 @@ export function packageDirs(entries, root = REPO_ROOT) {
     if (d !== "." && existsSync(join(root, d, "package.json")) && !dirs.includes(d)) dirs.push(d);
   }
   return dirs;
+}
+
+/**
+ * The package dirs (repo-relative, sorted) whose files the launcher's bundle
+ * build reads: the nearest package.json at or above each source in
+ * launcher/bundle-manifest.json (services, modules, assets, assetDirs, and the
+ * optional ones whose source exists here, the developer view among them), plus
+ * launcher/ itself, whose node_modules holds esbuild. esbuild resolves a bare
+ * import (`js-yaml`) from the importing file's own package, so each of these
+ * needs its node_modules before `npm pack` or `node scripts/build-bundle.mjs`
+ * (os-test-matrix.md §10.3.2; the 0.2.0-beta.8 tag's matrix packed without
+ * the developer view's). A source outside any package (scripts/apparmor/)
+ * adds none.
+ */
+export function bundlePackageDirs(root = REPO_ROOT) {
+  const manifest = JSON.parse(readFileSync(join(root, "launcher", "bundle-manifest.json"), "utf8"));
+  const srcs = [
+    ...Object.values(manifest.services ?? {}), ...Object.values(manifest.modules ?? {}),
+    ...Object.values(manifest.assets ?? {}), ...Object.values(manifest.assetDirs ?? {}),
+    ...[...Object.values(manifest.optionalModules ?? {}), ...Object.values(manifest.optionalAssetDirs ?? {})]
+      .filter((src) => existsSync(join(root, src))),
+  ];
+  const dirs = new Set(["launcher"]);
+  for (const src of srcs) {
+    for (let d = src; d !== "." && d !== "" && d !== "/"; d = dirname(d)) {
+      if (existsSync(join(root, d, "package.json"))) { dirs.add(toPosix(d)); break; }
+    }
+  }
+  return [...dirs].sort();
 }
 
 // ── claims ─────────────────────────────────────────────────────────────────────
@@ -1260,7 +1291,7 @@ export const COMMAND_FLAGS = {
     unsharded: BOOL, public: BOOL, "native-bins": BOOL,
     lane: STR, need: STR, agents: STR, drills: STR,
   },
-  packages: { kind: STR, public: BOOL },
+  packages: { kind: STR, public: BOOL, bundle: BOOL },
   check: { json: BOOL, public: BOOL },
   coverage: { json: BOOL, public: BOOL },
   doc: { check: BOOL },
@@ -1287,6 +1318,7 @@ const USAGE = `usage: node scripts/suites.mjs list [--kind a,b] [--frozen] [--pl
                                     [--unsharded] [--public] [--native-bins]
                                     [--lane ${CREDENTIALS.join("|")}] [--need n] [--agents a,b] [--drills id,id]
        node scripts/suites.mjs packages [--kind a,b] [--public]
+       node scripts/suites.mjs packages --bundle      (the package dirs the launcher's bundle build reads)
        node scripts/suites.mjs check [--json] [--public]
        node scripts/suites.mjs coverage [--json] [--public]  (the property x kind table of \`proves\`)
        node scripts/suites.mjs doc [--check]          (writes ${SUITES_DOC} from the public manifest)
@@ -1423,6 +1455,11 @@ export async function main(argv = process.argv.slice(2), { root = REPO_ROOT, std
     return 0;
   }
   if (cmd === "packages") {
+    if (f.bundle) {
+      if (f.kind) { process.stderr.write("suites: packages --bundle takes no --kind\n"); return 2; }
+      for (const d of bundlePackageDirs(root)) say(d);
+      return 0;
+    }
     const kinds = f.kind ? splitList(f.kind) : null;
     for (const k of kinds ?? []) if (!KINDS.includes(k)) { process.stderr.write(`suites: unknown kind '${k}'\n`); return 2; }
     for (const d of packageDirs(kinds ? entries.filter((x) => kinds.includes(x.kind) && !x.frozen) : entries, root)) say(d);

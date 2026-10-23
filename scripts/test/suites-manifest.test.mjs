@@ -28,7 +28,7 @@ import {
   COSTS_FILE, PRIVATE_COSTS_FILE, CREDENTIALS, COVERAGE_KINDS, DEFAULT_COST, ENV_NEEDS, HOST_FREE_KINDS, KINDS, KIND_NOTES, NATIVE_BIN_KINDS, NEEDS, NIGHTLY_KINDS,
   PER_PUSH_KINDS, PROPERTIES, REPO_ROOT, SUITES_DOC, checkManifest, costsFromRuns, costsFromSummary, coverage, coverageProblems, docsLaneSweep, docsReaderModules, docsReads, unmarkedDocsReaders,
   needsKernel, nightlyRuns, nonBlocking, planPhases, renderCoverage, runsEveryPush, usesNativeBins,
-  COMMAND_FLAGS, entryClaims,
+  COMMAND_FLAGS, bundlePackageDirs, entryClaims,
   expandGlob, expandShards, flakyBudget, freezeCanaries, loadAllCosts, loadCosts, loadManifest, main, orderByCost, parseFlags, renderSuitesDoc, scriptPathTokens, selectEntries, sharedQueueOrder,
   runEntry, sessionProblems, suitesDocProblem, walkTestFiles, isDrill,
 } from "../suites.mjs";
@@ -522,10 +522,37 @@ test("cli: list --json / --ids, packages, check", () => {
   // --kind keeps only the packages of entries of those kinds (frozen entries left out).
   const pkStack = cli("packages", "--kind", "stack").trim().split("\n");
   assert.ok(pkStack.includes("tests") && !pkStack.includes("arbiter"), pkStack.join(","));
+  // --bundle: what the launcher's bundle build reads (the OS test matrix installs it).
+  assert.deepEqual(cli("packages", "--bundle").trim().split("\n"), bundlePackageDirs());
+  assert.throws(() => execFileSync(process.execPath, [SUITES, "packages", "--bundle", "--kind", "unit"], { cwd: REPO_ROOT, stdio: "pipe" }), /takes no --kind/);
   assert.match(cli("check"), /0 error\(s\)/);
   assert.match(cli("coverage"), /^property\s+unit\s+component/m);
   const cov = JSON.parse(cli("coverage", "--json"));
   assert.deepEqual(cov.rows.map((r) => r.property), PROPERTIES);
+});
+
+test("bundlePackageDirs: the nearest package of each bundle source, optional ones only when present, launcher always", () => {
+  const root = mkdtempSync(join(tmpdir(), "mandu-bundle-pkgs-"));
+  try {
+    const file = (rel, text = "") => { mkdirSync(dirname(join(root, rel)), { recursive: true }); writeFileSync(join(root, rel), text); };
+    for (const p of ["launcher", "svc", "deep/pkg", "dash", "dev"]) file(`${p}/package.json`, "{}");
+    file("launcher/bundle-manifest.json", JSON.stringify({
+      services: { svc: "svc/src/main.ts", mandu: "launcher/src/run.ts" },
+      modules: { m: "deep/pkg/a/b/c.ts" },
+      assets: { "apparmor/x": "loose/apparmor/x" },
+      assetDirs: { "dash/public": "dash/public" },
+      optionalModules: { dev: "dev/src/index.ts", gone: "absent/src/index.ts" },
+      optionalAssetDirs: { "dash/dev": "dev/pages" },
+    }));
+    file("dev/src/index.ts");
+    file("dev/pages/index.html");
+    assert.deepEqual(bundlePackageDirs(root), ["dash", "deep/pkg", "dev", "launcher", "svc"]);
+    rmSync(join(root, "dev", "src"), { recursive: true });
+    rmSync(join(root, "dev", "pages"), { recursive: true });
+    assert.deepEqual(bundlePackageDirs(root), ["dash", "deep/pkg", "launcher", "svc"], "an optional source that is not here adds no package");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("shards: an entry runs as its shards, each with the parent's fields and its own cmd/env; naming the parent selects them all", async () => {

@@ -290,6 +290,10 @@
     <div class="page-head">
       <h1>Approvals</h1>
       <p>Always allow and Block are remembered under <a href="rules" data-page-link="rules">Rules</a>. Allow once lets just this one through.</p>
+      <!-- A link per list, each with its address (/approvals#answered;
+           dashboard.md §4.25 "Section links"): a list hidden while empty
+           has no link. home.js drawSectionLinks from SECTIONS. -->
+      <nav class="section-links" data-sections="approvals" aria-label="Sections of Approvals"></nav>
     </div>
     <!-- Opened for one question (?ask=, a Home card's Details link;
          dashboard.md §4.25 "Details"): shown only when it is no longer
@@ -303,11 +307,11 @@
       <h2 id="approvals-proposals-head">Rule changes your agent asked for</h2>
       <div id="approvals-proposals" class="cards"></div>
     </section>
-    <section class="block">
+    <section class="block" id="approvals-waiting-block">
       <h2>Waiting for your answer</h2>
       <div id="approvals-waiting" class="cards"></div>
     </section>
-    <section class="block">
+    <section class="block" id="approvals-answered-block">
       <h2>Answered earlier</h2>
       <!-- Finding an answer (§4.25): the secret, the host, the program, the
            agent or the answer, ?q= in the address; GET /api/home/answered?q=.

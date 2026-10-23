@@ -60,6 +60,16 @@ function pageOf(events = walkthroughEvents(), home?: string) {
   return buildAgentPage({ session: null, id: SESSION, vm, cwd: null, waiting: [], events: believed, believedVm: toSessionViewModel(SESSION, believed), ...(home !== undefined ? { home } : {}) });
 }
 
+test("a record Mandu could not check rides on the page's Your secrets (dashboard.md §4.25ah); absent otherwise", () => {
+  const events = walkthroughEvents();
+  const vm = toSessionViewModel(SESSION, events);
+  const base = { session: null, id: SESSION, vm, cwd: null, waiting: [], events, believedVm: vm };
+  assert.equal(buildAgentPage({ ...base, unchecked: true }).secrets.unchecked, true);
+  assert.equal("unchecked" in buildAgentPage(base).secrets, false);
+  assert.equal("unchecked" in buildAgentPage({ ...base, unchecked: false }).secrets, false);
+  assert.equal(secretsStory(vm, events, false, "secrets", "", undefined, undefined, { unchecked: true }).unchecked, true);
+});
+
 test("each secret by name, with where its real value went and what Mandu blocked", () => {
   const { secrets } = pageOf();
   assert.equal(secrets.mode, "secrets");

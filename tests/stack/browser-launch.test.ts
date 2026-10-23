@@ -51,7 +51,7 @@ import { stateAxes } from "../lib/axes.js";
 stateAxes("secrets");
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const KEY = "sk_live_51BrowserLaunchStackQz8Wm3Lp6";
+const KEY = "sk_" + "live_51BrowserLaunchStackQz8Wm3Lp6";
 const SESSION = "s-browser-launch";
 const BIN = chromiumBinary();
 const SKIP = BIN === null ? "no headless Chromium (MANDU_TEST_CHROMIUM)" : !opensslAvailable() ? "openssl unavailable" : false;

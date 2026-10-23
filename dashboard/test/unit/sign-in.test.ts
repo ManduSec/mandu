@@ -102,7 +102,7 @@ test("the socket: one answer per connection, 0600 in a 0700 directory, removed o
 
 const KEPT: SessionKept = {
   mode: "secrets", flagged: false, masked: { count: 1, names: ["DB_PASSWORD in ~/proj/.env"] }, early: { count: 0, names: [] },
-  unmasked: { count: 0, names: [] }, blocked: 0, sent: { count: 0, names: [] },
+  unmasked: { count: 0, names: [] }, blocked: 0, sent: { count: 0, names: [] }, unchecked: false,
 };
 
 test("answerSessionKept: a session id or a refusal; nothing known is found: false; a failed read is unknown", async () => {

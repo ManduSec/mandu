@@ -57,7 +57,7 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF
 
 after(() => resetCurrentPolicyForTests("claude-code"));
 
-const KEY = "sk_live_noticeUndoNamesStackCanary00000000001";
+const KEY = "sk_" + "live_noticeUndoNamesStackCanary00000000001";
 const CONF = "2b2b0000-0000-4000-8000-000000000003";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

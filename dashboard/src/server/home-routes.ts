@@ -34,7 +34,7 @@ import { toSessionViewModel } from "../view-model.js";
 import { buildAgentPage, buildStory, locateAsk, pageLaterLabels, pageSecrets, revealValues, sessionExited, storyCounts, untrustedMasked, type AgentPageShow, type AgentPageVM } from "../view-model/agent-page.js";
 import { buildSidebarSections, type SidebarTestRun, type SidebarWatchRun } from "../session-batches.js";
 import { sessionCwd } from "../session-paths.js";
-import { believedEvents, type ManduEvent } from "../event-model.js";
+import { believedEvents, recordUnchecked, type ManduEvent } from "../event-model.js";
 import { type SessionViewModel } from "../view-model.js";
 import { readAxesState } from "../config-axes.js";
 import { loadPolicyPanel, loadPolicySnapshot, type ReadFirstLookup } from "./api-routes.js";
@@ -163,7 +163,13 @@ export class HomeFacts {
       const had = readFirstFiles.get(l.path);
       if (had === undefined || ts < had) readFirstFiles.set(l.path, ts);
     }
-    const story = pageSecrets(vm, believed, believedVm, this.home, undefined, laterInput);
+    // A record Mandu could not check (every event a claim, or a launch with
+    // no wall) says so; it never raises a count (dashboard.md §4.25ah).
+    const story = pageSecrets(vm, believed, believedVm, this.home, undefined, laterInput, { unchecked: recordUnchecked(events) });
+    // The line's blocks and sends: the believed story's (a claim never
+    // raises the line's count); the same as the row's when nothing is a claim.
+    const believedTurns = believedVm === vm ? turns : believedVm ? buildStory(believedVm) : [];
+    const keptCounts = believedVm === vm ? { blocked, sent } : storyCounts(believedTurns);
     const facts: HomeSessionFacts = {
       stats: vm.lineage.stats,
       secrets: story.counts,
@@ -182,8 +188,9 @@ export class HomeFacts {
       // program reading that file never says the AI has not seen it.
       readFirstFiles,
       // The same counts with the names behind them, for the line the
-      // launcher prints when the session ends (dashboard.md §4.25ah).
-      kept: sessionKept(story, turns, { blocked, sent }),
+      // launcher prints when the session ends (dashboard.md §4.25ah), over
+      // the believed events only.
+      kept: sessionKept(story, believedTurns, keptCounts),
     };
     this.cache.set(id, { key, facts, paths, sig: labelSig(labels) });
     return facts;
@@ -621,6 +628,8 @@ export async function buildAgentPageFor(deps: HomeDeps, sessionId: string, ask?:
     events: believed,
     promptLocks: locks,
     believedVm: scopeVm,
+    // Your secrets says when Mandu could not check the record (§4.25ah).
+    unchecked: recordUnchecked(events),
     // Your secrets names a file under the home folder `~/…`.
     home: pageHome,
     ...(labels.length ? { labels } : {}),

@@ -903,6 +903,12 @@ The rule, line by line (`noteShow` in `launch-banner.ts`, the state in
     means the line was turned off or could not be read, never that nothing
     happened, and a session that touched no secret still shows the check
     ran.
+  - *A record Mandu could not check* (2026-10-23): a launch with no wall
+    around the human plane has every report stored as a claim, so the
+    line never says nothing came up: ``mandu: Mandu could not check this
+    session's record (on this computer the agent could reach Mandu's own
+    controls), so it shows no count · why: `mandu doctor` and `mandu
+    log` `` (dashboard.md §4.25ah, *A record Mandu could not check*).
   - *`off` (observe only)*: ``mandu: protection was off this session
     (observe only), so Mandu masked nothing · `mandu mode secrets` turns it
     on · …``, or, when the record names secrets anyway (a placeholder of an

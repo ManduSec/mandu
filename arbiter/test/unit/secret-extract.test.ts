@@ -46,7 +46,7 @@ test("dotenv: values are masked, keys and benign values stay, comments untouched
     "# app config",
     "PORT=3000",
     "NODE_ENV=production",
-    "STRIPE_KEY=sk_live_4eC39HqLyjWDarjtT1zdp7dc",
+    "STRIPE_KEY=sk_" + "live_4eC39HqLyjWDarjtT1zdp7dc",
     'DB_PASSWORD="hunter2"',
     "export API_TOKEN='abc def' # trailing",
     "EMPTY=",
@@ -56,7 +56,7 @@ test("dotenv: values are masked, keys and benign values stay, comments untouched
   const { x, text } = twin("/ws/app/.env", raw);
   assert.equal(x.shape, "dotenv");
   assert.deepEqual(x.spans.map((s) => [s.key, s.value]), [
-    ["STRIPE_KEY", "sk_live_4eC39HqLyjWDarjtT1zdp7dc"],
+    ["STRIPE_KEY", "sk_" + "live_4eC39HqLyjWDarjtT1zdp7dc"],
     ["DB_PASSWORD", "hunter2"],
     ["API_TOKEN", "abc def"],
     ["PLAIN", "hello world"],

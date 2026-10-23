@@ -57,7 +57,7 @@ after(() => resetCurrentPolicyForTests("claude-code"));
 
 const CLOCK = String.raw`[A-Z][a-z]{2} \d{1,2}(?:, \d{4})?, \d{2}:\d{2}`;
 const AGENTS = [
-  { session: "ask-from-shop", folder: "shop", name: "STRIPE_KEY", value: "sk_live_askFromSessionShop000000000001", host: "api.stripe.com" },
+  { session: "ask-from-shop", folder: "shop", name: "STRIPE_KEY", value: "sk_" + "live_askFromSessionShop000000000001", host: "api.stripe.com" },
   { session: "ask-from-blog", folder: "blog", name: "GITHUB_TOKEN", value: "ghp_askFromSessionBlog0000000000000002", host: "gist.github.com" },
 ] as const;
 

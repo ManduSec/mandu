@@ -456,7 +456,9 @@ export class DashboardServer {
     // in-flight agent run.
     if (this.supervisor) {
       try {
-        await this.supervisor.shutdownAll();
+        // close(), not shutdownAll(): a start still under way may not spawn
+        // after this stop has looked (Supervisor.close).
+        await this.supervisor.close();
       } catch (err) {
         this.log(`supervisor shutdown error: ${(err as Error).message}`);
       }

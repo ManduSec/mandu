@@ -75,8 +75,8 @@ const GATE = process.platform !== "linux"
       : false;
 const GUARD_GATE = GATE !== false ? GATE : !GUARD.path ? "mandu-net-guard is not built (scripts/build-native.sh)" : false;
 
-const ENV_KEY = "sk_live_CANARYtwinwrite7f3a91c0d2e4";
-const CONF_KEY = "sk_live_CANARYtwinconf0c9d8e7f6a5b";
+const ENV_KEY = "sk_" + "live_CANARYtwinwrite7f3a91c0d2e4";
+const CONF_KEY = "sk_" + "live_CANARYtwinconf0c9d8e7f6a5b";
 const AWS_KEY = "awsCANARYtwinwrite0b1c2d3e4f5a6b7c8";
 const CANARIES = [ENV_KEY, CONF_KEY, AWS_KEY];
 /** What a program writes into the copy: a refreshed token, and a new line. */

@@ -55,7 +55,7 @@ for (const bp of ["/mandu", ""]) {
     // The switch of §4.25ae *Only where Mandu stepped in*; any other value is off.
     assert.deepEqual(p("/agents/s1", "?ask=egr-7&only=stepped-in"), { ...R("agent", "s1", "egr-7"), only: true });
     assert.deepEqual(p("/agents/s1", "?only=yes"), R("agent", "s1"));
-    // A card of Rules or Settings (§4.25 *Section links*); a hash that names
+    // A card of Rules, Settings or Approvals (§4.25 *Section links*); a hash that names
     // no card of that page, or any hash on another page, is not read.
     const h = (path: string, hash: string) => plain(window.parseRoute(bp + path, "", hash));
     assert.deepEqual(h("/rules", "#keys-found"), { ...R("rules"), section: "keys-found" });
@@ -63,6 +63,10 @@ for (const bp of ["/mandu", ""]) {
     assert.deepEqual(h("/rules", "#prompt-filters"), R("rules"), "a Settings card is not on Rules");
     assert.deepEqual(h("/rules", "#nowhere"), R("rules"));
     assert.deepEqual(h("/approvals", "#who"), R("approvals"));
+    // Approvals' lists (since 2026-10-23); one item opened wins over a hash.
+    assert.deepEqual(h("/approvals", "#answered"), { ...R("approvals"), section: "answered" });
+    assert.deepEqual(h("/approvals", "#rule-changes"), { ...R("approvals"), section: "rule-changes" });
+    assert.deepEqual(h("/approvals/egr-1", "#answered"), R("approvals", null, "egr-1"));
     // The file a Your secrets card opens Rules at (§4.25b *A card opens its
     // file in Rules*); an empty one reads as today, a hash too; only on Rules.
     const f = (path: string, search: string, hash = "") => plain(window.parseRoute(bp + path, search, hash));

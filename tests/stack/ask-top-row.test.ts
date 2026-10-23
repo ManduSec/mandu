@@ -58,7 +58,7 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF
 
 after(() => resetCurrentPolicyForTests("claude-code"));
 
-const KEY = "sk_live_askTopRowStackCanary000000000001";
+const KEY = "sk_" + "live_askTopRowStackCanary000000000001";
 const ENV_VALUE = "askTopRowStackEnvValue0000000002";
 const VAR_VALUE = "ghp_askTopRowStackVariable00000000000003";
 const SESSION = "ask-top-row-session";

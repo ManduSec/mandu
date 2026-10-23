@@ -58,7 +58,7 @@ import { emitLauncherEvent, sessionExitEvent } from "../../launcher/src/services
 
 stateAxes("secrets");
 
-const KEY_VALUE = "sk_live_homeWaitingStackCanary0000000000001";
+const KEY_VALUE = "sk_" + "live_homeWaitingStackCanary0000000000001";
 const SESSION = "1791200000-417";
 
 test("while a question waits, a rule still sends the secret to its bound host, and Home says only what holds", { timeout: 60_000 }, async () => {

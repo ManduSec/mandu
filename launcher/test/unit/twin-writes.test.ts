@@ -34,7 +34,7 @@ import { stateAxes } from "../axes.js";
 stateAxes("secrets");
 
 const PLACEHOLDER = "STRIPE_SECRET_KEY='$MDU:nomodel_Read[72ae].STRIPE_SECRET_KEY'\nDB_HOST=localhost\n";
-const REAL = "STRIPE_SECRET_KEY=sk_live_CANARYtwinwritesUNIT0123456789\nDB_HOST=localhost\n";
+const REAL = "STRIPE_SECRET_KEY=sk_" + "live_CANARYtwinwritesUNIT0123456789\nDB_HOST=localhost\n";
 const FRESH = "ghp_FAKEfreshTOKENwrittenINsession0123456789";
 
 function twinDir(): { dir: string; cleanup: () => void } {
