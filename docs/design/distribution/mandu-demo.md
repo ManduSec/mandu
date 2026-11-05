@@ -444,7 +444,12 @@ answers non-200, a tool call the demo did not script) ends the run with
   passes with Codex's read whole, the why line, and Codex in full. The offline run
   (§4a) and the ^C run (a slow cleanup pressed with ^C every few ms until the
   sandbox is gone: exit 0 on its own, sandbox removed, no service left)
-  complete it.
+  complete it. The ^C run slows the cleanup with 20,000 small files written
+  before the demo starts and moved into its sandbox by one rename, and counts
+  only the presses that reach the running demo: until 2026-11-05 the test
+  wrote them into the sandbox in place, and on GitHub's Intel macOS runner
+  those writes outlasted the run and raced the removal
+  ([continuous-integration.md](../testing/continuous-integration.md) §12.6).
 
 ## 8. CLI surface
 

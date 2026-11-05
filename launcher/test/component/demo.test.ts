@@ -46,7 +46,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -293,8 +293,25 @@ test("mandu demo with the guard turned off (MANDU_NET_GUARD=0): Codex's read is 
   for (const w of INTERNALS) assert.ok(!r.stdout.includes(w), `the default output names ${w}:\n${r.stdout}`);
 });
 
-test("mandu demo: a ^C during its cleanup is ignored, the sandbox is removed, no service is left", { timeout: 150_000 }, async () => {
+// The budget covers the small files below, written before the demo starts
+// (about 45 s on GitHub's Intel macOS runner, 2026-11-05), and their removal.
+test("mandu demo: a ^C during its cleanup is ignored, the sandbox is removed, no service is left", { timeout: 300_000 }, async () => {
   const { base, env } = callerWorld("sigint");
+
+  // No test hook in the demo: make its cleanup slow instead, with many small
+  // files in the sandbox, so the synchronous removal (the window a ^C used to
+  // kill) takes a while. They are written BEFORE the demo starts, beside its
+  // TMPDIR (the same file system), and moved into the sandbox by one rename
+  // once it exists: nothing writes into the sandbox while the demo runs. They
+  // were written into it in place until 2026-11-05, and on GitHub's Intel
+  // macOS runner (about 2 ms a file) the writes outlasted the demo's run, so
+  // its removal, whose retries redo the failed rmdir but never the walk, met
+  // a file made after the walk on every retry, and the demo said it could not
+  // remove the sandbox (continuous-integration.md §12.6).
+  const prepared = join(dirname(base), "bulk");
+  mkdirSync(prepared);
+  for (let i = 0; i < 20_000; i++) writeFileSync(join(prepared, `f${i}`), "x");
+
   // `node --import tsx`, not the tsx CLI: the ^C must reach the demo's own
   // process, not a wrapper relaying (or acting on) it.
   const child = spawn(process.execPath, ["--import", "tsx", join(PKG, "src", "run.ts"), "demo", "--agent", "claude"], {
@@ -305,10 +322,10 @@ test("mandu demo: a ^C during its cleanup is ignored, the sandbox is removed, no
   child.stdout.setEncoding("utf8").on("data", (c: string) => (stdout += c));
   child.stderr.setEncoding("utf8").on("data", (c: string) => (stderr += c));
 
-  // No test hook in the demo: make its cleanup slow instead. Once the sandbox
-  // exists, fill it with many small files, so the synchronous removal (the
-  // window a ^C used to kill) takes a while. Then, once the run's last scene
-  // is out, press ^C every few ms for as long as the sandbox still exists.
+  // Once the run's last scene is out (the demo prints it and begins its
+  // cleanup with no wait in between), press ^C every few ms for as long as
+  // the sandbox exists and the demo still runs. A press counts only when it
+  // reached a live demo: one sent after its exit proves nothing.
   let sb: string | null = null;
   let presses = 0;
   const lastScene = NETWORK_TOOLS ? "in a real session the dashboard asks you" : "skipped";
@@ -318,26 +335,23 @@ test("mandu demo: a ^C during its cleanup is ignored, the sandbox is removed, no
       // mkdtemp comes before the sandbox's own mkdirs: wait for project/.
       if (n === undefined || !existsSync(join(base, n, "project"))) return;
       sb = join(base, n);
-      const bulk = join(sb, "project", "bulk");
-      mkdirSync(bulk);
-      for (let i = 0; i < 20_000; i++) writeFileSync(join(bulk, `f${i}`), "x");
+      renameSync(prepared, join(sb, "project", "bulk"));
       return;
     }
-    if (stdout.includes(lastScene) && existsSync(sb)) {
-      child.kill("SIGINT");
-      presses++;
-    }
+    if (stdout.includes(lastScene) && existsSync(sb) && child.exitCode === null && child.signalCode === null && child.kill("SIGINT")) presses++;
   }, 5);
   const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
     child.on("close", (c, s) => resolve([c, s]));
   });
   clearInterval(tick);
 
-  assert.equal(signal, null, `the demo was killed by ${signal} (a ^C during cleanup took the default action)\n${stdout}\n${stderr}`);
-  assert.equal(code, 0, `demo failed:\n${stdout}\n${stderr}`);
+  const said = `\n${stdout}\n${stderr}`;
+  assert.equal(signal, null, `the demo was killed by ${signal} (a ^C during cleanup took the default action)${said}`);
+  assert.equal(code, 0, `demo failed:${said}`);
   assert.ok(sb !== null, "the sandbox was seen");
-  assert.ok(presses > 0, "at least one ^C landed while the sandbox still existed (the cleanup window)");
-  assert.ok(!existsSync(sb), `the sandbox ${sb} was left behind`);
+  assert.ok(!existsSync(prepared), "the small files were moved into the sandbox (the slow cleanup)");
+  assert.ok(presses > 0, `at least one ^C reached the running demo while the sandbox still existed (the cleanup window)${said}`);
+  assert.ok(!existsSync(sb), `the sandbox ${sb} was left behind${said}`);
   assert.deepEqual(readdirSync(base).filter((n) => n.startsWith("mandu-demo-")), []);
   assert.match(stdout, /The AI never got the key/, "the result still printed");
   // At most one plain line, however many presses.

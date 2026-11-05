@@ -146,7 +146,7 @@ test("History's search finds where a secret came up or a send went, by name, and
       assert.deepEqual(rows(doc), [ID]);
       assert.equal(doc.querySelector("#history-list .history-found")?.textContent, "Found here: STRIPE_KEY in ~/mandu-try/.env");
       assert.equal(doc.getElementById("history-count")!.textContent, "1 of 4 sessions");
-      assert.equal(doc.getElementById("history-q")!.getAttribute("placeholder"), "What you asked, a folder, a secret or a host");
+      assert.equal(doc.getElementById("history-q")!.getAttribute("placeholder"), "What you asked, a folder, secret or host");
       pages.push(doc.documentElement.outerHTML);
     });
     await servedProductPage(base, "/history?q=api.stripe.com", (doc) => rows(doc).length === 1, (doc) => {

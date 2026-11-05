@@ -9,6 +9,16 @@
  * read "What you asked, the agent or the fo": the folder, which the search
  * reads too, was lost.
  *
+ * The design width (2026-11-05): a phone lays text out at each glyph's
+ * fractional advance, and so does a full Chrome at any scale, but
+ * Playwright's headless shell rounds each advance of the served font to a
+ * whole pixel. History's hint of 2026-11-02, "What you asked, a folder, a
+ * secret or a host", needs 268.1 px in IBM Plex Sans at 14 px and the box
+ * holds 266 px at 320 px; the headless shell measured it at exactly 266.0
+ * and passed, Chrome on GitHub's runner measured 268.1 and failed. Ten
+ * times the size makes that rounding a tenth as large, so the check reads
+ * what a phone draws in every Chromium.
+ *
  * Here a real ArbiterServer (`secrets`); the REAL anthropic-proxy on its
  * production client carries one session, so History lists it and shows its
  * box; the net-proxy on its production client stops one send of a
@@ -20,7 +30,8 @@
  *
  *   P1  at 390 and 320 px the box is under its label, the form's whole
  *       width, and its placeholder, measured in the box's own font, fits
- *       its content box;
+ *       its content box: the wider of its width at the box's size and its
+ *       design width (measured at ten times the size and scaled back);
  *   P2  at 980 px the label and the box share one line, the box right of
  *       the label;
  *   P3  the oracle: nothing left the machine, and no page drawn here
@@ -88,17 +99,22 @@ function viaProxy(port: number, url: string, body: string): Promise<{ status: nu
 }
 
 /** The box, its label and its form (window px), its placeholder's width in
- *  the box's own font, and the box's content width. */
+ *  the box's own font, and the box's content width. The width is the wider
+ *  of the one at the box's size and the design width, measured at ten times
+ *  the size and scaled back (a renderer that rounds each glyph's advance
+ *  to a whole pixel, as the headless shell does with the served font,
+ *  rounds it a tenth as much there). */
 interface Box { left: number; right: number; top: number; bottom: number }
 interface Shot { hint: string; need: number; room: number; box: Box; label: Box; form: Box }
 const measure = (id: string) => `(() => {
   const box = document.getElementById(${JSON.stringify(id)});
   const cs = getComputedStyle(box);
   const ctx = document.createElement("canvas").getContext("2d");
-  ctx.font = [cs.fontStyle, cs.fontWeight, cs.fontSize, cs.fontFamily].join(" ");
+  const at = (size) => { ctx.font = [cs.fontStyle, cs.fontWeight, size + "px", cs.fontFamily].join(" "); return ctx.measureText(box.placeholder).width; };
+  const size = parseFloat(cs.fontSize);
   const r = (el) => { const b = el.getBoundingClientRect(); return { left: b.left, right: b.right, top: b.top, bottom: b.bottom }; };
   return {
-    hint: box.placeholder, need: ctx.measureText(box.placeholder).width,
+    hint: box.placeholder, need: Math.max(at(size), at(size * 10) / 10),
     room: box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
     box: r(box), label: r(document.querySelector('label[for=' + JSON.stringify(${JSON.stringify(id)}) + ']')), form: r(box.form),
   };
@@ -227,7 +243,7 @@ test("on a phone each Find box sits under its label and its hint reads whole; wi
     };
 
     const CASES = [
-      { path: "/history", id: "history-q", hint: "What you asked, a folder, a secret or a host",
+      { path: "/history", id: "history-q", hint: "What you asked, a folder, secret or host",
         ready: `!document.getElementById("history-search").hidden && !!document.querySelector("#history-list .row.agent")` },
       { path: "/approvals", id: "answered-q", hint: "A secret, a host or the agent",
         ready: `!document.getElementById("answered-search").hidden && !!document.querySelector("#approvals-answered .row.answered")` },

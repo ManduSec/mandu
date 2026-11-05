@@ -376,7 +376,7 @@ test("History's search finds the sessions an agent ran in a folder by the folder
 
     // The served page: the box's new words, the two rows, each "in ~/projects/shop".
     await servedProductPage(base, "/history?q=shop", (doc) => rows(doc).length === 2, (doc) => {
-      assert.equal(doc.getElementById("history-q").getAttribute("placeholder"), "What you asked, a folder, a secret or a host");
+      assert.equal(doc.getElementById("history-q").getAttribute("placeholder"), "What you asked, a folder, secret or host");
       assert.deepEqual(rows(doc).sort(), [...SHOP].sort());
       assert.equal(doc.getElementById("history-count").textContent, `2 of ${ALL} sessions`);
       assert.match(doc.getElementById("history-list").textContent, /~\/projects\/shop/);

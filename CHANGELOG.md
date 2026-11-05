@@ -10,8 +10,21 @@ lives in `docs/design/`.
 Beta builds of this release are numbered `0.2.0-beta.N`. (0.1.0 was an
 internal pilot and was never published.)
 
-### New in 0.2.0-beta.9
+### New in 0.2.0-beta.10
 
+0.2.0-beta.9 was tagged but never published: its release check failed on
+GitHub's runners, which have a newer git, a real Chrome and a slower Intel
+Mac than the lab's own CI. Two of its fixes change Mandu itself (the first
+two entries); the others were in tests. Everything below is new since
+0.2.0-beta.8 and first ships in 0.2.0-beta.10.
+
+- With git 2.55 or newer, a repository whose `objects/info/alternates` is
+  not a regular file (a FIFO, a directory) is refused at once when Mandu
+  prepares its protected copies ahead of a launch, as with older git. Newer
+  git reads that file as it starts, so the preparation waited 20 seconds on
+  such a repository before refusing it.
+- The dashboard's History search box hints "What you asked, a folder,
+  secret or host": the longer hint was cut off on a 320 px wide phone.
 - Mandu now needs Node 22.15 or newer (it was 22.13). Node has zstd from
   22.15, and OpenClaw uses it for its ChatGPT sign-in's requests and for the
   transcripts it stores: on 22.13 and 22.14 Mandu refused OpenClaw on a

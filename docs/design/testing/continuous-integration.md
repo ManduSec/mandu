@@ -2958,6 +2958,23 @@ outside contributor sees on a pull request. A change that passes GitHub can
 still fail the VM gate (an agent-CLI suite, a sandbox suite), so an outside
 pull request also goes through the VM run before it lands.
 
+**The real-browser stack tests run only on GitHub (2026-11-05).** The VM
+guest has no Chromium, so every stack test that drives one
+(`scripts/tour-screenshots.mjs` `probeBrowser`) self-SKIPs there with "no
+Chromium found". GitHub's `ubuntu-24.04` image has Google Chrome on `PATH`,
+so they run there, in a full Chrome. That Chrome lays text at fractional
+glyph advances, as a phone does, while Playwright's headless shell, the
+browser a developer's machine usually has, rounds each advance of the
+served font to a whole pixel. So a layout check can pass locally and fail
+only on GitHub. On 2026-11-05 two did: a hint 2 px too wide for its box
+at 320 px, and a probe 1 px inside a fractional text edge
+([`dashboard.md`](../ui/dashboard.md) §4.25ae *The hint fits at its real
+width*, §4.25u *The last whole pixel*). A check of a fit measures the
+design width, and a probe of an edge reads a whole pixel. Before a
+release, run the browser tests in a full Chrome (`MANDU_TOUR_BROWSER`
+pointing at Playwright's `chromium-*/chrome-linux64/chrome`, or Google
+Chrome).
+
 The two must not drift apart. The manifest's sealed kinds are the list GitHub
 should run: a TS package needs nothing (discovery picks it up); any other
 sealed entry is in the `shell` job when its command is `bash` or `node`
@@ -3067,6 +3084,47 @@ Never green by absence: both Seatbelt entries must pass and skip nothing
 (the git sandbox one at most its xcrun-cache test), or the run fails.
 `scripts.ci-macos-run` tests the script; `private.ci-workflow` and
 `scripts.suites-manifest` pin both jobs.
+
+**What the first release check found (0.2.0-beta.9, 2026-11-05).** The
+release's check (run 42018312528, attempts 1 and 2) failed on
+`macos-26-intel` with two reds that `macos-26` (arm64) passed in the same
+run. Neither was a product fault: both were tests whose timing held only on
+Apple silicon (the Intel image ran each suite two to four times slower, and
+was slower still at creating small files).
+
+- `launcher.component3`'s `demo.test.ts` "a ^C during its cleanup is
+  ignored": the sandbox was left behind (45 s and 47 s, against 8 s on
+  arm64). The test slowed the cleanup by writing 20,000 small files into the
+  sandbox from its own event loop, from the moment the sandbox appeared, and
+  assumed the writes ended before the demo's cleanup. On the Intel image, at
+  about 2 ms a file, they outlasted the whole run: the demo's removal
+  (`rmSync`, whose `maxRetries` redo the failed `rmdir` but never the walk,
+  as §11 records for 2026-10-21) met a file made after its walk on every
+  retry, so the demo said it could not remove the sandbox and exited 0, and
+  the test, its event loop held by the writes, counted ^C presses sent after
+  the demo had exited. Slowing the writes to 2 ms a file reproduced it on
+  Linux: the same red in 46 s, with the demo's "could not remove the sandbox
+  … ENOTEMPTY … project/bulk". The files are now written before the demo
+  starts, beside its TMPDIR, and moved into the sandbox by one rename once it
+  exists; a press counts only when it reaches the running demo; the checks
+  print the demo's output. The claims are unchanged: with the slowed writes
+  it passes (61 presses in the cleanup), and with the teardown guard disarmed
+  it still fails on the ^C's default action (mandu-demo.md §7).
+- `launcher.darwin-seatbelt`'s "the inline wrap (-p) applies what -f
+  applies, with the same size limit": the `-f` run of the oversized profile
+  (6,000 literals) printed nothing. `sandbox-exec` compiles such a profile in
+  full before it refuses it, 9-13 s on arm64 and on the Intel image about
+  19.4 s for the `-p` run, so the test's 20 s timeout per run ended the `-f`
+  one (the test took 39.4 s in both attempts: one compile and the timeout),
+  and the helper dropped the kill, which read as an empty stderr. A pure
+  timing race with no product consequence: a launch puts no timeout on
+  `sandbox-exec`, and each probe under the launch's own profile took well
+  under 0.2 s on the same image. The timeout is now 120 s, and a run it ends
+  fails as a timeout, with its time.
+
+Both are checked on Linux only as far as Linux can (the demo test and its
+reproduction; the Seatbelt suite skips there): the next run on the Intel
+image is what confirms them.
 
 ## 13. Test credentials: one secrets file
 

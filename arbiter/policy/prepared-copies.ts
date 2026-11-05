@@ -947,6 +947,16 @@ export class PreparedCopies {
    *  `info/alternates`, a chain past the bounds): never a shorter list. */
   private async locate(root: string, set: { sha1: string[]; sha256: string[] }): Promise<PrepStore | null> {
     if (set.sha1.length === 0 && set.sha256.length === 0) return null;
+    // Git 2.55 and later read `info/alternates` while they set a repository
+    // up, so `git rev-parse` itself waits on a FIFO there until the inventory
+    // deadline (GitHub's runners, 0.2.0-beta.9's release check). The closure
+    // of the store a work tree's own `.git` directory holds is read first,
+    // O_NONBLOCK: an odd alternates file anywhere on that chain fails the
+    // repository before git runs. The closure of the common directory git
+    // reports is read again below; a linked work tree's (a `.git` file) only
+    // there.
+    const ownGit = join(root, ".git");
+    if (isDirectory(ownGit)) objectStoreClosure(join(ownGit, "objects"), this.alternatesIo);
     const r = await this.call(["rev-parse", "--show-toplevel", "--git-common-dir", "--show-object-format"], {
       cwd: root, timeoutMs: this.limits.inventoryTimeoutMs,
     });
@@ -1101,6 +1111,12 @@ export class PreparedCopies {
       for (const k of [...this.built.keys()]) if (k.startsWith(`${key}/`)) this.built.delete(k);
     }
   }
+}
+
+/** A directory (a symlink to one counts, as git follows it); a stat never
+ *  opens the path, so a FIFO there cannot block. */
+function isDirectory(p: string): boolean {
+  try { return statSync(p).isDirectory(); } catch { return false; }
 }
 
 /** Mark a cache entry used (the launcher's 30-day prune keeps it). */

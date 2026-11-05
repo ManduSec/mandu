@@ -20,12 +20,26 @@
  *       from its centre a pixel at a time) is at least 24 × 24 px, its four
  *       corners and 2 px outside the circle toward the link included; it
  *       overlaps no link or button of the page, and the link's own last
- *       pixel is still the link;
+ *       whole pixel is still the link;
  *   T2  a real mouse click 2 px outside the circle, toward the link, opens
  *       the note (`aria-expanded="true"`) and the page stays Home;
- *   T3  the same for *What the AI has now ?* on the Approvals card;
+ *   T3  the same for *What the AI has now ?* on the Approvals card; on a
+ *       phone the card is short (dashboard.md §4.25 *A waiting question is
+ *       short on a phone*), so a real click on What each answer does opens
+ *       its cells first;
  *   T4  the oracle: no page drawn here carries the key, the tour's fake
  *       values or a token.
+ *
+ * The link's last whole pixel (2026-11-05): a hit test reads whole pixels
+ * against a text's box snapped to them, so at a fractional right edge the
+ * point 1 px inside it can already be past the text. Chrome on GitHub's
+ * runner lays text at fractional advances, and there at 390 px "it", the
+ * link's last line, ended at 24.42 px: the point 23.42 hit the line's
+ * space, not the link (23.0 hit the link), though the "?" area began at
+ * 27.73. The probe takes the left edge of the last whole pixel inside the
+ * link's box, a whole-pixel point any snapping reads the same; an area
+ * that reached into the link would still take it, and one within 1 px of
+ * it fails `meets`.
  *
  * Self-SKIPs without a Chromium (scripts/tour-screenshots.mjs probeBrowser:
  * MANDU_TOUR_BROWSER, CHROME_PATH, a Playwright headless shell, or one on
@@ -72,7 +86,9 @@ const WIDTHS = [1280, 390];
  * out from the circle's centre a pixel at a time along both axes, then its
  * four corners and the point 2 px outside the circle toward the link before
  * it, if any. Every link and button of the page whose box meets that area
- * is listed, and the link's own last pixel is read back.
+ * is listed, and the link's own last whole pixel is read back: the point
+ * at its left edge, a whole pixel, which any snapping of the point reads
+ * the same and which lies inside the link's box however that is snapped.
  */
 const probe = (sel: string) => `(() => {
   const btn = document.querySelector(${JSON.stringify(sel)});
@@ -102,7 +118,7 @@ const probe = (sel: string) => `(() => {
   if (link) {
     const last = [...link.getClientRects()].pop();
     const ly = (last.top + last.bottom) / 2;
-    const e = document.elementFromPoint(last.right - 1, ly);
+    const e = document.elementFromPoint(Math.floor(last.right) - 1, ly);
     linkEnd = !!e && (e === link || link.contains(e));
     toward = on(r.left - 2, cy);
     gap = r.left - last.right;
@@ -211,16 +227,27 @@ test("a help button's hit area is 24 × 24 px and stops short of the link before
       const p = check(await evaluate(probe(HOME_HELP)) as Probe | null, at);
       assert.match(p.link ?? "", /masked before the AI saw/, `${at}: the "?" follows the masked count's link`);
       assert.equal(p.toward, true, `${at}: 2 px outside the circle toward the link is the button`);
-      assert.equal(p.linkEnd, true, `${at}: the link's last pixel is still the link`);
+      assert.equal(p.linkEnd, true, `${at}: the link's last whole pixel is still the link`);
       await click(p.x, p.y);
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(HOME_HELP)}).getAttribute("aria-expanded")`), "true", `${at}: a click at its edge opens the note`);
       assert.equal(await evaluate("location.pathname"), p.path, `${at}: and the page stays Home`);
       pages.push(await evaluate("document.documentElement.outerHTML + document.body.innerText"));
 
-      // T3: What the AI has now ? on the Approvals card.
+      // T3: What the AI has now ? on the Approvals card. On a phone (the
+      // page's breakpoint, max-width 760 px) the card is short, its cells
+      // under What each answer does, which a real click opens in place.
       const ASK_HELP = "#approvals-waiting .ask .ask-detail .help-btn";
-      await open("/approvals", `!!document.querySelector(${JSON.stringify(ASK_HELP)})`, `Approvals at ${width}px`);
+      const ASK_MORE = "#approvals-waiting .ask .ask-more";
+      const phone = width <= 760;
+      await open("/approvals", `!!document.querySelector(${JSON.stringify(phone ? ASK_MORE : ASK_HELP)})`, `Approvals at ${width}px`);
       const ap = `What the AI has now on Approvals at ${width}px`;
+      if (phone) {
+        assert.equal(await evaluate(`!!document.querySelector(${JSON.stringify(ASK_HELP)})`), false, `${ap}: the card is short`);
+        const more = await evaluate(`(() => { const b = document.querySelector(${JSON.stringify(ASK_MORE)}); b.scrollIntoView({ block: "center" }); const r = b.getBoundingClientRect(); return { text: b.textContent, x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 }; })()`) as { text: string; x: number; y: number };
+        assert.equal(more.text, "What each answer does", `${ap}: the short card offers What each answer does`);
+        await click(more.x, more.y);
+        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(ASK_MORE)}).getAttribute("aria-expanded")`), "true", `${ap}: a click opens the card's cells`);
+      }
       const q = check(await evaluate(probe(ASK_HELP)) as Probe | null, ap);
       const r = q.circle;
       await click(r.left - 2, (r.top + r.bottom) / 2);

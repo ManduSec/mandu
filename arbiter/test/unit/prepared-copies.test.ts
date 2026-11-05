@@ -891,11 +891,17 @@ test("fail closed: an odd or unreadable alternates file, in C's own directory or
   for (const k of cases) {
     const ch = chain();
     k.setup(ch);
-    const r = rig();
+    // Git 2.55 and later read info/alternates as they set the repository up,
+    // so a git started here would itself wait on the FIFO (GitHub's runners,
+    // 0.2.0-beta.9): the odd file must fail C before any git runs.
+    const ran: string[][] = [];
+    const real = prepGit(new Set());
+    const r = rig({ git: (args, opts) => { ran.push(args); return real(args, opts); } });
     r.repos = [ch.c];
     r.locked = { sha1: [ch.x, ch.w, ch.y, ch.z], sha256: [] };
     await cycle(r);
     const s = r.prep.summary();
+    assert.deepEqual(ran, [], `${k.what}: no git ran for C`);
     assert.deepEqual(s.ready, [], k.what);
     assert.equal(s.failed.length, 1, k.what);
     assert.match(s.failed[0]!.reason, k.why, `${k.what}: ${s.failed[0]!.reason}`);

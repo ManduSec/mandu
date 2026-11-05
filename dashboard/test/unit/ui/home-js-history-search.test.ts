@@ -76,7 +76,7 @@ test("F1: typing reads after the typing stops; the matches, their count, ?q= in 
   const form = doc.getElementById("history-search");
   assert.equal(form.getAttribute("role"), "search");
   assert.equal(doc.querySelector('label[for="history-q"]').textContent, "Find a session");
-  assert.equal(doc.getElementById("history-q").getAttribute("placeholder"), "What you asked, a folder, a secret or a host", "the folder, a secret and a host are searched too");
+  assert.equal(doc.getElementById("history-q").getAttribute("placeholder"), "What you asked, a folder, secret or host", "the folder, a secret and a host are searched too");
   assert.equal(doc.getElementById("history-count").hidden, true, "no count without a search");
   const entries = window.history.length;
   type(doc, "sta");

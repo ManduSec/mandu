@@ -99,7 +99,7 @@ test("G3: none in the sessions looked through is never 'No session matches'", as
 test("G4: the hint names what the box finds", async () => {
   const { doc } = load({ extensions: "", url: URL, homeVm: home(), routes: { "GET home/history": { total: 0, rows: [], next: null } } });
   await tick();
-  assert.equal(doc.getElementById("history-q").getAttribute("placeholder"), "What you asked, a folder, a secret or a host");
+  assert.equal(doc.getElementById("history-q").getAttribute("placeholder"), "What you asked, a folder, secret or host");
 });
 
 test("G5: each found name links into its session where it came up; 'and N more' and an older server's strings stay words (#301)", async () => {

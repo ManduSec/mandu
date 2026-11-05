@@ -20759,11 +20759,25 @@ key (retired by §4.25v), attributes and element ids were unchanged.
     dashboard): at 1280 and 390 px, the area where `elementFromPoint`
     returns Home's "?" and *What the AI has now ?* on Approvals is at
     least 24 × 24 px, corners included, and meets no other link or
-    button; the masked link's last pixel is still the link; a real click
-    2 px outside the circle opens the note and the page stays put; no page
-    carries the key, the tour's fake values or a token.
+    button; the masked link's last whole pixel is still the link; a real
+    click 2 px outside the circle opens the note and the page stays put;
+    no page carries the key, the tour's fake values or a token. At 390 px
+    the Approvals card is short (*A waiting question is short on a
+    phone*, §4.25), so a real click on What each answer does opens its
+    cells before the "?" is measured.
 
-  Both fail on the old page.
+  Both fail on the old page. *The last whole pixel* (2026-11-05): the
+  test first read the link's last pixel 1 px inside its right edge.
+  `elementFromPoint` reads whole pixels against a text box snapped to
+  them, so at a fractional edge that point can be past the text: in
+  Chrome on GitHub's runner, which lays text at fractional advances, the
+  link's last line at 390 px was "it", ending at 24.42 px, and 23.42 hit
+  the space after it (23.0 hit the link) while the "?" area began at
+  27.73 px. The page was right and the probe was not; Playwright's
+  headless shell, which rounds each advance of the served font to a whole
+  pixel, never met a fractional edge. The probe now takes the left edge of
+  the last whole pixel inside the link, a whole-pixel point; an area
+  reaching into the link still fails it, in both browsers.
 - **The session page says "masked" and "this computer" too (2026-10-25).**
   Its cards and step notes are built on the server (`secret-story.ts`,
   `agent-page.ts`, `block-why.ts`), which the sweep below never read, so
@@ -22782,6 +22796,25 @@ and one answered send, in a headless Chromium: at 390 and 320 px
 placeholders measured in the box's font fitting the box; at 980 px label
 and box share a line; no page carries the key's value or a token).
 
+*The hint fits at its real width* (2026-11-05). At 320 px the box holds
+266 px of text. #249's hint, "What you asked, a folder, a secret or a
+host", needs 268.1 px in the served IBM Plex Sans at 14 px, at the
+fractional glyph advances a phone and a full Chrome draw, so its last
+letter was cut. Playwright's headless shell rounds each advance of the
+served font to a whole pixel and measured exactly 266.0, so the stack
+test passed on the maintainers' machines and failed in Chrome on GitHub's
+runner (268.1). Common system fonts, should the served font not load,
+were wider still: DejaVu Sans 306.5, Inter 286.6, Noto Sans 281.1, Open
+Sans 280.5, Arimo (Arial's metrics) 270.0. The hint is now "What you
+asked, a folder, secret or host", the same four things in the same
+order: 246.6 px in IBM Plex Sans (19 px to spare at 320 px), and it fits
+in Roboto (243.4), Arimo (246.7), Cantarell (244.3), Open Sans (257.6),
+Noto Sans (258.1) and Inter (263.0); only DejaVu Sans (280.5) is still
+too wide. The stack test now measures the wider of the hint's width at
+the box's size and its design width (at ten times the size, scaled
+back), so the headless shell's rounding no longer passes a hint a phone
+cuts: on the old hint it reads 267.9 px and fails.
+
 *By a secret or a host* (2026-11-02, #249). The questions a person
 brings to History after a scare are about secrets and hosts: "which
 sessions touched my `.env`?", "when did `STRIPE_KEY` come up?", "what went
@@ -22807,7 +22840,9 @@ in ~/proj/.env and a send to api.stripe.com"** (a host only blocked reads
 below), at most three names, then
 "and N more"; a row its own words find draws nothing new. The hint
 became "What you asked, a folder, a secret or a host" (the agent's name
-still finds it), and it still reads whole at 390 and 320 px.
+still finds it); at 320 px it did not read whole, and since 2026-11-05
+it is "What you asked, a folder, secret or host" (*The hint fits at its
+real width*, under *On a phone, the box under its label* above).
 
 *The look-through and its count.* A name is known only once a session's
 facts are counted, so a search now looks through the sessions from the

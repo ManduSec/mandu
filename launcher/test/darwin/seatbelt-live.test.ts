@@ -570,21 +570,33 @@ test("the inline wrap (-p) applies what -f applies, with the same size limit (a 
   const target = join(S, "else", "limit.txt");
   writeFileSync(target, "x\n");
   const file = join(S, "else", "p.sb");
-  const run = (args: string[]): Promise<{ out: string; err: string }> => new Promise((res) => {
-    execFile(SANDBOX_EXEC, [...args, "/bin/cat", target], { timeout: 20_000 }, (_e, out, err) => res({ out: String(out), err: String(err) }));
+  // The timeout only ends a hang. sandbox-exec compiles the oversized profile
+  // below in full before it refuses it: 9-13 s on GitHub's arm64 macOS
+  // runner, about 20 s on its Intel one, where a 20 s timeout ended the `-f`
+  // run before it answered and read as an empty stderr (2026-11-05,
+  // continuous-integration.md §12.6). A run the timeout ends says so.
+  const TIMEOUT_MS = 120_000;
+  const run = (args: string[]): Promise<{ out: string; err: string; killed: boolean; ms: number }> => new Promise((res) => {
+    const t0 = Date.now();
+    execFile(SANDBOX_EXEC, [...args, "/bin/cat", target], { timeout: TIMEOUT_MS }, (e, out, err) =>
+      res({ out: String(out), err: String(err), killed: e?.killed === true, ms: Date.now() - t0 }));
   });
+  const said = (args: string[], r: { out: string; err: string; killed: boolean; ms: number }): string =>
+    `${args[0]}: ${r.killed ? `killed by the ${TIMEOUT_MS / 1000} s timeout after ${r.ms} ms; ` : ""}${r.out}${r.err}`;
   const small = `(version 1)\n(allow default)\n(deny file-read* (literal ${JSON.stringify(target)}))\n`;
   writeFileSync(file, small);
   for (const args of [["-p", small], ["-f", file]]) {
     const r = await run(args);
-    assert.match(r.err, EPERM, `${args[0]}: ${r.out}${r.err}`);
+    assert.equal(r.killed, false, said(args, r));
+    assert.match(r.err, EPERM, said(args, r));
   }
   const lines = Array.from({ length: 6000 }, (_, i) => `  (literal "/Users/nobody/a/long/path/to/credential/file/number/${String(i).padStart(5, "0")}/creds.json")`);
   const big = `(version 1)\n(allow default)\n(deny file-read*\n${lines.join("\n")})\n`;
   writeFileSync(file, big);
   for (const args of [["-p", big], ["-f", file]]) {
     const r = await run(args);
-    assert.match(r.err, /exceeds maximum \(65535\)/, `${args[0]}: ${r.out}${r.err}`);
+    assert.equal(r.killed, false, said(args, r));
+    assert.match(r.err, /exceeds maximum \(65535\)/, said(args, r));
   }
 });
 

@@ -4076,7 +4076,11 @@ reading three pack indexes whole). Three measures:
   a pack several known repositories reach one copy, built once, its bytes
   counted once; a repository whose alternates cannot be read as git reads
   them, or whose directory is read by two object formats, is `failed` and
-  gets no copy, its packs left to the guard's backstop) and the launch
+  gets no copy, its packs left to the guard's backstop; it reads the
+  closure of a work tree's own `.git` store before it runs any git, since
+  git 2.55 and later read `info/alternates` while they set a repository up
+  and would themselves wait on a FIFO there until the inventory deadline,
+  found on GitHub's runners in 0.2.0-beta.9's release check) and the launch
   (`preparedCopyTwins`, which serves a pack two listed repositories reach
   once). Their exclusions come from the one global locked set, so a shared
   pack gets one key whoever reaches it: the union of every locked version
@@ -4089,7 +4093,8 @@ reading three pack indexes whole). Three measures:
   `arbiter/test/unit/prepared-copies.test.ts` (an A ← B ← C chain with C
   registered alone, a `clone --shared` pair whose shared pack holds
   versions each locks, a cycle, a relative entry, a FIFO, a directory, a
-  bad quoted entry, a NUL, a non-UTF-8 file two links away, an unreadable
+  bad quoted entry, a NUL, a non-UTF-8 file two links away, each failing C
+  before any git runs, an unreadable
   file), `tests/stack/prepared-copies-parity.test.ts` (the chain through the
   production adapter, bound by the launcher for C) and the kernel e2e K14
   in `tests/sandbox/git-history-locks.test.ts` (git in C under the wrap).
