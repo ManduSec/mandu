@@ -184,6 +184,10 @@ export type Emitter =
   //                    the honest emitter; the arbiter only stores the event)
   | "launcher" //       the per-session launcher (`launch_posture` / `session_exit`)
   | "cdp-relay" //      the DevTools relay between a browser agent and Chrome (`browser_action`)
+  | "openclaw-plugin" // Mandu's plugin in a resident OpenClaw Gateway (openclaw-plugin.md
+  //                    §3.5-§3.6): a refused tool call (`tool_use`) and a chat reply's
+  //                    outcome (`egress_decision`), always CLAIMS (the data socket),
+  //                    with the Gateway's sessionKey under `openclaw`
   | "test-harness"; //  the e2e suite that emits the per-session `assertion` verdict
 
 export interface EventPolicy {
@@ -441,6 +445,38 @@ export interface FullInput {
  * future Claude Code release makes its prompt say. String heuristics remain the
  * fallback for events that predate this field.
  */
+/** One window of a model plan's quota (`fiveHour`, `sevenDay` below). */
+export interface UpstreamLimitWindow {
+  /** `allowed` / `allowed_warning` / `rejected`, as the provider said it. */
+  status?: string;
+  /** 0..1 (1 = used up). */
+  utilization?: number;
+  /** When the window resets, ISO 8601. */
+  resetsAt?: string;
+}
+
+/** An upstream throttle on a `tllm_call` (the model proxy's rate-limit.ts
+ *  `UpstreamLimit`, field for field). */
+export interface UpstreamLimit {
+  /** The provider's HTTP status: 429 (rate-limited) or 529 (overloaded). */
+  status: number;
+  /** The overall status of the plan's limits (`rejected`: the quota refused). */
+  unifiedStatus?: string;
+  /** The window that decided (`five_hour`, `seven_day`, …). */
+  claim?: string;
+  fiveHour?: UpstreamLimitWindow;
+  sevenDay?: UpstreamLimitWindow;
+  /** Whether the plan's extra usage could take over (`rejected`, …). */
+  overageStatus?: string;
+  /** When the decisive limit resets, ISO 8601. */
+  resetsAt?: string;
+  /** The answer's Retry-After, in seconds. */
+  retryAfterS?: number;
+  /** A limit the next minutes will not lift: the proxy relayed it at once
+   *  instead of retrying. */
+  hard: boolean;
+}
+
 export interface TllmCallShape {
   /** Number of entries in the request's `tools` array (0 when absent). */
   toolCount: number;
@@ -631,6 +667,14 @@ export interface ManduEvent {
    *  model proxies) — the side-call detection seam. Preserved verbatim by
    *  `coerceEvent` (spread), so the arbiter needs no change. */
   callShape?: TllmCallShape;
+
+  /** The upstream's throttle, present only on a kind "tllm_call" whose model
+   *  provider answered 429 (rate-limited) or 529 (overloaded): which limit
+   *  decided and until when, read off the answer's rate-limit HEADERS by the
+   *  model proxy (anthropic-proxy rate-limit.ts; mandu.md §4.1 "Upstream
+   *  throttles and plan limits"). Header values only, never an auth header
+   *  or a body. Preserved verbatim by `coerceEvent` (spread). */
+  upstreamLimit?: UpstreamLimit;
 
   /** The evaluated security + utility checks, present only on kind "assertion"
    *  (§4.13) — the e2e suite's per-session verdict. Preserved verbatim by
@@ -869,6 +913,35 @@ export function coerceEvent(v: unknown): ManduEvent | null {
  *  reveal or a verdict reads one. */
 export function believedEvents<T extends { claimed?: unknown }>(events: readonly T[]): T[] {
   return events.filter((e) => e.claimed !== true);
+}
+
+/** Is this session an ATTACHMENT's (openclaw-plugin.md §3.3), by the
+ *  arbiter's own believed record of its registration: a `launch_posture`
+ *  that is no claim, written by the arbiter, naming an attachment? A record
+ *  a program wrote is either a claim or refused (the arbiter takes no
+ *  `launch_posture` emit for a live attachment's session), so a session a
+ *  forger made up is never one. */
+export function isAttachmentSession(events: readonly { claimed?: unknown; kind?: unknown; emitter?: unknown }[]): boolean {
+  return events.some((e) => e.kind === "launch_posture" && e.claimed !== true && e.emitter === "arbiter" &&
+    typeof (e as { attachment?: { kind?: unknown } }).attachment?.kind === "string");
+}
+
+/**
+ * The events "Show the real value" may name a secret from (dashboard.md
+ * §4.25b *Showing a real value*, §4.25aj *A plugin session's page*): the
+ * believed ones; for an attachment session, every one of it. Its own model
+ * proxy writes every record while its attachment holds the human plane
+ * exposed, so they are all claims by construction, and the believed set
+ * would leave the session's masked steps with a button that shows nothing.
+ * What that admits is a token a program in the Gateway wrote into the
+ * session's own record: shown only to the signed-in person (the route needs
+ * the admin session and the CSRF header), never to the AI or a program, as
+ * any value of theirs may be. The page still says the record is unchecked
+ * (`recordUnchecked`), and nothing else widens: verdicts, counts, folders
+ * and the inline originals (`revealValues`) still read believed events only.
+ */
+export function revealScopeEvents<T extends { claimed?: unknown; kind?: unknown; emitter?: unknown }>(events: readonly T[]): T[] {
+  return isAttachmentSession(events) ? [...events] : believedEvents(events);
 }
 
 /** Whether Mandu could not check a session's record (dashboard.md §4.25ah,

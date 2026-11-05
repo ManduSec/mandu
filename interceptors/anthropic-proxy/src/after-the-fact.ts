@@ -1,8 +1,10 @@
 /**
  * after-the-fact — the `[mandu:secret] masked after the fact` note
  * (confidentiality.md §7.1, "Masked after the fact"; 2026-10-05).
- * Mandu-new (no reference origin). The openai-proxy keeps a byte-identical
- * copy (interceptors/openai-proxy/src/after-the-fact.ts).
+ * Mandu-new (no reference origin). ONE MODULE, TWO COPIES (both model
+ * proxies, no cross-package import): the source is
+ * interceptors/anthropic-proxy/src/after-the-fact.ts; change it, then run
+ * `node scripts/copies/module-copies.mjs generate`.
  *
  * Every request re-sends the whole history, and the request rewrite
  * re-classifies every tool_result in it. Once a file is labelled (or a value

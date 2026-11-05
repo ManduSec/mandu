@@ -10,7 +10,9 @@
  * tag and no commits, its detector with its line, the softer advice and
  * "from the next time an agent starts"; on macOS a history row's impact
  * says it hides the committed versions on Linux and that they stay readable
- * there (the Linux words unchanged); the scan's one-line summary names
+ * there (the Linux words unchanged); where to replace the key, one entry
+ * per company its detectors name, in their order (`replaceAt`), and none
+ * with no advice, on a label, past-sessions or model row; the scan's one-line summary names
  * both scans, the home folder, and what a cap left unchecked in plain words;
  * and every string passes the product vocabulary sweep (§4.16 / the home
  * page's FORBIDDEN list). The fixtures carry masks only, as the arbiter's
@@ -384,4 +386,77 @@ test("a file whose key mandu scan found in past sessions (plan 17 §3 item 13): 
   assert.equal(row!.rotate, ROTATE_WORDS, "the key did leave: the full advice");
   assert.equal(row!.rotateSoft, false);
   assert.equal(row!.by, "Suggested by mandu scan");
+});
+
+// ── The advice says where to replace the key (dashboard.md §4.25r) ──────────
+
+const shape = (rule: string, words: string) => ({ kind: "content-shape" as const, rule, mask: "x…", words, line: 1 });
+const withDetectors = (detectors: ReturnType<typeof shape>[], over: Partial<SuggestionWire> = {}) => suggestion({
+  evidence: { ...suggestion({}).evidence, findings: [{ ...suggestion({}).evidence.findings[0]!, detectors }] },
+  ...over,
+});
+
+test("replaceAt: a GitHub token's row gets GitHub's page, one entry", () => {
+  const [row] = suggestionRows([withDetectors([shape("github-token", "GitHub token")])], HOME, "linux");
+  assert.deepEqual(row!.replaceAt, [
+    { company: "GitHub", page: "Personal access tokens", url: "https://github.com/settings/tokens", lead: "Replace it on GitHub" },
+  ]);
+});
+
+test("replaceAt: keys from two companies give two entries in detector order, no company twice (across findings too)", () => {
+  const base = suggestion({}).evidence.findings[0]!;
+  const s = suggestion({
+    evidence: { ...suggestion({}).evidence, findings: [
+      { ...base, detectors: [shape("stripe-key", "Stripe live key"), shape("github-token", "GitHub token"), shape("stripe-key", "Stripe live key")] },
+      { ...base, blob: "b".repeat(40), detectors: [shape("github-token", "GitHub token"), shape("aws-access-key-id", "AWS access key"), shape("aws-secret-key", "AWS secret key")] },
+    ] },
+  });
+  const [row] = suggestionRows([s], HOME, "linux");
+  assert.deepEqual(row!.replaceAt.map((r) => [r.company, r.url]), [
+    ["Stripe", "https://dashboard.stripe.com/apikeys"],
+    ["GitHub", "https://github.com/settings/tokens"],
+    ["AWS", "https://console.aws.amazon.com/iam/"],
+  ]);
+  assert.equal(row!.replaceAt[2]!.after, ", then Security credentials under your user name");
+});
+
+test("replaceAt: an OpenAI-style key is marked maybe and says 'If it is an OpenAI key'", () => {
+  const [row] = suggestionRows([withDetectors([shape("openai-key", "OpenAI-style API key")])], HOME, "linux");
+  assert.deepEqual(row!.replaceAt, [{
+    company: "OpenAI", page: "API keys", url: "https://platform.openai.com/api-keys", maybe: true,
+    lead: "If it is an OpenAI key, replace it on OpenAI",
+  }]);
+});
+
+test("replaceAt: a private key, a password and a credential file name no company: none", () => {
+  const [row] = suggestionRows([withDetectors([shape("private-key", "private key"), shape("url-password", "password in a web address"), shape("credential-assignment", "password or token written in the file")])], HOME, "linux");
+  assert.ok(row!.rotate, "the advice is there");
+  assert.deepEqual(row!.replaceAt, []);
+  // The catalog's rule ids are never a company's.
+  const [cat] = suggestionRows([suggestion({})], HOME, "linux");
+  assert.deepEqual(cat!.replaceAt, []);
+});
+
+test("replaceAt: no advice gives none: rotate null, a label row, a past-sessions row, a model row", () => {
+  const gh = [shape("github-token", "GitHub token")];
+  const [quiet] = suggestionRows([withDetectors(gh, { historyOnly: false, rotate: false })], HOME, "linux");
+  assert.equal(quiet!.rotate, null);
+  assert.deepEqual(quiet!.replaceAt, []);
+  const [label] = suggestionRows([withDetectors(gh, {
+    source: "sensitivity-label", rotate: false,
+    evidence: { ...suggestion({}).evidence, findings: [{ ...suggestion({}).evidence.findings[0]!, detectors: gh }], label: { id: "l1", site: null, name: "Confidential", level: "local-model" } },
+  })], HOME, "linux");
+  assert.equal(label!.rotate, null);
+  assert.deepEqual(label!.replaceAt, []);
+  const [past] = suggestionRows([suggestion({ source: "past-sessions", rotate: true,
+    evidence: { paths: ["config.yml"], blobs: [], historyOnly: false, findings: [], pastSessions: { names: ["token"], sessions: 1, last: null } } })], HOME, "linux");
+  assert.equal(past!.rotate, ROTATE_WORDS);
+  assert.deepEqual(past!.replaceAt, []);
+  const [model] = suggestionRows([suggestion({ source: "model-names", rotate: false,
+    model: { endpoint: "m", level: "no-model", reason: "personal", reasonWords: "looks personal", candidate: "file", files: 1, covers: [] } })], HOME, "linux");
+  assert.deepEqual(model!.replaceAt, []);
+  // A file found as it is now keeps its softer advice, and its line.
+  const [ws] = suggestionRows([withDetectors(gh, { source: "workspace", historyOnly: false, rotate: false })], HOME, "linux");
+  assert.equal(ws!.rotate, ROTATE_SOFT_WORDS);
+  assert.deepEqual(ws!.replaceAt.map((r) => r.company), ["GitHub"]);
 });

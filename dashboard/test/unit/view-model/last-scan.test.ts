@@ -19,13 +19,21 @@
  *   - a finding or a send whose secret lives in a `~/…` or absolute file
  *     names it for Rules' link (`file`, Home's `ruleFile`); a key not in
  *     your files, a relative path or none names no file;
+ *   - a key not in your files and a send of one name where their company
+ *     replaces such a key, with the conditional lead (`replaceAt`); a test
+ *     value, your own, a kept or a named one none;
+ *   - a card with nothing to act on (no scan yet, or a clean one with no
+ *     send worth a look and no rule waiting) carries the line it folds to,
+ *     and every card its scan's `ranAt` (§4.25ai *A card with nothing to act
+ *     on folds*);
  *   - the copy is product vocabulary, and no 8-character run of a planted
  *     value is in any of it.
  * Axes: none (display only; the record is a `secrets`-mode scan). Mandu-new test.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { homeScanCard, parseLastScan, scanFigure, scanPageVM, type LastScanWire } from "../../../src/view-model/last-scan.js";
+import { homeScanCard, parseLastScan, scanFigure, scanItemIdOf, scanPageVM, withPresence, type LastScanWire, type ScanFindingWire } from "../../../src/view-model/last-scan.js";
+import { scanHead, scanItemDetail } from "../../../src/view-model/last-scan-pages.js";
 
 
 const STRIPE = `${"sk" + "_live_"}51Qz7Kp2Lm9Xw3Rt6Yv8Nb4C`;
@@ -98,6 +106,24 @@ test("Home's card: how to run one, before any scan", () => {
   assert.deepEqual(c.parts.filter((p) => p.kind === "code").map((p) => p.text), ["mandu scan"]);
   assert.match(c.sentence, /runs on this computer and sends nothing/);
   assert.equal(c.link, null);
+  // The command to run is marked so the page draws a Copy beside it
+  // (dashboard.md §4.25b); the sentence's mention of it is not.
+  assert.deepEqual(c.againParts, [{ kind: "text", text: "Run it in a terminal: " }, { kind: "code", text: "mandu scan", run: true }]);
+  assert.equal(c.parts.some((p) => "run" in p), false);
+});
+
+test("the Scan page before any scan (§4.25ai *Before any scan, the step comes first*): its step and the line under it; after one, Run it again and no such line; Home's card has none", () => {
+  const none = scanPageVM(null);
+  assert.equal(none.ran, false);
+  assert.deepEqual(none.againParts, [{ kind: "text", text: "Run it in a terminal: " }, { kind: "code", text: "mandu scan", run: true }], "the step, its command marked for a Copy");
+  assert.equal(none.stepNote, "This page shows what it found when it finishes.");
+  const kept = scanPageVM(record());
+  assert.equal(kept.ran, true);
+  assert.equal(kept.stepNote, null);
+  assert.deepEqual(kept.againParts.map((p) => p.text), ["Run it again: ", "mandu scan"]);
+  assert.equal(scanHead(none, null).stepNote, "This page shows what it found when it finishes.", "the head carries it");
+  assert.equal(scanHead(kept, "r1").stepNote, null);
+  for (const c of [homeScanCard(null), homeScanCard(record())]) assert.equal("stepNote" in c, false, "Home's card keeps its own words and order");
 });
 
 test("Home's card: what left this computer, with the way to stop it, the top findings, the sends worth a look and rules waiting", () => {
@@ -109,9 +135,50 @@ test("Home's card: what left this computer, with the way to stop it, the top fin
   assert.equal(c.worthWords, "1 send to a host Mandu cannot tie to the key's own service is worth a look.");
   assert.match(c.suggested ?? "", /^1 file that holds them has no rule yet/);
   assert.deepEqual(c.againParts.map((p) => p.text), ["Run it again: ", "mandu scan"]);
+  assert.deepEqual(c.againParts.filter((p) => "run" in p && p.run).map((p) => p.text), ["mandu scan"], "the command marked to run");
+  assert.equal(c.parts.some((p) => "run" in p), false, "mandu claude and mandu codex are not marked");
   assert.equal(c.link, "scan");
   const none = homeScanCard(record({ findings: [] }));
   assert.equal(none.headline, "None of your secrets left this computer in your agents' requests");
+});
+
+test("the way to stop it names the agents you use (start-commands.ts): a Goose-only scan says mandu goose; Home's list wins on the card; none known, today's two", () => {
+  const goose = record({ sessions: { goose: 40 } });
+  const codes = (parts: readonly { kind: string; text: string }[]): string[] => parts.filter((p) => p.kind === "code").map((p) => p.text);
+  const c = homeScanCard(goose);
+  assert.deepEqual(codes(c.parts), ["mandu goose"]);
+  assert.match(c.sentence, /To stop it from now on, start your agent with mandu goose\.$/);
+  assert.match(homeScanCard(record({ sessions: { goose: 40 }, findings: [] })).sentence, /To keep it so, start your agent with mandu goose\.$/);
+  const p = scanPageVM(goose);
+  assert.deepEqual(codes(p.stopParts), ["mandu goose"]);
+  assert.equal(p.stopParts.map((x) => x.text).join(""), "To keep your secrets from the AI from now on, start your agent with mandu goose.");
+  assert.doesNotMatch(JSON.stringify([c.parts, p.stopParts]), /mandu codex|mandu claude/);
+  // Home passes its own list (its recorded sessions first): the card names it.
+  assert.deepEqual(codes(homeScanCard(goose, ["mandu opencode", "mandu goose"]).parts), ["mandu opencode", "mandu goose"]);
+  assert.match(homeScanCard(goose, ["mandu opencode", "mandu goose"]).sentence, /start your agent with mandu opencode \(or mandu goose\)\.$/);
+  // No scan kept: the Scan page says today's two.
+  assert.deepEqual(codes(scanPageVM(null).stopParts), ["mandu claude", "mandu codex"]);
+  // Only an agent Mandu does not run: today's two, and the agents it runs listed after.
+  const gemini = scanPageVM(record({ sessions: { gemini: 9 } }));
+  assert.deepEqual(codes(gemini.stopParts).slice(0, 2), ["mandu claude", "mandu codex"]);
+  assert.ok(!codes(gemini.stopParts).includes("mandu gemini"));
+});
+
+test("the Scan page tags its start commands (§4.25ai): the page draws them from Home's `start`; Home's card, given its list, has none tagged", () => {
+  const tagged = (parts: readonly { kind: string; text: string; start?: true }[]): string[] => parts.filter((p) => p.start === true).map((p) => p.text);
+  const none = scanPageVM(null);
+  assert.deepEqual(tagged(none.stopParts), ["mandu claude", " (or ", "mandu codex", ")"]);
+  assert.deepEqual(tagged(none.parts), [], "no scan: the summary names no agent");
+  const rec = scanPageVM(record({ sessions: { "claude-code": 3 } }));
+  assert.deepEqual(tagged(rec.stopParts), ["mandu claude"]);
+  assert.deepEqual(tagged(rec.parts), ["mandu claude"]);
+  // The joined text is the same as untagged.
+  assert.equal(rec.parts.map((x) => x.text).join(""), rec.sentence);
+  assert.equal(none.stopParts.map((x) => x.text).join(""), "To keep your secrets from the AI from now on, start your agent with mandu claude (or mandu codex).");
+  // Only the commands: the words around them and the unrun note are not tagged.
+  const gemini = scanPageVM(record({ sessions: { gemini: 9 } }));
+  assert.deepEqual(tagged(gemini.stopParts), ["mandu claude", " (or ", "mandu codex", ")"]);
+  assert.deepEqual(tagged(homeScanCard(record(), ["mandu goose"]).parts), [], "Home's card is built with its list");
 });
 
 test("the Scan page: each finding's story, its footnote, its examples; the tiers, the sends and the riskier sessions", () => {
@@ -125,6 +192,9 @@ test("the Scan page: each finding's story, its footnote, its examples; the tiers
     "command-output": [{ at: "2026-10-19T10:00:00.000Z", agent: "claude-code", how: "command-output", command: "cat .env | grep STRIPE", project: "~/shop", mandu: "without" }],
   };
   const p = scanPageVM(r);
+  // Only the command to run again carries the Copy mark (dashboard.md §4.25b).
+  assert.deepEqual(p.againParts.filter((x) => "run" in x && x.run).map((x) => x.text), ["mandu scan"]);
+  assert.equal([...p.parts, ...p.stopParts].some((x) => "run" in x), false, "the start-your-agent commands are not marked");
   assert.equal(p.read, "Mandu read 812 Claude Code and 16 Codex sessions on this computer (29 Sep to 21 Oct), on 21 Oct. Nothing left this computer for the scan, and no secret's value is shown here.");
   assert.deepEqual(p.notes, ["1 session record over 512 MiB not read."]);
   assert.deepEqual(p.sections.map((s) => [s.id, s.items.length, s.folded, s.filter]), [
@@ -152,7 +222,8 @@ test("the Scan page: each finding's story, its footnote, its examples; the tiers
       { title: "A command printed it (3 sessions)", examples: [{ head: "19 Oct · ~/shop · Claude Code", did: "The agent ran:", code: "cat .env | grep STRIPE", mandu: "without Mandu" }] },
       { title: "The agent read the file", examples: [{ head: "2 Oct · ~/shop-api · Claude Code", did: "The agent read:", code: "~/shop/.env", mandu: "while Mandu ran (by the time only)" }] },
     ],
-  });
+    where: null,
+  }, "a scan kept before places were: none drawn");
   // Seen only under Mandu: kept from the AI, its own folded list. Codex, no
   // examples (before part D): the counts tell it, and the provider is the agent's.
   const cfg = p.sections.find((s) => s.id === "kept")!.items[0]!;
@@ -186,6 +257,21 @@ test("the Scan page: each finding's story, its footnote, its examples; the tiers
   assert.equal(q.story.find((s) => s.step === "went")!.text, "This session ran under Mandu: the AI saw it masked; only the record on disk holds the value.");
   f0.examples[0]!.mandu = "without";
   assert.equal(scanPageVM(r).sections[0]!.items[0]!.story.find((s) => s.step === "went")!.text, "The file's content, with the secret in it, went to the AI: it left this computer in OpenCode's next request to the model provider.");
+});
+
+test("a session under Mandu is not counted in a finding's summary (plan 17 §2, the terminal report's count): the sessions without Mandu, their date and ways; the footnote says the rest", () => {
+  const base = record().findings[0]!;
+  const f = { ...base, sessions: 2, first: "2026-10-24T10:00:00.000Z", last: "2026-10-26T10:00:00.000Z", how: { "command-output": 2, "read-file": 1 }, duringMandu: 1, sessionsUnderMandu: 1, sessionsByTime: 0, outsideMandu: { first: "2026-10-24T10:00:00.000Z", last: "2026-10-24T10:00:00.000Z", how: { "command-output": 1 } } };
+  const rec = parseLastScan(JSON.parse(JSON.stringify(record({ findings: [f] }))))!;
+  assert.deepEqual(rec.findings[0]!.outsideMandu, f.outsideMandu, "read back from the kept record");
+  const item = scanPageVM(rec).sections[0]!.items[0]!;
+  assert.match(item.summary, /^1 session, 24 Oct, 2 projects · a command printed it · /);
+  assert.equal(item.footnote, "1 session without Mandu; 1 session with Mandu, where the AI saw it masked.");
+  assert.equal(item.story.find((x) => x.step === "when")!.text.startsWith("The newest"), false, "one session without Mandu: no 'newest'");
+  assert.match(homeScanCard(rec).top[0]!.how, / · 1 session, 24 Oct$/);
+  // A record kept before outsideMandu: the count still leaves the session under Mandu out.
+  const { outsideMandu: _o, ...older } = f;
+  assert.match(scanPageVM(record({ findings: [older] })).sections[0]!.items[0]!.summary, /^1 session, 24 Oct to 26 Oct, 2 projects · /);
 });
 
 test("the Scan page: a web fetch's story names the URL it fetched, as code; the AI writing a key into one too; the URL in the filter and the detail", () => {
@@ -329,6 +415,49 @@ test("nothing left: green headline, no achievement in an empty list, and no risk
   assert.deepEqual([fig.file, fig.name, fig.agent, fig.provider], [null, null, null, null]);
 });
 
+test("nothing left in what it could read: OpenClaw sessions read without their compressed records (a Node before 22.15) make the headline amber and qualified, with a note", () => {
+  const none = record().findings.filter((f) => f.kind !== "known" || (f.sessionsUnderMandu ?? 0) >= f.sessions);
+  const raw = record({ findings: none, sends: [], capped: { overTime: 0, overBytes: 0, tooBig: 0, overFiles: 0, readFailed: 0, compressed: 2 } });
+  const r = parseLastScan(raw)!;
+  assert.equal(r.capped.compressed, 2, "read back");
+  const page = scanPageVM(r);
+  assert.equal(page.tone, "warn");
+  assert.equal(page.headline, "None of your secrets left this computer in your agents' requests, in what Mandu could read");
+  assert.ok(page.notes.includes("2 OpenClaw sessions not read in full: OpenClaw keeps its longer messages compressed, and Mandu reads those on Node 22.15 or later."), JSON.stringify(page.notes));
+  const yours = page.sections.find((s) => s.id === "yours")!;
+  assert.equal(yours.emptyTone, "warn");
+  assert.match(yours.empty ?? "", /in what it could read of these sessions \(see the notes\)\.$/);
+  // a record with no such field (an older scan): as before
+  const old = parseLastScan(record({ findings: none, sends: [] }))!;
+  assert.equal(old.capped.compressed, undefined);
+  assert.equal(scanPageVM(old).tone, "ok");
+});
+
+test("a card with nothing to act on folds (§4.25ai): the line before a scan and after a clean one, keyed to its ranAt; a card that says secrets left, could not read everything, has a send worth a look or a rule waiting never folds", () => {
+  const before = homeScanCard(null);
+  assert.equal(before.ranAt, null);
+  assert.equal(before.folded, "Did your agents already send a secret to the AI?", "the question's words, never a result");
+  const none = record().findings.filter((f) => f.kind !== "known" || (f.sessionsUnderMandu ?? 0) >= f.sessions);
+  const clean = homeScanCard(record({ findings: none, sends: [], suggestions: { pending: 0, filed: 1, covered: 1 } }));
+  assert.equal(clean.tone, "ok");
+  assert.equal(clean.ranAt, "2026-10-21T09:00:00.000Z", "the kept record's ranAt");
+  assert.equal(clean.folded, "Last scan, 21 Oct: none of your secrets left this computer.");
+  const left = homeScanCard(record());
+  assert.equal(left.tone, "bad");
+  assert.equal(left.ranAt, "2026-10-21T09:00:00.000Z");
+  assert.equal(left.folded, null, "secrets left: never folds");
+  const partly = homeScanCard(record({ findings: none, sends: [], suggestions: { pending: 0, filed: 1, covered: 1 }, capped: { overTime: 0, overBytes: 0, tooBig: 0, overFiles: 0, readFailed: 0, compressed: 2 } }));
+  assert.equal(partly.tone, "warn");
+  assert.equal(partly.folded, null, "not everything read: never folds");
+  // Green, but something still asks you: a send worth a look, a rule waiting.
+  const worth = homeScanCard(record({ findings: none, sends: [record().sends![1]!], suggestions: { pending: 0, filed: 1, covered: 1 } }));
+  assert.deepEqual([worth.tone, worth.worthALook, worth.folded], ["ok", 1, null]);
+  const waiting = homeScanCard(record({ findings: none, sends: [] }));
+  assert.equal(waiting.tone, "ok");
+  assert.ok(waiting.suggested);
+  assert.equal(waiting.folded, null);
+});
+
 test("the figure: the newest of your secrets that reached the AI, its file, agent and provider, without Mandu and with it", () => {
   const r = record();
   r.findings[0]!.examples![0]!.provider = "anthropic";
@@ -423,4 +552,91 @@ test("a finding's file for Change it in Rules (§4.25ai): a known secret's or a 
   // Home's top: the same rule, its `file` kept as the record says.
   const top = homeScanCard(record({ findings: [r.findings[0]!, abs, rel, nameless] })).top;
   assert.deepEqual(top.map((t) => [t.file, t.ruleFile]), [["~/shop/.env", "~/shop/.env"], ["/srv/app/.env", "/srv/app/.env"], ["app/.env", null]]);
+});
+
+test("a key links to where it is replaced (§4.25ai): a key not in your files and a send of one, with the conditional lead; none for a test value, your own, a kept or a named one", () => {
+  const r = record();
+  r.findings.push({ kind: "github-token", preview: "ghp_…", sessions: 1, agents: ["codex"], how: { "your-message": 1 }, projects: [], duringMandu: 1, sessionsUnderMandu: 1 });
+  r.findings.find((f) => f.kind === "github-token")!.looksLikeTest = true;
+  r.sends!.push(
+    { kind: "openai-key", preview: "sk-proj-…", to: "other-host", host: "hooks.vendor.dev", sessions: 1, ran: 1, stoppedByMandu: 0, via: ["curl"], by: ["value"], agents: ["codex"], duringMandu: 0 },
+    { kind: "github-token", preview: "ghp_…", to: "own-service", host: "api.github.com", sessions: 1, ran: 1, stoppedByMandu: 0, via: ["curl"], by: ["value"], agents: ["codex"], duringMandu: 0, looksLikeTest: true },
+  );
+  const p = scanPageVM(r);
+  const sec = (id: string) => p.sections.find((s) => s.id === id)!.items;
+  const line = (i: { replaceAt: Array<{ lead: string; page: string; url: string; after?: string }> }) => i.replaceAt.map((x) => `${x.lead}: ${x.page}${x.after ?? ""} <${x.url}>`);
+  // The looks tier: the test value has none, every other GitHub row its line.
+  const looks = sec("looks");
+  assert.equal(looks.length, 12);
+  assert.deepEqual(line(looks[0]!), [], "a test value: told plainly, no next step");
+  for (const i of looks.slice(1)) assert.deepEqual(line(i), ["If this key is still yours, replace it on GitHub: Personal access tokens <https://github.com/settings/tokens>"], i.id);
+  // Your own secrets, a kept one, a named one: none.
+  for (const id of ["yours", "kept", "named"]) for (const i of sec(id)) assert.deepEqual(i.replaceAt, [], `${id} ${i.title}`);
+  assert.ok(sec("kept").some((i) => i.title === "ghp_…"), "a GitHub key Mandu kept is listed, with no line");
+  // The sends: a key-shaped one gets the line (OpenAI's own lead), one of your files or a test value none.
+  const other = sec("sends-other");
+  assert.deepEqual(other.map(line), [[], ["If it is your OpenAI key, replace it on OpenAI: API keys <https://platform.openai.com/api-keys>"]]);
+  assert.deepEqual(sec("sends-own").map(line), [[], []]);
+  assert.doesNotMatch(allCopy(p), FORBIDDEN);
+});
+
+// ── Where the real value is now (§4.25ai, lineage ★2) ──────────────────────
+const PLACES: NonNullable<ScanFindingWire["places"]> = [
+  { agent: "openclaw", file: "~/.openclaw/agents/main/sessions/7c7c.jsonl", mandu: "without", first: "2026-10-27T00:37:00.000Z", last: "2026-10-27T00:40:00.000Z", sessions: 1 },
+  { agent: "openclaw", file: "~/.openclaw/agents/main/sessions/8d8d.jsonl", mandu: "by-time", first: "2026-10-28T00:37:00.000Z", sessions: 2, manduSessions: ["openclaw:main"] },
+  { agent: "openclaw", file: "~/.openclaw/agents/main/sessions/9e9e.jsonl", mandu: "under", first: "2026-10-29T00:37:00.000Z", sessions: 1, manduSessions: ["mdu-1", "mdu-2"] },
+];
+function withPlaces(more?: number): LastScanWire {
+  const r = record();
+  const f = r.findings[0]!;
+  return { ...r, findings: [{ ...f, sessionsUnderMandu: 1, places: PLACES, ...(more ? { placesMore: more } : {}), examples: [{ ...f.examples![0]!, agent: "openclaw", provider: "openai" }] }, ...r.findings.slice(1)] };
+}
+
+test("Where the real value is now: where it belongs, the AI service that got it, each chat history, without Mandu first; under Mandu linked; what to do", () => {
+  const p = scanPageVM(withPlaces(4));
+  const item = p.sections.find((s) => s.id === "yours")!.items[0]!;
+  const w = item.detail.where!;
+  assert.deepEqual(w.rows.map((r) => [r.kind, r.where, r.file, r.how, r.first, r.now, r.tone, r.sessions, r.check ?? null]), [
+    ["belongs", "Where it belongs", "~/shop/.env", "As STRIPE_KEY", null, "You keep it here", "plain", [], null],
+    ["provider", "OpenAI", null, "Got its real value, in 2 sessions without Mandu", "1 Oct", "Can't be taken back", "bad", [], null],
+    ["history", "OpenClaw's chat history", "~/.openclaw/agents/main/sessions/7c7c.jsonl", "Saved as the AI got it, without Mandu", "27 Oct", "In it when the scan ran", "bad", [], "~/.openclaw/agents/main/sessions/7c7c.jsonl"],
+    ["history", "OpenClaw's chat history", "~/.openclaw/agents/main/sessions/8d8d.jsonl", "Saved as the AI got it, while Mandu ran but not provably under it (2 sessions)", "28 Oct", "In it when the scan ran", "warn", ["openclaw:main"], "~/.openclaw/agents/main/sessions/8d8d.jsonl"],
+    ["under", "OpenClaw's chat history", "~/.openclaw/agents/main/sessions/9e9e.jsonl", "Saved on your computer; the AI got only its masked version, under Mandu", "29 Oct", "In it when the scan ran", "ok", ["mdu-1", "mdu-2"], "~/.openclaw/agents/main/sessions/9e9e.jsonl"],
+  ]);
+  assert.equal(w.more, "And 4 more chat-history files the scan counted.");
+  assert.equal(w.advice, "What reached OpenAI can't be taken back: change the secret where it was issued. Mandu only shows these places; it never changes an agent's chat history.");
+  // The head and a section's page carry no detail; the row's read does.
+  assert.equal(JSON.stringify(scanHead(p, "r")).includes("chat history"), false);
+  assert.deepEqual(scanItemDetail(p, item.id)!.detail.where, w);
+  assert.doesNotMatch(allCopy(w), FORBIDDEN);
+  // A key that is not yours, and a scan kept before places: none.
+  for (const s of p.sections.filter((s) => s.id !== "yours")) for (const i of s.items) assert.equal(i.detail.where, null, i.title);
+  assert.equal(scanPageVM(record()).sections[0]!.items[0]!.detail.where, null);
+});
+
+test("Where the real value is now: the server's look at each file says still there, or gone in green; a file it cannot tell keeps the scan's word", () => {
+  const item = scanPageVM(withPlaces()).sections[0]!.items[0]!;
+  const seen: string[] = [];
+  const d = withPresence(item.detail, (p) => { seen.push(p); return p.endsWith("7c7c.jsonl") ? true : p.endsWith("8d8d.jsonl") ? false : null; });
+  assert.deepEqual(seen, PLACES.map((p) => p.file), "only the chat histories' files are looked at, never its own file");
+  assert.deepEqual(d.where!.rows.slice(2).map((r) => [r.now, r.tone]), [["Still there", "bad"], ["Gone from this computer", "ok"], ["In it when the scan ran", "ok"]]);
+  assert.equal(withPresence(item.detail, () => true).where!.rows[4]!.now, "Still there, on your computer only");
+  assert.equal(item.detail.where!.rows[2]!.now, "In it when the scan ran", "the cached page is not changed");
+});
+
+test("parseLastScan: places read back checked (your secrets only); scanItemIdOf: the Scan row of one of your secrets that reached the AI", () => {
+  const raw = JSON.parse(JSON.stringify(withPlaces(2))) as Record<string, unknown>;
+  const fs = raw["findings"] as Array<Record<string, unknown>>;
+  (fs[0]!["places"] as unknown[]).push({ agent: "codex", file: "~/x.jsonl", mandu: "maybe", sessions: 1 }, { agent: "codex", file: "~/y.jsonl", mandu: "without", sessions: 1, manduSessions: ["../x", "ok-1"] });
+  fs[2]!["places"] = PLACES;
+  const rec = parseLastScan(raw)!;
+  assert.equal(rec.findings[0]!.places!.length, 4, "a bad mark dropped");
+  assert.deepEqual(rec.findings[0]!.places![3]!.manduSessions, ["ok-1"]);
+  assert.equal(rec.findings[0]!.placesMore, 2);
+  assert.equal(rec.findings[2]!.places, undefined, "a key that is not yours has none");
+  assert.equal(scanItemIdOf(rec, rec.findings[0]!), "f0");
+  assert.equal(scanItemIdOf(rec, rec.findings[1]!), null, "seen only under Mandu: not on the list of those that reached the AI");
+  const two = { ...rec, findings: [rec.findings[1]!, rec.findings[0]!, { ...rec.findings[0]!, preview: "B" }] };
+  assert.equal(scanItemIdOf(two, two.findings[2]!), "f1");
+  assert.equal(scanPageVM(two).sections[0]!.items[1]!.title, "B", "the same numbering as the page");
 });

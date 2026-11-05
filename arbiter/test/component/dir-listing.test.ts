@@ -90,7 +90,7 @@ test("no record, no start directory, a raw read in the tree, ls -l, a chain, an 
       ["ls -la, the names alone", "ls -la bank", "statement-2026-09.md"],
       ["a chain with cat", "ls bank && cat bank/statement-2026-09.md", "statement-2026-09.md\nAccount DEMO-ACCT-000123"],
       ["a chain, the listing alone", "ls bank; cat bank/statement-2026-09.md", "statement-2026-09.md"],
-      ["a pipe", "ls bank | head", "statement-2026-09.md"],
+      ["a pipe to a program that is no filter (ls | head is paths-only since 2026-10-26)", "ls bank | cat", "statement-2026-09.md"],
       ["an extra line", "ls bank", "statement-2026-09.md\nAccount DEMO-ACCT-000123"],
     ];
     for (const [why, cmd, out] of misses) {

@@ -14,12 +14,20 @@
  *     heading while the helper works; suggestions shown, their first line
  *     takes it; refused or nothing came back, Suggest rules, on again,
  *     described by what came back; cancelled, Suggest rules;
- *   - Cancel and Discard: Suggest rules;
+ *   - Cancel: Suggest rules; Discard: the Undo of the line it leaves, and
+ *     that Undo: the first line of the suggestion drawn again;
  *   - Try it: the button has it back, described by its answer;
  *   - Apply: applied, the line that says so; refused, Apply, described by
  *     the refusal;
  *   - only a focus the press left: one the person moved stays, and a press
  *     made without the focus moves nothing.
+ *
+ * The line of an Apply (§4.25 *Every change made on Rules ends with an Undo
+ * or a link*, 2026-10-25): with a `pc-…` change id, Undo (off until Your
+ * rules is read again) and See it in Approvals at that change; Undo posts
+ * the change's undo, then the line says "Undone." or the refusal; no id
+ * keeps the sentence of before. ALLOW typed while Apply is out leaves Apply
+ * off.
  *
  * jsdom keeps the focus of a button turned off or hidden; `press` drops it,
  * as Chromium does, only while the button still has it (a focus the page
@@ -291,6 +299,168 @@ test("Apply with a focus moved meanwhile, and Discard", async () => {
   suggest(doc);
   await tick();
   press(button(doc, "Discard"));
-  assert.equal(byId(doc, "describe-result").hidden, true);
-  assert.equal(doc.activeElement, byId(doc, "describe-submit"), "Discard gone: Suggest rules");
+  // Until 2026-10-28 Discard hid the card and gave the focus to Suggest
+  // rules; now its line with Undo takes the card place (§4.25n *Describe
+  // can undo its Discard*).
+  assert.equal(byId(doc, "describe-result").hidden, false);
+  assert.equal(doc.activeElement, button(doc, "Undo"), "Discard gone: the Undo of its line");
+});
+
+test("Discard: Undo has the focus; Undo: the suggestion's first line, Suggested rules; a press without the focus moves nothing", async () => {
+  const { doc } = await opened({ "POST policy/assistant": SUGGESTION });
+  suggest(doc);
+  await tick();
+  press(button(doc, "Discard"));
+  const undo = button(doc, "Undo");
+  assert.equal(doc.activeElement, undo, "the line's Undo, never <body>");
+  assert.equal(undo.getAttribute("aria-label"), "Undo the discard in Describe what you want");
+  assert.equal(describedBy(doc, undo), "Suggestion discarded.");
+  press(undo);
+  assert.equal(undo.isConnected, false, "the line is gone");
+  assert.equal(doc.activeElement, firstLine(doc), "the suggestion opens on its first line");
+  assert.equal(firstLine(doc).textContent, "Suggested rules");
+
+  const box = byId(doc, "describe-text");
+  box.focus();
+  button(doc, "Discard").click();
+  assert.equal(doc.activeElement, box, "a click made elsewhere leaves the focus");
+  button(doc, "Undo").click();
+  assert.equal(doc.activeElement, box, "and so does Undo");
+  assert.ok(firstLine(doc), "the suggestion is back");
+});
+
+// ── The line of an Apply: Undo and a link to the change (dashboard.md §4.25
+// *Every change made on Rules ends with an Undo or a link*) ─────────────────
+
+const line = (doc: Doc) => doc.querySelector("#describe-result .describe-done");
+const undoOf = (doc: Doc) => [...line(doc).querySelectorAll("button")].find((b: Doc) => b.textContent === "Undo");
+
+test("Apply with a change id: the line says Applied, with Undo and See it in Approvals at that change; Undo is off until Your rules is read again", async () => {
+  let reads = 0;
+  let readHeld = false;
+  let release: () => void = () => {};
+  const { doc, window } = await opened({
+    "POST policy/assistant": SUGGESTION,
+    "POST policy/assistant/apply": { applied: true, changeId: "pc-000042" },
+    "GET policy/panel": () => {
+      reads++;
+      if (!readHeld) return { panel: { available: true, verdictsKnown: true, queue: [], yourRules: [] } };
+      return new Promise((r) => { release = () => r({ panel: { available: true, verdictsKnown: true, queue: [], yourRules: [] } }); });
+    },
+  });
+  suggest(doc);
+  await tick();
+  readHeld = true;
+  const before = reads;
+  press(button(doc, "Apply"));
+  await tick();
+  assert.equal(reads, before + 1, "Your rules is read again");
+  const done = line(doc);
+  assert.equal(done.querySelector("span").textContent, "Applied. Your rules are updated.");
+  assert.equal(doc.activeElement, done, "the line takes the focus, as before");
+  const undo = undoOf(doc);
+  assert.ok(undo, "Undo on the line");
+  assert.equal(undo.getAttribute("aria-label"), "Undo the change in Describe what you want");
+  assert.equal(describedBy(doc, undo), "Applied. Your rules are updated.");
+  assert.equal(undo.disabled, true, "off while the apply's reads are out");
+  const link = done.querySelector("a.change-link");
+  assert.equal(link.textContent, "See it in Approvals");
+  assert.equal(link.getAttribute("href"), "/mandu/approvals/pc-000042");
+  assert.equal(link.dataset.ask, "pc-000042");
+  release();
+  await tick(20);
+  assert.equal(undo.disabled, false, "on once Your rules and Rule changes are read");
+
+  // Following the link opens Approvals at that change.
+  link.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await tick();
+  assert.equal(doc.getElementById("page-approvals").hidden, false, "Approvals is open");
+  assert.equal(window.location.pathname, "/mandu/approvals/pc-000042");
+});
+
+test("Undo on the line posts the change's undo, then the line says Undone. and has the focus; Your rules is read again", async () => {
+  const posted: string[] = [];
+  let reads = 0;
+  const { doc, calls } = await opened({
+    "POST policy/assistant": SUGGESTION,
+    "POST policy/assistant/apply": { applied: true, changeId: "pc-000042" },
+    "POST policy/changes/pc-000042/undo": () => (posted.push("undo"), { undone: true }),
+    "GET policy/panel": () => (reads++, { panel: { available: true, verdictsKnown: true, queue: [], yourRules: [] } }),
+  });
+  suggest(doc);
+  await tick();
+  press(button(doc, "Apply"));
+  await tick(20);
+  const undo = undoOf(doc);
+  const before = reads;
+  press(undo);
+  assert.equal(undo.disabled, true, "off while it posts");
+  await tick(20);
+  assert.deepEqual(posted, ["undo"]);
+  assert.equal(calls.filter((c) => c.url.endsWith("/api/policy/changes/pc-000042/undo")).length, 1, "posted once");
+  assert.equal(line(doc).textContent, "Undone.");
+  assert.equal(line(doc).querySelector("button, a"), null, "nothing more to press");
+  assert.equal(doc.activeElement, line(doc), "the line, never <body>");
+  assert.equal(reads, before + 1, "Your rules is read again");
+});
+
+test("a refused Undo: the line says the refusal's words", async () => {
+  const { doc } = await opened({
+    "POST policy/assistant": SUGGESTION,
+    "POST policy/assistant/apply": { applied: true, changeId: "pc-000042" },
+    "POST policy/changes/pc-000042/undo": { status: 409, body: { error: "A later change touched these rules. Undo that one first." } },
+  });
+  suggest(doc);
+  await tick();
+  press(button(doc, "Apply"));
+  await tick(20);
+  press(undoOf(doc));
+  await tick(20);
+  assert.equal(line(doc).textContent, "A later change touched these rules. Undo that one first.");
+  assert.equal(doc.activeElement, line(doc));
+});
+
+test("Apply with no change id (an older server): the sentence of before, no Undo, no link", async () => {
+  for (const changeId of [null, undefined, "egr-1"]) {
+    const { doc } = await opened({
+      "POST policy/assistant": SUGGESTION,
+      "POST policy/assistant/apply": { applied: true, changeId },
+    });
+    suggest(doc);
+    await tick();
+    press(button(doc, "Apply"));
+    await tick(20);
+    assert.equal(line(doc).textContent, "Applied. Your rules are updated, and you can undo this under Rule changes in Approvals.");
+    assert.equal(line(doc).querySelector("button, a"), null, String(changeId));
+  }
+});
+
+test("a wide change: typing in its ALLOW box while Apply is out leaves Apply off, and Enter sends nothing more", async () => {
+  const WIDE = { ...SUGGESTION, rows: SUGGESTION.rows.map((r, i) => (i === 1 ? { ...r, overBroad: true } : r)) };
+  const h = held();
+  const { doc, window, calls } = await opened({ "POST policy/assistant": WIDE, "POST policy/assistant/apply": h.route });
+  suggest(doc);
+  await tick();
+  const typed = doc.querySelector("#describe-result .proposal-confirm");
+  const apply = button(doc, "Apply");
+  typed.value = "ALLOW";
+  typed.dispatchEvent(new window.Event("input"));
+  assert.equal(apply.disabled, false, "ALLOW typed: Apply is on");
+  press(apply);
+  assert.equal(apply.disabled, true, "off while it posts");
+  typed.value = "ALLOWX";
+  typed.dispatchEvent(new window.Event("input"));
+  typed.value = "ALLOW";
+  typed.dispatchEvent(new window.Event("input"));
+  assert.equal(apply.disabled, true, "typing does not turn it back on");
+  typed.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  apply.click();
+  const posts = () => calls.filter((c) => c.url.endsWith("/api/policy/assistant/apply")).length;
+  assert.equal(posts(), 1, "one Apply sent");
+  // (A held answer is always a 200 here; a refused Apply turning back on is
+  // home-js-describe.test.ts's.)
+  h.answer({ applied: true, changeId: "pc-000043" });
+  await tick(20);
+  assert.equal(posts(), 1, "still one");
+  assert.equal(line(doc).querySelector("span").textContent, "Applied. Your rules are updated.");
 });

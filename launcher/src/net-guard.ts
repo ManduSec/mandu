@@ -66,6 +66,10 @@ export interface NetGuardSpecInput {
    *  null/absent. Never Chrome's own port: the agent reaches the browser
    *  only through the relay. */
   cdpRelayPort?: number | null;
+  /** The egress proxy's database login relays' loopback ports (db-relays.ts):
+   *  the agent's connects to a database are performed there (`--redirect`).
+   *  undefined/[] = none. */
+  dbRelayPorts?: number[];
   /** The model API host to admit on :443 (api.anthropic.com / api.openai.com);
    *  null under the model-host deny (model-host-deny.ts), where the tree's
    *  model-host traffic rides the egress proxy and the host is denied. */
@@ -112,8 +116,13 @@ export const NET_GUARD_PROXY_PORTS_ENV = "MANDU_NET_GUARD_PROXY_PORTS";
  * a secret is refused there like anywhere unbound; the agent itself never
  * holds a secret (it reads the twin), so its own model traffic is untouched.
  */
-export function sessionProxyPorts(input: Pick<NetGuardSpecInput, "netProxyPort">): number[] {
-  return input.netProxyPort !== null && input.netProxyPort > 0 ? [input.netProxyPort] : [];
+export function sessionProxyPorts(input: Pick<NetGuardSpecInput, "netProxyPort" | "dbRelayPorts">): number[] {
+  // The database relays (db-relays.ts) judge a process's taint like the
+  // proxy (they ARE the proxy): a reader of the password file reaches its
+  // database through one, and the relay applies its bindings.
+  const ports = input.netProxyPort !== null && input.netProxyPort > 0 ? [input.netProxyPort] : [];
+  for (const p of input.dbRelayPorts ?? []) if (p > 0 && !ports.includes(p)) ports.push(p);
+  return ports;
 }
 
 /**
@@ -133,6 +142,7 @@ export function computeNetGuardSpecs(input: NetGuardSpecInput): string[] {
   if (input.netProxyPort !== null) svcPorts.push(input.netProxyPort);
   if (input.ullmForwarderPort !== null) svcPorts.push(input.ullmForwarderPort);
   if (input.cdpRelayPort != null) svcPorts.push(input.cdpRelayPort);
+  for (const p of input.dbRelayPorts ?? []) svcPorts.push(p);
   for (const port of dedupeNums(svcPorts)) {
     for (const host of LOOPBACK_HOSTS) specs.push(`tcp:${host}:${port}`);
   }
@@ -266,10 +276,12 @@ export function specsAdmitAnyHttps(specs: string[]): boolean {
  * dropped: a guard that cannot install its listener exits 71 and the agent
  * never runs.
  */
-export function planNetGuard(opts: { binPath: string; specs: string[]; deny?: string[]; extra?: string[]; required?: boolean }): { wrapArgv: string[] } {
+export function planNetGuard(opts: { binPath: string; specs: string[]; deny?: string[]; redirects?: string[]; extra?: string[]; required?: boolean }): { wrapArgv: string[] } {
   const specTokens = opts.specs.flatMap((s) => ["--allow", s]);
   const denyTokens = (opts.deny ?? []).flatMap((s) => ["--deny", s]);
-  return { wrapArgv: [opts.binPath, ...specTokens, ...denyTokens, ...(opts.extra ?? []), ...(opts.required ? [] : ["--skip-unsupported"]), "--"] };
+  // The database login relays (db-relays.ts `dbGuardRedirects`).
+  const redirectTokens = (opts.redirects ?? []).flatMap((s) => ["--redirect", s]);
+  return { wrapArgv: [opts.binPath, ...specTokens, ...denyTokens, ...redirectTokens, ...(opts.extra ?? []), ...(opts.required ? [] : ["--skip-unsupported"]), "--"] };
 }
 
 function dedupeNums(xs: number[]): number[] {

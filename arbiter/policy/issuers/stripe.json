@@ -1,0 +1,10 @@
+{
+  "id": "stripe",
+  "name": "Stripe",
+  "formats": ["^(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{20,247}$"],
+  "shapes": ["sk_live_…", "sk_test_…", "rk_live_…", "rk_test_…"],
+  "hosts": ["api.stripe.com", "files.stripe.com"],
+  "docs": ["https://docs.stripe.com/api", "https://docs.stripe.com/api/files/create"],
+  "examples": ["sk_live_{x*24}", "sk_test_51{x*30}", "rk_live_{x*99}", "rk_test_{x*20}"],
+  "non_examples": ["sk_live_{x*19}", "pk_live_{x*24}", "sk_prod_{x*24}"]
+}

@@ -2,21 +2,30 @@
  * rules-find e2e — Rules › Your rules' *Find a rule* box (dashboard.md
  * §4.25f *Find a rule*) through the PRODUCTION wiring:
  * `makeApprovalsArbiter(dataSock, () => ({ socketPath: adminSock }))` over a
- * REAL ArbiterServer with a file-backed policy of 27 rules (20 files, 4 send
- * rules, 3 connections), and a real DashboardServer serving the product page.
+ * REAL ArbiterServer with a file-backed policy of 28 rules (21 files, one of
+ * them the folder ~/proj, 4 send rules, 3 connections), and a real
+ * DashboardServer serving the product page.
  *
  * The box narrows what the page drew, so what it must prove over real data
  * is that the rows it keeps are the ones that name the text:
  *
  *   1. typing a host keeps exactly its send rule and the file rules that may
  *      be sent there; typing a program, exactly the files it may open; a port,
- *      exactly its connection; the count says "N of 27";
- *   2. typing reads nothing (no request leaves the page for it);
+ *      exactly its connection; the count says "N of 28";
+ *   2. typing text that is not a full path reads nothing (no request leaves
+ *      the page for it); a full path no row names is asked of files/why once
+ *      typing stops, and the line under "No rule mentions" says what covers
+ *      it: the folder rule on ~/proj (Show that rule then draws that row),
+ *      the built-in SSH-key protection, or nothing;
  *   3. in a real headless Chromium at 1280 px and 390 px: the box and the
  *      count fit the card without overflow, the box beside the heading on a
  *      wide screen and under it on a phone;
  *   4. the served page and every answer carry no secret value (the stack
- *      suites' oracle; the box adds no read).
+ *      suites' oracle; the files/why answers included);
+ *   5. over an empty policy (#141), the page draws neither the tree's column
+ *      heads nor the box; a file rule saved through the page's own Add a rule
+ *      and Save (files/labels) brings both back on the re-read, and the page
+ *      carries only paths, never a value or a `$MDU:` symbol.
  *
  * The Chromium half self-SKIPs without a Chromium (probeBrowser:
  * MANDU_TOUR_BROWSER, CHROME_PATH, a Playwright headless shell); the first
@@ -38,6 +47,7 @@ import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import { ADMIN_COOKIE, ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
 import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
+import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
 import { stateAxes } from "../lib/axes.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF
@@ -53,7 +63,7 @@ const tour = (await import(pathToFileURL(join(REPO, "scripts", "tour-screenshots
 const browser = tour.probeBrowser({});
 
 const SECRET = `sk_live_rulesFindCanary_${process.pid}_000000`;
-const TOTAL = 27;
+const TOTAL = 28;
 
 const dirs: string[] = [];
 const closers: Array<() => Promise<void>> = [];
@@ -74,9 +84,13 @@ async function start() {
   mkdirSync(proj, { recursive: true });
   writeFileSync(join(proj, ".env"), `GITHUB_TOKEN=${SECRET}\n`);
   writeFileSync(join(proj, "deploy.token"), `${SECRET}\n`);
-  // 20 file rules: two that may go to api.github.com, one docker-compose may
-  // open, and 17 more in three folders.
+  // A key no rule names: the built-in protection covers it.
+  mkdirSync(join(home, ".ssh"), { recursive: true });
+  writeFileSync(join(home, ".ssh", "id_ed25519"), `-----BEGIN OPENSSH PRIVATE KEY-----\n${SECRET}\n-----END OPENSSH PRIVATE KEY-----\n`);
+  // 21 file rules: the folder ~/proj, two files in it that may go to
+  // api.github.com, one docker-compose may open, and 17 more in three folders.
   const paths = [
+    `  - { path: "${proj}", level: no-model, recursive: true }`,
     `  - { path: "${join(proj, ".env")}", level: no-model, recursive: false, bindings: [api.github.com], readers: [{ app: docker-compose, prints: nothing }] }`,
     `  - { path: "${join(proj, "deploy.token")}", level: no-model, recursive: false, bindings: [api.github.com] }`,
     `  - { path: "${join(proj, "stripe.key")}", level: no-model, recursive: false, bindings: [api.stripe.com] }`,
@@ -145,7 +159,7 @@ test("Find a rule over the real arbiter: a host keeps its send rule and the file
   assert.equal(panel.status, 200);
   const raw = await panel.text();
   assert.ok(!raw.includes(SECRET), "CONFIDENTIALITY VIOLATION: the rules answer carries the value");
-  assert.equal((JSON.parse(raw) as Doc).panel.yourRules.length, TOTAL, "27 rules of yours");
+  assert.equal((JSON.parse(raw) as Doc).panel.yourRules.length, TOTAL, "28 rules of yours");
 
   await servedProductPage(base, "/rules", (doc: Doc) => doc.getElementById("rules-count").textContent === String(TOTAL), async (doc: Doc) => {
     const box = doc.getElementById("rules-find");
@@ -188,9 +202,68 @@ test("Find a rule over the real arbiter: a host keeps its send rule and the file
 
     await type("");
     assert.equal(drawn(doc).length, TOTAL, "an empty box draws every rule");
-    assert.deepEqual(asked, [], "typing read nothing");
+    assert.deepEqual(asked, [], "typing text that is not a full path read nothing");
     assert.ok(!doc.body.textContent.includes(SECRET), "CONFIDENTIALITY VIOLATION: the Rules page shows the value");
   }, { headers: { Cookie: ADMIN_COOKIE } });
+});
+
+test("Find a rule over the real arbiter: a full path no rule names says what covers it (a folder rule, a built-in, nothing); one files/why read per path, no value", { timeout: 120_000 }, async () => {
+  const { base, home } = await start();
+  await servedProductPage(base, "/rules", (doc: Doc) => doc.getElementById("rules-count").textContent === String(TOTAL), async (doc: Doc) => {
+    const box = doc.getElementById("rules-find");
+    const w = doc.defaultView;
+    // Every request the page makes from here on, and each files/why answer.
+    const asked: string[] = [];
+    const answers: string[] = [];
+    const fetch0 = w.fetch;
+    w.fetch = async (url: string, init?: unknown) => {
+      asked.push(String(url));
+      const res = await fetch0(url, init);
+      if (!String(url).includes("/api/files/why")) return res;
+      const body = await res.json();
+      answers.push(JSON.stringify(body));
+      return { ...res, json: () => Promise.resolve(body) };
+    };
+    const line = () => ([...doc.querySelectorAll("#rules-find-none p")] as Doc[]).map((p) => p.textContent);
+    /** Types `text`, then waits for the line under it to stop checking. */
+    const ask = async (text: string) => {
+      box.focus();
+      box.value = text;
+      box.dispatchEvent(new w.Event("input", { bubbles: true }));
+      for (const end = Date.now() + 10_000; Date.now() < end; await new Promise((r) => setTimeout(r, 50))) {
+        const l = line();
+        if (l.length > 1 && l[1] !== "Checking what covers it…") break;
+      }
+      return line();
+    };
+    const whyReads = () => asked.filter((u) => u.includes("/api/files/why")).map((u) => decodeURIComponent(u.split("path=")[1]!));
+
+    const inFolder = await ask("~/proj/inner/new.txt");
+    assert.equal(inFolder[0], "No rule mentions “~/proj/inner/new.txt”. Clear");
+    assert.equal(inFolder[1], "Your rule on ~/proj covers it: No AI. Show that rule");
+    assert.equal(inFolder[2], "To give it a rule of its own, add a rule.");
+    ([...doc.querySelectorAll("#rules-find-none button")] as Doc[]).find((b) => b.textContent === "Show that rule").click();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(box.value, "~/proj");
+    const row = ([...doc.querySelectorAll("#files-tree .row.file-rule")] as Doc[]).find((r) => r.getAttribute("data-path") === join(home, "proj"));
+    assert.ok(row && !row.closest("[hidden]"), "the ~/proj rule is drawn");
+    assert.ok(row.classList.contains("open"), "and opened");
+
+    const key = await ask("~/.ssh/id_ed25519");
+    assert.match(key[1]!, /^Mandu keeps it secret without a rule \(Built in: [^)]+\): No AI\. See Built-in protections$/, key[1]);
+
+    const plain = await ask("~/elsewhere/plain.txt");
+    assert.deepEqual(plain.slice(1), ["No rule and no built-in protection covers it. To protect it, add a rule."]);
+
+    assert.deepEqual(whyReads().filter((p) => p.startsWith("~")), ["~/proj/inner/new.txt", "~/.ssh/id_ed25519", "~/elsewhere/plain.txt"], "one read per path typed");
+    assert.ok(answers.length >= 3);
+    for (const a of answers) assert.ok(!a.includes(SECRET), "CONFIDENTIALITY VIOLATION: a files/why answer carries the value");
+    assert.ok(!doc.body.textContent.includes(SECRET), "CONFIDENTIALITY VIOLATION: the Rules page shows the value");
+  }, { headers: { Cookie: ADMIN_COOKIE } });
+  // The same answer read directly: still no value.
+  const direct = await pageFetch(`${base}/api/files/why?path=${encodeURIComponent("~/.ssh/id_ed25519")}`, { headers: CSRF_ADMIN });
+  assert.equal(direct.status, 200);
+  assert.ok(!(await direct.text()).includes(SECRET), "CONFIDENTIALITY VIOLATION: files/why carries the key");
 });
 
 test("in a real Chromium: the box and the count fit Your rules at 1280 px and at 390 px, beside the heading and under it, and the page shows no value", {
@@ -256,4 +329,68 @@ test("in a real Chromium: the box and the count fit Your rules at 1280 px and at
     cdp.close();
     await tour.stopProc(proc);
   }
+});
+
+test("over an empty policy (#141): no column heads and no Find a rule box until the first rule, saved on the page, brings both; no value, no symbol", { timeout: 120_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-rules-find-empty-"));
+  dirs.push(dir);
+  const home = join(dir, "home");
+  const proj = join(home, "proj");
+  mkdirSync(proj, { recursive: true });
+  writeFileSync(join(proj, "deploy.token"), `${SECRET}\n`);
+  const dataSock = join(dir, "arbiter.sock");
+  const adminSock = join(dir, "admin.sock");
+  const policyPath = join(dir, "policy.yaml");
+  writeFileSync(policyPath, "version: 1\n");
+  const arbiter = new ArbiterServer({
+    socketPath: dataSock, adminSocketPath: adminSock, dbPath: join(dir, "mandu.db"), eventDir: join(dir, "events"),
+    policyPath, policyPollMs: 0, adminPolicyDir: null, integrity: false, confidentiality: true, log: () => {},
+  });
+  await arbiter.listen();
+  const wired = await makeApprovalsArbiter(dataSock, () => ({ socketPath: adminSock }));
+  assert.ok(wired?.secrets && wired.policyDoc, "the production wiring connects");
+  const server = new DashboardServer({
+    source: new ArbiterEventSource({ socketPath: dataSock }),
+    approvalsArbiter: wired.arbiter, secretsArbiter: wired.secrets, policyDocArbiter: wired.policyDoc,
+    fileBrowserHome: home, configEnv: { MANDU_HOME: join(dir, "mhome"), MANDU_POLICY_FILE: policyPath },
+    log: () => {}, ...ADMIN_OPTS,
+  });
+  const base = `http://127.0.0.1:${await server.listen(0)}`;
+  closers.push(async () => { await server.close(); wired.close(); await arbiter.close(); });
+
+  const panel = (await (await pageFetch(`${base}/api/policy/panel`, { headers: CSRF_ADMIN })).json()) as Doc;
+  assert.equal(panel.panel.yourRules.length, 0, "no rule of yours");
+  const page = (doc: Doc) => doc.body.textContent as string;
+  await servedProductPage(base, "/rules", (doc: Doc) => /No file or folder has a rule of yours yet/.test(doc.getElementById("files-tree").textContent), async (doc: Doc) => {
+    const box = doc.getElementById("rules-find");
+    const heads = doc.getElementById("files-heads");
+    assert.equal(heads.hidden, true, "no column heads over the empty line");
+    assert.equal(doc.getElementById("files-group").hidden, false, "the group's title stays");
+    assert.equal(box.hidden, true, "no Find a rule box with nothing to find");
+    assert.equal(doc.getElementById("rules-add").hidden, false, "Add a rule stays");
+
+    // The first rule, as a person makes it: Add a rule, the folder, a label, Save.
+    const add = doc.getElementById("rules-add");
+    add.focus();
+    add.click();
+    await waitWhile(() => !doc.querySelector("#files-list .row.file"));
+    doc.getElementById("lock-path").value = "~/proj/";
+    doc.getElementById("files-go").dispatchEvent(new doc.defaultView.Event("submit", { cancelable: true }));
+    const row = () => ([...doc.querySelectorAll("#files-list .row.file:not(.up)")] as Doc[])
+      .find((r) => r.querySelector(".file-name").textContent.startsWith("deploy.token"));
+    await waitWhile(() => !row()?.querySelector("select.label-select"));
+    const menu = row().querySelector("select.label-select");
+    menu.value = "no-model";
+    menu.dispatchEvent(new doc.defaultView.Event("change", { bubbles: true }));
+    doc.getElementById("files-save").click();
+    await waitWhile(() => !doc.querySelector("#files-tree .row.file-rule"));
+    assert.equal(doc.getElementById("rules-count").textContent, "1");
+    assert.equal(heads.hidden, false, "the heads come back over the first rule");
+    assert.equal(box.hidden, false, "and the box, with a rule to find");
+    assert.ok(!page(doc).includes(SECRET), "CONFIDENTIALITY VIOLATION: the Rules page shows the value");
+    assert.ok(!page(doc).includes("$MDU:"), "the page carries paths, never a symbol");
+  }, { headers: { Cookie: ADMIN_COOKIE } });
+  const after = await (await pageFetch(`${base}/api/policy/panel`, { headers: CSRF_ADMIN })).text();
+  assert.ok(!after.includes(SECRET), "CONFIDENTIALITY VIOLATION: the rules answer carries the value");
+  assert.equal((JSON.parse(after) as Doc).panel.yourRules.length, 1, "the rule was saved");
 });

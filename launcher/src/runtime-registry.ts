@@ -14,6 +14,14 @@
  *     either the profile would have to leave that entry writable or the
  *     launch's own files would land in it.
  *
+ *   attachments/        `mandu serve`'s proxy pool (openclaw-plugin.md §3.2):
+ *                       each attachment session's port file, which
+ *                       `mandu openclaw install` and the doctor adopt a port
+ *                       through, and the pool's records, which `mandu reap`
+ *                       reads; written by the dashboard. A forged port file
+ *                       would route the Gateway to a proxy of the agent's
+ *                       choosing; a forged record would keep a dead pool's
+ *                       proxy from being reaped or name another pid
  *   instances/          the arbiter's instance dirs: its socket, its manifest
  *                       (written by the arbiter), removed by the arbiter's
  *                       start-up sweep and `mandu reap` when their pid is dead
@@ -55,7 +63,7 @@ import { normalizeAbs, type SeatbeltRuntime } from "./seatbelt-profile.js";
 /** The registry, relative to the runtime base. */
 export const RUNTIME_REGISTRY: { readonly dirs: readonly string[]; readonly names: readonly string[]; readonly prefixes: readonly string[] } = {
   /** Denied as a `subpath`: the directory and everything below it. */
-  dirs: ["dashboards", "instances", "logs", "release-check", "test", "vm-guests"],
+  dirs: ["attachments", "dashboards", "instances", "logs", "release-check", "test", "vm-guests"],
   /** Denied as a `literal`: the entry itself (`current` is a link). */
   names: ["arbiter.sock", "current", "dashboard.log"],
   /** Denied as a `prefix`: every name that starts with it. */

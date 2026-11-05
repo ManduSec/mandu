@@ -225,7 +225,7 @@ test("forced colors: only the picked tab of Who may get your secrets has an edge
 test("forced colors: the top bar's current page is underlined in the selection color, the others are not", () => {
   const { doc, win, close } = productPage(1280, true);
   const links = [...doc.querySelectorAll("#nav a")] as El[];
-  assert.equal(links.length, 6, "Home, Approvals, Rules, Settings, History and Scan");
+  assert.equal(links.length, 7, "Home, Approvals, Rules, Settings, History, Scan and Plugins");
   for (const current of links) {
     for (const a of links) {
       if (a === current) a.setAttribute("aria-current", "page");

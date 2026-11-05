@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { spawnSync } from "node:child_process";
 import {
-  opencode2ConfidentialityMissing, opencode2ConfidentialityRefusal, opencode2ConfidentialityUnenforced, probeGuardNotify,
+  opencode2ConfidentialityMissing, opencode2ConfidentialityRefusal, opencode2ConfidentialityUnenforced, guardStartsHere, probeGuardNotify,
   type Opencode2ConfidentialityFacts, type Opencode2Enactment,
 } from "../../src/opencode2-confidentiality.js";
 
@@ -100,4 +100,14 @@ test("probeGuardNotify: the guard bin around `true`, without --skip-unsupported;
   assert.deepEqual(calls[0], { bin: "/g", args: ["--", "true"] });
   assert.equal(probeGuardNotify("/g", fake(71)), false);
   assert.equal(probeGuardNotify("/g", fake(null)), false);
+});
+
+test("guardStartsHere: the probe runs once per bin per process (the launch's guard step and doctor share it)", () => {
+  let runs = 0;
+  const fake = (status: number) => (() => { runs++; return { status } as ReturnType<typeof spawnSync>; }) as unknown as typeof spawnSync;
+  assert.equal(guardStartsHere("/memo/blocked", fake(71)), false);
+  assert.equal(guardStartsHere("/memo/blocked", fake(0)), false, "the first answer is kept");
+  assert.equal(runs, 1);
+  assert.equal(guardStartsHere("/memo/ok", fake(0)), true, "another bin is asked on its own");
+  assert.equal(runs, 2);
 });

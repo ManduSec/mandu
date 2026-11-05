@@ -97,7 +97,7 @@ import {
 } from "./git-alternates.js";
 import { readReflogOids } from "./reflog-tips.js";
 import { lockedMemoryFile, readLockedMemory, rememberLocked } from "./locked-memory.js";
-import { addStoreScanStats, newStoreScanStats, scanStore, storeScanMaxFromEnv, StoreScanOverCap, topPrefixes, type StoreScan, type StoreScanStats } from "./store-scan.js";
+import { addStoreScanStats, appendAll, newStoreScanStats, scanStore, storeScanMaxFromEnv, StoreScanOverCap, topPrefixes, type StoreScan, type StoreScanStats } from "./store-scan.js";
 import { GIT_RUNNER_MAX_STDOUT, isProductionGitRunner, openGitSession, perCallGitRunner, type GitSession } from "./git-session.js";
 import { launchGitSandbox } from "./probe-cache.js";
 import {
@@ -972,7 +972,7 @@ async function historyBlobsOf(
   // locked memory, locked-memory.ts).
   const parse = (out: string): string[] => {
     const pairs = parseRawLogBlobPaths(out).filter(([, p]) => filter === undefined || filter.keep(p));
-    found?.push(...pairs);
+    if (found !== undefined) appendAll(found, pairs);
     return [...new Set(pairs.map(([b]) => b))].sort();
   };
   // The whole history: from the tips (every ref and reflog entry of every
@@ -1079,7 +1079,7 @@ export async function protectedBlobsOf(
     worktreeBlobNames(git, root, present, reads),
   ]);
   if (store?.found !== undefined) {
-    store.found.push(...parseLsFilesStagePaths(idx));
+    appendAll(store.found, parseLsFilesStagePaths(idx));
     // The working copies' names: the raw hashes, then the converted ones,
     // each in `present`'s order.
     if (hashed.length === 2 * present.length) hashed.forEach((b, i) => store.found!.push([b, present[i % present.length]!]));
@@ -1213,7 +1213,7 @@ export async function labelledBlobsOf(
   const filter: WalkFilter = { key: labelFilterKey(key, specs), keep };
   // The index is this work tree's own; it is read while the history is.
   const idxP = mustGit(git, ["ls-files", "-s", "-z", "--", ...(specs ?? [])], root, "git ls-files")
-    .then((out) => { const kept = parseLsFilesStagePaths(out).filter(([, p]) => keep(p)); store?.found?.push(...kept); return kept.map(([b]) => b); });
+    .then((out) => { const kept = parseLsFilesStagePaths(out).filter(([, p]) => keep(p)); if (store?.found !== undefined) appendAll(store.found, kept); return kept.map(([b]) => b); });
   idxP.catch(() => undefined);
   const state = await reads.stateOf(store?.roots ?? [root]);
   // Plan 14 §11.1 R2: the arbiter resolved this repository in the background.
@@ -1726,7 +1726,7 @@ export async function prepareGitObjectTwins(realPaths: readonly string[], opts: 
         blobs += got.blobs;
         packsRebuilt += got.packsRebuilt;
         cacheHits += got.cacheHits;
-        twins.push(...mine);
+        appendAll(twins, mine);
       } catch (e) {
         if (!opts.continueOnFailure) throw e;
         rebuiltBytes = bytesBefore;
@@ -1806,15 +1806,15 @@ export async function prepareGitObjectTwins(realPaths: readonly string[], opts: 
     // the token rule hides (it reads every protected version known here).
     const scanned: Array<[string, string]> = [];
     if (scan !== null) {
-      scanned.push(...scan.pairs);
+      appendAll(scanned, scan.pairs);
       const working: Array<[string, string]> = [];
       for (const r of g.roots) for (const rel of byRepo.get(r) ?? []) working.push([join(r, rel), rel]);
       try {
-        scanned.push(...await scan.finish([...store.found!, ...rememberedPairs, ...scanned], working));
+        appendAll(scanned, await scan.finish([...store.found!, ...rememberedPairs, ...scanned], working));
       } catch (e) {
         throw new GitObjectTwinError(`${g.roots[0]}: could not check the blobs no tree names in its repository (${(e as Error).message})`);
       }
-      store.found!.push(...scanned);
+      appendAll(store.found!, scanned);
     }
     if (memFile !== undefined) rememberLocked(memFile, commonDir, store.found!);
     const remembered = [...new Set([...rememberedPairs.map(([n]) => n), ...scanned.map(([n]) => n)])].sort();
@@ -2106,7 +2106,7 @@ export async function preparedCopyTwins(
         packs += fresh.length;
         verified += bytes;
         for (const t of mine) served.add(t.targetPath);
-        out.twins.push(...mine);
+        appendAll(out.twins, mine);
         out.bound.push(root);
       } catch (e) {
         out.notReady.push({ root, reason: (e as Error).message });

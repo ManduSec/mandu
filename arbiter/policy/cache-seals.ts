@@ -59,6 +59,36 @@
  * the home from it) does not end the exposure while this arbiter runs. A
  * launcher that does not say (an older one) counts as unwalled.
  *
+ * ATTACHMENTS (docs/design/agents/openclaw-plugin.md §3.3). Mandu attached
+ * to an agent it does not run (the OpenClaw plugin, beside a resident
+ * service) is recorded here too, by `beginAttachment`: a session, a kind, no
+ * pid. Its agent's programs reach Mandu's home and the human socket (nothing
+ * walls them off), so an attachment is an UNCONFINED, UNWALLED period by
+ * construction: while one is live no seal is honoured and the human plane is
+ * exposed, and its end starts a new epoch, as an unwalled launch's does. It
+ * lives on a LEASE, not a pid (the registering service is not an ancestor of
+ * the Gateway, and may run in another pid namespace): `beginAttachment`
+ * grants {@link ATTACHMENT_LEASE_MS}, `renewAttachment` extends it, and an
+ * attachment whose lease runs out ends as a gone launcher does. The rows
+ * persist (an arbiter restart keeps the period open until each lease runs
+ * out, at most one lease from the start: a row's own deadline is never
+ * believed further than that), and the arbiter keeps its own copy in memory
+ * so a deleted row does not end one early. One attachment per session: a
+ * second registration of a session replaces the first (no rotation; the
+ * period goes on).
+ *
+ * ATTACHMENT PERIODS (confidentiality-plan-17-past-sessions-scan.md §3 item
+ * 6). The `attachments` rows are the live ones only; `attachment_periods`
+ * keeps each one's history after it ends, for `mandu scan` to tell an
+ * OpenClaw transcript that ran through the session's proxy from one that
+ * did not: when it began, its last renewal, and its end (`endAttachment`,
+ * or a replacement by a second registration of the session). A lapsed lease
+ * leaves no end: its period ends at its last renewal. Written only by the
+ * three attachment ops, which are human plane (never an emit, never the
+ * data socket), on the arbiter's own clock, so a period can never cover the
+ * past. Kept {@link ATTACHMENT_PERIOD_KEEP_MS}, at most
+ * {@link MAX_ATTACHMENT_PERIODS} rows.
+ *
  * Each launch may also name its session (the launcher's scope id, display
  * only): the arbiter answers the exposure with it (`humanPlaneStatus`), so a
  * confined launch's launcher, the dashboard and the inspector can name the
@@ -83,6 +113,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "../db/sqlite.js";
+import { openReadOnly } from "../db/store-seed.js";
 import { getSymbolDbPath } from "../symbol-table/symbol-table.js";
 
 const SCHEMA_SQL = `
@@ -106,6 +137,22 @@ CREATE TABLE IF NOT EXISTS unconfined_launches (
   mode      TEXT NOT NULL,
   posture   TEXT NOT NULL,
   begun_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS attachments (
+  token      TEXT PRIMARY KEY,
+  session    TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  begun_at   INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS attachment_periods (
+  token      TEXT PRIMARY KEY,
+  session    TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  begun_at   INTEGER NOT NULL,
+  renewed_at INTEGER NOT NULL,
+  ended_at   INTEGER,
+  lapsed     INTEGER NOT NULL DEFAULT 0
 );
 `;
 /** Added 2026-10-02 (plan 13 D9 leftovers): 1 when the launch's agent world
@@ -263,6 +310,86 @@ export interface LiveLaunch {
   workspace?: string;
   /** Why it is unconfined ({@link unconfinedWhy}), when this arbiter recorded it. */
   why?: string;
+  /** Set for an attachment (`beginAttachment`): its kind. Its `pid` is 0
+   *  (it has none) and `walled` false. */
+  attachment?: string;
+}
+
+/** How long an attachment lives without a renewal (ms): the registering
+ *  service renews well inside it (a third is the intended cadence). */
+export const ATTACHMENT_LEASE_MS = 60_000;
+/** An attachment kind's shape (the kinds themselves are confinement-posture.ts
+ *  `AttachmentGap`; the server checks the kind before the store sees it). */
+const ATTACHMENT_KIND_RE = /^[a-z][a-z0-9-]{0,40}$/;
+/** Why an attachment is unconfined, in the few words `why` carries. */
+export const ATTACHMENT_WHY = "attached to an agent Mandu does not run";
+/** How long an ended attachment's period is kept for `mandu scan` (ms). */
+export const ATTACHMENT_PERIOD_KEEP_MS = 400 * 24 * 3600 * 1000;
+/** The most attachment periods kept (the newest). */
+export const MAX_ATTACHMENT_PERIODS = 10_000;
+
+/** One attachment's period, as `mandu scan` reads it (ms since the epoch). */
+export interface AttachmentPeriod {
+  session: string;
+  kind: string;
+  from: number;
+  /** Its end: `endAttachment` or a replacement; the last renewal for a lease
+   *  that lapsed (or a row a crashed arbiter left); now for a live one. */
+  to: number;
+  live: boolean;
+  lapsed: boolean;
+}
+
+type PeriodRow = { token: string; session: string; kind: string; begun_at: number; renewed_at: number; ended_at: number | null; lapsed: number };
+
+/** The periods of a store's `attachment_periods`, `live` naming the tokens
+ *  of the attachments live now. A row of a bad shape is not read. */
+function periodsOf(db: InstanceType<typeof Database>, live: ReadonlySet<string>, now: number): AttachmentPeriod[] {
+  const rows = db.prepare("SELECT token, session, kind, begun_at, renewed_at, ended_at, lapsed FROM attachment_periods ORDER BY begun_at").all() as PeriodRow[];
+  const out: AttachmentPeriod[] = [];
+  for (const r of rows) {
+    const session = claimSession(r.session);
+    const from = Number(r.begun_at);
+    if (session === null || typeof r.kind !== "string" || !ATTACHMENT_KIND_RE.test(r.kind) || !Number.isFinite(from)) continue;
+    const isLive = live.has(r.token) && r.ended_at === null;
+    const end = isLive ? now : r.ended_at !== null ? Number(r.ended_at) : Number(r.renewed_at);
+    // Never past now, never before its start (a clock set back).
+    const to = Math.min(Number.isFinite(end) ? end : from, now);
+    if (to < from) continue;
+    out.push({ session, kind: r.kind, from, to, live: isLive, lapsed: !isLive && r.ended_at === null });
+  }
+  return out;
+}
+
+/**
+ * The attachment periods kept in ANOTHER arbiter's store (the resident
+ * arbiter's `mandu.db`, read by the throwaway arbiter `mandu scan` runs
+ * in), opened read-only (db/store-seed.ts `openReadOnly`: nothing is
+ * written to it, no database is created). An attachment is live there when
+ * its row's deadline is still ahead (believed at most one lease from now,
+ * as a restarted arbiter believes it). A missing store, or one with no
+ * periods (an older Mandu), has none. Never throws.
+ */
+export function attachmentPeriodsIn(dbPath: string, now: number = Date.now(), leaseMs: number = ATTACHMENT_LEASE_MS): AttachmentPeriod[] {
+  if (!existsSync(dbPath)) return [];
+  let db: InstanceType<typeof Database> | null = null;
+  try {
+    db = openReadOnly(dbPath).db;
+    const tables = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((t) => t.name));
+    if (!tables.has("attachment_periods")) return [];
+    const live = new Set<string>();
+    if (tables.has("attachments")) {
+      for (const r of db.prepare("SELECT token, begun_at, expires_at FROM attachments").all() as Array<{ token: string; begun_at: number; expires_at: number }>) {
+        const deadline = Math.min(Number(r.expires_at), now + leaseMs);
+        if (Number.isFinite(deadline) && deadline > now) live.add(r.token);
+      }
+    }
+    return periodsOf(db, live, now);
+  } catch {
+    return [];
+  } finally {
+    try { db?.close(); } catch { /* closed */ }
+  }
 }
 
 /** Is this launch confined, for the caches' purpose? Pure. Fail closed:
@@ -406,6 +533,16 @@ export interface CacheSealStoreOptions {
   onRotate?: (e: { from: string | null; to: string; reason: string }) => void;
   /** Seals kept per epoch (default {@link MAX_SEALS_PER_EPOCH}). */
   maxSealsPerEpoch?: number;
+  /** An attachment's lease (default {@link ATTACHMENT_LEASE_MS}). */
+  attachmentLeaseMs?: number;
+}
+
+/** A live attachment as the store holds it. */
+interface Attachment {
+  session: string;
+  kind: string;
+  begunAt: number;
+  expiresAt: number;
 }
 
 const INVISIBLE = "invisible";
@@ -434,6 +571,12 @@ export class CacheSealStore {
   private closed = false;
   /** The unwalled launches, by token, also held in memory (see the header). */
   private readonly unwalled = new Map<string, { pid: number; start: string | null; begunAt: number; mode: string; posture: string; session: string | null; workspace: string | null; why: string }>();
+  /** The live attachments, by token, held in memory too (see the header):
+   *  this copy decides while the arbiter runs; a row it does not hold (a
+   *  previous run's, or one written by hand) counts until its deadline, never
+   *  beyond one lease from when this run first saw it. */
+  private readonly attached = new Map<string, Attachment>();
+  private readonly leaseMs: number;
 
   constructor(opts: CacheSealStoreOptions) {
     const dbPath = opts.dbPath ?? getSymbolDbPath();
@@ -458,6 +601,7 @@ export class CacheSealStore {
       ?? (opts.procStartTime === undefined && src.platform === "darwin" ? DARWIN_START_MEMO_MS : 0);
     this.onRotate = opts.onRotate;
     this.maxSeals = opts.maxSealsPerEpoch ?? MAX_SEALS_PER_EPOCH;
+    this.leaseMs = opts.attachmentLeaseMs ?? ATTACHMENT_LEASE_MS;
   }
 
   /**
@@ -473,6 +617,7 @@ export class CacheSealStore {
     if (epoch === null) this.rotate("first start", "first-start");
     else if (this.getState("clean") !== "1") this.rotate("the arbiter's last shutdown was not clean, or an unconfined period was live at it", "unclean-stop");
     this.setState("clean", "0");
+    this.adoptAttachmentRows();
     this.reap();
   }
 
@@ -599,6 +744,8 @@ export class CacheSealStore {
     }
     // The in-memory copy wins: a row a program rewrote does not rename it.
     for (const [token, l] of this.unwalled) out.set(token, liveLaunch(l.pid, l.mode, l.posture, false, l.session, l.begunAt));
+    // An attachment is never walled (its agent's programs reach the socket).
+    for (const [token, l] of this.attachmentRows(false)) out.set(token, l);
     return [...out.values()].sort((a, b) => (a.begunAt ?? 0) - (b.begunAt ?? 0) || a.pid - b.pid);
   }
 
@@ -614,6 +761,142 @@ export class CacheSealStore {
       return { ended: true, rotated: true, epoch };
     }
     return { ended: false, rotated: false, epoch: this.epoch() };
+  }
+
+  /**
+   * An attachment begins (openclaw-plugin.md §3.3): Mandu attached to an
+   * agent it does not run, for `sessionId`, of `kind`. Never confined, never
+   * walled: while it is live no seal is honoured and the human plane is
+   * exposed (see the header). Lives until `endAttachment`, or until its lease
+   * runs out with no `renewAttachment`. A live attachment of the same session
+   * is replaced (its token stops working; no rotation). Throws on a session
+   * or kind not of the shape.
+   */
+  beginAttachment(claim: { sessionId: unknown; kind: unknown }): { token: string; epoch: string; expiresAt: number; leaseMs: number; others: LiveLaunch[] } {
+    this.open();
+    const session = claimSession(claim.sessionId);
+    if (session === null) throw new Error("beginAttachment: sessionId must be a session id (letters, digits, '.', '_', ':', '-'; at most 128)");
+    if (typeof claim.kind !== "string" || !ATTACHMENT_KIND_RE.test(claim.kind)) throw new Error("beginAttachment: kind must be an attachment kind");
+    this.reap();
+    const replaced = [...this.attached].filter(([, a]) => a.session === session).map(([t]) => t);
+    const del = this.db.prepare("DELETE FROM attachments WHERE token = ?");
+    for (const t of replaced) { del.run(t); this.attached.delete(t); }
+    this.db.prepare("DELETE FROM attachments WHERE session = ?").run(session);
+    const others = this.liveLaunchRows();
+    const token = this.newToken();
+    const begunAt = this.now();
+    // A replaced period ends where this one begins (the period goes on).
+    const endReplaced = this.db.prepare("UPDATE attachment_periods SET ended_at = ? WHERE token = ? AND ended_at IS NULL");
+    for (const t of replaced) endReplaced.run(begunAt, t);
+    const a: Attachment = { session, kind: claim.kind, begunAt, expiresAt: begunAt + this.leaseMs };
+    this.db.prepare("INSERT INTO attachments (token, session, kind, begun_at, expires_at) VALUES (?, ?, ?, ?, ?)")
+      .run(token, a.session, a.kind, a.begunAt, a.expiresAt);
+    this.attached.set(token, a);
+    this.notePeriod(token, a, begunAt);
+    this.prunePeriods();
+    return { token, epoch: this.epoch(), expiresAt: a.expiresAt, leaseMs: this.leaseMs, others };
+  }
+
+  /** An attachment's lease is renewed: one more lease from now. An unknown
+   *  token (ended, replaced, or run out: the period it held ended with a
+   *  rotation) renews nothing, and the registrant registers again. */
+  renewAttachment(token: string): { renewed: boolean; expiresAt: number | null } {
+    this.open();
+    if (typeof token !== "string" || token === "") throw new Error("renewAttachment: token must be a non-empty string");
+    this.reap();
+    const a = this.attached.get(token);
+    if (a === undefined) return { renewed: false, expiresAt: null };
+    a.expiresAt = this.now() + this.leaseMs;
+    this.db.prepare("INSERT INTO attachments (token, session, kind, begun_at, expires_at) VALUES (?, ?, ?, ?, ?) " +
+      "ON CONFLICT(token) DO UPDATE SET expires_at = excluded.expires_at").run(token, a.session, a.kind, a.begunAt, a.expiresAt);
+    this.notePeriod(token, a, this.now());
+    return { renewed: true, expiresAt: a.expiresAt };
+  }
+
+  /** An attachment ended: its end starts a new epoch, as an unconfined
+   *  launch's does. An unknown token changes nothing. */
+  endAttachment(token: string): { ended: boolean; rotated: boolean; epoch: string } {
+    this.open();
+    if (typeof token !== "string" || token === "") throw new Error("endAttachment: token must be a non-empty string");
+    const a = this.attached.get(token);
+    const r = this.db.prepare("DELETE FROM attachments WHERE token = ?").run(token);
+    this.attached.delete(token);
+    if (a !== undefined || r.changes > 0) {
+      this.db.prepare("UPDATE attachment_periods SET ended_at = ? WHERE token = ? AND ended_at IS NULL").run(this.now(), token);
+      const epoch = this.rotate("an attachment ended", "unprotected-ended");
+      return { ended: true, rotated: true, epoch };
+    }
+    return { ended: false, rotated: false, epoch: this.epoch() };
+  }
+
+  /** The live attachment a token names (reaped first), or null. */
+  attachmentOf(token: string): { session: string; kind: string } | null {
+    this.open();
+    this.reap();
+    const a = this.attached.get(token);
+    return a === undefined ? null : { session: a.session, kind: a.kind };
+  }
+
+  /** The live attachments' sessions (reaped first). */
+  attachedSessions(): Set<string> {
+    this.open();
+    this.reap();
+    return new Set([...this.attached.values()].map((a) => a.session));
+  }
+
+  /**
+   * Every attachment period kept (see ATTACHMENT PERIODS in the header),
+   * oldest first, for `mandu scan`: a live one ends now; an ended one at its
+   * end; one with no end (its lease lapsed, or the arbiter that held it
+   * stopped without ending it) at its last renewal. Reaps first, so a lease
+   * that ran out reads as lapsed.
+   */
+  attachmentPeriods(): AttachmentPeriod[] {
+    this.open();
+    this.reap();
+    return periodsOf(this.db, new Set(this.attached.keys()), this.now());
+  }
+
+  /** Record (or move the last renewal of) an attachment's period. */
+  private notePeriod(token: string, a: Attachment, at: number): void {
+    this.db.prepare("INSERT INTO attachment_periods (token, session, kind, begun_at, renewed_at) VALUES (?, ?, ?, ?, ?) " +
+      "ON CONFLICT(token) DO UPDATE SET renewed_at = excluded.renewed_at WHERE ended_at IS NULL AND lapsed = 0").run(token, a.session, a.kind, a.begunAt, at);
+  }
+
+  /** Drop the periods past {@link ATTACHMENT_PERIOD_KEEP_MS} and beyond the
+   *  newest {@link MAX_ATTACHMENT_PERIODS}. */
+  private prunePeriods(): void {
+    this.db.prepare("DELETE FROM attachment_periods WHERE COALESCE(ended_at, renewed_at) < ?").run(this.now() - ATTACHMENT_PERIOD_KEEP_MS);
+    this.db.prepare("DELETE FROM attachment_periods WHERE token NOT IN (SELECT token FROM attachment_periods ORDER BY begun_at DESC LIMIT ?)").run(MAX_ATTACHMENT_PERIODS);
+  }
+
+  /** The attachments as {@link LiveLaunch} rows (pid 0, unwalled; `why`
+   *  as the named rows carry it, not the exposure's). */
+  private attachmentRows(withWhy = true): Array<[string, LiveLaunch]> {
+    return [...this.attached].map(([token, a]) => [token, {
+      ...liveLaunch(0, this.axisOn ? "secrets" : "off", "gated", false, a.session, a.begunAt, null, withWhy ? ATTACHMENT_WHY : null),
+      attachment: a.kind,
+    }]);
+  }
+
+  /** Take into memory every attachment row this run does not hold yet (a
+   *  previous run's, or one written by hand), believing its deadline no
+   *  further than one lease from now. */
+  private adoptAttachmentRows(): void {
+    const now = this.now();
+    const rows = this.db.prepare("SELECT token, session, kind, begun_at, expires_at FROM attachments").all() as Array<{
+      token: string; session: string; kind: string; begun_at: number; expires_at: number;
+    }>;
+    for (const r of rows) {
+      if (this.attached.has(r.token)) continue;
+      const session = claimSession(r.session) ?? "unknown";
+      const kind = typeof r.kind === "string" && ATTACHMENT_KIND_RE.test(r.kind) ? r.kind : "unknown";
+      const deadline = Number(r.expires_at);
+      this.attached.set(r.token, {
+        session, kind, begunAt: Number(r.begun_at),
+        expiresAt: Math.min(Number.isFinite(deadline) ? deadline : now, now + this.leaseMs),
+      });
+    }
   }
 
   /** Start a new epoch now: every older seal is deleted. Returns it.
@@ -657,7 +940,8 @@ export class CacheSealStore {
 
   private liveLaunchRows(): LiveLaunch[] {
     return (this.db.prepare("SELECT pid, mode, posture, walled, session, begun_at, workspace, why FROM unconfined_launches").all() as Array<{ pid: number; mode: string; posture: string; walled: number | null; session: string | null; begun_at: number; workspace: string | null; why: string | null }>)
-      .map((r) => liveLaunch(Number(r.pid), r.mode, r.posture, Number(r.walled) === 1, claimSession(r.session), Number(r.begun_at), claimWorkspace(r.workspace), r.why));
+      .map((r) => liveLaunch(Number(r.pid), r.mode, r.posture, Number(r.walled) === 1, claimSession(r.session), Number(r.begun_at), claimWorkspace(r.workspace), r.why))
+      .concat(this.attachmentRows().map(([, l]) => l));
   }
 
   /** Every live unconfined launch, oldest first: the rows, and an unwalled
@@ -672,6 +956,7 @@ export class CacheSealStore {
       out.set(r.token, liveLaunch(Number(r.pid), r.mode, r.posture, Number(r.walled) === 1, claimSession(r.session), Number(r.begun_at), claimWorkspace(r.workspace), r.why));
     }
     for (const [token, l] of this.unwalled) out.set(token, liveLaunch(l.pid, l.mode, l.posture, false, l.session, l.begunAt, l.workspace, l.why));
+    for (const [token, l] of this.attachmentRows()) out.set(token, l);
     return [...out.values()].sort((a, b) => (a.begunAt ?? 0) - (b.begunAt ?? 0) || a.pid - b.pid);
   }
 
@@ -688,10 +973,22 @@ export class CacheSealStore {
       token: string; pid: number; pid_start: string | null; begun_at: number;
     }>;
     for (const r of rows) if (!this.alive(Number(r.pid), r.pid_start, Number(r.begun_at))) gone.add(r.token);
-    if (gone.size === 0) return;
+    // Attachments: a row this run does not hold yet is taken in first; one
+    // whose lease ran out ends here, in the same rotation.
+    this.adoptAttachmentRows();
+    const now = this.now();
+    const lapsed = [...this.attached].filter(([, a]) => a.expiresAt <= now).map(([t]) => t);
+    if (gone.size === 0 && lapsed.length === 0) return;
     const del = this.db.prepare("DELETE FROM unconfined_launches WHERE token = ?");
     for (const t of gone) { del.run(t); this.unwalled.delete(t); }
-    this.rotate(`${gone.size} unconfined launch${gone.size === 1 ? "" : "es"} ended (launcher gone)`, "unprotected-ended");
+    const delA = this.db.prepare("DELETE FROM attachments WHERE token = ?");
+    const lapse = this.db.prepare("UPDATE attachment_periods SET lapsed = 1 WHERE token = ? AND ended_at IS NULL");
+    for (const t of lapsed) { delA.run(t); lapse.run(t); this.attached.delete(t); }
+    const said = [
+      ...(gone.size > 0 ? [`${gone.size} unconfined launch${gone.size === 1 ? "" : "es"} ended (launcher gone)`] : []),
+      ...(lapsed.length > 0 ? [`${lapsed.length} attachment${lapsed.length === 1 ? "" : "s"} ended (lease ran out)`] : []),
+    ];
+    this.rotate(said.join("; "), "unprotected-ended");
   }
 
 
@@ -728,6 +1025,7 @@ export class CacheSealStore {
   private liveCount(): number {
     const tokens = new Set((this.db.prepare("SELECT token FROM unconfined_launches").all() as Array<{ token: string }>).map((r) => r.token));
     for (const t of this.unwalled.keys()) tokens.add(t);
+    for (const t of this.attached.keys()) tokens.add(t);
     return tokens.size;
   }
 

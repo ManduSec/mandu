@@ -450,7 +450,7 @@ namespace for the wrap) a kill is still possible, and fails closed.
 **Mandu's runtime registries (2026-10-07).** The Linux list carries the
 entries the macOS profile denies (§9's last bullet): under the launch's
 runtime base and the account's default base and rendezvous,
-`instances/`, `dashboards/`, `vm-guests/`, `logs/`, `test/`, `release-check/` and the human
+`instances/`, `dashboards/`, `vm-guests/`, `logs/`, `test/`, `release-check/`, `attachments/` and the human
 plane's `human/` (plain), `current`, the legacy `arbiter.sock` and
 `dashboard.log` (`name`), `.current.tmp-` and `dashboard-` (`prefix`), and
 the base itself (`self`), all `deny` under Mandu's own label, so policy.yaml
@@ -1530,7 +1530,7 @@ on Linux). The differences:
   entries in it that Mandu processes outside the profile write through or
   delete from (`instances/`, `current`, the promotion's `.current.tmp-*`,
   the legacy `arbiter.sock`, `dashboards/`, `mandu dashboard`'s
-  `dashboard.log` and `dashboard-*` port files, `vm-guests/`, `logs/`, `release-check/`,
+  `dashboard.log` and `dashboard-*` port files, `vm-guests/`, `logs/`, `release-check/`, `attachments/`,
   `test/`; `launcher/src/runtime-registry.ts`), in the launch's runtime
   directory and the account's default one, are write-denied by a component
   of their own, in every mode but `off` and whatever `MANDU_WRITE_PROTECT`

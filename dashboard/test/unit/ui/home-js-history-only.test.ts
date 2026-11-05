@@ -15,6 +15,8 @@
  *       still has Show more ("has not stepped in in the newest 200");
  *   O3  none at all: "Mandu has not stepped in in any session on record."
  *       with Show every session, which turns the switch off and focuses it;
+ *       with a search, "… in any session that matches “…”.", which the
+ *       status line says to a screen reader too;
  *   O4  Home's poll reads with the filter: a session that got its first
  *       block comes in on top, the switch stays on; a poll whose look ended
  *       before the drawn rows leaves them;
@@ -130,6 +132,21 @@ test("O3: none at all says so, with Show every session: the switch off and focus
   assert.match(empty.doc.getElementById("history-list").textContent, /No session has been recorded yet/);
 });
 
+test("O3b: with a search, none kept says so in the list and, to a screen reader, in the status line", async () => {
+  const kept = { total: 30, rows: [], next: null, only: { through: 30 }, query: { text: "deploy", all: 950 } };
+  const { doc } = load({ extensions: "", url: `${URL}?q=deploy&only=stepped-in`, homeVm: home(), routes: { "GET home/history?q=deploy&only=stepped-in": kept } });
+  await tick();
+  assert.equal(doc.getElementById("history-list").textContent, "Mandu has not stepped in in any session that matches “deploy”. Show every session");
+  const count = doc.getElementById("history-count");
+  assert.equal(count.textContent, "Mandu has not stepped in in any session that matches “deploy”.", "the list's sentence, without its button");
+  assert.equal(count.hidden, false);
+  assert.equal(count.classList.contains("sr-only"), true, "on screen the list says it");
+  // Without a search the switch's own words stay in the list (O3): no line.
+  const bare = load({ extensions: "", url: `${URL}?only=stepped-in`, homeVm: home(), routes: { "GET home/history?only=stepped-in": { total: 950, rows: [], next: null, only: { through: 950 } } } });
+  await tick();
+  assert.equal(bare.doc.getElementById("history-count").hidden, true);
+});
+
 test("O4: the poll reads with the filter: a new block comes in on top, the switch stays on; a look that ended before the drawn rows leaves them", async () => {
   const first = { total: 950, rows: [MASKED], next: null, only: { through: 950 } };
   const later = { total: 951, rows: [row("s10", { state: "running", blocked: 1 }), MASKED], next: null, only: { through: 951 } };
@@ -163,7 +180,7 @@ test("O5: ?q= and ?only= on load set both; Back from a session keeps the switch;
   assert.equal(doc.getElementById("history-q").value, "deploy");
   assert.equal(sw(doc).getAttribute("aria-checked"), "true");
   assert.deepEqual(historyCalls(calls), ["home/history?q=deploy&only=stepped-in"]);
-  assert.equal(doc.getElementById("history-count").textContent, "Showing the sessions where Mandu stepped in, of 30 sessions found");
+  assert.equal(doc.getElementById("history-count").textContent, "Showing the sessions where Mandu stepped in that match “deploy”", "with a search, the switch names it (§4.25ae *By a secret or a host*: how many match is not known before every session is read)");
   // A row's Details, then Back: the address and the read keep both.
   const link = doc.querySelector('#history-list .row.agent a[data-page-link="agent"]');
   link.click();

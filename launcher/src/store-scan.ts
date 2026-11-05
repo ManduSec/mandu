@@ -68,6 +68,15 @@ import type { SealSession } from "./cache-seals.js";
 import type { GitRunner } from "./git-object-twins.js";
 import { Pacer } from "./reflog-tips.js";
 
+/** Append `src` to `dst` in place. Never `dst.push(...src)` for a list as
+ *  long as a store's objects: a spread passes each element as an argument,
+ *  and past ~125k (less on a deeper stack) V8 throws "Maximum call stack size
+ *  exceeded" (live 2026-10-28: the first whole-store check of a 129k-object
+ *  store failed, and the launch was refused). */
+export function appendAll<T>(dst: T[], src: readonly T[]): void {
+  for (const x of src) dst.push(x);
+}
+
 /** The rule the kept state was computed by; another rule scans anew. */
 export const STORE_SCAN_RULE = "store-scan:v1 tops=root+prefixes pathless=tokens+index";
 /** The seal kind of a store's `state.json` (cache-seals.ts). */
@@ -936,7 +945,7 @@ export async function scanStore(opts: StoreScanOpts, pred: ScanPredicate): Promi
     await batched(ids, () => 1, IDS_PER_CALL, CALLS_AT_ONCE, async (chunk) => {
       const out = await call(["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], `${chunk.join("\n")}\n`, false);
       const got = parseBatchCheck(out, hex);
-      found.push(...got.found);
+      appendAll(found, got.found);
       for (const m of got.missing) missing.add(m);
     });
     return found;
@@ -1027,7 +1036,7 @@ export async function scanStore(opts: StoreScanOpts, pred: ScanPredicate): Promi
     const t = pace.tick();
     if (t !== null) await t;
   }
-  if (viaGit.length > 0) infos.push(...await typesOf(viaGit));
+  if (viaGit.length > 0) appendAll(infos, await typesOf(viaGit));
   stats.asked += viaGit.length;
   stats.loose += freshList.length - viaGit.length;
   const newBlobs: ObjectInfo[] = [];

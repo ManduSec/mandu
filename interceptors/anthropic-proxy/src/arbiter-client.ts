@@ -123,6 +123,20 @@ export interface ClassifyResult {
    *  kind, so the path-derived note can say how to read the file itself
    *  (`pathDerivedTwins`). Explains only. */
   namedTwins?: Array<{ path: string; twin: string }>;
+  /** The tokens of the call's own input that it WRITES and that name a
+   *  registered secret file Mandu serves a twin of (arbiter
+   *  twin-write-targets.ts, plan 10 §4.1 "The model is told at the call"):
+   *  the `copy:` line names them (`twinWriteTokens`). Explains only. */
+  twinWrites?: string[];
+  /** On a public result: the object ids it reports the agent's git could not
+   *  read that Mandu locked (arbiter tool-error-notice.ts lockedObjectsIn),
+   *  explained to the model in one note (confidentiality.md §7.1, "git's
+   *  report on a history rewrite"). Explains only. */
+  lockedObjects?: string[];
+  /** On a public result: the work-tree paths git could not remove for
+   *  EACCES (arbiter tool-error-notice.ts unlinkDeniedPathsIn), a protected
+   *  file's read-only copy; explained in the same note. Explains only. */
+  protectedCopies?: string[];
   /** `value-backstop`: the level is the arbiter's value backstop raise of a
    *  verdict its policy called public (plan 15 §4.1). The proxy echoes it as
    *  `secretBy` on the symbolize only when it raised the level no further. */

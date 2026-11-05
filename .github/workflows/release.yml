@@ -36,7 +36,7 @@ concurrency:
 
 env:
   # The engines floor and the workspace's rust-version, as ci.yml (pins.env).
-  NODE_VERSION: "22.13.0"
+  NODE_VERSION: "22.15.0"
   RUSTUP_TOOLCHAIN: "1.75.0"
   # The publish job's node, and the pinned npm it installs (trusted
   # publishing needs npm >= 11.5.1).

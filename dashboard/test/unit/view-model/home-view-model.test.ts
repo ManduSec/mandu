@@ -11,7 +11,8 @@
  *   3. Counts cover the window only, and only LIVE sessions the route passed.
  *   4. The eight-word vocabulary: no inspector term leaks into product copy —
  *      the same sweep the simple register had, applied to the projection AND
- *      to the product's static page + script.
+ *      to the product's static page + script (the script's string and
+ *      template literals, read with the compiler: a comment is never copy).
  *   5. The first-run card: present only while no live session exists, and in
  *      `secrets` mode it says untrusted content is NOT masked.
  *   6. The Rules page's built-in protections follow the running mode: the
@@ -29,7 +30,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { ANSWERED_PAGE, ANSWERED_PAGE_MAX, aboutUpdate, agentNotice, agentNoticeParts, answeredPage, buildHomeViewModel, homeAbout, isAgentSession, askedBy, buildFirstRun, builtInProtections, describeAsk, agentName, oneLine, promptLabel, POLICY_FILE_WORDS, secretsPostureNote, type HomeInput } from "../../../src/view-model/home.js";
+import { ANSWERED_PAGE, ANSWERED_PAGE_MAX, RELEASES_URL, aboutUpdate, releaseNotesUrl, agentNotice, agentNoticeParts, answeredPage, buildHomeViewModel, homeAbout, homeAgentRow, historyFlagged, steppedIn, isAgentSession, askedBy, buildFirstRun, builtInProtections, describeAsk, homePolicyFile, agentName, oneLine, promptLabel, POLICY_FILE_WORDS, secretsPostureNote, windowCountedNothing, type HomeInput } from "../../../src/view-model/home.js";
 import { deriveHealth, SECRETS_FIX, SECRETS_PARTIAL_NOTE, SECRETS_SENTENCE, type SessionHealth } from "../../../src/session-health.js";
 import type { ManduEvent } from "../../../src/event-model.js";
 import { manduPath } from "../../../src/generated/mandu-paths.js";
@@ -38,11 +39,17 @@ import type { PolicySnapshot, VerdictEntry } from "../../../src/policy-model.js"
 import type { SessionRef } from "../../../src/event-source/contract.js";
 import type { SessionFlowStats } from "../../../src/view-model/lineage.js";
 import { toSessionViewModel } from "../../../src/view-model.js";
-import { buildStory, pageSecrets, storyCounts, untrustedMasked } from "../../../src/view-model/agent-page.js";
+import { RETIRED, THIS_MACHINE } from "./retired-words.js";
+import { literals, type Literal } from "./js-literals.js";
+import { toHumanPlaneVM } from "../../../src/view-model/human-plane.js";
+import { builtinFiles } from "../../../src/view-model/builtin-files.js";
+import { buildAgentPage, buildStory, pageSecrets, storyCounts, untrustedMasked } from "../../../src/view-model/agent-page.js";
+import { HomeFacts } from "../../../src/server/home-routes.js";
+import type { EventSource } from "../../../src/event-source.js";
 import { firstSessionEvents, FIRST_SESSION } from "./first-session-fixture.js";
 import { DOCS_BASE_URL } from "../../../src/release-version.js";
-import { ISSUES_URL } from "../../../src/agent-versions.js";
-import type { UpdateCache } from "../../../src/update-notice.js";
+import { ISSUES_URL, SECURITY_REPORT_URL } from "../../../src/agent-versions.js";
+import { RELEASE_REPO, type UpdateCache } from "../../../src/update-notice.js";
 
 const PUB = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "public");
 
@@ -173,19 +180,50 @@ test("failed in two sessions: the trace link opens the trace's session list, not
 test("both axes off → off, before any pending ask", () => {
   const vm = buildHomeViewModel(input({
     panel: toPolicyPanelViewModel(snapshot({ integrity: false, confidentiality: false, verdicts: [verdict({})] })),
+    configuredMode: "off", // off saved too: nothing is waiting on a restart
   }));
   assert.equal(vm.verdict, "off");
   assert.equal(vm.protection.level, "off");
   // The switch is in Settings (since 2026-10-05), and the words link there.
   // Until 2026-10-08 they said "Turn it back on under Rules.": Rules has no
   // switch (§4.25, *The hero links where it points*).
-  assert.equal(vm.sentence, "The AI can read untrusted content as-is, and your secrets are not guarded. Turn it back on in Settings.");
+  assert.equal(vm.sentence, "Your keys and secret files reach the AI as they are, and nothing stops them leaving this computer. Turn it back on in Settings.");
   assert.deepEqual(vm.sentenceParts, [
-    { kind: "text", text: "The AI can read untrusted content as-is, and your secrets are not guarded. " },
+    { kind: "text", text: "Your keys and secret files reach the AI as they are, and nothing stops them leaving this computer. " },
     { kind: "link", text: "Turn it back on in Settings", to: "settings" },
     { kind: "text", text: "." },
   ]);
   assert.doesNotMatch(vm.sentence, /Rules/);
+});
+
+test("off running, On saved for the next start: the hero says what is left to do and links Settings › Protection, never 'Turn it back on' (§4.25)", () => {
+  const offPanel = toPolicyPanelViewModel(snapshot({ integrity: false, confidentiality: false }));
+  const SAVED_ON = "Your keys and secret files reach the AI as they are, and nothing stops them leaving this computer. On is saved and starts when the protection service restarts. Open Settings › Protection.";
+  // Saved on is the secrets axis on: Secrets, or the frozen Full.
+  for (const configuredMode of ["secrets", "full"] as const) {
+    const vm = buildHomeViewModel(input({ panel: offPanel, configuredMode }));
+    assert.equal(vm.verdict, "off", configuredMode);
+    assert.equal(vm.headline, "Protection is off.");
+    assert.equal(vm.protection.configured, configuredMode);
+    assert.equal(vm.sentence, SAVED_ON, configuredMode);
+    assert.deepEqual(vm.sentenceParts, [
+      { kind: "text", text: "Your keys and secret files reach the AI as they are, and nothing stops them leaving this computer. " },
+      { kind: "text", text: "On is saved and starts when the protection service restarts. " },
+      { kind: "link", text: "Open Settings › Protection", to: "protection" },
+      { kind: "text", text: "." },
+    ]);
+    assert.doesNotMatch(vm.sentence, /Turn it|Restart/, "no step already done, no Restart button promised");
+  }
+  // Off saved, or a saved frozen `injection` (it guards no secret): today's words.
+  for (const configuredMode of ["off", "injection"] as const) {
+    const vm = buildHomeViewModel(input({ panel: offPanel, configuredMode }));
+    assert.equal(vm.sentence, "Your keys and secret files reach the AI as they are, and nothing stops them leaving this computer. Turn it back on in Settings.", configuredMode);
+    assert.deepEqual(vm.sentenceParts.filter((p) => p.kind === "link"), [{ kind: "link", text: "Turn it back on in Settings", to: "settings" }]);
+  }
+  // No arbiter answers: not this case, whatever is saved.
+  const away = buildHomeViewModel(input({ panel: toPolicyPanelViewModel(null), configuredMode: "secrets" }));
+  assert.equal(away.headline, "Not connected.");
+  assert.doesNotMatch(away.sentence, /On is saved/);
 });
 
 test("pending asks → waiting, with the count in the headline", () => {
@@ -394,6 +432,23 @@ test("describeAsk covers every family with a sentence, a why, what the AI has no
     assert.match(d.ifAllowed, /^(The AI('s)?|When the AI)\b/, at);
     assert.doesNotMatch(d.why + d.aiNow + d.ifAllowed, /placeholder|locked file/i, at);
   }
+});
+
+test("§4.34 a held message names a kind Mandu has words for as Settings names it, in text with no code; an organization's own category stays code", () => {
+  const base = { id: "x", family: "prompt", status: "pending", outcome: "pending", reason: "", count: 1, firstSeen: 0, lastSeen: 0, resolvedAt: null, sessions: [], scope: "always", consumedAt: null, actions: [], ruleRefId: null, detail: [], originHost: null, mintable: null } as const;
+  const ref = "a".repeat(32);
+  const said = (category: string) => describeAsk({ ...base, where: "prompt", subject: `prompt:${category}#${ref}`, target: `model:s1#turn:${"b".repeat(32)}` } as never, "Claude Code");
+  for (const [category, words] of [["pii.payment-card", "a card number"], ["secret.shape.stripe-key", "a Stripe key"], ["pii.email", "an email address"]] as const) {
+    const d = said(category);
+    assert.equal(d.family, "prompt", category);
+    assert.equal(textOf(d.sentence), `Claude Code wants to send your message to the AI. It holds ${words}.`, category);
+    assert.ok(d.sentence.every((p) => p.kind === "text"), `${category}: no code part`);
+    assert.ok(!textOf(d.sentence).includes(category), `${category}: the id is not in the words`);
+    assert.equal(textOf(d.whatParts), `send your message to the AI. It holds ${words}.`, `${category}: "Allowed once: …" reads on`);
+  }
+  // An organization's own category has no words: it stays as written, a code, as Settings shows it.
+  const own = said("acme.codename");
+  assert.deepEqual(own.sentence, [{ kind: "text", text: "Claude Code wants to send your message to the AI. It holds " }, { kind: "code", text: "acme.codename" }, { kind: "text", text: "." }]);
 });
 
 test("describeAsk: a program allowed to read a secret file reads it itself; the AI still gets only masked output, never the file", () => {
@@ -718,8 +773,8 @@ test("counts cover only sessions inside the window; older sessions still count t
     ]),
     historyTotal: 2,
   }));
-  assert.deepEqual(vm.window, { hours: 24, sessions: 1, counted: 1, masked: 3, secretsMasked: 1, secretsEarly: 0, untrusted: 2, blocked: 2, sent: 3, waiting: 0,
-    only: { secretsMasked: "s-claude", secretsEarly: null, blocked: "s-claude", sent: "s-claude" } });
+  assert.deepEqual(vm.window, { hours: 24, sessions: 1, counted: 1, masked: 3, secretsMasked: 1, secretsEarly: 0, untrusted: 2, blocked: 2, sent: 3, off: 0, waiting: 0,
+    only: { secretsMasked: "s-claude", secretsEarly: null, blocked: "s-claude", sent: "s-claude", off: null } });
   assert.equal(vm.agents.length, 1);
   assert.equal(vm.history.total, 2);
 });
@@ -757,27 +812,58 @@ test("the window names the one session holding each count, so the hero links to 
     sessions: [session({ id: "s1" }), session({ id: "s2" }), session({ id: "s3" })],
     facts: new Map([["s1", fact({ masked: 1, blocked: 2, early: 1 })], ["s2", fact({ masked: 3 })], ["s3", fact({})]]),
   }));
-  assert.deepEqual(vm.window.only, { secretsMasked: null, secretsEarly: "s1", blocked: "s1", sent: null });
+  assert.deepEqual(vm.window.only, { secretsMasked: null, secretsEarly: "s1", blocked: "s1", sent: null, off: null });
   assert.equal(vm.window.blocked, 2, "the counts are as before");
   // A second session's block: no one session holds it any more.
   const two = buildHomeViewModel(input({
     sessions: [session({ id: "s1" }), session({ id: "s2" })],
     facts: new Map([["s1", fact({ blocked: 1 })], ["s2", fact({ blocked: 1, sent: 1 })]]),
   }));
-  assert.deepEqual(two.window.only, { secretsMasked: null, secretsEarly: null, blocked: null, sent: "s2" });
+  assert.deepEqual(two.window.only, { secretsMasked: null, secretsEarly: null, blocked: null, sent: "s2", off: null });
   // Partly counted (s2 could not be read): a session left out may hold it too.
   const partly = buildHomeViewModel(input({
     sessions: [session({ id: "s1" }), session({ id: "s2" })],
     facts: new Map([["s1", fact({ blocked: 1, masked: 1 })]]),
   }));
   assert.deepEqual([partly.window.counted, partly.window.sessions], [1, 2]);
-  assert.deepEqual(partly.window.only, { secretsMasked: null, secretsEarly: null, blocked: null, sent: null });
+  assert.deepEqual(partly.window.only, { secretsMasked: null, secretsEarly: null, blocked: null, sent: null, off: null });
   // A session outside the window never holds one.
   const old = buildHomeViewModel(input({
     sessions: [session({ id: "s1" }), session({ id: "s-old", lastTs: new Date(NOW - 30 * 3_600_000).toISOString(), status: undefined })],
     facts: new Map([["s1", fact({ blocked: 1 })], ["s-old", fact({ blocked: 4 })]]),
   }));
   assert.equal(old.window.only.blocked, "s1");
+});
+
+test("the window counts the sessions that ran with protection off, names the one that holds it, and is then not empty (§4.25 *A session that ran with protection off says so*)", () => {
+  const fact = (off?: boolean) => ({ stats: stats(), secrets: { masked: 0, early: 0 }, untrusted: 0, blocked: 0, sent: 0, holds: true, violations: 0, cwd: null, ...(off === undefined ? {} : { off }) });
+  // One Off session and nothing else: the day did not pass quietly.
+  const one = buildHomeViewModel(input({ sessions: [session({ id: "s-off" }), session({ id: "s-on" })], facts: new Map([["s-off", fact(true)], ["s-on", fact(false)]]) }));
+  assert.equal(one.window.off, 1);
+  assert.equal(one.window.only.off, "s-off");
+  assert.notEqual(one.verdict, "off", "protection is on now");
+  assert.equal(windowCountedNothing(one), false, "no \"Nothing to count\", no \"Mandu last stepped in\"");
+  assert.deepEqual([one.window.secretsMasked, one.window.blocked, one.window.sent], [0, 0, 0], "it adds to no other count");
+  // Two: no one session holds it.
+  const two = buildHomeViewModel(input({ sessions: [session({ id: "s1" }), session({ id: "s2" })], facts: new Map([["s1", fact(true)], ["s2", fact(true)]]) }));
+  assert.equal(two.window.off, 2);
+  assert.equal(two.window.only.off, null);
+  // Partly counted (s2 could not be read): it may have run Off too.
+  const partly = buildHomeViewModel(input({ sessions: [session({ id: "s1" }), session({ id: "s2" })], facts: new Map([["s1", fact(true)]]) }));
+  assert.deepEqual([partly.window.off, partly.window.counted, partly.window.sessions], [1, 1, 2]);
+  assert.equal(partly.window.only.off, null);
+  // No Off session (false, or no recorded mode): nothing, and the empty window is as before.
+  const none = buildHomeViewModel(input({ sessions: [session({ id: "s1" }), session({ id: "s2" })], facts: new Map([["s1", fact(false)], ["s2", fact()]]) }));
+  assert.equal(none.window.off, 0);
+  assert.equal(none.window.only.off, null);
+  assert.equal(windowCountedNothing(none), true);
+  // A session outside the window never counts.
+  const old = buildHomeViewModel(input({
+    sessions: [session({ id: "s1" }), session({ id: "s-old", lastTs: new Date(NOW - 30 * 3_600_000).toISOString(), status: undefined })],
+    facts: new Map([["s1", fact()], ["s-old", fact(true)]]),
+  }));
+  assert.equal(old.window.off, 0);
+  assert.equal(windowCountedNothing(old), true);
 });
 
 test("a row counts its secrets as its page's tiles do, and the window adds them up; never the lineage's masked tokens (§4.25)", () => {
@@ -908,15 +994,16 @@ test("in every verdict the hero's sentence is its parts joined, and a link part 
   ];
   const seen = new Set<string>();
   for (const panel of panels) {
-    for (const facts of [new Map(), input().facts, new Map([["s-claude", { stats: stats({ flows: 1 }), blocked: 0, sent: 0, holds: false, violations: 1, cwd: null }]])]) {
-      const vm = buildHomeViewModel(input({ panel, facts }));
+    for (const facts of [new Map(), input().facts, new Map([["s-claude", { stats: stats({ flows: 1 }), blocked: 0, sent: 0, holds: false, violations: 1, cwd: null }]])]) for (const configuredMode of ["full", "off"] as const) {
+      const vm = buildHomeViewModel(input({ panel, facts, configuredMode }));
       seen.add(vm.verdict);
       assert.ok(vm.sentenceParts.length > 0, vm.verdict);
       assert.equal(vm.sentence, vm.sentenceParts.map((p) => p.text).join(""), vm.verdict);
       const links = vm.sentenceParts.filter((p) => p.kind === "link");
       assert.ok(links.length <= 1, `${vm.verdict}: one place at most`);
       for (const l of links) {
-        assert.ok(l.to === "settings" || l.to === "trace", `${vm.verdict}: a known place (${l.to})`);
+        // Settings › Protection: off running with On saved (§4.25).
+        assert.ok(l.to === "settings" || l.to === "trace" || l.to === "protection", `${vm.verdict}: a known place (${l.to})`);
         assert.doesNotMatch(JSON.stringify(l), /https?:|\/\//, "the page builds the address");
       }
       // Only the three verdicts that send the person somewhere link.
@@ -954,23 +1041,34 @@ test("the product page and script carry no inspector vocabulary in their copy", 
   // Strip comments (they explain the design in inspector terms on purpose).
   const visible = html.replace(/<!--[\s\S]*?-->/g, "");
   assert.doesNotMatch(visible, FORBIDDEN);
-  const js = readFileSync(join(PUB, "js", "home.js"), "utf8");
-  // Only string literals are user-visible; identifiers and comments are not.
-  const strings = [...js.matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((m) => m[1]!).join("\n");
-  // The route paths are the one legitimate use of "egress" (the URL the
-  // inspector shares); everything else must be plain.
-  const copy = strings.replace(/egress\/approvals\//g, "");
-  assert.doesNotMatch(copy, FORBIDDEN, copy);
+  const all = literals(join(PUB, "js", "home.js"));
+  assert.ok(all.length > 1000, `read home.js's literals: ${all.length}`);
+  // A failure names the first offending literal and its line.
+  assert.equal(inspectorWords(all)[0], undefined);
 });
 
-/** Words the product retired (dashboard.md §4.25u): the page is Approvals,
- *  a secret file is not a "locked file", and a masked value is "masked". */
-const RETIRED = new RegExp([
-  /\bInbox\b/.source, // the page's old name (the "inbox" page key and ids are routing, lower-case)
-  /\b[Tt]he inbox\b/.source,
-  /\b[Ll]ocked[ -]files?\b/.source,
-  /\b[Pp]laceholders?\b(?!\s*:)/.source, // not an <input>'s placeholder attribute
-].join("|"));
+/** The literals of `all` that hold an inspector term, as `line: text`. Only
+ *  string and template literals are user-visible (js-literals.ts reads them
+ *  with the compiler, in every quote style); identifiers and comments are
+ *  not, and comments explain the design in inspector terms on purpose, so a
+ *  comment may hold any word and any apostrophe. */
+function inspectorWords(all: Literal[]): string[] {
+  // The route paths are the one legitimate use of "egress" (the URL the
+  // inspector shares); everything else must be plain.
+  return all
+    .filter((l) => FORBIDDEN.test(l.text.replace(/egress\/approvals\//g, "")))
+    .map((l) => `${l.line}: ${l.text}`);
+}
+
+test("the script sweep reads literals, not comments: an apostrophe in a comment is skipped, and '…', \"…\" and `…` are all read", () => {
+  // Pairing quotes over this comment would sweep "s turn reaches the arbiter\nconst a = ".
+  const comment = "// the session's turn reaches the arbiter\nconst a = 'Saved';\n";
+  assert.deepEqual(inspectorWords(literals("sample.js", comment)), []);
+  assert.deepEqual(inspectorWords(literals("sample.js", `${comment}const r = 'egress/approvals/';\n`)), [], "the route path stays exempt");
+  for (const literal of ["'egress'", "\"egress\"", "`egress`", "`${a} egress`"]) {
+    assert.deepEqual(inspectorWords(literals("sample.js", `${comment}const b = ${literal};\n`)), [`3: ${literal.slice(1, -1).replace("${a}", "")}`], literal);
+  }
+});
 
 test("no product string names the Inbox, a locked file or a placeholder", () => {
   const html = readFileSync(join(PUB, "index.html"), "utf8").replace(/<!--[\s\S]*?-->/g, "");
@@ -978,9 +1076,7 @@ test("no product string names the Inbox, a locked file or a placeholder", () => 
   // ("inbox") are routing, not copy.
   const visible = html.replace(/<[^>]*>/g, (tag) => [...tag.matchAll(/\b(?:aria-label|title|placeholder)="([^"]*)"/g)].map((m) => m[1]).join(" "));
   assert.doesNotMatch(visible, RETIRED, visible.match(RETIRED)?.[0]);
-  const js = readFileSync(join(PUB, "js", "home.js"), "utf8");
-  const strings = [...js.matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((m) => m[1]!).filter((s) => !/^[a-z-]+$/.test(s)).join("\n");
-  assert.doesNotMatch(strings, RETIRED, strings.match(RETIRED)?.[0]);
+  // home.js's strings: product-words.test.ts reads them with the compiler.
   const panels = [toPolicyPanelViewModel(snapshot({ verdicts: [verdict({}), verdict({ id: "k", status: "denied", resolvedAt: 1 })] })), toPolicyPanelViewModel(snapshot({ integrity: false, confidentiality: true }))];
   for (const panel of panels) {
     const vm = buildHomeViewModel(input({ panel }));
@@ -1080,8 +1176,8 @@ test("a session that only read .env: one secret masked before the AI saw it, and
     facts: new Map([[FIRST_SESSION, { stats: vm0.lineage.stats, secrets, untrusted, blocked, sent, holds: true, violations: 0, cwd: null }]]),
     historyTotal: 1,
   }));
-  assert.deepEqual(vm.window, { hours: 24, sessions: 1, counted: 1, masked: 1, secretsMasked: 1, secretsEarly: 0, untrusted: 0, blocked: 0, sent: 0, waiting: 0,
-    only: { secretsMasked: FIRST_SESSION, secretsEarly: null, blocked: null, sent: null } });
+  assert.deepEqual(vm.window, { hours: 24, sessions: 1, counted: 1, masked: 1, secretsMasked: 1, secretsEarly: 0, untrusted: 0, blocked: 0, sent: 0, off: 0, waiting: 0,
+    only: { secretsMasked: FIRST_SESSION, secretsEarly: null, blocked: null, sent: null, off: null } });
 });
 
 // ── 5. The first-run card (§4.25, "First-run card") ───────────────────────────
@@ -1127,7 +1223,7 @@ test("first run with the service not running: the saved mode, said to apply when
 
 test("first run: every mode says what it does and does not do", () => {
   const off = buildFirstRun("off", "secrets");
-  assert.match(off.protects, /not guarded and untrusted content is not masked/);
+  assert.match(off.protects, /Protection is off, so Mandu only watches: keys and secret files reach the AI as they are, and nothing stops them leaving this computer\. /);
   assert.match(off.protects, /Turn it on in Settings › Protection\./);
   const full = buildFirstRun("full", "secrets");
   assert.match(full.protects, /keeps your secrets away/);
@@ -1136,6 +1232,25 @@ test("first run: every mode says what it does and does not do", () => {
   const inj = buildFirstRun("injection", "secrets");
   assert.match(inj.protects, /masks untrusted content/);
   assert.match(inj.protects, /secrets are not guarded/);
+});
+
+// Off names what it costs, never untrusted content: the Secrets mode the
+// switch brings back does not mask that either (§4.25, the verdict ladder).
+test("protection off: the hero and the first-run card say secrets reach the AI and can leave, never 'untrusted' (§4.25)", () => {
+  const offPanel = toPolicyPanelViewModel(snapshot({ integrity: false, confidentiality: false }));
+  const said = [
+    ...(["off", "secrets", "full", "injection"] as const).map((configuredMode) => {
+      const vm = buildHomeViewModel(input({ panel: offPanel, configuredMode }));
+      assert.equal(vm.verdict, "off", configuredMode);
+      return vm.sentence;
+    }),
+    buildFirstRun("off", "secrets").protects,
+  ];
+  for (const words of said) {
+    assert.doesNotMatch(words, /untrusted/i, words);
+    assert.match(words, /reach the AI as they are/, words);
+    assert.match(words, /leaving this computer/, words);
+  }
 });
 
 test("first run: how to start each agent, how to mark a secret, where mandu doctor is", () => {
@@ -1231,6 +1346,58 @@ test("built-in protections: with masking on (Full, Injection) the masking senten
   assert.deepEqual(buildHomeViewModel(input({ panel: toPolicyPanelViewModel(null) })).builtIn, builtInProtections("unknown"));
 });
 
+test("built-in protections, Mandu not running at all: 'not running' and that none is on yet, never 'not connected'; a fault keeps 'not connected' (§4.25)", () => {
+  const OFF_ITEM = "Mandu is not running now, so none of these is on. They turn on with your first agent.";
+  const off = builtInProtections("unknown", undefined, "secrets", true);
+  assert.equal(off.note, "not running");
+  assert.deepEqual(off.items, [OFF_ITEM]);
+  assert.equal(off.issuers, null);
+  assert.equal(off.filesAt, null);
+  for (const everRan of [false, true]) {
+    const vm = buildHomeViewModel(input({ panel: toPolicyPanelViewModel(null), sessions: [], facts: new Map(), historyTotal: 0, configuredMode: "secrets", notRunning: { everRan } }));
+    assert.deepEqual(vm.builtIn, off, `everRan ${everRan}`);
+  }
+  // A fault: the service does not answer, Mandu is not known to be stopped.
+  const fault = buildHomeViewModel(input({ panel: toPolicyPanelViewModel(null), notRunning: null }));
+  assert.equal(fault.builtIn.note, "not connected");
+  assert.deepEqual(fault.builtIn.items, ["The protection service is not reachable, so Mandu cannot say what is on."]);
+  // An arbiter that answers decides the level, whatever the probe found.
+  const up = buildHomeViewModel(input({ notRunning: { everRan: true } }));
+  assert.notEqual(up.builtIn.note, "not running");
+});
+
+test("built-in protections, off running: with On saved for the next start the item says what is left to do, as the hero does; off saved keeps 'Turn it on' (§4.25)", () => {
+  const SAVED_ON = [
+    { kind: "text", text: "Mandu only watches: nothing is masked, and your secrets are not guarded. " },
+    { kind: "text", text: "On is saved and starts when the protection service restarts. " },
+    { kind: "link", text: "Open Settings › Protection", to: "protection" },
+    { kind: "text", text: "." },
+  ];
+  const TODAY = [
+    { kind: "text", text: "Mandu only watches: nothing is masked, and your secrets are not guarded. " },
+    { kind: "link", text: "Turn it on in Settings", to: "protection" },
+    { kind: "text", text: "." },
+  ];
+  for (const configured of ["secrets", "full"] as const) {
+    const b = builtInProtections("off", undefined, configured);
+    assert.deepEqual(b.itemsParts, [SAVED_ON], configured);
+    assert.deepEqual(b.items, ["Mandu only watches: nothing is masked, and your secrets are not guarded. On is saved and starts when the protection service restarts. Open Settings › Protection."]);
+    assert.equal(b.note, "protection is off");
+  }
+  for (const configured of ["off", "injection", undefined] as const) {
+    const b = builtInProtections("off", undefined, configured);
+    assert.deepEqual(b.itemsParts, [TODAY], String(configured));
+    assert.deepEqual(b.items, ["Mandu only watches: nothing is masked, and your secrets are not guarded. Turn it on in Settings."]);
+  }
+  // The home passes the saved mode; an unreachable arbiter is not this case.
+  const offPanel = toPolicyPanelViewModel(snapshot({ integrity: false, confidentiality: false }));
+  assert.deepEqual(buildHomeViewModel(input({ panel: offPanel, configuredMode: "secrets" })).builtIn.itemsParts, [SAVED_ON]);
+  assert.deepEqual(buildHomeViewModel(input({ panel: offPanel, configuredMode: "off" })).builtIn.itemsParts, [TODAY]);
+  assert.deepEqual(buildHomeViewModel(input({ panel: toPolicyPanelViewModel(null), configuredMode: "secrets" })).builtIn, builtInProtections("unknown"));
+  // Saved on changes nothing while protection runs.
+  assert.deepEqual(builtInProtections("secrets", undefined, "secrets"), builtInProtections("secrets"));
+});
+
 test("built-ins and the first-run card: a secret is never promised an OK that a rule skips (dashboard.md §4.25d)", () => {
   // A rule (a file's "may be sent to" host, an Always-allow, an
   // administrator's locked row) sends a secret's real value with no question
@@ -1268,6 +1435,25 @@ test("built-in protections: the copy uses the product vocabulary only, in every 
   }
 });
 
+test("built-in protections: the Which files fold opens under the masking item in Secrets and Full, none in Off, Injection and unknown; the home leaves its lists out (§4.25z)", () => {
+  for (const level of ["secrets", "full"] as const) {
+    const b = builtInProtections(level);
+    assert.equal(typeof b.filesAt, "number", level);
+    assert.equal(b.items[b.filesAt!], "Keys and secret files reach the AI masked, unless a rule lets the AI read them.", `${level}: the fold opens under that item`);
+    assert.equal(b.files, undefined, `${level}: the lists are fixed copy, not in the polled home`);
+  }
+  for (const level of ["off", "injection", "unknown"] as const) assert.equal(builtInProtections(level).filesAt, null, level);
+  const f = builtinFiles();
+  const copy = [...f.kinds.map((k) => k.words), ...f.also.map((a) => a.text), f.found, f.change.text].join("\n");
+  assert.doesNotMatch(copy, FORBIDDEN, copy);
+  assert.doesNotMatch(copy, RETIRED, copy);
+  // the home carries where it opens
+  const vm = buildHomeViewModel(input({ panel: toPolicyPanelViewModel(snapshot({ integrity: false, confidentiality: true })) }));
+  assert.equal(vm.builtIn.filesAt, 0);
+  const offVm = buildHomeViewModel(input({ panel: toPolicyPanelViewModel(snapshot({ integrity: false, confidentiality: false })) }));
+  assert.equal(offVm.builtIn.filesAt, null);
+});
+
 test("built-in protections: the issuer item is there in Secrets and Full, absent in Off, Injection and unknown (§4.25z)", () => {
   const read = { read: true as const, raw: { issuers_off: ["stripe"] } };
   for (const level of ["secrets", "full"] as const) {
@@ -1289,6 +1475,29 @@ test("built-in protections: the issuer item is there in Secrets and Full, absent
   assert.deepEqual(vm.builtIn, builtInProtections("secrets", { read: true, raw: false }));
   const offVm = buildHomeViewModel(input({ panel: toPolicyPanelViewModel(snapshot({ integrity: false, confidentiality: false })), issuerBindings: { read: true, raw: undefined } }));
   assert.equal(offVm.builtIn.issuers, null);
+});
+
+// ── An edit to policy.yaml Mandu refused (dashboard.md §4.25) ─────────────────
+
+test("policyFile: a refused edit carries the path, the problem count and the time, never the problems; a valid file says valid; no status, a malformed one or no path leave it out", () => {
+  const AT = Date.parse("2026-10-26T05:05:00Z");
+  const PROBLEM = 'paths[0].level: unknown level "no-modle" (sk_live_echoed_from_the_file)';
+  const refused = { path: "/home/u/.mandu/policy.yaml", found: true, valid: false, problems: [PROBLEM, "paths[1].path: required", ""], loadedAt: AT - 60_000, refusedAt: AT };
+  const vm = buildHomeViewModel(input({ policyFileStatus: refused }));
+  assert.deepEqual(vm.policyFile, { valid: false, path: "/home/u/.mandu/policy.yaml", problemCount: 2, refusedAt: AT }, "an empty problem is not counted");
+  const json = JSON.stringify(vm);
+  assert.ok(!json.includes("no-modle") && !json.includes("sk_live_echoed") && !json.includes("required"), "Home carries no problem text");
+  assert.deepEqual(buildHomeViewModel(input({ policyFileStatus: { ...refused, refusedAt: null } })).policyFile?.refusedAt, null);
+  assert.deepEqual(buildHomeViewModel(input({ policyFileStatus: { ...refused, valid: true, problems: [], refusedAt: null } })).policyFile,
+    { valid: true, path: "/home/u/.mandu/policy.yaml", problemCount: 0, refusedAt: null });
+  // Not read (no reader, a failed read), or nothing to say about a file.
+  assert.equal("policyFile" in buildHomeViewModel(input()), false, "not read: absent");
+  for (const status of [null, "x", [], { ...refused, path: null }, { ...refused, path: "" }, { ...refused, valid: "no" }]) {
+    assert.equal(homePolicyFile(status), undefined, JSON.stringify(status));
+    assert.equal("policyFile" in buildHomeViewModel(input({ policyFileStatus: status })), false, JSON.stringify(status));
+  }
+  assert.equal(homePolicyFile({ ...refused, problems: "x", refusedAt: Number.NaN })?.problemCount, 0);
+  assert.equal(homePolicyFile({ ...refused, refusedAt: Number.NaN })?.refusedAt, null);
 });
 
 // ── Where the front-ends are found (source checkout vs installed bundle) ──────
@@ -1568,17 +1777,19 @@ test("§4.34 Answers that no longer apply: the arbiter's mark reads as why, with
 
 // ── Settings › About Mandu (§4.25 *About Mandu*) ─────────────────────────────
 
-test("about: the home carries the release it was given and the three help links, each https", () => {
+test("about: the home carries the release it was given and the four help links, each https", () => {
   const vm = buildHomeViewModel(input({ version: "0.2.0-beta.7" }));
   assert.deepEqual(vm.about, {
     version: "0.2.0-beta.7",
     guideUrl: DOCS_BASE_URL + "docs/usage.md",
     troubleshootingUrl: DOCS_BASE_URL + "docs/usage.md#troubleshooting",
     issuesUrl: ISSUES_URL,
+    bugReportUrl: ISSUES_URL + "/new?template=bug_report.yml&version=0.2.0-beta.7",
+    securityUrl: SECURITY_REPORT_URL,
     // The route read no update cache (a test seam): nothing said of updates.
     update: null,
   });
-  for (const k of ["guideUrl", "troubleshootingUrl", "issuesUrl"] as const) assert.match(vm.about[k], /^https:\/\//, k);
+  for (const k of ["guideUrl", "troubleshootingUrl", "issuesUrl", "bugReportUrl", "securityUrl"] as const) assert.match(vm.about[k], /^https:\/\//, k);
   // The same on every rung of the ladder: not connected too, since the
   // release and the links do not depend on the service.
   assert.deepEqual(buildHomeViewModel(input({ version: "0.2.0-beta.7", panel: toPolicyPanelViewModel(null) })).about, vm.about);
@@ -1589,8 +1800,29 @@ test("about: no version, a blank one or \"unknown\" reads \"unknown\", never emp
     const about = buildHomeViewModel(input(version === undefined ? {} : { version })).about;
     assert.equal(about.version, "unknown", JSON.stringify(version));
     assert.match(about.issuesUrl, /^https:\/\//);
+    assert.equal(about.securityUrl, SECURITY_REPORT_URL);
   }
   assert.equal(homeAbout(" 1.0.0 ").version, "1.0.0", "trimmed");
+});
+
+test("about: Report a problem is the bug form with a semver version filled in, URL-encoded; any other text never reaches the address", () => {
+  const form = (url: string) => new URL(url);
+  for (const [version, filled] of [["0.2.0-beta.8", "0.2.0-beta.8"], [" 1.0.0+build.5 ", "1.0.0+build.5"]] as const) {
+    const url = homeAbout(version).bugReportUrl;
+    assert.ok(url.startsWith(ISSUES_URL + "/new?"), url);
+    assert.equal(form(url).searchParams.get("template"), "bug_report.yml");
+    assert.equal(form(url).searchParams.get("version"), filled);
+    assert.deepEqual([...form(url).searchParams.keys()], ["template", "version"], "nothing else is sent");
+  }
+  assert.equal(homeAbout("0.2.0-beta.8").bugReportUrl, ISSUES_URL + "/new?template=bug_report.yml&version=0.2.0-beta.8");
+  assert.equal(homeAbout("1.0.0+build.5").bugReportUrl, ISSUES_URL + "/new?template=bug_report.yml&version=1.0.0%2Bbuild.5", "a + is encoded, not read as a space");
+  // Not known, or not semver: the same form, its field empty.
+  for (const version of [undefined, "", "  ", "unknown", "1.0.0 <x>", "../", "1.0.0&labels=x", "1.0.0\nx"]) {
+    const url = homeAbout(version).bugReportUrl;
+    assert.equal(url, ISSUES_URL + "/new?template=bug_report.yml", JSON.stringify(version));
+  }
+  // The issue list stays the tracker (about-mandu-parity checks it).
+  assert.equal(homeAbout("0.2.0-beta.8").issuesUrl, ISSUES_URL);
 });
 
 // ── About Mandu: a newer release (dashboard.md §4.25 *A newer release*) ────────
@@ -1605,40 +1837,92 @@ test("about update: newer, newer with security fixes, newest, and no answer, eac
   // Newer, plain: the newest, its npm line pinned to it, and when the list came.
   assert.deepEqual(aboutUpdate("0.2.0-beta.7", cache(releases.map((r) => ({ ...r, security: false }))), "npm", NOW), {
     state: "newer", at: NOW - 3_600_000, newest: "0.2.0-beta.9", security: false, install: "npm install -g @mandusec/mandu@0.2.0-beta.9",
+    notesUrl: "https://github.com/ManduSec/mandu/releases", notesSince: true,
   });
   // With security fixes: a release in between carries the marker; the
   // installer's channel gives the release's install.sh line.
   assert.deepEqual(aboutUpdate("0.2.0-beta.7", cache(releases), "release", NOW), {
     state: "newer", at: NOW - 3_600_000, newest: "0.2.0-beta.9", security: true,
     install: "curl -fsSL https://github.com/ManduSec/mandu/releases/download/v0.2.0-beta.9/install.sh | sh",
+    notesUrl: "https://github.com/ManduSec/mandu/releases", notesSince: true,
   });
   // A security release older than the running one says nothing.
   assert.deepEqual(aboutUpdate("0.2.0-beta.9", cache(releases), "npm", NOW), { state: "current", at: NOW - 3_600_000 });
   // No cache, or one no check ever filled: no answer, and the page says when Mandu checks.
-  assert.deepEqual(aboutUpdate("0.2.0-beta.7", null, "npm", NOW), { state: "unknown" });
-  assert.deepEqual(aboutUpdate("0.2.0-beta.7", cache([], { ok: false, releasesAt: null }), "npm", NOW), { state: "unknown" });
+  assert.deepEqual(aboutUpdate("0.2.0-beta.7", null, "npm", NOW), { state: "unknown", check: "on" });
+  assert.deepEqual(aboutUpdate("0.2.0-beta.7", cache([], { ok: false, releasesAt: null }), "npm", NOW), { state: "unknown", check: "on" });
   // A version that is not semver: nothing to compare.
   assert.equal(aboutUpdate("unknown", cache(releases), "npm", NOW), null);
 });
 
 test("about update: a list fetched in the future gives no time; a failed later check keeps the list and its own time", () => {
   assert.deepEqual(aboutUpdate("1.0.0", cache([{ version: "1.0.1", security: false }], { releasesAt: NOW + 86_400_000 }), "npm", NOW),
-    { state: "newer", at: null, newest: "1.0.1", security: false, install: "npm install -g @mandusec/mandu@1.0.1" });
+    { state: "newer", at: null, newest: "1.0.1", security: false, install: "npm install -g @mandusec/mandu@1.0.1", notesUrl: "https://github.com/ManduSec/mandu/releases/tag/v1.0.1", notesSince: false });
   const kept = cache([{ version: "1.0.0", security: false }], { ok: false, checkedAt: NOW - 1000, releasesAt: NOW - 5 * 86_400_000 });
   assert.deepEqual(aboutUpdate("1.0.0", kept, "npm", NOW), { state: "current", at: NOW - 5 * 86_400_000 });
 });
 
 test("about update: the install line holds only the semver version, trimmed, never other text from the file", () => {
   const up = aboutUpdate("1.0.0", cache([{ version: " 1.0.1\n", security: true }]), "npm", NOW);
-  assert.deepEqual(up, { state: "newer", at: NOW - 3_600_000, newest: "1.0.1", security: true, install: "npm install -g @mandusec/mandu@1.0.1" });
+  assert.deepEqual(up, { state: "newer", at: NOW - 3_600_000, newest: "1.0.1", security: true, install: "npm install -g @mandusec/mandu@1.0.1", notesUrl: "https://github.com/ManduSec/mandu/releases/tag/v1.0.1", notesSince: false });
+});
+
+test("about update: one newer release links its own notes; more than one links the release list", () => {
+  const notes = (version: string, releases: UpdateCache["releases"]) => {
+    const up = aboutUpdate(version, cache(releases), "npm", NOW);
+    return up !== null && up.state === "newer" ? [up.notesUrl, up.notesSince] : up;
+  };
+  // One release newer: its tag, `v<version>`, as the launcher reads tags.
+  assert.deepEqual(notes("0.2.0-beta.8", [{ version: "0.2.0-beta.9", security: true }, { version: "0.2.0-beta.7", security: true }]),
+    ["https://github.com/ManduSec/mandu/releases/tag/v0.2.0-beta.9", false]);
+  // Two or more: the list, since the fix may be in a release before the newest.
+  assert.deepEqual(notes("0.2.0-beta.7", [{ version: "0.2.0-beta.8", security: true }, { version: "0.2.0-beta.9", security: false }]),
+    ["https://github.com/ManduSec/mandu/releases", true]);
+  assert.deepEqual(notes("1.0.0", [{ version: "1.0.1", security: false }, { version: "1.1.0", security: false }, { version: "2.0.0", security: true }]),
+    ["https://github.com/ManduSec/mandu/releases", true]);
+  // Counted by newerRelease's rule: a full-release user is not offered
+  // prereleases, so they do not count; the same version twice counts once.
+  assert.deepEqual(notes("1.0.0", [{ version: "1.1.0-beta.1", security: false }, { version: "1.0.1", security: true }, { version: "v1.0.1", security: true }]),
+    ["https://github.com/ManduSec/mandu/releases/tag/v1.0.1", false]);
+  assert.deepEqual(notes("1.1.0-beta.0", [{ version: "1.1.0-beta.1", security: false }, { version: "1.1.0", security: true }]),
+    ["https://github.com/ManduSec/mandu/releases", true]);
+  // Build metadata is URL-encoded in the tag.
+  assert.deepEqual(notes("0.2.0-beta.8", [{ version: "0.2.0-beta.9+build.5", security: true }]),
+    ["https://github.com/ManduSec/mandu/releases/tag/v0.2.0-beta.9%2Bbuild.5", false]);
+  // current and unknown carry no address; a version that does not parse, no answer.
+  assert.equal("notesUrl" in (aboutUpdate("0.2.0-beta.9", cache([{ version: "0.2.0-beta.9", security: false }]), "npm", NOW) ?? {}), false);
+  assert.equal("notesUrl" in (aboutUpdate("0.2.0-beta.9", null, "npm", NOW) ?? {}), false);
+  assert.equal(aboutUpdate("not a version", cache([{ version: "1.0.1", security: true }]), "npm", NOW), null);
+});
+
+test("about update: releaseNotesUrl builds a tag only from a semver version, trimmed and URL-encoded", () => {
+  assert.equal(RELEASES_URL, `https://github.com/${RELEASE_REPO}/releases`);
+  assert.equal(releaseNotesUrl(" 0.2.0-beta.9\n", false), "https://github.com/ManduSec/mandu/releases/tag/v0.2.0-beta.9");
+  assert.equal(releaseNotesUrl("1.0.0+a.b", false), "https://github.com/ManduSec/mandu/releases/tag/v1.0.0%2Ba.b");
+  for (const bad of ["", "unknown", "1.0.0/../../x", "1.0.0?x=1", "1.0.0#x", "../", "1.0.0 <x>"]) assert.equal(releaseNotesUrl(bad, false), null, JSON.stringify(bad));
+  // The list needs no version.
+  assert.equal(releaseNotesUrl("anything", true), "https://github.com/ManduSec/mandu/releases");
 });
 
 test("about update: the home carries the answer when the route read the cache, and none when it did not", () => {
   const read = buildHomeViewModel(input({ version: "0.2.0-beta.7", update: { cache: cache([{ version: "0.2.0-beta.8", security: true }]), channel: "npm" } }));
-  assert.deepEqual(read.about.update, { state: "newer", at: NOW - 3_600_000, newest: "0.2.0-beta.8", security: true, install: "npm install -g @mandusec/mandu@0.2.0-beta.8" });
-  assert.deepEqual(buildHomeViewModel(input({ version: "0.2.0-beta.7", update: { cache: null, channel: "npm" } })).about.update, { state: "unknown" });
+  assert.deepEqual(read.about.update, { state: "newer", at: NOW - 3_600_000, newest: "0.2.0-beta.8", security: true, install: "npm install -g @mandusec/mandu@0.2.0-beta.8", notesUrl: "https://github.com/ManduSec/mandu/releases/tag/v0.2.0-beta.8", notesSince: false });
+  assert.deepEqual(buildHomeViewModel(input({ version: "0.2.0-beta.7", update: { cache: null, channel: "npm" } })).about.update, { state: "unknown", check: "on" });
   assert.equal(buildHomeViewModel(input({ version: "unknown", update: { cache: null, channel: "npm" } })).about.update, null);
   assert.equal(buildHomeViewModel(input({ version: "0.2.0-beta.7" })).about.update, null);
+});
+
+test("about update: with no answer, whether the launcher checks rides it; a cached answer is kept when the check is off", () => {
+  for (const check of ["on", "off", "source"] as const) {
+    assert.deepEqual(aboutUpdate("1.0.0", null, "npm", NOW, check), { state: "unknown", check }, check);
+    assert.deepEqual(buildHomeViewModel(input({ version: "1.0.0", update: { cache: null, channel: "npm", check } })).about.update, { state: "unknown", check }, `${check}: the home`);
+    // An older list the launcher left before the check was turned off is
+    // still drawn, its "checked …" age saying how old it is.
+    assert.deepEqual(aboutUpdate("1.0.0", cache([{ version: "1.0.0", security: false }], { releasesAt: NOW - 9 * 86_400_000 }), "npm", NOW, check),
+      { state: "current", at: NOW - 9 * 86_400_000 }, `${check}: a cached answer`);
+  }
+  // A file whose newest name does not hold up gives no answer, and still says whether Mandu checks.
+  assert.equal(aboutUpdate("unknown", null, "npm", NOW, "off"), null, "nothing to compare: nothing said");
 });
 
 // ── The secret posture card (dashboard.md §4.23 *Product page*) ───────────────
@@ -1734,9 +2018,31 @@ test("secret posture: the card's words use the product vocabulary, never borrow 
       const p = secretsPostureNote(launched("gated", gap).secrets, of)!;
       const copy = [p.headline, p.sentence, p.note ?? "", ...(p.fixParts ?? []).map((x) => x.text)].join("\n");
       assert.doesNotMatch(copy, FORBIDDEN, copy);
-      assert.doesNotMatch(copy, /placeholder copy of each credential file, never the real one|cannot open your credential files/, "never the confined or read-blocked claim");
+      assert.doesNotMatch(copy, /masked copy of each credential file, never the real one|cannot open your credential files/, "never the confined or read-blocked claim");
+      assert.doesNotMatch(copy, RETIRED, copy);
+      assert.doesNotMatch(copy, THIS_MACHINE, copy);
       if (p.fixParts) assert.equal(p.fixParts.filter((x) => x.kind === "code").map((x) => x.text).join(""), p.fix);
     }
+  }
+});
+
+test("Home's posture and exposure cards say \"masked\", never \"placeholder\" (dashboard.md §4.25u, 2026-10-27)", () => {
+  const panel = toPolicyPanelViewModel(snapshot());
+  const vm = buildHomeViewModel(input({
+    sessions: [session({ id: "s-new", status: undefined, firstTs: at(20), lastTs: at(10), health: launched("gated", "guard-off") })],
+    facts: new Map(),
+    panel: { ...panel, humanPlane: toHumanPlaneVM({ exposed: true, since: NOW - 60_000, launches: [{ pid: 4242, mode: "off", posture: "off", session: "claude-x1", begunAt: NOW - 90_000 }] }) },
+  }));
+  const p = vm.secretsPosture!;
+  const posture = [p.headline, p.sentence, p.note ?? ""].join("\n");
+  assert.match(posture, /The AI sees your secrets masked/);
+  assert.match(posture, /puts a masked copy over each credential file/);
+  const x = vm.exposure!;
+  const exposure = [x.headline, x.sentence, x.fix, ...x.causes.map((c) => c.words)].join("\n");
+  assert.match(exposure, /those agents get masked copies of secret files/);
+  for (const copy of [posture, exposure]) {
+    assert.doesNotMatch(copy, RETIRED, copy);
+    assert.doesNotMatch(copy, THIS_MACHINE, copy);
   }
 });
 
@@ -1809,6 +2115,11 @@ test("several troubles: the most serious first, the version last; the parts carr
   const parts = agentNoticeParts(health, false, "s-claude")!;
   assert.equal(parts.map((p) => p.text).join(""), notice);
   assert.deepEqual(parts.filter((p) => p.kind === "code").map((p) => p.text), ["mandu doctor", "mandu log s-claude"]);
+  // Only the launch log's command is marked to run, so the page gives it a
+  // Copy (dashboard.md §4.25b, *A command Mandu asks you to run has one too*).
+  assert.deepEqual(parts.filter((p) => p.run === true).map((p) => [p.kind, p.text]), [["code", "mandu log s-claude"]]);
+  assert.deepEqual(agentNoticeParts(deriveHealth([claudeLaunch(), ...command("c1", NOT_FOUND), aTurn()])!, false)!.filter((p) => p.run).map((p) => p.text), ["mandu log"], "without an id, the plain one");
+  assert.equal(agentNoticeParts(deriveHealth([claudeLaunch(), hev("relay_mode", { mode: "passthrough" }), aTurn()])!, false, "s-claude")!.some((p) => p.run), false, "a notice without the log command marks nothing");
   // Some failed (degraded) comes after a broken cause.
   const mixed = agentNotice(deriveHealth([claudeLaunch(), hev("relay_mode", { mode: "passthrough" }), ...command("c1", NOT_FOUND), ...command("c2", "ok"), aTurn()])!, false)!;
   assert.ok(mixed.indexOf(RELAY) === 0 && mixed.endsWith("1 of the commands the agent ran could not start."), mixed);
@@ -1823,6 +2134,48 @@ test("several troubles: the most serious first, the version last; the parts carr
   assert.ok(row.notice!.startsWith(RELAY), row.notice!);
 });
 
+const droppedLaunchFor = () => hev("launch_posture", { target: "claude", live: ["fs"], dropped: ["mandu: net-proxy did not start"] });
+test("the AI plan's usage limit: the parts carry its reset moment as a time part the page draws in the reader's clock; the plain line keeps UTC (dashboard.md §4.25u)", () => {
+  const RESETS = "2026-10-28T21:00:00.000Z";
+  const limit = (resetsAt?: string) => hev("tllm_call", {
+    upstreamLimit: { status: 429, unifiedStatus: "rejected", claim: "seven_day", hard: true, ...(resetsAt ? { resetsAt } : {}) },
+    output: { symbolized: "no model response", original: null, differs: false, symbols: [] },
+  });
+  const health = deriveHealth([claudeLaunch(), limit(RESETS), hev("session_exit", { code: 0 })])!;
+  assert.deepEqual(health.providerLimit, { resetsAt: RESETS });
+  const parts = agentNoticeParts(health, false, "s-claude")!;
+  const times = parts.filter((p) => p.kind === "time");
+  assert.deepEqual(times, [{ kind: "time", text: RESETS }], "exactly one moment, the provider's ISO time");
+  const at = parts.findIndex((p) => p.kind === "time");
+  assert.ok(at > 0 && parts[at - 1].kind === "text" && parts[at - 1].text.endsWith("It resets "), JSON.stringify(parts));
+  assert.equal(parts[at + 1]?.text.startsWith("."), true, "the sentence ends after the moment");
+  for (const p of parts.filter((q) => q.kind !== "time")) {
+    assert.doesNotMatch(p.text, /UTC|2026-10-28/, `no UTC words in the drawn parts: ${p.text}`);
+  }
+  // The plain line is today's: the date and the UTC clock.
+  const notice = agentNotice(health, false, "s-claude")!;
+  assert.match(notice, /This limit is your AI provider's, not Mandu's\. It resets 2026-10-28 at 21:00 UTC\.$/);
+  assert.equal(parts.map((p) => (p.kind === "time" ? "2026-10-28 at 21:00 UTC" : p.text)).join(""), notice);
+  // With another sentence after it, the rest of the line follows the moment.
+  const both = deriveHealth([droppedLaunchFor(), limit(RESETS), hev("session_exit", { code: 0 })])!;
+  const bothParts = agentNoticeParts(both, false, "s-claude")!;
+  assert.equal(bothParts.filter((p) => p.kind === "time").length, 1);
+  assert.ok(agentNotice(both, false, "s-claude")!.includes("It resets 2026-10-28 at 21:00 UTC. 1 of Mandu's protections did not start"));
+  // No reset time known: no moment and no "It resets".
+  const none = deriveHealth([claudeLaunch(), limit(), hev("session_exit", { code: 0 })])!;
+  assert.deepEqual(none.providerLimit, {});
+  const noneParts = agentNoticeParts(none, false, "s-claude")!;
+  assert.equal(noneParts.some((p) => p.kind === "time"), false);
+  assert.equal(noneParts.some((p) => p.text.includes("It resets")), false);
+  // A reset time that reads as no date is left out, as before.
+  const junk = deriveHealth([claudeLaunch(), limit("soon"), hev("session_exit", { code: 0 })])!;
+  assert.equal(agentNoticeParts(junk, false, "s-claude")!.some((p) => p.kind === "time" || p.text.includes("It resets")), false);
+  // Its Home row carries both forms.
+  const vm = buildHomeViewModel(input({ sessions: [session({ id: "s-claude", health })] }));
+  const row = vm.agents.find((a) => a.id === "s-claude")!;
+  assert.deepEqual(row.noticeParts?.filter((p) => p.kind === "time"), [{ kind: "time", text: RESETS }]);
+  assert.match(row.notice!, /It resets 2026-10-28 at 21:00 UTC\.$/);
+});
 test("the trouble notices use the product's words: no developer term, no retired word, no token, and never a leak", () => {
   const cases: ManduEvent[][] = [
     [claudeLaunch(), hev("relay_mode", { mode: "passthrough" }), aTurn()],
@@ -1831,6 +2184,7 @@ test("the trouble notices use the product's words: no developer term, no retired
     [claudeLaunch(), ...command("c1", NOT_FOUND), ...command("c2", "ok"), aTurn()],
     [claudeLaunch(), aSideCall(), hev("session_exit", { code: 0 })],
     [claudeLaunch(), hev("session_exit", { code: 2 })],
+    [droppedLaunch(NET_PROXY_DOWN, FS_DEGRADED), aTurn()],
   ];
   for (const events of cases) {
     for (const masking of [false, true]) {
@@ -1844,10 +2198,169 @@ test("the trouble notices use the product's words: no developer term, no retired
   }
 });
 
+// ── A protection that did not start (dashboard.md §4.21 On the product page) ──
+
+const NET_PROXY_DOWN = "mandu: service 'net-proxy' is on by default but failed to start: 127.0.0.1:8790 is occupied — proceeding WITHOUT it (opt out explicitly with --no-net-proxy to silence this)";
+const FS_DEGRADED = "mandu: fs rung DEGRADED: workspace /home/u/w and its AgentView /home/u/w/.av nest — no usable view";
+const NO_GUARD = "mandu: the default-on whole-agent connect-guard is unavailable — the mandu-net-guard bin is not built; proceeding WITHOUT it (the landlock-net port wrap / netns stay the boundary).";
+const droppedLaunch = (...dropped: string[]) => hev("launch_posture", { target: "claude", live: ["fs"], dropped });
+const DROPPED = (n: number) => `${n} of Mandu's protections did not start in this session, so it ran with less protection than usual. Run mandu log s-claude to see which, and mandu doctor to check this computer.`;
+
+test("a session where a protection did not start says how many, with its log and mandu doctor as code, never the launch line", () => {
+  assert.equal(noticeOf([droppedLaunch(NET_PROXY_DOWN), aTurn()]), DROPPED(1));
+  assert.equal(noticeOf([droppedLaunch(NET_PROXY_DOWN, FS_DEGRADED, NO_GUARD), aTurn()]), DROPPED(3));
+  const parts = agentNoticeParts(deriveHealth([droppedLaunch(NET_PROXY_DOWN), aTurn()])!, false, "s-claude")!;
+  assert.deepEqual(parts.filter((p) => p.kind === "code").map((p) => p.text), ["mandu log s-claude", "mandu doctor"]);
+  assert.deepEqual(parts.filter((p) => p.run === true).map((p) => p.text), ["mandu log s-claude"], "the log command gets its Copy");
+  // Off Linux a Linux-only layer's absence is no drop; the gated line keeps the posture note.
+  assert.equal(agentNotice(deriveHealth([droppedLaunch(NO_GUARD), aTurn()], "darwin")!, false, "s-claude"), null);
+  assert.equal(agentNotice(deriveHealth([droppedLaunch(NO_GUARD, NET_PROXY_DOWN), aTurn()], "darwin")!, false, "s-claude"), DROPPED(1));
+  const gated = hev("launch_posture", { target: "claude", live: ["fs"], dropped: ["mandu: secrets are GATED, not confined, on this host."], secrets: { posture: "gated", gap: "userns-off" } });
+  assert.equal(noticeOf([gated, aTurn()]), null);
+  // Its place: after the broken causes, before some commands failing and the version.
+  const events = [
+    droppedLaunch(NET_PROXY_DOWN), hev("relay_mode", { mode: "passthrough" }), hev("client_info", { clientVersion: "9.0.0" }),
+    ...command("c1", NOT_FOUND), ...command("c2", "ok"), aTurn(),
+  ];
+  const notice = noticeOf(events)!;
+  const order = [RELAY, DROPPED(1), "1 of the commands the agent ran could not start.", "Claude Code 9.0.0 is newer than the versions Mandu was tested with"];
+  const at = order.map((x) => notice.indexOf(x));
+  assert.ok(at.every((i) => i >= 0), notice);
+  assert.deepEqual([...at].sort((a, b) => a - b), at, notice);
+  // Nothing of the line reaches the page: no service, path, port, flag or developer term.
+  for (const n of [noticeOf([droppedLaunch(NET_PROXY_DOWN, FS_DEGRADED, NO_GUARD), aTurn()])!, notice]) {
+    assert.doesNotMatch(n, /net-proxy|net-guard|fs-sync|\brungs?\b|DEGRADED|WITHOUT|8790|127\.0\.0\.1|\/home\/u|--no-|landlock|AgentView/i, n);
+  }
+  // Home's row carries it.
+  const health = deriveHealth([droppedLaunch(NET_PROXY_DOWN), aTurn()])!;
+  const row = buildHomeViewModel(input({ sessions: [session({ id: "s-claude", health })] })).agents.find((a) => a.id === "s-claude")!;
+  assert.equal(row.notice, DROPPED(1));
+});
+
+test("a session where a protection did not start gives its row lessProtection: true; none, 0 and no health leave it out (dashboard.md §4.25, §4.30)", () => {
+  const rowOf = (health: SessionHealth | undefined) => homeAgentRow(session({ id: "s-claude", ...(health ? { health } : {}) }), undefined, 0, false);
+  const rowWith = (health: SessionHealth | undefined) => rowOf(health).lessProtection === true;
+  const one = deriveHealth([droppedLaunch(NET_PROXY_DOWN), aTurn()])!;
+  assert.equal(one.droppedProtections, 1);
+  assert.equal(rowWith(one), true);
+  assert.equal(rowWith(deriveHealth([droppedLaunch(NET_PROXY_DOWN, FS_DEGRADED, NO_GUARD), aTurn()])!), true);
+  const none = deriveHealth([claudeLaunch(), aTurn()])!;
+  assert.equal(none.droppedProtections, undefined);
+  assert.equal(rowWith(none), false, "a full launch");
+  assert.equal(rowWith({ ...one, droppedProtections: 0 }), false, "a count of 0");
+  assert.equal(rowWith(undefined), false, "no launch record: nothing claimed");
+  // Left out, not false: every row rides the polled /api/home (§4.30 Payload budgets).
+  assert.equal("lessProtection" in rowOf(none), false);
+  assert.equal("lessProtection" in rowOf(undefined), false);
+  assert.equal(rowOf(one).lessProtection, true);
+  // Off Linux a Linux-only layer's absence is no drop, so no mark either.
+  assert.equal(rowWith(deriveHealth([droppedLaunch(NO_GUARD), aTurn()], "darwin")!), false);
+  // It stays apart from protection off and from a failure: the row keeps both.
+  const vm = buildHomeViewModel(input({ sessions: [session({ id: "s-claude", violated: true, health: one })], facts: new Map() }));
+  assert.deepEqual(vm.agents.map((a) => [a.id, a.lessProtection === true, a.protectionOff, a.holds]), [["s-claude", true, false, false]]);
+});
+
 test("built-in protections, protection off: Turn it on in Settings is a link part to Settings › Protection; joined, the same words", () => {
   const off = builtInProtections("off");
   assert.equal(off.itemsParts!.length, off.items.length);
   off.items.forEach((text, i) => assert.equal(off.itemsParts![i]!.map((x) => x.text).join(""), text));
   assert.deepEqual(off.itemsParts![0]!.filter((x) => x.kind === "link"), [{ kind: "link", text: "Turn it on in Settings", to: "protection" }]);
   for (const level of ["secrets", "full", "injection", "unknown"] as const) assert.equal(builtInProtections(level).itemsParts, undefined, level);
+});
+
+// ── A session that ran with protection off says so (dashboard.md §4.25) ─────
+
+/** A session's events: the launcher's posture with the protection the
+ *  arbiter reported (`mode`; none: a launch that recorded no mode), one turn. */
+function offEvents(id: string, mode: string | null, reported = true): ManduEvent[] {
+  const ev = (kind: string, n: number, extra: Record<string, unknown> = {}) => ({
+    id: `${id}-${n}`, sessionId: id, turn: n, ts: new Date(1700000000000 + n * 1000).toISOString(), seq: n,
+    callId: null, parentId: null, kind, view: "HumanView", boundary: "shell", emitter: "launcher",
+    input: null, output: null, invariant: { violatedInvariant: false }, ...extra,
+  }) as unknown as ManduEvent;
+  const protection = mode === null ? {} : { protection: { mode, integrity: false, confidentiality: mode !== "off", reported } };
+  return [
+    ev("launch_posture", 1, { target: "claude", live: [], dropped: [], ...protection }),
+    ev("tllm_call", 2, { callShape: { toolCount: 12 }, output: { symbolized: "Done.", original: null, differs: false, symbols: [] } }),
+  ];
+}
+
+test("a session whose record says Off gives its row protectionOff; Secrets, no recorded mode, a launch-side guess and no facts give false; a failed Off one still fails", async () => {
+  const byId: Record<string, ManduEvent[]> = {
+    "s-off": offEvents("s-off", "off"),
+    "s-secrets": offEvents("s-secrets", "secrets"),
+    "s-none": offEvents("s-none", null),
+    // The launcher's own request, not what the arbiter reported: no mode.
+    "s-guess": offEvents("s-guess", "off", false),
+  };
+  const source = { readEvents: async (id: string) => byId[id] ?? [], listSessions: async () => [], subscribe: () => () => {} } as unknown as EventSource;
+  const facts = new HomeFacts(source, "/home/u");
+  const rowOf = async (id: string) => homeAgentRow(session({ id }), await facts.of(session({ id, eventCount: byId[id]!.length })), 0, false);
+  const off = await rowOf("s-off");
+  assert.equal(off.protectionOff, true);
+  assert.equal(off.holds, true);
+  assert.equal((await rowOf("s-secrets")).protectionOff, false);
+  assert.equal((await rowOf("s-none")).protectionOff, false, "a session that recorded no mode is never guessed Off");
+  assert.equal((await rowOf("s-guess")).protectionOff, false, "only the mode the arbiter reported counts");
+  assert.equal(homeAgentRow(session({ id: "s-nofacts" }), undefined, 0, false).protectionOff, false, "not counted: nothing claimed");
+  // Never today's setting: the hero says Off now; a Secrets session stays unmarked.
+  const vm = buildHomeViewModel(input({
+    sessions: [session({ id: "s-a" }), session({ id: "s-b", status: "pass" })],
+    facts: new Map([
+      ["s-a", { stats: stats(), blocked: 0, sent: 0, holds: true, violations: 0, cwd: null, off: true }],
+      ["s-b", { stats: stats(), blocked: 0, sent: 0, holds: false, violations: 1, cwd: null, off: true }],
+    ]),
+    configuredMode: "secrets",
+  }));
+  assert.deepEqual(vm.agents.map((a) => [a.id, a.protectionOff, a.holds]), [["s-a", true, true], ["s-b", true, false]], "a failed Off session keeps holds: false");
+});
+
+// ── Changes Mandu did not apply, on the row (dashboard.md §4.25b *Home and History say so*) ──
+
+test("an ended session whose believed exit names discarded writes gives its row notApplied, a count only; a claim, none and a running row give none; History keeps it, Home's stepped-in line does not", async () => {
+  const exitOf = (id: string, files: unknown, claimed = false) => ({
+    id: `${id}-exit`, sessionId: id, turn: 3, ts: new Date(1700000003000).toISOString(), seq: 3,
+    callId: null, parentId: null, kind: "session_exit", view: "HumanView", boundary: "shell", emitter: "launcher",
+    input: null, output: null, invariant: { violatedInvariant: false }, code: 0, durationMs: 1000,
+    ...(files === undefined ? {} : { discardedWrites: files }), ...(claimed ? { claimed: true } : {}),
+  }) as unknown as ManduEvent;
+  const byId: Record<string, ManduEvent[]> = {
+    "s-lost": [...offEvents("s-lost", "secrets"), exitOf("s-lost", ["/home/u/app/.env", "/home/u/app/.env", "/etc/key.pem", ""])],
+    "s-claim": [...offEvents("s-claim", "secrets"), exitOf("s-claim", ["/home/u/app/.env"], true)],
+    "s-none": [...offEvents("s-none", "secrets"), exitOf("s-none", undefined)],
+    "s-empty": [...offEvents("s-empty", "secrets"), exitOf("s-empty", [])],
+  };
+  const source = { readEvents: async (id: string) => byId[id] ?? [], listSessions: async () => [], subscribe: () => () => {} } as unknown as EventSource;
+  const facts = new HomeFacts(source, "/home/u");
+  const factsOf = (id: string) => facts.of(session({ id, eventCount: byId[id]!.length }));
+  assert.equal((await factsOf("s-lost")).notApplied, 2, "two distinct files; an empty entry dropped");
+  for (const id of ["s-claim", "s-none", "s-empty"]) assert.equal("notApplied" in await factsOf(id), false, id);
+  // The row: only once ended, only when > 0, never a path.
+  const lost = homeAgentRow(session({ id: "s-lost", status: "pass" }), await factsOf("s-lost"), 0, false);
+  assert.equal(lost.state, "idle");
+  assert.equal(lost.notApplied, 2);
+  assert.doesNotMatch(JSON.stringify(lost), /\.env|key\.pem|\/home\/u\/app/, "a count, never a path");
+  const ended = homeAgentRow(session({ id: "s-lost", status: "running" }), await factsOf("s-lost"), 0, false);
+  assert.equal(ended.state, "idle", "a recorded exit ends a listed-running session");
+  assert.equal(ended.notApplied, 2);
+  const f = (notApplied?: number) => ({ stats: stats(), blocked: 0, sent: 0, holds: true, violations: 0, cwd: null, ...(notApplied === undefined ? {} : { notApplied }) });
+  assert.equal("notApplied" in homeAgentRow(session({ id: "s-run", status: "running" }), f(3), 0, false), false, "running (resumed after its exit): its page hides the block, so the row says nothing");
+  assert.equal("notApplied" in homeAgentRow(session({ id: "s-run", status: "running" }), f(3), 1, false), false, "waiting: still running");
+  assert.equal("notApplied" in homeAgentRow(session({ id: "s-z", status: "pass" }), f(0), 0, false), false, "0: left out (payload budget)");
+  assert.equal("notApplied" in homeAgentRow(session({ id: "s-z", status: "pass" }), undefined, 0, false), false, "no facts: nothing claimed");
+  // History's switch keeps it; Home's last-stepped-in line does not name it.
+  assert.equal(steppedIn(lost), false);
+  assert.equal(historyFlagged(lost), true);
+  assert.equal(historyFlagged({ ...lost, notApplied: undefined }), false);
+  // buildHomeViewModel carries it through.
+  const vm = buildHomeViewModel(input({ sessions: [session({ id: "s-a", status: "pass" })], facts: new Map([["s-a", f(1)]]) }));
+  assert.deepEqual(vm.agents.map((a) => [a.id, a.notApplied]), [["s-a", 1]]);
+});
+
+test("the session page of a session whose record says Off has protectionOff; Secrets and an unrecorded one do not", () => {
+  const page = (events: ManduEvent[]) => buildAgentPage({ session: session({ id: events[0]!.sessionId }), id: events[0]!.sessionId, vm: toSessionViewModel(events[0]!.sessionId, events), cwd: null, waiting: [] });
+  assert.equal(page(offEvents("p-off", "off")).protectionOff, true);
+  assert.equal(page(offEvents("p-secrets", "secrets")).protectionOff, false);
+  assert.equal(page(offEvents("p-none", null)).protectionOff, false);
+  assert.equal(buildAgentPage({ session: null, id: "gone", vm: null, cwd: null, waiting: [] }).protectionOff, false, "no record: nothing claimed");
 });

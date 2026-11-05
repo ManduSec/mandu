@@ -34,97 +34,40 @@
  * issuer's own documentation names (`docs` on each row). Left out, and why
  * (confidentiality.md §2.3): Anthropic (the key goes in `x-api-key`; the
  * agent's own sign-in is never masked), AWS (SigV4 signs with the secret on
- * this machine, so no placeholder can be put back), Twilio (its auth token
+ * this machine: the egress proxy re-signs instead, under a release of its
+ * own, aws-signing.ts), Twilio (its auth token
  * has no format of its own), GitLab (a `glpat-` token may be a self-managed
  * instance's: the format names no host), Google API keys (many hosts, the
  * key in the URL), Notion's legacy `secret_` tokens (the prefix names no
  * issuer).
  *
+ * THE TABLE IS DATA (2026-10-24): one JSON file per issuer in
+ * `policy/issuers/`, listed in table order by `issuers/index.ts`, checked
+ * and compiled by `issuer-catalog.ts` (every check is listed there; a file
+ * that fails one is left out whole, so its keys ask). `npm run
+ * check:issuers` runs the same checks over the directory.
+ *
  * Pure. Mandu-new (no reference origin).
  */
 import { isValueKey, valueKeyMatches } from "./value-bindings.js";
+import { issuerDestinationHost, loadIssuerCatalog, type Issuer } from "./issuer-catalog.js";
+import { ISSUER_FILES } from "./issuers/index.js";
+import { AWS_SIGNING_ISSUER_ID } from "./aws-signing.js";
 
-export interface Issuer {
-  /** The id `issuers_off` names. */
-  id: string;
-  /** For people: "Stripe". */
-  name: string;
-  /** The key formats, each anchored over the whole value. */
-  formats: readonly RegExp[];
-  /** The formats in words, for `mandu why` and the docs. */
-  shapes: readonly string[];
-  /** The exact API hosts (lower case, no port). */
-  hosts: readonly string[];
-  /** Where each host is documented by the issuer itself. */
-  docs: readonly string[];
-}
+export { issuerDestinationHost, type Issuer };
 
-/** The table (confidentiality.md §2.3 prints it with its sources). */
-export const ISSUERS: readonly Issuer[] = [
-  {
-    id: "stripe", name: "Stripe",
-    formats: [/^(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{20,247}$/],
-    shapes: ["sk_live_…", "sk_test_…", "rk_live_…", "rk_test_…"],
-    hosts: ["api.stripe.com", "files.stripe.com"],
-    docs: ["https://docs.stripe.com/api", "https://docs.stripe.com/api/files/create"],
-  },
-  {
-    id: "github", name: "GitHub",
-    formats: [/^gh[pous]_[0-9A-Za-z]{36,251}$/, /^github_pat_[0-9A-Za-z_]{50,244}$/],
-    shapes: ["ghp_…", "gho_…", "ghu_…", "ghs_…", "github_pat_…"],
-    hosts: ["api.github.com", "uploads.github.com"],
-    docs: ["https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api", "https://docs.github.com/en/rest/releases/assets#upload-a-release-asset"],
-  },
-  {
-    id: "notion", name: "Notion",
-    formats: [/^ntn_[0-9A-Za-z]{40,64}$/],
-    shapes: ["ntn_…"],
-    hosts: ["api.notion.com"],
-    docs: ["https://developers.notion.com/reference/authentication"],
-  },
-  {
-    id: "openai", name: "OpenAI",
-    formats: [/^sk-(?:proj|svcacct|admin)-[0-9A-Za-z_-]{20,250}$/],
-    shapes: ["sk-proj-…", "sk-svcacct-…", "sk-admin-…"],
-    hosts: ["api.openai.com"],
-    docs: ["https://platform.openai.com/docs/api-reference/authentication"],
-  },
-  {
-    id: "slack", name: "Slack",
-    formats: [/^xox[bp]-[0-9A-Za-z-]{20,250}$/],
-    shapes: ["xoxb-…", "xoxp-…"],
-    hosts: ["slack.com"],
-    docs: ["https://docs.slack.dev/apis/web-api/"],
-  },
-  {
-    id: "npm", name: "npm",
-    formats: [/^npm_[0-9A-Za-z]{36}$/],
-    shapes: ["npm_…"],
-    hosts: ["registry.npmjs.org"],
-    docs: ["https://docs.npmjs.com/cli/using-npm/registry"],
-  },
-  {
-    id: "pypi", name: "PyPI",
-    formats: [/^pypi-AgEIcHlwaS5vcmc[0-9A-Za-z_-]{50,2000}$/],
-    shapes: ["pypi-AgEIcHlwaS5vcmc…"],
-    hosts: ["upload.pypi.org"],
-    docs: ["https://docs.pypi.org/api/upload/", "https://pypi.org/help/#apitoken"],
-  },
-  {
-    id: "huggingface", name: "Hugging Face",
-    formats: [/^hf_[0-9A-Za-z]{34}$/],
-    shapes: ["hf_…"],
-    hosts: ["huggingface.co", "router.huggingface.co"],
-    docs: ["https://huggingface.co/docs/hub/security-tokens", "https://huggingface.co/docs/inference-providers/index"],
-  },
-  {
-    id: "sendgrid", name: "SendGrid",
-    formats: [/^SG\.[0-9A-Za-z_-]{22}\.[0-9A-Za-z_-]{43}$/],
-    shapes: ["SG.….…"],
-    hosts: ["api.sendgrid.com"],
-    docs: ["https://www.twilio.com/docs/sendgrid/api-reference/how-to-use-the-sendgrid-v3-api/authentication"],
-  },
-];
+/** The table, compiled from the issuer files (`policy/issuers/*.json`, in
+ *  `issuers/index.ts` order; confidentiality.md §2.3 prints it with its
+ *  sources). A file that fails a check is not in it (fail-closed: that
+ *  issuer's keys ask), and `ISSUER_CATALOG_PROBLEMS` says why. */
+const CATALOG = loadIssuerCatalog(ISSUER_FILES);
+export const ISSUERS: readonly Issuer[] = CATALOG.issuers;
+/** Why a shipped issuer file was left out of `ISSUERS` (empty when none
+ *  was; the arbiter prints each at start). */
+export const ISSUER_CATALOG_PROBLEMS: readonly string[] = CATALOG.problems;
+/** Each issuer's examples and non-examples from its file, written out
+ *  (the tests drive every issuer with them). */
+export const ISSUER_SAMPLES = CATALOG.samples;
 
 /** The issuer whose format `value` matches, whole; null for none, and for a
  *  value two issuers' formats match (no doubt is resolved toward a send). */
@@ -132,28 +75,6 @@ export function issuerOfValue(value: unknown): Issuer | null {
   if (typeof value !== "string" || value.length > 4096) return null;
   const hits = ISSUERS.filter((i) => i.formats.some((f) => f.test(value)));
   return hits.length === 1 ? hits[0]! : null;
-}
-
-/** The host of `destination` when it is a plain DNS name on port 443 or on
- *  no stated port (`host`, `host:443`, `https://host[:443]/…`), lower case,
- *  a trailing dot dropped; null for anything else (an address, userinfo, a
- *  wildcard, another port, another scheme). Pure. */
-export function issuerDestinationHost(destination: unknown): string | null {
-  if (typeof destination !== "string") return null;
-  let s = destination.trim();
-  const m = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*)(?:[/?#].*)?$/is.exec(s);
-  if (m) {
-    if (m[1]!.toLowerCase() !== "https") return null;
-    s = m[2]!;
-  }
-  if (s.includes("@") || s.includes("[") || s.includes("*") || s.includes("/")) return null;
-  const parts = s.split(":");
-  if (parts.length > 2) return null;
-  if (parts.length === 2 && parts[1] !== "443") return null;
-  let host = parts[0]!.toLowerCase();
-  if (host.endsWith(".")) host = host.slice(0, -1);
-  if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) return null;
-  return host;
 }
 
 /** Is `destination` one of `issuer`'s hosts, exactly? */
@@ -198,9 +119,11 @@ export function checkIssuerBindings(v: unknown, at: string, out: string[]): void
   }
   const o = v as Record<string, unknown>;
   if ("issuers_off" in o) {
-    if (!Array.isArray(o.issuers_off)) out.push(`${at}.issuers_off: must be a list of issuer ids (${ISSUERS.map((i) => i.id).join(", ")})`);
+    // `aws` is the AWS signing release (aws-signing.ts), not a table row.
+    const ids = [...ISSUERS.map((i) => i.id), AWS_SIGNING_ISSUER_ID];
+    if (!Array.isArray(o.issuers_off)) out.push(`${at}.issuers_off: must be a list of issuer ids (${ids.join(", ")})`);
     else o.issuers_off.forEach((e, i) => {
-      if (typeof e !== "string" || !ISSUERS.some((x) => x.id === e)) out.push(`${at}.issuers_off[${i}]: ${JSON.stringify(e)} is not an issuer id (${ISSUERS.map((x) => x.id).join(", ")})`);
+      if (typeof e !== "string" || !ids.includes(e)) out.push(`${at}.issuers_off[${i}]: ${JSON.stringify(e)} is not an issuer id (${ids.join(", ")})`);
     });
   }
   if ("values_off" in o) {

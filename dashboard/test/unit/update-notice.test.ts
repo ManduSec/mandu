@@ -17,9 +17,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
-  cacheFresh, compareVersions, installLine, layoutOf, MAX_CACHE_BYTES, newerRelease, parseVersion, readUpdateCache,
-  UpdateCacheReader, updateChannel, type UpdateCache,
+  cacheFresh, compareVersions, configuredUpdateCheck, dashboardLayout, installLine, layoutOf, MAX_CACHE_BYTES, newerRelease, parseVersion,
+  readUpdateCache, UpdateCacheReader, updateChannel, updateCheckSetting, type UpdateCache,
 } from "../../src/update-notice.js";
+import { readConfigText } from "../../src/config-axes.js";
 
 const tmp = mkdtempSync(join(tmpdir(), "mandu-update-notice-"));
 after(() => rmSync(tmp, { recursive: true, force: true }));
@@ -84,6 +85,46 @@ test("the layout: a bundle in an installed dist/ is installed; a checkout's buil
   assert.equal(layoutOf(url("/pkg/dist/dashboard.mjs"), { MANDU_LAYOUT: "dev" }, none).mode, "dev");
   assert.equal(layoutOf(url("/pkg/dist/dashboard.mjs"), { MANDU_DEV_REPO: "/x" }, none).mode, "dev");
   assert.equal(layoutOf(url("/repo/dashboard/src/update-notice.ts"), { MANDU_LAYOUT: "installed" }, none).mode, "installed");
+});
+
+test("whether the launcher checks: update-check = false is off, = true on; unset, an installed package checks and a source checkout does not", () => {
+  const cases: Array<[string | null, "installed" | "dev", "on" | "off" | "source"]> = [
+    ["update-check = false\n", "installed", "off"],
+    ["update-check = false\n", "dev", "off"],
+    ["update-check = true\n", "installed", "on"],
+    ["update-check = true\n", "dev", "on"],
+    ["mode = \"secrets\"\n", "installed", "on"],
+    ["mode = \"secrets\"\n", "dev", "source"],
+    [null, "installed", "on"],
+    [null, "dev", "source"],
+  ];
+  for (const [text, mode, want] of cases) assert.equal(updateCheckSetting(configuredUpdateCheck(text), mode), want, `${JSON.stringify(text)} ${mode}`);
+});
+
+test("the update-check key: the launcher's bool coercion (only true or \"true\" is on), comments and sections as its reader takes them", () => {
+  assert.equal(configuredUpdateCheck(null), null, "no file: unset");
+  assert.equal(configuredUpdateCheck(""), null);
+  assert.equal(configuredUpdateCheck("# update-check = false\n"), null, "the template's commented line is unset");
+  assert.equal(configuredUpdateCheck("update-check = \"true\""), true);
+  assert.equal(configuredUpdateCheck("update-check = true # yes"), true, "an inline comment");
+  for (const v of ["\"yes\"", "1", "0", "off", "\"\""]) assert.equal(configuredUpdateCheck(`update-check = ${v}`), false, `${v}: not true is off, as the launcher coerces`);
+  assert.equal(configuredUpdateCheck("update-check = true\nupdate-check = false\n"), false, "the last line wins");
+  assert.equal(configuredUpdateCheck("[ui]\nupdate-check = false\n"), false, "sections flatten, as the launcher's reader does");
+  assert.equal(configuredUpdateCheck("no-update-check = false\n"), null, "another key");
+});
+
+test("the config text: absent or unreadable counts as unset; the dashboard's own layout runs from source here", () => {
+  const home = join(tmp, "mandu-home");
+  mkdirSync(home, { recursive: true });
+  assert.equal(readConfigText({ MANDU_HOME: home }), null, "no config.toml");
+  assert.equal(readConfigText({}), null, "no home at all");
+  mkdirSync(join(home, "config.toml"));
+  assert.equal(readConfigText({ MANDU_HOME: home }), null, "a directory where the file would be: unreadable, unset");
+  rmSync(join(home, "config.toml"), { recursive: true });
+  writeFileSync(join(home, "config.toml"), "update-check = false\n");
+  assert.equal(configuredUpdateCheck(readConfigText({ MANDU_HOME: home })), false);
+  assert.equal(dashboardLayout({}), "dev", "this test runs the source");
+  assert.equal(dashboardLayout({ MANDU_LAYOUT: "installed" }), "installed");
 });
 
 test("a version holding shell text never reaches the install line: the cache reader refuses the file", () => {

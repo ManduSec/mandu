@@ -329,6 +329,40 @@ Full graphs render per-symbol only. The session map is linear strips with a
 cap + "show more". Consecutive `entered_context` turns collapse to one node
 (`context ×N`). No silent truncation: a capped list says what was dropped.
 
+### 5.6 What the record does not hold: where it is kept, an earlier leak, an unchecked record (2026-10-28)
+
+The session's events say where a masked item came from as its **recorded
+origin**, which for a registered secret is not its file: a placeholder that
+reached the AI in a command's output carries that command (the OpenClaw
+plugin demo's `$MDU:nomodel_Read[…].ORDERHUB_PASSPHRASE` has the origin
+`DEBUG=1 sh orders-app/bin/sync-orders.sh`). Three facts from outside the
+record join *Where each went*, each display only (an arbiter or a scan that
+cannot answer adds nothing, and nothing here is evidence of an edge):
+
+- **Where it is kept.** The arbiter's registry (`confidentialityState`'s
+  `secrets`: base symbol and absolute path, never a value) names the file a
+  registered placeholder stands for. The row's origin sub-line adds "kept in
+  `~/app/.env`" (`flowNotes`, `secret-path.ts lineageNotes`).
+- **An earlier leak.** The last `mandu scan` the launcher kept lists each of
+  your secrets that reached an AI in a session without Mandu, by file and
+  key name. When one matches the row's file and key, a red line under the
+  row says so ("Without Mandu, OpenClaw gave the AI its real value on 27
+  Oct, 09:37: `DEBUG=1 sh …` printed it."; `secret-path.ts earlierLeak`).
+- **An unchecked record.** A record Mandu could not check (event-model.ts
+  `recordUnchecked`: every event a claim, or a launch with no wall around
+  the human plane, as under the OpenClaw plugin) says so in the panel's
+  summary line, a *Record unchecked* line under the session's banner and
+  the chip: its rows and counts are what the events say, and the product
+  page counts none of them (dashboard.md §4.25ah).
+
+The server sends the first two as `/api/events`' `flowNotes` (by flow
+root; a root the registry does not place gets none) and the third as its
+`recordUnchecked`, over the whole log only (a `sinceSeq` tail cannot tell).
+The product page's cards draw the same facts (dashboard.md §4.25b *Where it
+went*). Tests: `secret-path.test.ts`, `events-lineage-notes.test.ts`, the
+developer view's own JSDOM test, and over the real arbiter,
+proxy and dashboard `tests/stack/session-lineage.test.ts`.
+
 ## 6. Implementation plan
 
 **Phase 0 — evidence hygiene** (arbiter, fs-sync, inspect-mcp; small):

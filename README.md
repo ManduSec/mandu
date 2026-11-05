@@ -29,16 +29,16 @@ Mandu stores stays in `~/.mandu`.
 
 ```sh
 npx @mandusec/mandu scan         # first: which of your secrets your agents already sent to the AI
-npm install -g @mandusec/mandu   # needs Node 22.13 or newer
+npm install -g @mandusec/mandu   # needs Node 22.15 or newer
 mandu doctor                     # check this computer: Node, git, your agent, your secrets
 mandu claude                     # your agent, protected (or: mandu codex)
 mandu dashboard                  # what was protected, and what waits for your OK
 ```
 
 No Node, or another way to install: [Getting started](docs/getting-started.md#1-install).
-New to Mandu? `mandu demo` runs the real components offline against a
-stand-in AI, and [Your first session](docs/first-session.md) is a
-fifteen-minute tour with your own agent.
+New to Mandu? `mandu demo` runs the real components offline against a stand-in AI, and
+[Your first session](docs/first-session.md) is a fifteen-minute tour with your own agent.
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/mandusec/mandu?quickstart=1) runs the demo in your browser, with nothing to install.
 
 ## The same file, read two ways
 
@@ -202,9 +202,9 @@ OpenClaw's Node version):
 
 ## Documentation
 
-All documentation starts at [`docs/`](docs/README.md). `mandu --help` lists
-every command. To turn Mandu off, start the agent without the `mandu` prefix;
-to remove it, see [Uninstall](docs/usage.md#uninstall).
+All documentation starts at [`docs/`](docs/README.md). `mandu --help` lists every command.
+To turn Mandu off, start the agent without the `mandu` prefix; to remove it, see [Uninstall](docs/usage.md#uninstall).
+**Agent skills:** `npx skills add mandusec/mandu` teaches your coding agent to work under Mandu ([more](docs/usage.md#agent-skills)).
 
 ## Research
 

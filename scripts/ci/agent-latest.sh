@@ -56,7 +56,19 @@ for own in "$HOME/.local" "$(npm config get prefix 2>/dev/null || true)"; do
   esac
 done
 
-if [[ -n "$pkg" ]]; then
+# OpenClaw's engine floor is above Mandu's node (pins.env AGENT_NODE_VERSION):
+# its preinstall refuses an older node, and its `openclaw` runs on whatever
+# `node` leads PATH. So it installs with the agent node's npm and runs through
+# a wrapper on that node, as the guest's pinned one does (provision.sh). Where
+# there is no agent node (MANDU_AGENT_NODE_DIR, default /opt/agent-node), the
+# PATH's node it is.
+agent_node="${MANDU_AGENT_NODE_DIR:-/opt/agent-node}"
+if [[ "$agent" == openclaw && -x "$agent_node/bin/node" && -x "$agent_node/bin/npm" ]]; then
+  PATH="$agent_node/bin:$PATH" "$agent_node/bin/npm" install -g --no-audit --no-fund --prefix "$prefix" "$pkg@latest" >/dev/null
+  rm -f "$prefix/bin/openclaw"
+  printf '#!/bin/sh\nexec %s %s "$@"\n' "$agent_node/bin/node" "$prefix/lib/node_modules/openclaw/openclaw.mjs" > "$prefix/bin/openclaw"
+  chmod 0755 "$prefix/bin/openclaw"
+elif [[ -n "$pkg" ]]; then
   npm install -g --no-audit --no-fund --prefix "$prefix" "$pkg@latest" >/dev/null
   # OpenCode 2 installs `opencode` too: only `opencode2` may lead PATH, so the
   # 1.x pin keeps its name

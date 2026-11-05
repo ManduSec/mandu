@@ -14,16 +14,34 @@
  * preview, probe and propose ops. jsdom keeps the focus of a button turned
  * off, so `press` drops it, as Chromium does, while the button still has it:
  *
+ *   D0  Ctrl+Enter in the box presses Suggest rules: the page posts the box's
+ *       text unchanged to POST /api/policy/assistant, the helper reads it
+ *       whole, and the focus stays in the box;
  *   D1  Enter on Suggest rules: the focus waits on the card's heading, then
- *       the suggestion opens on its first line, "Suggested rules";
+ *       the suggestion opens on its first line, "Suggested rules"; the line
+ *       above the box, which said no helper was found (and no "again":
+ *       nothing was pressed), follows the press's answer and names Claude
+ *       Code (dashboard.md *Describe says which AI reads your words*);
  *   D2  Try it on the pypi.org row: the button has the focus back, described
  *       by the arbiter's own Now / After;
  *   D3  ALLOW typed, Apply: the line "Applied. …" takes the focus;
- *       policy.yaml carries both rules;
+ *       policy.yaml carries both rules; the line has Undo and See it in
+ *       Approvals at the change made, and its Undo puts policy.yaml and
+ *       Your rules back as before (§4.25 *Every change made on Rules ends
+ *       with an Undo or a link*);
  *   D4  the law moves under a second suggestion: Apply is refused (409) and
  *       has the focus back, described by the refusal, and policy.yaml is
  *       unchanged; Describe it again waits on the heading, then the new
  *       suggestion opens on its first line;
+ *   D7  Discard leaves "Suggestion discarded." with Undo, which has the
+ *       focus; Undo draws the suggestion again, on its first line, and
+ *       posts nothing; Apply then writes the rule (§4.25n *Describe can undo
+ *       its Discard*);
+ *   D8  a suggestion discarded, the law moved meanwhile, then Undo and
+ *       Apply: refused (409) and policy.yaml unchanged, so Undo is no way
+ *       around the rules-changed check;
+ *   D6  that suggestion applied, See it in Approvals opens Approvals with
+ *       the change's Rule changes row marked, with its Undo;
  *   D5  the oracle: the `.env` value reaches neither the helper model nor a
  *       drawn page nor an answer.
  */
@@ -39,7 +57,7 @@ import { resetCurrentPolicyForTests } from "../../arbiter/policy/compiled-policy
 import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
-import type { AssistantModel } from "../../dashboard/src/policy-assistant.js";
+import { HELPER_WORDS, type AssistantChannel, type AssistantModel } from "../../dashboard/src/policy-assistant.js";
 import { ADMIN_COOKIE, ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
 import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
@@ -72,7 +90,7 @@ const describedBy = (doc: Doc, b: Doc): string => {
   return id ? doc.getElementById(id)?.textContent ?? `(no #${id})` : "";
 };
 
-test("Describe what you want over the real arbiter: Suggest rules, Try it, Apply and Describe it again keep the focus; the helper never sees a secret", { timeout: 180_000 }, async () => {
+test("Describe what you want over the real arbiter: Ctrl+Enter, Suggest rules, Try it, Apply, Discard and its Undo, and Describe it again keep the focus; the helper never sees a secret", { timeout: 180_000 }, async () => {
   const tmp = mkdtempSync(join(tmpdir(), "mandu-describe-focus-"));
   const home = join(tmp, "home");
   const proj = join(home, "proj");
@@ -81,8 +99,10 @@ test("Describe what you want over the real arbiter: Suggest rules, Try it, Apply
   writeFileSync(env, `API_TOKEN=${ENV_VALUE}\n`);
   const token = join(proj, "deploy.token");
   writeFileSync(token, "not read by this test\n");
+  const notes = join(proj, "notes.txt");
+  writeFileSync(notes, "not read by this test either\n");
   const policyPath = join(tmp, "policy.yaml");
-  writeFileSync(policyPath, `version: 1\nlists:\n  svc: [api.example.com]\npaths:\n  - path: "${env}"\n    level: no-model\n`);
+  writeFileSync(policyPath, `version: 1\nlists:\n  svc: [api.example.com]\n  mirrors: [a.example.org]\npaths:\n  - path: "${env}"\n    level: no-model\n`);
   const socketPath = join(tmp, "arbiter.sock");
   const adminSock = join(tmp, "admin.sock");
   const humanPath = humanSockIn(tmp);
@@ -104,10 +124,14 @@ test("Describe what you want over the real arbiter: Suggest rules, Try it, Apply
   const model = async (): Promise<AssistantModel> => ({
     async complete(call) { seen.push(call.system + "\n" + call.user); return { text: answers.shift() ?? "{}", model: "fake-assistant" }; },
   });
+  // Which helper the channel line finds: none until the person signs in
+  // to Claude Code (set by D1 once the line before the press is checked).
+  let signedIn = false;
+  const assistantChannel = async (): Promise<AssistantChannel> => (signedIn ? { ready: true, via: "claude" } : { ready: false, reason: "no-channel" });
   const dashboard = new DashboardServer({
     source: new ArbiterEventSource({ socketPath, humanSocketPath: humanPath }),
     approvalsArbiter: wired.arbiter, secretsArbiter: wired.secrets, policyDocArbiter: wired.policyDoc,
-    assistantModel: model, fileBrowserHome: home,
+    assistantModel: model, assistantChannel, fileBrowserHome: home,
     configEnv: { MANDU_HOME: join(tmp, "mhome"), MANDU_POLICY_FILE: policyPath },
     log: () => {}, ...ADMIN_OPTS,
   });
@@ -125,6 +149,30 @@ test("Describe what you want over the real arbiter: Suggest rules, Try it, Apply
       const firstLine = () => host.querySelector(".suggestion .proposal-k");
       const button = (words: string) => [...host.querySelectorAll("button")].find((b: Doc) => b.textContent === words);
 
+      // D0: Ctrl+Enter in the box, the page's fetch watched.
+      const win = doc.defaultView;
+      const pageFetchFn = win.fetch;
+      const posted: unknown[] = [];
+      win.fetch = (url: string, init: RequestInit = {}) => {
+        if (String(url).endsWith("/api/policy/assistant") && init.method === "POST") posted.push(JSON.parse(String(init.body)));
+        return pageFetchFn(url, init);
+      };
+      answers.push(JSON.stringify({ edits: [{ op: "lock-path", path: token, level: "no-model" }] }));
+      const box = doc.getElementById("describe-text");
+      const said = "Keep deploy.token secret.\nOur written policy: nothing leaves for paste sites.";
+      box.value = said;
+      box.focus();
+      const ctrlEnter = new win.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true });
+      box.dispatchEvent(ctrlEnter);
+      assert.equal(ctrlEnter.defaultPrevented, true, "no new line");
+      assert.equal(submit.disabled, true, "Suggest rules is pressed: off while the helper works");
+      await waitWhile(() => !firstLine());
+      assert.deepEqual(posted, [{ sentence: said }], "the box's text, unchanged, once");
+      assert.equal(seen.length, 1, "the helper was asked once");
+      assert.ok(seen[0].includes(`<<<\n${said}\n>>>`), "the helper reads the text whole");
+      assert.equal(doc.activeElement, box, "the focus stays in the box");
+      win.fetch = pageFetchFn;
+
       // D1: Suggest rules.
       answers.push(JSON.stringify({
         edits: [
@@ -133,6 +181,11 @@ test("Describe what you want over the real arbiter: Suggest rules, Try it, Apply
         ],
         note: "I did not add GitHub: you did not say what to allow there.",
       }));
+      const where = doc.getElementById("describe-where");
+      await waitWhile(() => where.hidden);
+      assert.equal(where.textContent, HELPER_WORDS["no-channel"].replace(", then press Suggest rules again.", ", then press Suggest rules."), "no helper found, in the 503's words");
+      assert.doesNotMatch(where.textContent, /\bagain\b/, "no \"again\" before this press");
+      signedIn = true;
       doc.getElementById("describe-text").value = "Keep deploy.token secret. My data may go to PyPI.";
       press(submit);
       assert.equal(doc.activeElement, head, "the focus waits on the card's heading, never <body>");
@@ -142,7 +195,13 @@ test("Describe what you want over the real arbiter: Suggest rules, Try it, Apply
       assert.equal(firstLine().textContent, "Suggested rules");
       assert.equal(submit.disabled, false);
       assert.equal(submit.getAttribute("aria-describedby"), null);
-      assert.equal(seen.length, 1, "the helper was asked once");
+      assert.equal(seen.length, 2, "the helper was asked once more");
+      const ready = /^What you write here goes through Claude Code on this computer/;
+      await waitWhile(() => !ready.test(where.textContent));
+      assert.match(where.textContent, ready, "the line follows what the press found");
+      assert.equal(where.hidden, false);
+      assert.equal(firstLine().textContent, "Suggested rules", "the suggestion is unchanged");
+      assert.equal(host.querySelectorAll(".suggestion-rows li").length, 2);
       pages.push(doc.body.textContent ?? "");
 
       // D2: Try it on the pypi.org row, through the arbiter's own probe.
@@ -162,6 +221,9 @@ test("Describe what you want over the real arbiter: Suggest rules, Try it, Apply
       assert.ok(typed, "a wide change asks for ALLOW");
       typed.value = "ALLOW";
       typed.dispatchEvent(new doc.defaultView.Event("input"));
+      const yamlBefore = readFileSync(policyPath, "utf8");
+      const yourRules = () => (doc.getElementById("rules-list").textContent ?? "") + "\n" + (doc.getElementById("files-tree")?.textContent ?? "");
+      const rulesBefore = yourRules();
       press(button("Apply"));
       await waitWhile(() => !host.querySelector(".describe-done, .ask-error"));
       const done = host.querySelector(".describe-done");
@@ -171,6 +233,88 @@ test("Describe what you want over the real arbiter: Suggest rules, Try it, Apply
       const onDisk = readFileSync(policyPath, "utf8");
       assert.match(onDisk, /pypi\.org/);
       assert.match(onDisk, /deploy\.token/);
+      pages.push(doc.body.textContent ?? "");
+
+      // D3a: the line has Undo and See it in Approvals at the change made.
+      assert.equal(done.querySelector("span").textContent, "Applied. Your rules are updated.");
+      const seeIt = done.querySelector("a.change-link");
+      assert.equal(seeIt?.textContent, "See it in Approvals");
+      const changeId = seeIt.dataset.ask;
+      assert.match(changeId, /^pc-\d+$/, "a change made");
+      assert.equal(seeIt.getAttribute("href"), `/approvals/${changeId}`);
+      const undo = [...done.querySelectorAll("button")].find((b: Doc) => b.textContent === "Undo");
+      assert.ok(undo, "Undo on the line");
+      await waitWhile(() => undo.disabled || !/pypi\.org/.test(yourRules()));
+      assert.notEqual(yourRules(), rulesBefore, "Your rules lists the applied rules");
+
+      // D3b: Undo: policy.yaml and Your rules are back as before.
+      press(undo);
+      await waitWhile(() => done.textContent !== "Undone." || /pypi\.org/.test(yourRules()));
+      assert.equal(doc.activeElement, done, "the line says Undone. and has the focus");
+      const undone = readFileSync(policyPath, "utf8");
+      assert.doesNotMatch(undone, /pypi\.org/, "policy.yaml lost the release rule");
+      assert.doesNotMatch(undone, /deploy\.token/, "and the lock");
+      assert.match(yamlBefore, /\.env/);
+      assert.match(undone, /\.env/, "the rules of before are kept");
+      assert.equal(yourRules(), rulesBefore, "Your rules is back as before");
+      pages.push(doc.body.textContent ?? "");
+
+      // D7: Discard, Undo, then Apply writes the rule.
+      const posts: string[] = [];
+      const statuses: number[] = [];
+      win.fetch = (url: string, init: RequestInit = {}) => {
+        if (init.method === "POST") posts.push(String(url));
+        const r = pageFetchFn(url, init);
+        if (String(url).endsWith("/api/policy/assistant/apply")) r.then((res: Response) => statuses.push(res.status));
+        return r;
+      };
+      answers.push(JSON.stringify({ edits: [{ op: "lock-path", path: notes, level: "no-model" }] }));
+      doc.getElementById("describe-text").value = "Keep notes.txt secret.";
+      press(submit);
+      await waitWhile(() => !firstLine());
+      const discard = button("Discard");
+      discard.focus();
+      discard.click();
+      const line = host.querySelector(".describe-done");
+      assert.equal(line?.querySelector("span").textContent, "Suggestion discarded.");
+      const undoDiscard = button("Undo");
+      assert.equal(undoDiscard.getAttribute("aria-label"), "Undo the discard in Describe what you want");
+      assert.equal(doc.activeElement, undoDiscard, "the line's Undo has the focus");
+      const postsBefore = posts.length;
+      undoDiscard.focus();
+      undoDiscard.click();
+      assert.equal(doc.activeElement, firstLine(), "Undo: the suggestion opens on its first line");
+      assert.equal(posts.length, postsBefore, "Undo posts nothing");
+      assert.doesNotMatch(readFileSync(policyPath, "utf8"), /notes\.txt/, "nothing written yet");
+      press(button("Apply"));
+      await waitWhile(() => !host.querySelector(".describe-done a.change-link, .ask-error"));
+      assert.ok(host.querySelector(".describe-done a.change-link"), `applied: ${host.textContent}`);
+      assert.deepEqual(statuses, [200]);
+      assert.match(readFileSync(policyPath, "utf8"), /notes\.txt/, "the rule kept through Discard and Undo is written");
+      pages.push(doc.body.textContent ?? "");
+
+      // D8: Discard, the law moves (mirrors released), Undo, Apply: the
+      // server refuses what is now a wider change than the one shown.
+      answers.push(JSON.stringify({ edits: [{ op: "list", name: "mirrors", add: ["b.example.org"] }] }));
+      doc.getElementById("describe-text").value = "Add b.example.org to my mirrors.";
+      press(submit);
+      await waitWhile(() => !firstLine());
+      button("Discard").click();
+      const moved = await admin.policyDocument();
+      const law = moved.inForce as Record<string, unknown>;
+      const lawRules = Array.isArray(law.user_rules) ? law.user_rules : [];
+      await admin.applyPolicyDocument({ ...law, user_rules: [...lawRules, { id: "r-0099", kind: "release", to: { host: "@mirrors" }, mode: "allow" }] }, "human", moved.lawHash!);
+      const yamlMoved = readFileSync(policyPath, "utf8");
+      button("Undo").click();
+      assert.ok(firstLine(), "the suggestion is back");
+      press(button("Apply"));
+      await waitWhile(() => !host.querySelector(".describe-done, .ask-error"));
+      assert.ok(host.querySelector(".ask-error"), `refused: ${host.textContent}`);
+      assert.deepEqual(statuses, [200, 409], "the rules-changed answer");
+      assert.ok(button("Describe it again"), "a 409 offers Describe it again");
+      assert.equal(readFileSync(policyPath, "utf8"), yamlMoved, "nothing written");
+      assert.doesNotMatch(yamlMoved, /b\.example\.org/);
+      win.fetch = pageFetchFn;
       pages.push(doc.body.textContent ?? "");
 
       // D4: a second suggestion; the law moves before Apply.
@@ -200,7 +344,24 @@ test("Describe what you want over the real arbiter: Suggest rules, Try it, Apply
       assert.equal(doc.activeElement, head, "Describe it again: the heading, never <body>");
       await waitWhile(() => !firstLine());
       assert.equal(doc.activeElement, firstLine(), "the new suggestion opens on its first line");
-      assert.equal(seen.length, 3);
+      assert.equal(seen.length, 6);
+      pages.push(doc.body.textContent ?? "");
+
+      // D6: Apply it, then See it in Approvals: Approvals opens with that
+      // change's Rule changes row marked, with its Undo.
+      press(button("Apply"));
+      await waitWhile(() => !host.querySelector(".describe-done a.change-link"));
+      const link = host.querySelector(".describe-done a.change-link");
+      const applied = link.dataset.ask;
+      assert.match(readFileSync(policyPath, "utf8"), /deploy\.token/);
+      link.click();
+      const marked = () => [...doc.querySelectorAll("#page-approvals .focus")].map((x: Doc) => x.dataset.id);
+      await waitWhile(() => !marked().includes(applied));
+      assert.equal(doc.getElementById("page-approvals").hidden, false, "Approvals is open");
+      assert.equal(doc.defaultView.location.pathname, `/approvals/${applied}`);
+      assert.deepEqual(marked(), [applied]);
+      const row = doc.querySelector("#approvals-rule-history .row.focus");
+      assert.ok([...row.querySelectorAll("button")].some((b: Doc) => b.textContent === "Undo"), "its Undo on the row");
       pages.push(doc.body.textContent ?? "");
     }, { headers: { Cookie: ADMIN_COOKIE } });
     await new Promise((r) => setTimeout(r, 50));

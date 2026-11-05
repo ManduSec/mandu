@@ -16,7 +16,9 @@
  *   1. the GET and every POST need the CSRF header and the admin session;
  *   2. Scan over the folder the recorded session worked in files the three;
  *      the GET lists them: two paths only git history holds, and the old
- *      version of config.py under its file;
+ *      version of config.py under its file; the committed GitHub tokens'
+ *      rows serve `replaceAt` with GitHub's own page, the deploy key's none
+ *      (dashboard.md §4.25r *The advice says where to replace the key*);
  *   3. one Save of the deploy key and the old config.py: the law shows the
  *      lock-path and the lock-blob at once, each a change proposed by
  *      mandu:scan (on an arbiter without lock-blob, that one is refused and
@@ -49,7 +51,8 @@
  *
  * The closed card's line (dashboard.md §4.25r *The closed card says whether
  * any wait*), on the served page in jsdom over the same wiring: before any
- * scan "None waiting. Press Review…"; after a scan of a project with no key,
+ * scan "None waiting. Press Review…" (opened, "None waiting. Press Scan for
+ * keys…", the empty list only "No keys waiting."); after a scan of a project with no key,
  * "None waiting. Mandu last looked at <when>: <the scan's summary>"; after a
  * key is committed and the project scanned again, "Possible keys in this
  * project's … that no rule covers yet." beside the count; no page or answer
@@ -211,6 +214,15 @@ test("Suggested view over the real arbiter: scan, list, Save applies the lock, N
     assert.equal(key.path, join(f.repo, "deploy/id_ed25519"));
     assert.ok(key.found.some((x: any) => x.words === "Looks like a private key"));
     assert.equal(env.tag, "only in git history");
+    // The advice says where to replace the key (dashboard.md §4.25r): the
+    // committed GitHub token links GitHub's own page; a private key names
+    // no company.
+    assert.match(env.rotate, /^This key was exposed\./);
+    assert.deepEqual(env.replaceAt, [
+      { company: "GitHub", page: "Personal access tokens", url: "https://github.com/settings/tokens", lead: "Replace it on GitHub" },
+    ]);
+    assert.deepEqual(blob.replaceAt.map((r: any) => r.url), ["https://github.com/settings/tokens"]);
+    assert.deepEqual(key.replaceAt, []);
     assert.equal(blob.kind, "versions");
     assert.equal(blob.parent.display, "~/proj/config.py");
     assert.equal(blob.tag, null);
@@ -520,12 +532,32 @@ test("Keys Mandu found's closed card over the real arbiter: never looked, then n
     assert.ok(seen);
     return seen as { line: string; badge: string; closed: boolean };
   };
+  /** The same card opened with Review: its line, its button and the empty
+   *  list's row, once the opened list was read. */
+  const openedCard = async () => {
+    let seen: { line: string; button: string; list: string } | null = null;
+    await servedProductPage(base, "/rules", (doc) => !/^Mandu looks for keys/.test(doc.getElementById("suggested-line")?.textContent ?? "Mandu looks"), async (doc) => {
+      doc.getElementById("suggest-open").click();
+      const list = () => doc.getElementById("files-suggested-list").textContent as string;
+      for (const end = Date.now() + 10_000; /^Reading the suggestions/.test(list()) && Date.now() < end;) await new Promise((r) => setTimeout(r, 20));
+      seen = { line: doc.getElementById("suggested-line").textContent, button: doc.getElementById("suggest-open").textContent, list: list() };
+      pages.push(doc.body.textContent ?? "");
+    }, { headers: { Cookie: ADMIN_COOKIE } });
+    assert.ok(seen);
+    return seen as { line: string; button: string; list: string };
+  };
   try {
     // Before any scan: none waiting, and how to look.
     const never = await card();
     assert.equal(never.closed, true, "the card is closed until Review");
     assert.equal(never.line, "None waiting. Press Review, then Scan for keys, to look through the projects your agents worked in.");
     assert.equal(never.badge, "");
+    // Opened, the Review button reads Close: the line names only Scan for
+    // keys, and the empty list does not say it again.
+    const opened = await openedCard();
+    assert.equal(opened.button, "Close");
+    assert.equal(opened.line, "None waiting. Press Scan for keys to look through the projects your agents worked in.");
+    assert.equal(opened.list, "No keys waiting.");
 
     // A scan of the project with no key: none waiting, and when Mandu looked.
     const clean = await scanned();
@@ -549,7 +581,7 @@ test("Keys Mandu found's closed card over the real arbiter: never looked, then n
     assert.equal(waiting.badge, String(count));
 
     // The oracle: no answer and no page holds the key or a run of it.
-    assert.equal(pages.length, 3);
+    assert.equal(pages.length, 4, "three closed cards and the opened one");
     noValue("the answers", bodies.join("\n"));
     noValue("the pages", pages.join("\n"));
   } finally {

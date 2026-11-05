@@ -61,6 +61,7 @@
  *
  * Mandu-new (no reference origin).
  */
+import { isKubeconfigPath } from "../policy/kubeconfig.js";
 import type { SymbolEntry, SymbolMap } from "../symbol-table/symbol-table.js";
 import { findSymbolByName, getSymbolEntry, persistSymbol, touchSymbolMap, wireGrantOf } from "../symbol-table/symbol-table.js";
 import { destinationMatchesBindings } from "../policy/policy-interface.js";
@@ -131,7 +132,9 @@ export function ownWireHost(symbolMap: SymbolMap, name: string, row: SymbolEntry
   const shape = secretFileShape(row.origin);
   // An MCP config by its name, or a `config.toml` (Codex's where
   // CODEX_HOME moved it, known by its text below).
-  if (shape !== "npmrc" && shape !== "pip-conf" && !mcpConfigLike(row.origin)) return null;
+  // A kubeconfig's bearer token (kube-wire-release.md) too, a `.pgpass`
+  // line's database and a `~/.my.cnf` section's (db-login-release.md).
+  if (shape !== "npmrc" && shape !== "pip-conf" && shape !== "pgpass" && !/(^|\/)\.my\.cnf$/.test(row.origin) && !mcpConfigLike(row.origin) && !isKubeconfigPath(row.origin)) return null;
   const dot = name.indexOf(".");
   if (dot < 0) return null;
   const base = symbolMap.symbols.get(name.slice(0, dot));

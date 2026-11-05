@@ -1,6 +1,6 @@
 {
   "name": "@mandusec/arbiter",
-  "version": "0.2.0-beta.8",
+  "version": "0.2.0-beta.9",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -12,11 +12,12 @@
     "test:unit": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home tsx --test test/unit/*.test.ts",
     "test:component": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home tsx --test test/component/*.test.ts",
     "test:integrity": "MANDU_AXES_STRICT=1 MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml MANDU_HOME=/dev/null/mandu-test-home tsx --test test/integrity/*.test.ts",
-    "serve": "tsx ipc/server-main.ts"
+    "serve": "tsx ipc/server-main.ts",
+    "check:issuers": "tsx scripts/check-issuers.ts"
   },
   "dependencies": {
     "js-yaml": "^4.1.0",
-    "re2js": "^2.8.6"
+    "re2js": "^2.8.8"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",

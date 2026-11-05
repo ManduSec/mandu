@@ -20,7 +20,7 @@ import { AGENT, T, load, tick } from "./home-js-fixtures.js";
 const URL1 = "http://127.0.0.1:4500/mandu/agents/s1";
 const step = (id: string, over: Record<string, unknown> = {}) => ({ kind: "action", id, ts: "2026-09-25T10:00:01.000Z", icon: "run", sentence: [T(`Ran ${id}`)], outcome: "plain", note: null, split: null, ...over });
 const turn = (id: string, steps: unknown[], over: Record<string, unknown> = {}) => ({ ...AGENT.story[1], id, prompt: `Question ${id}`, routine: null, reply: null, steps, moreSteps: 0, ...over });
-const card = (name: string) => ({ what: [T("The environment variable "), { kind: "code", text: name }], level: "No AI", saw: "masked", lines: [{ tone: "good", parts: [T("The AI got only a placeholder, never the real value.")] }] });
+const card = (name: string) => ({ what: [T("The environment variable "), { kind: "code", text: name }], level: "No AI", saw: "masked", lines: [{ tone: "good", parts: [T("The AI got only its masked version, never the real value.")] }] });
 const secrets = (cards: unknown[], more: number) => ({ mode: "secrets", flagged: false, more, counts: { masked: cards.length + more, early: 0 }, secrets: cards });
 
 /** The page as first read: 2 earlier turns, a turn with 3 more steps, 1

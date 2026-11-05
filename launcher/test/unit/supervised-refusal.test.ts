@@ -117,3 +117,55 @@ test("mandu version says the same: an adopted old arbiter under a service runnin
   assert.deepEqual(own.map((p) => p.id), ["services-supervised-other-build"]);
   assert.match(own[0]!.fix, /^systemctl --user disable --now/);
 });
+
+// The shipped unit (`mandu serve`, runtime-instances.md §4.1d). An npm
+// package updated in place (or a checkout pulled) leaves the unit running the
+// earlier code from this mandu's own folder: the fix is `mandu serve
+// upgrade`, never disabling the service the user installed on purpose.
+const SERVE: StackSupervisor = {
+  unit: "mandu.service", user: true, mainPid: 100, restart: "always",
+  workingDirectory: "/usr/lib/node_modules/@mandusec/mandu", fragmentPath: "/home/u/.config/systemd/user/mandu.service",
+};
+
+test("the shipped unit on this mandu's own folder: mandu serve upgrade, whichever process is old", () => {
+  for (const v of [OLDER, BUILD]) {
+    for (const arbiterOutside of [false, true, null]) {
+      const m = refusal(input(v, { ...SERVE, arbiterOutside, runsOurCode: true }));
+      assert.match(m, /They are run by the Mandu service mandu\.service \(`mandu serve`, Restart=always, in \/usr\/lib\/node_modules\/@mandusec\/mandu\)/);
+      assert.match(m, /Restart it on this mandu: mandu serve upgrade, then run mandu again\.$/);
+      assert.doesNotMatch(m, /disable|mandu-own|mandu stop/);
+    }
+  }
+  // With a session on it, the restart it names goes on despite the session.
+  const peers = refusal(input(OLDER, { ...SERVE, arbiterOutside: false, runsOurCode: true }, { peers: [777] }));
+  assert.match(peers, /another mandu session uses them \(pid 777\).*: mandu serve upgrade --force$/);
+});
+
+test("the shipped unit of ANOTHER install (another folder): the general rule, the unit named as the Mandu service", () => {
+  const m = refusal(input(OLDER, { ...SERVE, workingDirectory: "/opt/other/mandu", arbiterOutside: false, runsOurCode: false }));
+  assert.match(m, /That arbiter is the Mandu service mandu\.service \(`mandu serve`, Restart=always, in \/opt\/other\/mandu\)'s own process/);
+  assert.match(m, /systemctl --user disable --now mandu\.service/);
+  assert.doesNotMatch(m, /mandu serve upgrade/);
+  // A system unit of the same name is not the shipped one.
+  const sys = refusal(input(OLDER, { ...SERVE, user: false, arbiterOutside: false, runsOurCode: true }));
+  assert.doesNotMatch(sys, /mandu serve upgrade/);
+  assert.match(sys, /systemctl disable --now mandu\.service/);
+});
+
+test("mandu version: the shipped unit not restarted after an update names mandu serve upgrade", () => {
+  const base = {
+    self: { invoked: null, realPath: null, kind: "npm" as const, root: "/usr/lib/node_modules/@mandusec/mandu", version: "0.2.0-beta.8", commitsFrom: "build-info" as const, sourceCommit: null, publicCommit: null, publicAhead: 0, dirty: false },
+    node: { version: "22.0.0", path: "/usr/bin/node", meetsFloor: true, floor: "22.0.0" },
+    path: [], env: {}, npmGlobal: null, forcedLayout: null,
+  };
+  const p = problemsOf({
+    ...base,
+    services: {
+      sock: `${BASE}/current/arbiter.sock`, sockMode: "resident", base: BASE, running: true, version: "0.2.0-beta.7", build: null,
+      pid: 4242, startedAt: null, codeDir: "/usr/lib/node_modules/@mandusec/mandu", verdict: "older" as const, ourBuild: null,
+      supervisor: { ...SERVE, arbiterOutside: false, runsOurCode: true },
+    },
+  });
+  assert.deepEqual(p.map((x) => x.id), ["services-serve-not-upgraded"]);
+  assert.match(p[0]!.fix, /^mandu serve upgrade \(/);
+});

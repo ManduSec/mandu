@@ -32,6 +32,8 @@ import type { ManduEvent } from "./event-model.js";
 import { checkAgentVersion, isVersionedAgent, previewLineOf, rangeWords, type AgentVersionCheck } from "./agent-versions.js";
 import { extractToolUses } from "./view-model/tool-calls.js";
 import { toolFamily } from "./view-model/tool-family.js";
+import { gapExplanation, PARTIAL_NOTE, POSTURE_GAPS, POSTURE_SENTENCE, postureSentence } from "./confinement-posture.js";
+import { isLinuxOnlyRungLine } from "./linux-only-rung.js";
 
 export type HealthVerdict = "ok" | "degraded" | "broken";
 
@@ -39,8 +41,9 @@ export type HealthVerdict = "ok" | "degraded" | "broken";
  *  `agentNotice`, dashboard.md §4.21 *On the product page*): the relay in
  *  passthrough (`relay`) or its lookups failing (`relay-lookup`), every
  *  command run failing (`commands`), model calls but no turn (`no-turn`),
- *  a non-zero exit before any model call (`no-call`). */
-export type BrokenCause = "relay" | "relay-lookup" | "commands" | "no-turn" | "no-call";
+ *  a non-zero exit before any model call (`no-call`), the AI provider's
+ *  usage limit refusing the model calls before any turn (`limit`). */
+export type BrokenCause = "relay" | "relay-lookup" | "commands" | "no-turn" | "no-call" | "limit";
 
 export interface SessionHealth {
   verdict: HealthVerdict;
@@ -48,6 +51,14 @@ export interface SessionHealth {
   live: string[];
   /** Launcher banner lines for dropped / degraded rungs. */
   dropped: string[];
+  /** How many of those lines are a protection that did not start, for the
+   *  product page's warning (dashboard.md §4.21 *On the product page*):
+   *  not the gated line the posture note words, not a trust line
+   *  (`NOT_A_PROTECTION_RE`), and off Linux not a Linux-only layer's
+   *  absence (linux-only-rung.ts). Absent when none. Only the count leaves
+   *  this module for the page: a line may name paths, ports or developer
+   *  terms. */
+  droppedProtections?: number;
   /** The reply-filter's mode, or null when it never reported. */
   relay: "pty" | "pipe" | "passthrough" | null;
   /** Why the reply filter's lookups fail, when its LAST record says they do
@@ -89,6 +100,26 @@ export interface SessionHealth {
    *  axis was off or the launcher predates the field. `gated` is a KNOWN HOST
    *  CONDITION: it degrades the verdict (amber), never breaks it (red). */
   secrets?: SecretsPosture;
+  /** An attachment's route as its service's check last found it LOST
+   *  (openclaw-plugin.md §3.6): the OpenClaw config no longer routes the
+   *  session through Mandu. From the newest believed posture record; absent
+   *  while routed, never from a claim. */
+  attachmentRoute?: AttachmentRouteLost;
+  /** The AI provider refused a model call on the plan's usage limit (the
+   *  model proxy's `tllm_call.upstreamLimit`, a `hard` one: no retry in the
+   *  next minutes lifts it). `resetsAt`: when it lifts, ISO 8601, when the
+   *  provider said. The newest such call; absent when none. */
+  providerLimit?: { resetsAt?: string };
+}
+
+/** What the route check found lost, as the arbiter recorded it. */
+export interface AttachmentRouteLost {
+  /** Each problem in a sentence (attachment-contract.ts routeVerdict). */
+  problems: Array<{ code: string; detail: string }>;
+  /** The config the service checked. */
+  config: string | null;
+  /** When the arbiter recorded it (ms). */
+  since: number | null;
 }
 
 export interface SecretsPosture {
@@ -101,35 +132,47 @@ export interface SecretsPosture {
   fix?: string;
 }
 
-/** Mirrors launcher/src/confinement-posture.ts POSTURE_SENTENCE / gapExplanation
- *  (the dashboard does not import the launcher package; the parity test in
- *  test/unit/session-health.test.ts holds the two equal). */
-export const SECRETS_SENTENCE: Record<SecretsPosture["posture"], string> = {
-  "confined": "Programs the AI runs get a placeholder copy of each credential file, never the real one. A program you allow to read a file gets the real contents, and what it prints is masked before the AI sees it.",
-  "read-blocked": "Programs the AI runs cannot open your credential files: a read fails instead of returning a placeholder.",
-  "gated": "The AI sees placeholders and a secret is sent out only where a rule or your OK allows, but programs the AI runs can still read your credential files.",
-};
-export const SECRETS_FIX: Record<string, string> = {
-  "apparmor-userns": "mandu setup",
-  "no-bwrap": "sudo apt install bubblewrap",
-  "bwrap-nesting": "mandu setup",
-  // "no-guard" / "guard-off" (the mount layer alone, no file guard) carry no
-  // one-command fix: the cause line in the launch notice says what to do.
-};
+/** The posture sentences, read from the dashboard's copy of the launcher's
+ *  confinement-posture.ts (scripts/copies/module-copies.mjs keeps it the
+ *  source's bytes), so the two cannot drift. */
+export const SECRETS_SENTENCE: Readonly<Record<SecretsPosture["posture"], string>> = POSTURE_SENTENCE;
+
+/** Each gap's one-command fix, where it has one ("no-guard" / "guard-off"
+ *  and the attachments carry none: the cause line says what to do). */
+export const SECRETS_FIX: Readonly<Record<string, string>> = Object.fromEntries(
+  POSTURE_GAPS.flatMap((gap) => {
+    const fix = gapExplanation(gap).fix;
+    return fix === null ? [] : [[gap, fix] as const];
+  }),
+);
 
 /** The bind-only gaps (sandbox-security-review-2026-09-28 finding 7): the
  *  mount layer is up, so the tooltip says what it covers and what it misses. */
-export const SECRETS_PARTIAL_NOTE: Record<string, string> = {
-  "no-guard": "The mount layer still puts a placeholder over each credential file, but Mandu's file guard is not available, so a file replaced while the AI runs is readable.",
-  "guard-off": "The mount layer still puts a placeholder over each credential file, but Mandu's file guard is turned off, so a file replaced while the AI runs is readable.",
-};
+export const SECRETS_PARTIAL_NOTE: Readonly<Record<string, string | undefined>> = PARTIAL_NOTE;
 
 function secretsOf(posture: Record<string, unknown>): SecretsPosture | undefined {
   const raw = posture["secrets"] as { posture?: unknown; gap?: unknown } | undefined;
   if (!raw || (raw.posture !== "confined" && raw.posture !== "read-blocked" && raw.posture !== "gated")) return undefined;
   const gap = typeof raw.gap === "string" ? raw.gap : undefined;
   const fix = gap !== undefined ? SECRETS_FIX[gap] : undefined;
-  return { posture: raw.posture, sentence: SECRETS_SENTENCE[raw.posture], ...(gap ? { gap } : {}), ...(fix ? { fix } : {}) };
+  // A gap with a sentence of its own (an attachment's) says it instead of
+  // the posture's, which would claim an egress check it does not make.
+  const sentence = postureSentence({ posture: raw.posture, ...(gap !== undefined ? { gap } : {}) });
+  return { posture: raw.posture, sentence, ...(gap ? { gap } : {}), ...(fix ? { fix } : {}) };
+}
+
+/** A believed attachment posture record's lost route, or undefined. Its
+ *  text is bounded by the arbiter; copied field by field. */
+function routeLostOf(posture: Loose): AttachmentRouteLost | undefined {
+  if (posture.claimed === true) return undefined;
+  const r = posture["attachmentRoute"] as { state?: unknown; problems?: unknown; config?: unknown } | undefined;
+  if (!r || r.state !== "lost") return undefined;
+  const problems = (Array.isArray(r.problems) ? r.problems as unknown[] : []).slice(0, 8).flatMap((p) => {
+    const x = p as { code?: unknown; detail?: unknown } | null;
+    return x && typeof x.code === "string" && typeof x.detail === "string" ? [{ code: x.code, detail: x.detail }] : [];
+  });
+  const since = Date.parse(posture.ts ?? "");
+  return { problems, config: typeof r.config === "string" ? r.config : null, since: Number.isFinite(since) ? since : null };
 }
 
 /** The session's agent version check: the proxy's `client_info` version (the
@@ -153,11 +196,36 @@ function versionCheckOf(posture: Loose, clientVersion: string | null): AgentVers
 export const TOOL_CANNOT_RUN_RE =
   /^(?:Exit code:? |Process exited with code |Script failed \(exit code )(?:126|127)\b|bwrap: |command not found|Failed to create NETLINK|Can't mount proc|Operation not permitted/m;
 
+/** Dropped lines that are no protection: the AgentView twin could not
+ *  inherit the agent's workspace or directory trust (launcher
+ *  services/manager.ts), so the agent may ask its trust question once. The
+ *  chip still grades them; the product page's count leaves them out. */
+export const NOT_A_PROTECTION_RE = /could not inherit (?:workspace|directory) trust/;
+
 type Loose = ManduEvent & Record<string, unknown>;
 
-export function deriveHealth(events: readonly ManduEvent[]): SessionHealth | null {
-  const posture = events.find((e) => e.kind === "launch_posture") as Loose | undefined;
+/** `platform`: the platform the session ran on (the dashboard runs beside
+ *  the launcher, so its callers pass `process.platform`); it decides only
+ *  whether a Linux-only layer's absence counts. Without one every dropped
+ *  line counts, the side that says more. */
+export function deriveHealth(events: readonly ManduEvent[], platform: NodeJS.Platform = "linux"): SessionHealth | null {
+  // The first BELIEVED posture record wins over a claimed one (a claim,
+  // arbiter-human-plane.md §10.2, is what a program on the data socket could
+  // write first): an attachment's posture is the arbiter's own record of its
+  // registration (openclaw-plugin.md §3.3). A session whose every record is
+  // a claim (an unwalled launch's) keeps its first, as before.
+  let posture = (events.find((e) => e.kind === "launch_posture" && e.claimed !== true)
+    ?? events.find((e) => e.kind === "launch_posture")) as Loose | undefined;
   if (!posture) return null;
+  // An attachment's posture changes while it runs: the arbiter records each
+  // change its service's route check reports (openclaw-plugin.md §3.6), so
+  // the NEWEST believed record of the arbiter's stands, never a claim.
+  if (posture["attachment"] !== undefined && posture.emitter === "arbiter" && posture.claimed !== true) {
+    for (const e of events) {
+      if (e.kind === "launch_posture" && e.claimed !== true && e.emitter === "arbiter" && (e as Loose)["attachment"] !== undefined) posture = e as Loose;
+    }
+  }
+  const attachmentRoute = routeLostOf(posture);
 
   const live = Array.isArray(posture["live"]) ? (posture["live"] as unknown[]).filter((x): x is string => typeof x === "string") : [];
   const dropped = Array.isArray(posture["dropped"]) ? (posture["dropped"] as unknown[]).filter((x): x is string => typeof x === "string") : [];
@@ -226,13 +294,19 @@ export function deriveHealth(events: readonly ManduEvent[]): SessionHealth | nul
   // The gated notice is a multi-line banner; the chip's tooltip gets the one
   // honest sentence + the fix instead, and the verdict is amber, never red.
   const secrets = secretsOf(posture);
+  let droppedProtections = 0;
   for (const d of dropped) {
     if (secrets?.posture === "gated" && /secrets are GATED/.test(d)) continue;
     degrade(d);
+    if (!NOT_A_PROTECTION_RE.test(d) && (platform === "linux" || !isLinuxOnlyRungLine(d))) droppedProtections++;
   }
   if (secrets?.posture === "gated") {
     const partial = secrets.gap !== undefined ? SECRETS_PARTIAL_NOTE[secrets.gap] : undefined;
     degrade(`secrets are gated, not confined: ${secrets.sentence}${partial ? ` ${partial}` : ""}${secrets.fix ? ` Upgrade once with \`${secrets.fix}\`.` : ""}`);
+  }
+  if (attachmentRoute) {
+    degrade(`the OpenClaw config no longer routes this session through Mandu: ${attachmentRoute.problems.map((p) => p.detail).join("; ")}. ` +
+      "Fix: `mandu openclaw install`, then `openclaw gateway restart`");
   }
   if (unknownTools.length) degrade(`tools with no inbound spec (outputs fail closed): ${unknownTools.join(", ")}`);
   if (agentVersion?.verdict === "newer" || agentVersion?.verdict === "older") {
@@ -242,9 +316,17 @@ export function deriveHealth(events: readonly ManduEvent[]): SessionHealth | nul
   }
   if (preview !== null) reasons.push(`${preview} support is a preview: tested less than Claude Code and Codex`);
   if (relay === "passthrough") breakIt("relay", "reply-filter in PASSTHROUGH: symbols stay opaque on the terminal");
-  else if (relayFailure !== undefined) breakIt("relay-lookup", `reply-filter cannot resolve placeholders (${relayFailure}): symbols stay opaque on the terminal`);
+  else if (relayFailure !== undefined) breakIt("relay-lookup", `reply-filter cannot resolve masked values (${relayFailure}): symbols stay opaque on the terminal`);
   const modelCalls = events.filter((e) => e.kind === "tllm_call").length;
-  if (exitEv && modelCalls > 0 && turns === 0) breakIt("no-turn", "the agent made model calls but never completed a conversation turn");
+  // The provider's usage limit (the plan's, not Mandu's): the newest model
+  // call it refused. Before any turn it is what stopped the session.
+  const limitEv = [...events].reverse().find((e) => e.kind === "tllm_call" && e.upstreamLimit?.hard === true);
+  const providerLimit = limitEv?.upstreamLimit
+    ? { ...(typeof limitEv.upstreamLimit.resetsAt === "string" ? { resetsAt: limitEv.upstreamLimit.resetsAt } : {}) }
+    : undefined;
+  if (exitEv && modelCalls > 0 && turns === 0 && providerLimit) breakIt("limit", "the AI provider refused the model calls: the plan's usage limit");
+  else if (exitEv && modelCalls > 0 && turns === 0) breakIt("no-turn", "the agent made model calls but never completed a conversation turn");
+  else if (providerLimit) reasons.push("the AI provider refused a model call: the plan's usage limit");
   // No model call at all: a `--version` / quit-at-the-prompt launch is normal
   // (exit 0, nothing to grade); a non-zero exit with no model call is the
   // agent dying before its first request — broken.
@@ -261,8 +343,11 @@ export function deriveHealth(events: readonly ManduEvent[]): SessionHealth | nul
   return {
     verdict, live, dropped, relay, clientVersion, unknownTools, agentVersion, turns, toolFailures, exitCode, reasons,
     ...(broken.length ? { broken } : {}),
+    ...(droppedProtections > 0 ? { droppedProtections } : {}),
     ...(secrets ? { secrets } : {}),
+    ...(attachmentRoute ? { attachmentRoute } : {}),
     ...(relayFailure !== undefined ? { relayFailure } : {}),
     ...(preview !== null ? { preview } : {}),
+    ...(providerLimit ? { providerLimit } : {}),
   };
 }

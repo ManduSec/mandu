@@ -25,6 +25,7 @@ import {
   type SecretArbiter,
   type SecretSetupDeps,
 } from "../../src/secret-setup.js";
+import { EGRESS_GATE_OFF_LINE, resolveHostPosture } from "../../src/confinement-posture.js";
 import { emptyMutation } from "../../src/backend/types.js";
 import { seatbeltSecretProfile } from "../../src/secret-twins.js";
 import { TWIN_SNAPSHOT_FILE, discardedWrites, parseTwinSnapshots } from "../../src/twin-writes.js";
@@ -329,8 +330,61 @@ test("DEFAULT: no userns ⇒ the launch PROCEEDS gated, with the loud notice, NO
     // gated must never borrow the confined claim
     assert.ok(!logs.some((l) => /absent from the agent's world|secret\(s\) confined via/.test(l)));
     assert.ok(logs.some((l) => /1 secret\(s\) registered for masking, NONE confined/.test(l)));
+    assert.doesNotMatch(notice!, /egress gate is also off/, "the gate runs by default");
   } finally {
     cleanup();
+  }
+});
+
+test("ONE decision: over every host fact, a launch lands on resolveHostPosture's posture and gap (what `mandu doctor` reads)", async () => {
+  const cases: Array<{ platform: "linux" | "darwin" | "win32"; bwrap: boolean; userns: boolean; apparmor: boolean; guard: boolean; guardOff: boolean; sandboxExec: boolean }> = [];
+  for (const bwrap of [true, false]) for (const userns of [true, false]) for (const apparmor of [true, false])
+    for (const guard of [true, false]) for (const guardOff of [true, false]) {
+      cases.push({ platform: "linux", bwrap, userns, apparmor, guard, guardOff, sandboxExec: false });
+    }
+  cases.push({ platform: "win32", bwrap: false, userns: false, apparmor: false, guard: false, guardOff: false, sandboxExec: false });
+  cases.push({ platform: "darwin", bwrap: false, userns: false, apparmor: false, guard: false, guardOff: false, sandboxExec: false });
+  for (const c of cases) {
+    const { dir, cleanup } = runDir();
+    try {
+      const want = resolveHostPosture({
+        platform: c.platform, bwrap: c.bwrap, userns: c.bwrap && c.userns, apparmorRestricted: c.bwrap && !c.userns && c.apparmor,
+        sandboxExec: c.sandboxExec, landlockReadBlock: false, guard: c.platform === "linux" && c.guard, guardOff: c.guardOff,
+      });
+      const res = await applySecretTwins(plan(c.guardOff ? { netGuard: false } : {}), dir, emptyMutation(), deps({
+        platform: c.platform,
+        commandExists: (cmd) => (cmd === "bwrap" ? c.bwrap : c.sandboxExec),
+        usernsOk: () => c.userns,
+        apparmorRestricted: () => c.apparmor,
+        guardServesTwins: c.guard,
+      }));
+      const at = JSON.stringify(c);
+      assert.equal(res.posture, want.posture, at);
+      assert.equal(res.gap, want.gap, at);
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test("gated with the egress gate turned off: the notice says the sentence's egress half does not hold", async () => {
+  for (const host of ["no-userns", "bind-only"] as const) {
+    const { dir, cleanup } = runDir();
+    try {
+      const logs: string[] = [];
+      const p = plan();
+      p.requested = { ...p.requested, netProxy: false };
+      const res = await applySecretTwins(p, dir, emptyMutation(), deps({
+        ...(host === "no-userns" ? { usernsOk: () => false, apparmorRestricted: () => true } : {}),
+        log: (m) => logs.push(m),
+      }));
+      assert.equal(res.posture, "gated", host);
+      const notice = logs.find((l) => l.startsWith("mandu: secrets are GATED, not confined"));
+      assert.ok(notice, `${host}: the notice is printed`);
+      assert.ok(notice!.split("\n").includes(EGRESS_GATE_OFF_LINE), `${host}: ${notice}`);
+    } finally {
+      cleanup();
+    }
   }
 });
 
@@ -683,6 +737,20 @@ test("applyEnvSecrets: masked variables reach mut.env (both spawn paths); launch
   assert.ok(logs.some((l) => /2 secret variables masked \(DATABASE_URL, GH_TOKEN\)/.test(l)), logs.join("\n"));
 });
 
+test("applyEnvSecrets under `mandu openclaw`: OpenClaw's Gateway token and password are masked like any secret (their placeholder is the same in every launch: openclaw-gateway-credentials.ts)", async () => {
+  const arb = mockArbiter({
+    registerEnvSecrets: async (vars) => ({ vars: vars.map((v) => ({ name: v.name, symbol: `$MDU:nomodel_Env[3333].${v.name}`, twin: `$MDU:nomodel_Env[3333].${v.name}`, reason: "registered" })) }),
+  });
+  const env = { OPENCLAW_GATEWAY_TOKEN: "oc-gw-token", OPENCLAW_GATEWAY_PASSWORD: "oc-gw-pw" };
+  for (const target of ["openclaw", "opencode"] as const) {
+    const mut = emptyMutation();
+    const res = await applyEnvSecrets(plan({ target }), env, mut, { arbiter: arb, log: () => {} });
+    assert.equal(mut.env["OPENCLAW_GATEWAY_TOKEN"], "$MDU:nomodel_Env[3333].OPENCLAW_GATEWAY_TOKEN", target);
+    assert.equal(mut.env["OPENCLAW_GATEWAY_PASSWORD"], "$MDU:nomodel_Env[3333].OPENCLAW_GATEWAY_PASSWORD", target);
+    assert.deepEqual(res.masked, ["OPENCLAW_GATEWAY_PASSWORD", "OPENCLAW_GATEWAY_TOKEN"]);
+  }
+});
+
 test("applyEnvSecrets under `mandu goose`: the key of the Chat Completions provider the launch routes is the agent's own, never sent; another provider's key is", async () => {
   const sent: string[] = [];
   const arb = envArbiter({ registerEnvSecrets: async (vars) => { sent.push(...vars.map((v) => v.name)); return envArbiter().registerEnvSecrets!(vars); } });
@@ -693,6 +761,21 @@ test("applyEnvSecrets under `mandu goose`: the key of the Chat Completions provi
   sent.length = 0;
   await applyEnvSecrets(plan({ target: "opencode", gooseRouting }), env, emptyMutation(), { arbiter: arb, log: () => {} });
   assert.ok(sent.includes("OPENROUTER_API_KEY"), "only a goose launch");
+});
+
+test("applyEnvSecrets under `mandu opencode` / `mandu openclaw` routing a Gemini provider: the agent's own Google key variable is never sent; without the route it is (model-wires.md §5)", async () => {
+  const sent: string[] = [];
+  const arb = envArbiter({ registerEnvSecrets: async (vars) => { sent.push(...vars.map((v) => v.name)); return envArbiter().registerEnvSecrets!(vars); } });
+  const env = { GOOGLE_GENERATIVE_AI_API_KEY: "AIza-x", GEMINI_API_KEY: "AIza-y", GH_TOKEN: "ghp_x" };
+  const openaiRoutes = [{ id: "google", api: "google-generative-ai" as const, upstream: "https://generativelanguage.googleapis.com/v1beta" }];
+  await applyEnvSecrets(plan({ target: "opencode", openaiRoutes }), env, emptyMutation(), { arbiter: arb, log: () => {} });
+  assert.deepEqual(sent.sort(), ["GH_TOKEN"], "both names OpenCode's Google client reads stay the agent's own");
+  sent.length = 0;
+  await applyEnvSecrets(plan({ target: "openclaw", openaiRoutes }), env, emptyMutation(), { arbiter: arb, log: () => {} });
+  assert.deepEqual(sent.sort(), ["GH_TOKEN", "GOOGLE_GENERATIVE_AI_API_KEY"], "OpenClaw's google provider reads GEMINI_API_KEY");
+  sent.length = 0;
+  await applyEnvSecrets(plan({ target: "opencode" }), env, emptyMutation(), { arbiter: arb, log: () => {} });
+  assert.deepEqual(sent.sort(), ["GEMINI_API_KEY", "GH_TOKEN", "GOOGLE_GENERATIVE_AI_API_KEY"], "no Gemini route: masked like any key");
 });
 
 test("applyEnvSecrets: off with the axis off or --no-env-secrets; fail-soft on an arbiter error (and says so)", async () => {
@@ -1077,6 +1160,23 @@ test("applyEnvSecrets: a sourced variable is fetched, registered, and reaches th
   assert.deepEqual(sent, [{ name: "GH_TOKEN", value: "gho_from_source" }], "the source's value, not the shell's");
   assert.equal(mut.env["GH_TOKEN"], "$MDU:nomodel_Env[1111].GH_TOKEN");
   assert.deepEqual(res.masked, ["GH_TOKEN"]);
+});
+
+test("applyEnvSecrets: PGHOST / PGPORT and MYSQL_HOST / MYSQL_TCP_PORT ride in the SAME call as the password they bind (db-login-release.md §3.3.1), a sourced PGPASSWORD's too", async () => {
+  const calls: Array<Array<{ name: string; value: string }>> = [];
+  const arb = envArbiter({
+    envSources: async () => ({ sources: [{ name: "PGPASSWORD", source: "keyring:postgres/app", bindings: [] }] }),
+    registerEnvSecrets: async (vars) => { calls.push(vars.map(({ name, value }) => ({ name, value }))); return envArbiter().registerEnvSecrets!(vars); },
+  });
+  const env = { PGPASSWORD: "shell_pw", PGHOST: "db.internal", PGPORT: "6543", MYSQL_PWD: "my_pw", MYSQL_HOST: "mysql.internal", MYSQL_TCP_PORT: "3307" };
+  await applyEnvSecrets(plan(), env, emptyMutation(), {
+    arbiter: arb, log: () => {}, resolveSource: (s) => (s === "keyring:postgres/app" ? { value: "pw_from_keyring" } : { error: "?" }),
+  });
+  assert.equal(calls.length, 1, "one registration: the arbiter reads the host beside the password");
+  const sent = new Map(calls[0]!.map((v) => [v.name, v.value]));
+  assert.equal(sent.get("PGPASSWORD"), "pw_from_keyring", "the source's value, once");
+  assert.equal(calls[0]!.filter((v) => v.name === "PGPASSWORD").length, 1);
+  for (const n of ["PGHOST", "PGPORT", "MYSQL_PWD", "MYSQL_HOST", "MYSQL_TCP_PORT"]) assert.equal(sent.get(n), env[n as keyof typeof env], n);
 });
 
 test("applyEnvSecrets: a failed source falls back to the shell's value, masked; a value the arbiter declines is emptied, never raw", async () => {
@@ -2783,4 +2883,16 @@ test("socketSecretArbiter: registerEnvSecrets and registerSecret go over the hum
     data.srv.close(); human.srv.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("applyEnvSecrets under `mandu openclaw` routing an Ollama provider: OLLAMA_API_KEY is the agent's own, never sent; without the route it is (model-wires.md, \"The Ollama wire\")", async () => {
+  const sent: string[] = [];
+  const arb = envArbiter({ registerEnvSecrets: async (vars) => { sent.push(...vars.map((v) => v.name)); return envArbiter().registerEnvSecrets!(vars); } });
+  const env = { OLLAMA_API_KEY: "ok-cloud-x", GH_TOKEN: "ghp_x" };
+  const openaiRoutes = [{ id: "ollama-cloud", api: "ollama" as const, upstream: "https://ollama.com" }];
+  await applyEnvSecrets(plan({ target: "openclaw", openaiRoutes }), env, emptyMutation(), { arbiter: arb, log: () => {} });
+  assert.deepEqual(sent.sort(), ["GH_TOKEN"]);
+  sent.length = 0;
+  await applyEnvSecrets(plan({ target: "openclaw" }), env, emptyMutation(), { arbiter: arb, log: () => {} });
+  assert.deepEqual(sent.sort(), ["GH_TOKEN", "OLLAMA_API_KEY"], "no Ollama route: masked like any key");
 });

@@ -28,6 +28,10 @@
  *   - everything else (config, models, plugins, channels, message, infer, …):
  *     management or one-off commands with no reason to run under Mandu; run
  *     them without `mandu`.
+ *   The Gateway SERVICE is protected the other way round instead: `mandu
+ *   serve` beside it and the Mandu plugin inside it, written into the user's
+ *   openclaw.json by `mandu openclaw install` (openclaw-plugin.md). The
+ *   refusal says so, and says it is already done when the plugin is there.
  * Allowed: `chat` / `terminal` (aliases of `tui --local`), `tui --local`,
  * `agent --local` (the embedded runtime: the agent loop inside the launcher's
  * child), `gateway` / `gateway run` (the Gateway itself under the wrap, so it
@@ -102,11 +106,54 @@ export function openclawRunsLocally(argv: readonly string[]): boolean {
 }
 const GATEWAY_CLIENT_OPT_IN = "MANDU_OPENCLAW_GATEWAY_CLIENT";
 
+/** Is `argv` the Gateway itself in the foreground (`gateway`, `gateway
+ *  run`)? */
+export function openclawRunsGateway(argv: readonly string[]): boolean {
+  const oc = readOpenclawArgv(argv);
+  if (!oc || oc.sub !== "gateway") return false;
+  const valueFlags = new Set(["--port", "--bind", "--auth", "--password", "--password-file", "--token", "--tailscale", "--ws-log", "--raw-stream-path"]);
+  for (let k = 0; k < oc.rest.length; k++) {
+    const a = oc.rest[k]!;
+    if (a.startsWith("-")) { if (valueFlags.has(a)) k++; continue; }
+    return a === "run";
+  }
+  return true;
+}
+
+/**
+ * The launch line for a Gateway run under Mandu (`mandu openclaw gateway
+ * [run]`), or null for any other shape. OpenClaw's own clients (`openclaw
+ * agent` without --local, `openclaw tui`) run a turn THEMSELVES, with their
+ * own config, when their call to the Gateway fails (OpenClaw's gateway-client
+ * fallback: 2026.3.12 on any error, 2026.7.1-2 on a lost connection, an auth
+ * failure or a timeout; openclaw-plugin.md §9). A client started without
+ * `mandu` reads the user's own openclaw.json, which this launch does not
+ * route: that turn's model calls, and the files its tools read, go around
+ * Mandu. OpenClaw has no switch to turn the fallback off, so the launch says
+ * which clients are protected. It also says what that costs since the Gateway
+ * token became a stable placeholder (openclaw-gateway-credentials.ts): a
+ * client outside Mandu, holding the real token, is refused. Pure.
+ */
+export function openclawGatewayClientNotice(argv: readonly string[]): string | null {
+  if (!openclawRunsGateway(argv)) return null;
+  return "mandu: this OpenClaw Gateway runs under Mandu. Send it turns through its channels or `mandu openclaw agent` / " +
+    `\`mandu openclaw tui\` with ${GATEWAY_CLIENT_OPT_IN}=1. A plain \`openclaw agent\` or \`openclaw tui\` on this machine runs a turn ` +
+    "itself when its call to the Gateway fails, with your own openclaw.json, which this launch does not route: that turn goes around Mandu. " +
+    "And a client outside Mandu (a plain `openclaw agent`, a remote app) cannot connect to this Gateway with your Gateway token: under Mandu " +
+    "it expects the token's placeholder, which only a `mandu openclaw` launch holds.";
+}
+
 /** The refusal message for an OpenClaw launch shape outside the allowlist, or
  *  null when it may launch. */
 export function openclawLaunchRefusal(
   argv: readonly string[],
   env: Record<string, string | undefined>,
+  opts: {
+    /** Is the Mandu plugin installed in the user's openclaw.json (`mandu
+     *  openclaw install`)? Asked only for a Gateway-service shape, to word the
+     *  refusal; the shape is refused either way (openclaw-plugin.md §8). */
+    attached?: () => boolean;
+  } = {},
 ): string | null {
   const oc = readOpenclawArgv(argv);
   if (!oc) return null; // a wrapper: --target vouches for it (see the header)
@@ -154,9 +201,23 @@ export function openclawLaunchRefusal(
         sub = a; break;
       }
       if (sub === undefined || sub === "run") return null;
+      // The service Gateway is protected the other way round: the Mandu
+      // plugin inside it and `mandu serve` beside it (openclaw-plugin.md).
+      // Either way this launch would protect nothing, so it is refused; only
+      // the advice differs.
+      let attached = false;
+      try { attached = opts.attached?.() === true; } catch { /* unknown: the not-installed advice */ }
+      if (attached) {
+        return refuse(
+          `\`openclaw gateway ${sub}\` manages the Gateway SERVICE or talks to a running Gateway, outside this confinement. ` +
+            "Your service Gateway is already attached to Mandu through its plugin (`mandu openclaw install`).",
+          `Run \`openclaw gateway ${sub}\` without \`mandu\`; \`mandu doctor\` checks the attachment.`,
+        );
+      }
       return refuse(
         `\`openclaw gateway ${sub}\` manages the Gateway SERVICE or talks to a running Gateway, outside this confinement.`,
-        "Run the Gateway itself under Mandu with `mandu openclaw gateway` (or `gateway run`), or run management commands without `mandu`.",
+        "Run the Gateway itself under Mandu with `mandu openclaw gateway` (or `gateway run`), or run management commands without `mandu`. " +
+          "To protect the Gateway you run as a service, attach Mandu to it instead: `mandu serve start`, then `mandu openclaw install`.",
       );
     }
     case "":

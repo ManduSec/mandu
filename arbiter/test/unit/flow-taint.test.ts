@@ -140,17 +140,18 @@ test("output rules: default secret; an interpreter is always secret; the fold ta
   assert.equal(appRuleRefusal({ app: "bash", output: "secret" }), null);
 });
 
-test("the consumer table carries the TLS compatibility verdict (confidentiality-plan-13-reader-set-labels.md): HTTP bearer consumers are served by the wire, signers, daemons, pinners and non-HTTP protocols are readers", () => {
+test("the consumer table carries the TLS compatibility verdict (confidentiality-plan-13-reader-set-labels.md): HTTP bearer consumers and SigV4 signers (re-signed at the proxy) are served by the wire; daemons, pinners and non-HTTP protocols are readers", () => {
   for (const row of CONSUMER_TABLE) assert.ok(row.wire.why.length > 0, row.apps.join(","));
   assert.equal(consumerWireRelease("/h/.config/gh/hosts.yml")!.served, true);
   assert.equal(consumerWireRelease("/h/.npmrc")!.served, true);
   assert.equal(consumerWireRelease("/h/.cargo/credentials.toml")!.served, true);
   assert.equal(consumerWireRelease("/h/.netrc")!.served, true);
   assert.equal(consumerWireRelease("/h/.pypirc")!.served, true);
-  assert.equal(consumerWireRelease("/h/.pgpass")!.served, false);
+  assert.equal(consumerWireRelease("/h/.pgpass")!.served, true, "the database relay (db-login-release.md)");
   assert.match(consumerWireRelease("/h/.aws/credentials")!.why, /SigV4/);
+  assert.equal(consumerWireRelease("/h/.aws/credentials")!.served, true, "aws-sigv4-resign.md");
   assert.equal(consumerWireRelease("/h/.docker/config.json")!.served, false);
-  assert.equal(consumerWireRelease("/h/.kube/config")!.served, false);
+  assert.equal(consumerWireRelease("/h/.kube/config")!.served, true);
   assert.equal(consumerWireRelease("/h/.ssh/id_ed25519")!.served, false);
   assert.equal(consumerWireRelease("/ws/.env"), null);
 });

@@ -42,6 +42,16 @@
  * holds the whole mark, so it has nothing to parse (a mark split across
  * chunks is caught on the tail of the text before it).
  *
+ * TOOL CALLS WRITTEN AS TEXT, OpenClaw's form (`lineTextCalls`, both wires,
+ * streamed and buffered; text-calls.ts). OpenClaw's plain-text tool-call
+ * compat layer (around its LM Studio and xAI providers' streams, and any
+ * provider plugin that uses it) RUNS a reply line that opens `[tool]`,
+ * `[tool:tool]`, `<function=tool>` or a Harmony `commentary to=tool` header.
+ * On an OpenClaw session's routes (proxy.ts) a reply whose text opens one,
+ * in a delta or in a snapshot (`.output_text.done`, a content part, an
+ * output item, the completed response), is ENDED with the error event before
+ * that event is relayed; a buffered answer carrying one is a 502.
+ *
  * `onCall` reports each released call (as released, after the gate) once,
  * for the arbiter's tool-call record and the `tool_use` event; `onText`
  * reports assistant text for the `tllm_call` event. Both are observability,
@@ -49,6 +59,7 @@
  */
 
 import { parseArguments } from "./openai-wire.js";
+import { LINE_TEXT_CALL_WHY, TextCallScan, hasTextCall } from "./text-calls.js";
 
 /** The per-exchange tool-call gate (proxy.ts toolInputTransform). */
 export type CallGate = (name: string, input: unknown, callId: string) => Promise<{ input: unknown; changed: boolean } | null>;
@@ -66,6 +77,14 @@ export interface OpenAiRewriterOptions {
   /** End a Chat response whose text carries TEXT_CALL_MARK (see TOOL CALLS
    *  WRITTEN AS TEXT). */
   refuseTextCalls?: boolean;
+  /** The tool names the request declared, as sent (the Ollama wire reads a
+   *  call's name the way the agent maps it, ollama-wire.ts canonicalToolName). */
+  toolNames?: ReadonlySet<string>;
+  /** End a response whose reply text opens a tool call OpenClaw's
+   *  plain-text compat layer would run (text-calls.ts), against the
+   *  request's declared tool names (see TOOL CALLS WRITTEN AS TEXT,
+   *  OpenClaw's form). */
+  lineTextCalls?: { toolNames: ReadonlySet<string> };
 }
 
 /** What makes Goose's ollama reader parse the assistant text for tool calls
@@ -88,11 +107,12 @@ export const UNREADABLE_CALL_NAME = "mandu_refused_unreadable_call";
 type Json = Record<string, unknown>;
 const isObj = (v: unknown): v is Json => v !== null && typeof v === "object" && !Array.isArray(v);
 
-/** Gate one assembled call: the name and arguments to release. */
-async function gateCall(gate: CallGate, name: string, args: string, id: string, log?: (m: string) => void): Promise<{ name: string; args: string; input: unknown }> {
+/** Gate one assembled call: the name and arguments to release. Shared with
+ *  the Gemini answer gate (gemini-sse.ts). */
+export async function gateCall(gate: CallGate, name: string, args: string, id: string, log?: (m: string) => void): Promise<{ name: string; args: string; input: unknown }> {
   const input = parseArguments(args);
   if (input === null) {
-    log?.(`openai: call ${id || "(no id)"} to ${name} has arguments that are not a JSON object: refused`);
+    log?.(`call ${id || "(no id)"} to ${name} has arguments that are not a JSON object: refused`);
     return { name: UNREADABLE_CALL_NAME, args: "{}", input: {} };
   }
   const r = await gate(name, input, id);
@@ -160,8 +180,12 @@ export class ChatStreamRewriter {
   /** refuseTextCalls: the end of each choice's text so far, one character
    *  shorter than TEXT_CALL_MARK (a mark split across chunks). */
   private readonly textTail = new Map<number, string>();
+  /** lineTextCalls: each choice's reply text, line by line. */
+  private readonly lineScan: TextCallScan | null;
 
-  constructor(private readonly gate: CallGate, private readonly opts: OpenAiRewriterOptions = {}) {}
+  constructor(private readonly gate: CallGate, private readonly opts: OpenAiRewriterOptions = {}) {
+    this.lineScan = opts.lineTextCalls ? new TextCallScan(opts.lineTextCalls.toolNames) : null;
+  }
 
   async feed(chunk: string): Promise<string> {
     if (this.failed) return "";
@@ -238,6 +262,9 @@ export class ChatStreamRewriter {
             this.textTail.set(ci, seen.slice(-(TEXT_CALL_MARK.length - 1)));
           }
         }
+        if (this.lineScan !== null && this.lineScan.add(`choice:${ci}`, chatContentText(delta["content"]))) {
+          return this.abort(LINE_TEXT_CALL_WHY);
+        }
         if (delta["function_call"] !== undefined) return this.abort("the model sent a legacy function_call");
         const tcs = delta["tool_calls"];
         if (tcs !== undefined && tcs !== null) {
@@ -297,6 +324,7 @@ export async function gateChatJson(obj: Json, gate: CallGate, opts: OpenAiRewrit
     if (!isObj(msg)) continue;
     if (typeof msg["content"] === "string") opts.onText?.(msg["content"] as string);
     if (opts.refuseTextCalls && chatContentText(msg["content"]).includes(TEXT_CALL_MARK)) throw new Error(TEXT_CALL_WHY);
+    if (opts.lineTextCalls && hasTextCall(chatContentText(msg["content"]), opts.lineTextCalls.toolNames)) throw new Error(LINE_TEXT_CALL_WHY);
     if (msg["function_call"] !== undefined) throw new Error("the model sent a legacy function_call");
     const tcs = msg["tool_calls"];
     if (tcs === undefined || tcs === null) continue;
@@ -333,8 +361,24 @@ export class ResponsesStreamRewriter {
   /** The gated result per item id: every snapshot carries the same one. */
   private readonly gated = new Map<string, Promise<{ name: string; args: string; input: unknown }>>();
   private failed = false;
+  /** lineTextCalls: each content part's reply text, line by line. */
+  private readonly lineScan: TextCallScan | null;
 
-  constructor(private readonly gate: CallGate, private readonly opts: OpenAiRewriterOptions = {}) {}
+  constructor(private readonly gate: CallGate, private readonly opts: OpenAiRewriterOptions = {}) {
+    this.lineScan = opts.lineTextCalls ? new TextCallScan(opts.lineTextCalls.toolNames) : null;
+  }
+
+  /** lineTextCalls: whether a COMPLETE reply text a snapshot carries opens
+   *  a call (an upstream that sends no deltas still sends these). */
+  private snapshotCalls(text: unknown): boolean {
+    return this.opts.lineTextCalls !== undefined && typeof text === "string" && hasTextCall(text, this.opts.lineTextCalls.toolNames);
+  }
+
+  /** lineTextCalls: whether a message item's text parts open a call. */
+  private itemCalls(item: Json): boolean {
+    if (this.opts.lineTextCalls === undefined || item["type"] !== "message" || !Array.isArray(item["content"])) return false;
+    return (item["content"] as unknown[]).some((p) => isObj(p) && this.snapshotCalls(p["text"]));
+  }
 
   async feed(chunk: string): Promise<string> {
     if (this.failed) return "";
@@ -462,6 +506,7 @@ export class ResponsesStreamRewriter {
           return "";
         }
         if (!INERT_ITEMS.has(t)) return this.abort(`the model produced a "${t}" item, which Mandu does not gate`);
+        if (this.itemCalls(item)) return this.abort(LINE_TEXT_CALL_WHY);
         return raw;
       }
       case "response.function_call_arguments.delta": {
@@ -488,6 +533,7 @@ export class ResponsesStreamRewriter {
           if (typeof item["arguments"] === "string") h.args = item["arguments"] as string;
           pre = await this.release(itemId, null);
         }
+        if (this.itemCalls(item)) return this.abort(LINE_TEXT_CALL_WHY);
         const released = await this.item(item);
         if (released === null) return this.abort(`the model produced a "${String(item["type"])}" item, which Mandu does not gate`);
         return pre + (released === item ? raw : serialize(type, { ...obj, item: released }));
@@ -502,6 +548,7 @@ export class ResponsesStreamRewriter {
         const out: unknown[] = [];
         for (const it of resp["output"] as unknown[]) {
           if (!isObj(it)) return this.abort("an output item is not an object");
+          if (this.itemCalls(it)) return this.abort(LINE_TEXT_CALL_WHY);
           const released = await this.item(it);
           if (released === null) return this.abort(`the model produced a "${String(it["type"])}" item, which Mandu does not gate`);
           out.push(released);
@@ -509,7 +556,18 @@ export class ResponsesStreamRewriter {
         return pre + serialize(type, { ...obj, response: { ...resp, output: out } });
       }
       case "response.output_text.delta":
-        if (typeof obj["delta"] === "string") this.opts.onText?.(obj["delta"] as string);
+        if (typeof obj["delta"] === "string") {
+          this.opts.onText?.(obj["delta"] as string);
+          const run = `${String(obj["item_id"] ?? "")}\u0000${String(obj["output_index"] ?? "")}\u0000${String(obj["content_index"] ?? "")}`;
+          if (this.lineScan !== null && this.lineScan.add(run, obj["delta"] as string)) return this.abort(LINE_TEXT_CALL_WHY);
+        }
+        return raw;
+      case "response.output_text.done":
+        if (this.snapshotCalls(obj["text"])) return this.abort(LINE_TEXT_CALL_WHY);
+        return raw;
+      case "response.content_part.added":
+      case "response.content_part.done":
+        if (isObj(obj["part"]) && this.snapshotCalls((obj["part"] as Json)["text"])) return this.abort(LINE_TEXT_CALL_WHY);
         return raw;
       default:
         // Custom-tool / shell / computer call events belong to items refused
@@ -549,6 +607,9 @@ export async function gateResponsesJson(obj: Json, gate: CallGate, opts: OpenAiR
     if (!INERT_ITEMS.has(type)) throw new Error(`the model produced a "${type}" item, which Mandu does not gate`);
     if (type === "message" && Array.isArray(item["content"])) {
       for (const p of item["content"]) if (isObj(p) && p["type"] === "output_text" && typeof p["text"] === "string") opts.onText?.(p["text"] as string);
+      if (opts.lineTextCalls && (item["content"] as unknown[]).some((p) => isObj(p) && typeof p["text"] === "string" && hasTextCall(p["text"] as string, opts.lineTextCalls!.toolNames))) {
+        throw new Error(LINE_TEXT_CALL_WHY);
+      }
     }
   }
   return changed;

@@ -10,6 +10,13 @@
  * Pins:
  * - each empty or fallback state the page writes names its commands as
  *   code (Home › Running now, Settings › Protection service);
+ * - the commands that start your agent name the agents you use: the
+ *   fixtures' Claude Code sessions give `mandu claude`; with nothing of
+ *   Mandu's running and a kept scan of Goose sessions, /api/home's hero,
+ *   `start` and scan card, /api/scan's stop line and the drawn page name
+ *   `mandu goose`, never `mandu codex`; with one recorded Goose session
+ *   and no scan kept, the Scan page's stop line follows /api/home's
+ *   `start`: `mandu goose`;
  * - Approvals › Answered earlier is not a bare heading;
  * - Rules says your rules could not be read, never "no rules", since no
  *   protection service gave them (the panel route answers `available:
@@ -31,12 +38,13 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 
 import { DashboardServer } from "../../src/server.js";
-import { FileEventSource } from "../../src/event-source.js";
+import { FileEventSource, type EventSource } from "../../src/event-source.js";
 import { tmpDir } from "../unit/tmp-dir.js";
 import { resolveCssVars } from "../unit/ui/css-flatten.js";
 import { waitWhile } from "../unit/page-wait.js";
@@ -68,14 +76,14 @@ after(async () => {
   await server.close();
 });
 
-/** The served page at `path` running against the server, with the served
- *  styles applied (jsdom does not fetch the page's stylesheet links), or
- *  the `css` given. */
-async function openPage(path: string, css = styles) {
-  const html = await (await pageFetch(`${base}${path}`)).text();
-  const js = await (await pageFetch(`${base}/js/home.js`)).text();
+/** The served page at `path` running against the server (`at`, else the
+ *  shared one), with the served styles applied (jsdom does not fetch the
+ *  page's stylesheet links), or the `css` given. */
+async function openPage(path: string, css = styles, at = base) {
+  const html = await (await pageFetch(`${at}${path}`)).text();
+  const js = await (await pageFetch(`${at}/js/home.js`)).text();
   const dom = new JSDOM(html.replace(/<script type="module"[^>]*><\/script>/, ""), {
-    url: `${base}${path}`, runScripts: "outside-only", pretendToBeVisual: true,
+    url: `${at}${path}`, runScripts: "outside-only", pretendToBeVisual: true,
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = dom.window as any;
@@ -88,7 +96,7 @@ async function openPage(path: string, css = styles) {
   const gate = <T>(p: Promise<T>): Promise<T> =>
     p.then((v) => (closed ? new Promise<T>(() => {}) : v), (e) => (closed ? new Promise<T>(() => {}) : Promise.reject(e)));
   w.fetch = (url: string, { signal: _signal, ...init }: RequestInit = {}) =>
-    gate(pageFetch(new URL(url, base).href, init).then(async (res) => {
+    gate(pageFetch(new URL(url, at).href, init).then(async (res) => {
       const body = await res.text();
       return { ok: res.ok, status: res.status, json: () => gate(Promise.resolve().then(() => JSON.parse(body))) };
     }));
@@ -106,15 +114,95 @@ async function until(check: () => boolean, what: string): Promise<void> {
 
 const codes = (node: Element | null): string[] => [...(node?.querySelectorAll("code") ?? [])].map((c) => c.textContent ?? "");
 
-test("Home: no agent is running, and the sentence names mandu claude and mandu codex as code", async () => {
+test("Home: no agent is running, and the sentence names the agent of the sessions on record as code", async () => {
+  // The fixtures record Claude Code sessions only, and no scan is kept:
+  // `start` names that agent (start-commands.ts), the one the page draws.
+  const vm = await (await pageFetch(`${base}/api/home`)).json() as { start: string[] };
+  assert.deepEqual(vm.start, ["mandu claude"]);
   const { doc, close } = await openPage("/");
   try {
     await until(() => doc.querySelector("#home-agents .empty") !== null, "Running now rendered");
     const empty = doc.querySelector("#home-agents .empty");
-    assert.equal(empty?.textContent, "No agent is running right now. Start one with mandu claude or mandu codex.");
-    assert.deepEqual(codes(empty), ["mandu claude", "mandu codex"]);
+    assert.equal(empty?.textContent, "No agent is running right now. Start one with mandu claude.");
+    assert.deepEqual(codes(empty), ["mandu claude"]);
   } finally {
     close();
+  }
+});
+
+test("nothing of Mandu's runs and the kept scan read Goose sessions: the hero, the scan card, Running now and the Scan page name mandu goose, never mandu codex", async () => {
+  const mh = tmpDir("mandu-empty-states-goose-");
+  mkdirSync(join(mh, "state"), { recursive: true });
+  const rec = {
+    version: 1, ranAt: "2026-10-21T09:00:00Z", sessions: { goose: 40 }, duringMandu: 0, sessionsUnderMandu: 0, sessionsByTime: 0,
+    findings: [{ kind: "known", preview: "STRIPE_KEY in ~/shop/.env", sessions: 3, how: { "read-file": 3 }, agents: ["goose"], projects: ["~/shop"], duringMandu: 0, source: { path: "~/shop/.env", name: "STRIPE_KEY" } }],
+    dropped: 0, known: 1, capped: { overTime: 0, overBytes: 0, tooBig: 0, overFiles: 0, readFailed: 0 }, suggestions: null,
+  };
+  writeFileSync(join(mh, "state", "last-scan.json"), JSON.stringify(rec), { mode: 0o600 });
+  // No arbiter answers, and the probe finds nothing of Mandu's.
+  const unread = {
+    async listSessions() { throw new Error("connect ENOENT arbiter.sock"); },
+    async readEvents() { return []; },
+    subscribe() { return () => {}; },
+    close() {},
+  } as unknown as EventSource;
+  const off = new DashboardServer({ source: unread, configEnv: { MANDU_HOME: mh }, manduNotRunning: () => ({ everRan: false }), log: () => {} });
+  const at = `http://127.0.0.1:${await off.listen(0)}`;
+  try {
+    const homeBody = await (await pageFetch(`${at}/api/home`)).text();
+    const vm = JSON.parse(homeBody) as { verdict: string; sentence: string; sentenceParts: unknown[]; start: string[]; scan?: { sentence: string; parts: unknown[] }; firstRun: { steps: { commands: { command: string }[] }[] } | null };
+    assert.equal(vm.verdict, "off");
+    assert.equal(vm.sentence, "Your agents send what they read to the AI as it is, secrets included. To protect one, start it with mandu goose.");
+    assert.deepEqual(vm.start, ["mandu goose"]);
+    assert.match(vm.scan?.sentence ?? "", /start your agent with mandu goose\.$/);
+    assert.doesNotMatch(JSON.stringify([vm.sentenceParts, vm.start, vm.scan?.parts]), /mandu codex|mandu claude/);
+    // The first-run card still lists every agent Mandu runs.
+    assert.equal(vm.firstRun?.steps[0]?.commands.length, 5);
+    const scanBody = await (await pageFetch(`${at}/api/scan`)).text();
+    const stop = (JSON.parse(scanBody) as { scan: { stopParts: { kind: string; text: string }[] } }).scan.stopParts;
+    assert.equal(stop.map((p) => p.text).join(""), "To keep your secrets from the AI from now on, start your agent with mandu goose.");
+    assert.doesNotMatch(scanBody, /mandu codex|mandu claude/);
+    const { doc, close } = await openPage("/", styles, at);
+    try {
+      await until(() => doc.querySelector("#home-agents .empty") !== null && codes(doc.getElementById("hero-sentence")).length > 0, "Home rendered");
+      assert.equal(doc.querySelector("#home-agents .empty")?.textContent, "No agent is running right now. Start one with mandu goose.");
+      assert.deepEqual(codes(doc.getElementById("hero-sentence")), ["mandu goose"]);
+    } finally {
+      close();
+    }
+  } finally {
+    await off.close();
+  }
+});
+
+test("one recorded Goose session and no scan kept: the Scan page's stop line names mandu goose, the `start` of /api/home, never mandu codex nor mandu claude", async () => {
+  const at0 = new Date(Date.now() - 60_000).toISOString();
+  const goose = {
+    async listSessions() { return [{ id: "1761700000-4242", label: null, eventCount: 2, firstTs: at0, lastTs: at0, agent: "goose" }]; },
+    async readEvents() { return []; },
+    subscribe() { return () => {}; },
+    close() {},
+  } as unknown as EventSource;
+  const srv = new DashboardServer({ source: goose, configEnv: { MANDU_HOME: tmpDir("mandu-empty-states-goose-run-") }, log: () => {} });
+  const at = `http://127.0.0.1:${await srv.listen(0)}`;
+  try {
+    const vm = await (await pageFetch(`${at}/api/home`)).json() as { start: string[] };
+    assert.deepEqual(vm.start, ["mandu goose"]);
+    const { doc, close } = await openPage("/scan", styles, at);
+    try {
+      // The page reads /api/scan and /api/home side by side: wait for both.
+      // The page reads /api/scan and /api/home side by side: the top bar's
+      // link is drawn from Home's answer, in the same turn as the stop line.
+      await until(() => codes(doc.getElementById("scan-stop")).length > 0 && doc.querySelector("#top-status .top-status-link") !== null, "the Scan page and Home's answer rendered");
+      const stop = doc.getElementById("scan-stop");
+      assert.deepEqual(codes(stop), vm.start);
+      assert.equal(stop?.textContent, "To keep your secrets from the AI from now on, start your agent with mandu goose.");
+      assert.doesNotMatch(stop?.textContent ?? "", /mandu codex|mandu claude/);
+    } finally {
+      close();
+    }
+  } finally {
+    await srv.close();
   }
 });
 

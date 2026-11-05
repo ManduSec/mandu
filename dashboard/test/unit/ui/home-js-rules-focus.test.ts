@@ -17,7 +17,13 @@
  *   - after Remove, or Undo, the "Your rules" heading; never another row's
  *     menu or button;
  *   - a refused change gives the focus back to the menu or button pressed,
- *     described by the refusal's words; a declined question gives it back;
+ *     described by the refusal's words;
+ *   - a change that makes protection weaker asks on the page, under its row
+ *     (dashboard.md §4.25n *Rules asks on the page, not in a browser
+ *     dialog*): its sentence takes the focus, so a second Enter posts
+ *     nothing; Cancel or Escape gives the focus to the row's ⋯; Remove
+ *     anyway leaves it on the heading, Allow anyway on the row's menu; a
+ *     redraw keeps the question and the focus in it;
  *   - a focus moved elsewhere meanwhile, or a press made without the focus,
  *     moves nothing.
  *
@@ -196,17 +202,97 @@ test("Your rules: a refused change gives the focus back to the menu or button pr
   assert.equal(focused(doc), b, "Remove, on again");
   assert.equal(b.getAttribute("aria-describedby"), b.closest(".rule-detail").querySelector(".ask-error").id);
 
-  // Remove that loosens asks first; declined, nothing is sent again and the
-  // focus is where it was pressed.
+  // Remove that loosens asks first, on the page; Cancel sends nothing again
+  // and gives the focus to the row's ⋯ (asksInPlace below).
   const asked = rules({ "POST policy/rules/change": { applied: false, confirm: true, expected: ["k"] } });
   await tick();
-  asked.window.confirm = () => false;
-  const r = removeIn(opened(asked.doc, "b.example"));
-  press(r);
+  asked.window.confirm = () => { throw new Error("window.confirm called"); };
+  press(removeIn(opened(asked.doc, "b.example")));
   await tick(30);
-  assert.equal(focused(asked.doc), r);
-  assert.equal(r.disabled, false);
-  assert.equal(r.getAttribute("aria-describedby"), null, "nothing was refused");
+  const cancel = [...asked.doc.querySelectorAll(".ask-in-place button")].find((b: Doc) => b.textContent === "Cancel");
+  cancel.focus();
+  cancel.click();
+  await tick(30);
+  assert.equal(focused(asked.doc), rowOf(asked.doc, "b.example").querySelector(".file-more"));
+  assert.equal(removeIn(rowOf(asked.doc, "b.example").nextElementSibling).getAttribute("aria-describedby"), null, "nothing was refused");
+});
+
+/** The Rules page whose change routes ask first for every change, then
+ *  apply it once sent back with `expected` (a weakening change). */
+function weakening() {
+  const posts: { id: string; action: string; expected?: unknown }[] = [];
+  let yourRules: unknown[] = [sendRule("r-0001", "api.example.com", "block"), sendRule("r-0002", "b.example", "allow")];
+  const page = rules({
+    "GET policy/panel": () => panelOf(yourRules, []),
+    "POST policy/rules/change": (b: { id: string; action: string; expected?: unknown }) => {
+      posts.push(b);
+      if (!b.expected) return { applied: false, confirm: true, expected: ["k-" + b.id] };
+      if (b.action === "remove") yourRules = yourRules.filter((r) => (r as { id: string }).id !== b.id);
+      else yourRules = yourRules.map((r) => ((r as { id: string }).id === b.id ? sendRule(b.id, (r as { subject: string }).subject, b.action as "allow" | "block") : r));
+      return { applied: true, changeId: "pc-0007" };
+    },
+  });
+  return { ...page, posts };
+}
+const askOf = (doc: Doc) => doc.querySelector("#rules-list .ask-in-place");
+const askButton = (doc: Doc, words: string) => [...askOf(doc).querySelectorAll("button")].find((b: Doc) => b.textContent === words);
+
+test("Your rules asks on the page: the sentence holds the focus, so a second Enter posts nothing; Remove anyway leaves it on the heading", async () => {
+  const { doc, window, posts } = weakening();
+  await tick();
+  window.confirm = () => { throw new Error("window.confirm called"); };
+  const remove = removeIn(opened(doc, "b.example"));
+  press(remove);
+  await tick(30);
+  const words = askOf(doc).querySelector(".ask-in-place-words");
+  assert.equal(focused(doc), words, "the question's sentence, a line, has the focus");
+  assert.notEqual(words.tagName, "BUTTON");
+  assert.equal(words.textContent, "Removing this rule makes protection weaker for b.example.");
+  // An Enter pressed again lands on the sentence: nothing is posted.
+  words.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await tick(30);
+  assert.deepEqual(posts, [{ id: "r-0002", action: "remove" }], "only the first, asking request");
+  const yes = askButton(doc, "Remove anyway");
+  press(yes);
+  await tick(30);
+  assert.deepEqual(posts[1], { id: "r-0002", action: "remove", expected: ["k-r-0002"] }, "the expected the first answer gave");
+  assert.equal(rowOf(doc, "b.example"), undefined, "removed");
+  assert.equal(askOf(doc), null);
+  assert.equal(focused(doc), heading(doc), "the row gone: the heading, never another row's control");
+});
+
+test("Your rules asks on the page: Allow anyway gives the focus back to the row's menu; Escape gives it to the ⋯; a redraw keeps the question", async () => {
+  const { doc, window, posts } = weakening();
+  await tick();
+  window.confirm = () => { throw new Error("window.confirm called"); };
+  pick(menuOf(doc, "api.example.com"));
+  await tick(30);
+  assert.equal(askOf(doc).querySelector(".ask-in-place-words").textContent, "Always allowing this makes protection weaker for api.example.com.");
+  assert.equal(askOf(doc).previousElementSibling, rowOf(doc, "api.example.com"), "under the row");
+  assert.equal(menuOf(doc, "api.example.com").value, "", "the menu still shows the effect in force");
+  // A redraw (a read of the rules, Find) draws the question again, the
+  // focus on the same part of it.
+  askButton(doc, "Cancel").focus();
+  doc.getElementById("rules-find").value = "api";
+  doc.getElementById("rules-find").dispatchEvent(new window.Event("input", { bubbles: true }));
+  await tick();
+  assert.ok(askOf(doc), "still asked");
+  assert.equal(focused(doc), askButton(doc, "Cancel"));
+  // Escape in it: closed, nothing posted, the focus on the ⋯.
+  focused(doc).dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  await tick(30);
+  assert.equal(askOf(doc), null);
+  assert.equal(posts.length, 1);
+  assert.equal(focused(doc), rowOf(doc, "api.example.com").querySelector(".file-more"));
+  // Asked again, Allow anyway: the row's menu, drawn with its new effect.
+  pick(menuOf(doc, "api.example.com"));
+  await tick(30);
+  press(askButton(doc, "Allow anyway"));
+  await tick(30);
+  assert.deepEqual(posts[2], { id: "r-0001", action: "allow", expected: ["k-r-0001"] });
+  assert.equal(focused(doc), menuOf(doc, "api.example.com"));
+  assert.deepEqual(effects(menuOf(doc, "api.example.com")), ["sending allowed", "Always blocked"]);
+  assert.equal(doc.getElementById("rules-notice").firstChild.textContent, "Now always allowed.");
 });
 
 test("Your rules: a focus moved elsewhere meanwhile, and a press made without the focus, move nothing", async () => {

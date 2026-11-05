@@ -27,8 +27,9 @@
  *       the arbiter's IPC, `violatedInvariant`, as the fixtures record one):
  *       the served agent page, signed in and out, shows *What the leak check
  *       found* and then *What to do now*, which names the secret by its name
- *       and links Report a problem; no rendered text carries the value or a
- *       token.
+ *       and links Report it privately (the private vulnerability report
+ *       form, never the public tracker); no rendered text carries the value
+ *       or a token.
  *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON).
  */
@@ -54,7 +55,7 @@ import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
 import { stateAxes } from "../lib/axes.js";
 import { ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
-import { ISSUES_URL } from "../../dashboard/src/agent-versions.js";
+import { ISSUES_URL, SECURITY_REPORT_URL } from "../../dashboard/src/agent-versions.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the axis under test
 
@@ -166,7 +167,7 @@ test("a product-only dashboard shows a session's trace: History lists it, its ag
       assert.equal(split.querySelector(".half.real .half-label").textContent, "What really happened");
       assert.ok(split.querySelector(".half.saw .chip, .half.saw [class*=chip]") || /secret/.test(split.querySelector(".half.saw").textContent), "the AI saw a placeholder");
       assert.match(split.querySelector(".half.real").textContent, /The result held your secret \.env\./, "what happened names the secret");
-      assert.match(doc.getElementById("agent-secrets").textContent, /The AI got only a placeholder, never the real value\./);
+      assert.match(doc.getElementById("agent-secrets").textContent, /The AI got only its masked version, never the real value\./);
       assert.equal(doc.getElementById("agent-finding-block").hidden, true);
       assert.equal(doc.getElementById("agent-trace").hidden, true, "no Detailed trace button");
       const devLinks = [...doc.querySelectorAll("a")].filter((a) => /\/dev\//.test((a as { href: string }).href) && !(a as { closest(s: string): unknown }).closest("[hidden]"));
@@ -188,7 +189,7 @@ test("a product-only dashboard shows a session's trace: History lists it, its ag
   }
 });
 
-test("a session the leak check flagged: its agent page says what to do now, naming the secret by its name and linking Report a problem, signed in and out, with no value (secrets axes, explicit)", { timeout: 60_000 }, async () => {
+test("a session the leak check flagged: its agent page says what to do now, naming the secret by its name and linking Report it privately, signed in and out, with no value (secrets axes, explicit)", { timeout: 60_000 }, async () => {
   const FLAGGED = `${SESSION}-flagged`;
   const tmp = mkdtempSync(join(tmpdir(), "mandu-history-todo-"));
   const ws = join(tmp, "ws");
@@ -260,10 +261,15 @@ test("a session the leak check flagged: its agent page says what to do now, nami
         assert.equal(doc.getElementById("agent-finding-todo-title").textContent, "What to do now");
         const lines = [...doc.querySelectorAll("#agent-finding-todo li")].map((li) => (li as { textContent: string }).textContent);
         assert.match(lines[0]!, /^Change \.env where it was issued/, who);
-        assert.equal(lines[lines.length - 1], "This is a fault in Mandu, not in your rules. Report a problem, with this session's time. Never paste the key itself.");
-        const link = doc.querySelector("#agent-finding-todo a") as { getAttribute(a: string): string };
-        assert.equal(link.getAttribute("href"), ISSUES_URL);
+        assert.equal(lines[lines.length - 1], "This is a fault in Mandu, not in your rules. Report it privately to Mandu's maintainers, with this session's time. Do not open a public issue, and never paste the key itself.");
+        const links = [...doc.querySelectorAll("#agent-finding-todo a")] as { getAttribute(a: string): string; textContent: string }[];
+        assert.equal(links.length, 1, who);
+        const link = links[0]!;
+        assert.equal(link.textContent, "Report it privately");
+        assert.equal(link.getAttribute("href"), SECURITY_REPORT_URL);
+        assert.notEqual(link.getAttribute("href"), ISSUES_URL, "a leak is never sent to the public issue tracker (SECURITY.md)");
         assert.equal(link.getAttribute("target"), "_blank");
+        assert.equal(link.getAttribute("rel"), "noopener noreferrer");
         noValue(doc.body.textContent, `${who}: the rendered agent page`);
       }, signedIn ? { headers: CSRF_ADMIN } : {});
     }

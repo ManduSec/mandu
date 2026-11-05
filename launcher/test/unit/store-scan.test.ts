@@ -30,7 +30,7 @@ import { deflateSync } from "node:zlib";
 import { SealSession } from "../../src/cache-seals.js";
 import type { GitRunner } from "../../src/git-object-twins.js";
 import {
-  cmpBytes, commitTree, credentialTokens, ENTRY_BLOB, ENTRY_OTHER, ENTRY_TREE, hasId, isRacy, mergeSorted, metasOf, newStoreScanStats,
+  appendAll, cmpBytes, commitTree, credentialTokens, ENTRY_BLOB, ENTRY_OTHER, ENTRY_TREE, hasId, isRacy, mergeSorted, metasOf, newStoreScanStats,
   parseBatch, parseBatchCheck, parseLooseHeader, parseScanState, readLooseObject, recordWidth, scanStore, sortRecords, sortedIdBuffer,
   storeScanDir, STORE_SCAN_RULE, tagTarget, topPrefixes, topProtected, treeEntries, unseenOfSorted, type ScanPredicate, type StoreScanStats,
 } from "../../src/store-scan.js";
@@ -360,5 +360,30 @@ test("a store over the cap is not scanned", async () => {
     assert.ok(s.overCap !== null && s.overCap > 2);
     assert.deepEqual(s.pairs, []);
     assert.equal(stats.overCap, 1);
+  } finally { rmSync(r.tmp, { recursive: true, force: true }); }
+});
+
+test("appendAll appends a list far past the spread-argument limit, in order", () => {
+  const src = Array.from({ length: 300_000 }, (_, i) => i);
+  const dst = [-1];
+  appendAll(dst, src);
+  assert.equal(dst.length, 300_001);
+  assert.deepEqual([dst[0], dst[1], dst[300_000]], [-1, 0, 299_999]);
+});
+
+test("a first scan of a store of 200k objects completes (no spread of every id as call arguments)", async () => {
+  // Live 2026-10-28: the first whole-store check of a 129k-object store threw
+  // "Maximum call stack size exceeded" (each id's type pushed as one spread)
+  // and the launch was refused. Past ~125k a spread overflows on any stack.
+  const r = repo();
+  try {
+    commitEnv(r, `TOKEN=${key(1)}\n`, "v1");
+    const n = 200_000;
+    const parts: string[] = [];
+    for (let i = 0; i < n; i++) { const d = `filler ${i}\n`; parts.push(`blob\ndata ${Buffer.byteLength(d)}\n${d}\n`); }
+    git(r.ws, ["fast-import", "--quiet"], parts.join(""));
+    const s = await scan(r, protect(".env"), { now: later() });
+    assert.ok(s.pairs.some(([b, p]) => b === blobOf(r, `TOKEN=${key(1)}\n`) && p === ".env"), "the protected version is still found");
+    assert.ok(s.stats.asked >= n, `git was asked every packed id (${s.stats.asked})`);
   } finally { rmSync(r.tmp, { recursive: true, force: true }); }
 });

@@ -113,9 +113,13 @@ test("Rules over the real arbiter: Changes to save keeps its room below a focuse
   try {
     // R1: the served stylesheet.
     const css = rulesOf(await (await pageFetch(`${base}/app.css`)).text());
-    const padding = css.filter((r) => /scroll-padding/.test(r.body));
+    const padding = css.filter((r) => /scroll-padding-bottom/.test(r.body));
     assert.deepEqual(padding.map((r) => `${r.sel} { ${r.body} }`), ["html:not(:has(#files-pending:focus-within)) { scroll-padding-bottom: var(--bar-room, 0px); }"],
       "the window keeps the bar's room, except while the focus is in the bar");
+    // The only other room is above: 8 px on a phone, the top bar's on a
+    // wide window (dashboard.md §4.25 *The bar stays in sight on a wide window*).
+    assert.deepEqual(css.filter((r) => /scroll-padding/.test(r.body) && !/scroll-padding-bottom/.test(r.body)).map((r) => `${r.sel} { ${r.body} }`), ["html { scroll-padding-top: 8px; }", "html { scroll-padding-top: 73px; }"],
+      "a room above, never a bottom one");
     assert.match(css.find((r) => r.sel === ".files-pending")?.body ?? "", /position: sticky; bottom: 12px;/);
 
     const ro = fakeResize();

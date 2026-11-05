@@ -46,7 +46,7 @@ function gooseUrl(base: string, path: string): URL {
 
 test("every endpoint key of the unrouted providers is in the forced env, each pointed where nothing is sent", () => {
   const e = gooseForcedEnv(PROXY);
-  assert.ok(GOOSE_PROVIDER_FENCE.length >= 30, "goose 1.53.0's keys, pinned");
+  assert.ok(GOOSE_PROVIDER_FENCE.length >= 29, "goose 1.53.0's keys, pinned (GOOGLE_HOST is routed since 2026-10-25)");
   for (const f of GOOSE_PROVIDER_FENCE) {
     const v = e[f.key];
     assert.ok(v, `${f.key} is set`);
@@ -77,7 +77,7 @@ test("every endpoint key of the unrouted providers is in the forced env, each po
     }
   }
   // the declarative `${VAR}` providers and the CLI-spawning ones are covered
-  for (const k of ["GOOGLE_HOST", "LMSTUDIO_HOST", "MOONSHOT_BASE_URL", "ZAI_BASE_URL", "TANZU_AI_ENDPOINT", "CODEX_COMMAND", "CURSOR_AGENT_COMMAND", "GCP_LOCATION", "GITHUB_COPILOT_HOST", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME"]) {
+  for (const k of ["LMSTUDIO_HOST", "MOONSHOT_BASE_URL", "ZAI_BASE_URL", "TANZU_AI_ENDPOINT", "CODEX_COMMAND", "CURSOR_AGENT_COMMAND", "GCP_LOCATION", "GITHUB_COPILOT_HOST", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME"]) {
     assert.ok(GOOSE_PROVIDER_FENCE.some((f) => f.key === k), k);
   }
 });

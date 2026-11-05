@@ -78,6 +78,7 @@ import { eventRetentionDaysFromEnv } from "../events/event-store.js";
 import { setActiveInboundSpec, isInboundSpecId } from "../policy/tool-inbound.js";
 import { setActiveOutboundSpec } from "../policy/tool-outbound.js";
 import { resolveConfidentialityEnabled } from "../policy/confidentiality-flag.js";
+import { ISSUER_CATALOG_PROBLEMS } from "../policy/issuer-bindings.js";
 import { assertIntegrityAllowed, resolveIntegrityEnabled } from "../policy/integrity-flag.js";
 import { modeOf } from "../policy/protection-mode.js";
 import { installAdminLayer, loadPolicyFileStrict, policyWarnings, resolvePolicyFilePath, type StrictPolicyFile } from "../policy/policy-file-validate.js";
@@ -286,6 +287,9 @@ async function main(): Promise<void> {
   } else {
     console.error(`[arbiter] policy file: none at ${policyPath} — the built-in policy is the whole law`);
   }
+  // A shipped issuer file that fails a check is left out of the issuer
+  // bindings (its keys ask; confidentiality.md §2.3): say so at start.
+  for (const p of ISSUER_CATALOG_PROBLEMS) console.error(`[arbiter] issuer bindings: ${p} (left out: its keys ask)`);
 
   const prepOff = preparedCopiesOff(process.env);
   server = new ArbiterServer({

@@ -41,6 +41,7 @@ import { claudeCodeSetting, codexSetting, resolveProvider, type ProviderSetting,
 import { COUNT_ONLY_KINDS, countCursorChats, isUnwrappedStoreFile, unwrappedItems, type UnwrappedKind } from "./transcript-unwrapped.js";
 import { RESPONSE_ID_RE, Turns } from "./transcript-readers.js";
 import { looksLikeTestValue } from "./transcript-test-values.js";
+import { ATTACHMENT_SESSION_PREFIX, isAttachmentKind, type AttachmentGap } from "./confinement-posture.js";
 
 // ── What reached the model ──────────────────────────────────────────────────
 
@@ -132,6 +133,45 @@ export interface SessionMeta {
   /** Not a session of its own (Goose's request log, a record of many
    *  sessions' requests): its findings count it, the sessions read do not. */
   uncounted?: boolean;
+  /** The record is a copy the agent masked when it SAVED it while the model
+   *  got the text as read: OpenClaw's JSONL store (2026.7 and earlier,
+   *  transcript-stores.ts), whose `logging.redactSensitive` keeps a
+   *  secret-looking value as its first 6 characters, `…` and its last 4.
+   *  A known value is then also found by that mask ({@link openclawMask}),
+   *  and the finding says so (`matchedMasked`). From 2026.8 OpenClaw masks
+   *  the same values before the model too (its SQLite store), so there the
+   *  mask is what the model got, not the value: no such record sets this. */
+  savedMasked?: boolean;
+  /** Records the agent stored compressed that this Node cannot decompress
+   *  (OpenClaw 2026.8 and later keep a message of 1 KiB or more as zstd,
+   *  `event_zstd`; `node:zlib` decompresses zstd from Node 22.15): the
+   *  session was read without them, and the scan says it was not read in
+   *  full (`capped.compressed`) rather than calling it clean. */
+  compressedUnread?: number;
+}
+
+/** OpenClaw's `maskToken` floor: a value shorter than this is saved as
+ *  `***`, which ties to no value. */
+export const OPENCLAW_MASK_MIN = 18;
+
+/**
+ * OpenClaw's mask of `value` as its `logging.redactSensitive` saves it
+ * (`maskToken`, OpenClaw 2026.3 to 2026.10: the first 6 characters, `…`, the
+ * last 4), or null when the value is too short for one (`***`) or holds a
+ * character outside the Basic Multilingual Plane (OpenClaw cuts by UTF-16
+ * code units around those, so the mask is not the value's to compute). Pure.
+ */
+export function openclawMask(value: string): string | null {
+  if (value.length < OPENCLAW_MASK_MIN || /[\uD800-\uDFFF]/.test(value)) return null;
+  return `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
+
+/** Is the mask at `at` in `text` a whole masked token: the characters
+ *  around it are not ones a token goes on with (a letter, a digit, `_`,
+ *  `-`), so a mask inside a longer word is no match. Pure. */
+function maskStandsAlone(text: string, at: number, len: number): boolean {
+  const word = /[A-Za-z0-9_-]/;
+  return !word.test(text[at - 1] ?? "") && !word.test(text[at + len] ?? "");
 }
 
 export { RESPONSE_ID_RE };
@@ -401,6 +441,48 @@ export interface TranscriptFinding {
    *  `looksLikeTestValue`): reported, not counted as a leak. Never set on
    *  one of the person's own secrets. */
   looksLikeTest?: true;
+  /** Of `sessions`, those where it was found by the agent's saved mask of
+   *  the value ({@link SessionMeta.savedMasked}: OpenClaw 2026.7 and
+   *  earlier, which sent the value itself to the model and saved only the
+   *  mask). Absent when none. */
+  matchedMasked?: number;
+  /** When some of `sessions` ran under Mandu (`sessionsUnderMandu > 0`)
+   *  and some did not: the others' dates and ways, those the report counts
+   *  as reaching the AI (plan 17 §2: a session under Mandu is never
+   *  counted as a leak; one marked by time is). `how` counts those
+   *  sessions per way; `first` and `last` are their texts' times. Absent
+   *  when no session ran under Mandu (then `first`, `last` and `how` say
+   *  the same) or when every one did (the finding is one Mandu kept). */
+  outsideMandu?: { first?: string; last?: string; how: Partial<Record<SentHow, number>> };
+  /** For a known value: where the value itself sits now on this computer,
+   *  outside the file it lives in (lineage ★2, plan 17 §3 item 15): each
+   *  chat-history file (or agent database) the scan found it in, those of
+   *  sessions without Mandu first, then the newest, at most
+   *  {@link MAX_PLACES}. The scan only says where; it never changes one
+   *  (§7 item 2). */
+  places?: ScanPlace[];
+  /** Places past {@link MAX_PLACES}, counted only. */
+  placesMore?: number;
+}
+
+/** One place a known value sits in now (`TranscriptFinding.places`): a
+ *  transcript file, or an agent's database, as the scan read it. */
+export interface ScanPlace {
+  agent: TranscriptAgent;
+  /** The file, home as `~`, redacted like an example's file. */
+  file: string;
+  /** The weakest standing to Mandu of the sessions in it that carried the
+   *  value (`without` below `by-time` below `under`). */
+  mandu: ManduStatus;
+  /** Its texts' first and last times that carried the value. */
+  first?: string;
+  last?: string;
+  /** Sessions in it that carried the value. */
+  sessions: number;
+  /** The Mandu sessions they ran under (their ids, as the dashboard's
+   *  session page takes them), at most {@link MAX_PLACE_MANDU_SESSIONS};
+   *  absent when none ran under Mandu or none is known. */
+  manduSessions?: string[];
 }
 
 /** One example of a finding: what the agent did in one session, REDACTED
@@ -447,6 +529,12 @@ export const MAX_EXAMPLES_PER_HOW = 10;
 export const MAX_DETAIL_FINDINGS = 500;
 /** Projects counted per finding. */
 const MAX_PROJECT_COUNT = 10_000;
+/** Places listed per known finding (`places`). */
+export const MAX_PLACES = 10;
+/** Files held per known finding while the scan reads; past it, counted. */
+const MAX_PLACE_FILES = 1_000;
+/** Mandu sessions listed per place. */
+export const MAX_PLACE_MANDU_SESSIONS = 3;
 
 /** Newest first; an example with no time last. */
 function insertNewest<T extends { ex: ScanExample }>(list: T[], h: T, max: number): void {
@@ -476,6 +564,9 @@ export interface ManduWindow {
   agent: TranscriptAgent;
   from: number;
   to: number;
+  /** The Mandu session's id (its event file's name; an attachment's
+   *  session), so a place can link to it. Absent: not known. */
+  session?: string;
   /** The response ids Mandu's model proxy recorded in it (`tllm_call`'s
    *  `model.responseId`). Absent or empty for a session of an older Mandu,
    *  whose events carry none: there only the time can mark a transcript. */
@@ -684,6 +775,9 @@ interface Acc {
   projects: Set<string>;
   /** Per session, how the texts that carried it stand to Mandu. */
   marks: Map<string, SessionMark>;
+  /** Per session, the times of its first and last texts that carried it
+   *  (for `outsideMandu`). */
+  times: Map<string, { first?: string; last?: string }>;
   allProjects: Set<string>;
   /** Per way, the newest example of each of the newest sessions. */
   byHow: Map<SentHow, HeldExample[]>;
@@ -691,6 +785,13 @@ interface Acc {
   withoutPool: HeldExample[];
   /** It looks like a test value (`looksLikeTestValue`). */
   test?: true;
+  /** The sessions it was found in only by the agent's saved mask. */
+  masked?: Set<string>;
+  /** A known value's files (`places`): per file, its agent and the
+   *  sessions in it that carried the value. */
+  files?: Map<string, { agent: TranscriptAgent; sessions: Set<string> }>;
+  /** Files past {@link MAX_PLACE_FILES}. */
+  filesMore?: number;
 }
 
 /** An example as the scanner holds it: with its request's mark, or, where
@@ -720,6 +821,9 @@ export class TranscriptScanner {
   private readonly sends = new Map<string, SendAcc>();
   private sendsDropped = 0;
   private readonly knownIds = new Set<string>();
+  /** Each known value by OpenClaw's mask of it, for a record saved masked
+   *  (`savedMasked`); a mask two known values share ties to neither. */
+  private readonly knownByMask = new Map<string, { value: string; id: string; k: KnownSecret; shape?: SecretShape } | null>();
   private readonly sessionsOf = new Map<TranscriptAgent, Set<string>>();
   /** Each session's standing to Mandu, by `agent\0session`. */
   private readonly status = new Map<string, ManduStatus>();
@@ -733,6 +837,11 @@ export class TranscriptScanner {
   /** Every agent session id Mandu recorded, by agent, with the Mandu
    *  sessions that recorded it. */
   private readonly recordedSessions = new Map<TranscriptAgent, Map<string, ManduWindow[]>>();
+  /** The Mandu sessions (their ids) each response id was recorded in, by
+   *  agent: a place's links. */
+  private readonly recordedIn = new Map<TranscriptAgent, Map<string, Set<string>>>();
+  /** Each transcript session's Mandu sessions (`agent\0session`). */
+  private readonly sessionWindows = new Map<string, Set<string>>();
   private from: string | undefined;
   private to: string | undefined;
   private dropped = 0;
@@ -759,6 +868,14 @@ export class TranscriptScanner {
       let ids = this.recorded.get(w.agent);
       if (ids === undefined) this.recorded.set(w.agent, (ids = new Map()));
       for (const id of w.responseIds) ids.set(id, Math.min(ids.get(id) ?? Infinity, w.from));
+      if (w.session === undefined) continue;
+      let by = this.recordedIn.get(w.agent);
+      if (by === undefined) this.recordedIn.set(w.agent, (by = new Map()));
+      for (const id of w.responseIds) {
+        const s = by.get(id);
+        if (s === undefined) by.set(id, new Set([w.session]));
+        else s.add(w.session);
+      }
     }
     for (const w of this.windows) {
       if (!w.agentSessionIds?.length) continue;
@@ -778,6 +895,9 @@ export class TranscriptScanner {
         const last = (k.name ?? "").split(".").pop()!.replace(/__\d+$/, "");
         const shown = /^[A-Za-z_][A-Za-z0-9_-]{0,40}$/.test(last) && !looksLikeSecretValue(last) && !last.startsWith("cred") ? last : "secret";
         this.redact.push({ value: k.value, mask: `‹${shown}›` });
+        // OpenClaw's saved mask of it is ten of its characters: never shown either
+        const om = openclawMask(k.value);
+        if (om !== null) this.redact.push({ value: om, mask: `‹${shown}›` });
       }
       if (!cred) continue;
       const id = this.idOf(k.value);
@@ -786,6 +906,8 @@ export class TranscriptScanner {
       const shape = vendorShapeOf(k.value);
       const entry = { value: k.value, id, k, ...(shape ? { shape } : {}) };
       this.known.push(entry);
+      const mask = openclawMask(k.value);
+      if (mask !== null) this.knownByMask.set(mask, this.knownByMask.has(mask) ? null : entry);
       const name = (k.name ?? "").split(".").pop()!.replace(/__\d+$/, "");
       // Only a variable's kind of name (`STRIPE_KEY`): a config key's `token` is too common to tie a `$token` to.
       if (/^[A-Z][A-Z0-9_]*$/.test(name) && !this.knownByName.has(name)) this.knownByName.set(name, entry);
@@ -882,6 +1004,23 @@ export class TranscriptScanner {
     return this.status.get(`${agent}\u0000${session}`) ?? "without";
   }
 
+  /** The Mandu sessions a transcript session ran under: those that
+   *  recorded one of its response ids or its agent session id, else those
+   *  of the same agent its time overlaps (a mark by time). Ids only, at
+   *  most {@link MAX_PLACE_MANDU_SESSIONS}. Pure over the windows. */
+  private manduSessionsOf(agent: TranscriptAgent, from: string | undefined, to: string | undefined, ids: ReadonlySet<string> | undefined, sessionId: string | undefined): string[] {
+    const out = new Set<string>();
+    const by = this.recordedIn.get(agent);
+    if (ids !== undefined && by !== undefined) for (const id of ids) for (const s of by.get(id) ?? []) out.add(s);
+    if (sessionId !== undefined) for (const w of this.recordedSessions.get(agent)?.get(sessionId) ?? []) if (w.session !== undefined) out.add(w.session);
+    if (out.size === 0 && from !== undefined && to !== undefined) {
+      const a = Date.parse(from);
+      const b = Date.parse(to);
+      for (const w of this.windows) if (w.agent === agent && w.session !== undefined && a <= w.to && b >= w.from) out.add(w.session);
+    }
+    return [...out].slice(0, MAX_PLACE_MANDU_SESSIONS);
+  }
+
   /** A finding's (or send's) mark in one session, as answered. */
   private markOf(m: SessionMark): ManduStatus {
     return weaker(m.fixed, m.follows ? this.status.get(m.key) ?? "without" : undefined) ?? "without";
@@ -902,8 +1041,10 @@ export class TranscriptScanner {
 
   /** Read one transcript file: `session` names its session (a subagent's
    *  file shares its parent's), `texts` are its reader's output, `acts`
-   *  what the session did (transcript-acts.ts), for the riskier sessions. */
-  addSession(agent: TranscriptAgent, session: string, texts: Iterable<SentText>, meta: SessionMeta = {}, acts?: SessionActs): void {
+   *  what the session did (transcript-acts.ts), for the riskier sessions,
+   *  and `path` the file it is in (a known value's `places`; absent, the
+   *  session's key when that is a path). */
+  addSession(agent: TranscriptAgent, session: string, texts: Iterable<SentText>, meta: SessionMeta = {}, acts?: SessionActs, path?: string): void {
     let seen = this.sessionsOf.get(agent);
     if (seen === undefined) this.sessionsOf.set(agent, (seen = new Set()));
     if (meta.uncounted !== true) seen.add(session);
@@ -937,6 +1078,23 @@ export class TranscriptScanner {
         const name = k.k.name;
         keep(this.note(k.id, "known", name ? `${name} in ${k.k.path}` : k.k.path, agent, session, t, { path: k.k.path, ...(name ? { name } : {}) }), t);
       }
+      // A record saved masked (OpenClaw 2026.7 and earlier): a known value
+      // the model got as read is kept here as its mask. Matched only as a
+      // whole token, only for a mask no other known value shares, and only
+      // where the value itself is not in the text already.
+      if (meta.savedMasked === true && t.text.includes("…")) {
+        for (const [mask, k] of this.knownByMask) {
+          if (k === null || here.includes(k.value)) continue;
+          let at = t.text.indexOf(mask);
+          while (at >= 0 && !maskStandsAlone(t.text, at, mask.length)) at = t.text.indexOf(mask, at + 1);
+          if (at < 0) continue;
+          here.push(mask);
+          const name = k.k.name;
+          const a = this.note(k.id, "known", name ? `${name} in ${k.k.path}` : k.k.path, agent, session, t, { path: k.k.path, ...(name ? { name } : {}) });
+          if (a !== undefined) (a.masked ??= new Set()).add(session);
+          keep(a, t);
+        }
+      }
       for (const h of findSecretValues(t.text)) {
         const id = this.idOf(h.value);
         // A known value its shape also finds is reported once, as known; so
@@ -962,6 +1120,26 @@ export class TranscriptScanner {
     const before = this.status.get(key);
     const st: ManduStatus = before === "under" || here === "under" ? "under" : before === "by-time" || here === "by-time" ? "by-time" : "without";
     this.status.set(key, st);
+    if (here !== "without") {
+      const ms = this.manduSessionsOf(agent, first, last, meta.responseIds, meta.agentSessionId);
+      if (ms.length > 0) {
+        let s = this.sessionWindows.get(key);
+        if (s === undefined) this.sessionWindows.set(key, (s = new Set()));
+        for (const m of ms) s.add(m);
+      }
+    }
+    // A known value's places: the file the session was read from.
+    const where = path ?? (session.startsWith("/") ? session : undefined);
+    if (where !== undefined) {
+      for (const a of touched) {
+        if (a.kind !== "known") continue;
+        const files = (a.files ??= new Map());
+        const f = files.get(where);
+        if (f !== undefined) f.sessions.add(session);
+        else if (files.size < MAX_PLACE_FILES) files.set(where, { agent, sessions: new Set([session]) });
+        else a.filesMore = (a.filesMore ?? 0) + 1;
+      }
+    }
     // Per request (plan 17 §3 item 6) where the record keeps response ids or
     // its requests carried the agent's session id; a text or call of no
     // known request, or of a record that keeps no ids, follows the
@@ -999,7 +1177,9 @@ export class TranscriptScanner {
         if (a.allProjects.size < MAX_PROJECT_COUNT) a.allProjects.add(proj);
       }
     }
-    // The examples (item 4): the newest text of each way in this session,
+    // The examples (item 4): the FIRST text of each way in this session
+    // (where the value first got there: a live model that prints it again
+    // while it checks its fix must not hide the command that leaked it),
     // redacted only when it enters a finding's list, with its request's
     // mark (or, of no known request, its session's final mark, read when
     // the answer is made).
@@ -1017,23 +1197,23 @@ export class TranscriptScanner {
       const put = (list: HeldExample[], h: Hit, max: number): void => {
         const same = list.findIndex((e) => e.key === key);
         if (same >= 0) {
-          // Another file of the same session (a subagent's): the newer stays.
-          if ((list[same]!.ex.at ?? "") >= (h.t.at ?? "")) return;
+          // Another file of the same session (a subagent's): the earlier stays.
+          if ((list[same]!.ex.at ?? "") <= (h.t.at ?? "")) return;
           list.splice(same, 1);
         }
         if (wouldEnter(list, h.t.at, max)) insertNewest(list, held(h), max);
       };
-      const newer = (x: Hit | undefined, t: SentText): boolean => x === undefined || (t.at ?? "") > (x.t.at ?? "");
+      const earlier = (x: Hit | undefined, t: SentText): boolean => x === undefined || (t.at ?? "") < (x.t.at ?? "");
       const byHow = new Map<SentHow, Hit>();
-      // The newest text that went without Mandu, so `examples` can tell one
+      // The first text that went without Mandu, so `examples` can tell one
       // when every newer one ran while Mandu ran (a resumed session's part
       // outside Mandu among them).
       let without: Hit | undefined;
       for (const [req, e] of per) {
         for (const [how, t] of e.hows) {
           const m = reqMark(req, t.at);
-          if (newer(byHow.get(how), t)) byHow.set(how, { t, mark: m });
-          if ((m ?? st) === "without" && newer(without, t)) without = { t, mark: m };
+          if (earlier(byHow.get(how), t)) byHow.set(how, { t, mark: m });
+          if ((m ?? st) === "without" && earlier(without, t)) without = { t, mark: m };
         }
       }
       for (const [how, h] of byHow) {
@@ -1184,7 +1364,7 @@ export class TranscriptScanner {
       // A key-shaped value that reads as a test value is marked, from its
       // value, here: the value never leaves (plan 17 §3 item 14).
       const test = kind !== "known" && value !== undefined && looksLikeTestValue(value, kind, preview);
-      a = { kind, preview, ...(source ? { source } : {}), sessions: new Set(), agents: new Set(), how: new Map(), projects: new Set(), marks: new Map(), allProjects: new Set(), byHow: new Map(), withoutPool: [], ...(test ? { test: true } : {}) };
+      a = { kind, preview, ...(source ? { source } : {}), sessions: new Set(), agents: new Set(), how: new Map(), projects: new Set(), marks: new Map(), times: new Map(), allProjects: new Set(), byHow: new Map(), withoutPool: [], ...(test ? { test: true } : {}) };
       this.acc.set(id, a);
     }
     a.sessions.add(session);
@@ -1195,8 +1375,70 @@ export class TranscriptScanner {
     if (t.at !== undefined) {
       if (a.first === undefined || t.at < a.first) a.first = t.at;
       if (a.last === undefined || t.at > a.last) a.last = t.at;
+      let w = a.times.get(session);
+      if (w === undefined) a.times.set(session, (w = {}));
+      if (w.first === undefined || t.at < w.first) w.first = t.at;
+      if (w.last === undefined || t.at > w.last) w.last = t.at;
     }
     return a;
+  }
+
+  /** A finding's sessions not under Mandu, when some are and some are not
+   *  (`TranscriptFinding.outsideMandu`): their dates and their ways. */
+  private outsideMandu(a: Acc, under: number): TranscriptFinding["outsideMandu"] {
+    if (under === 0) return undefined;
+    const outside = new Set<string>();
+    for (const s of a.sessions) {
+      const m = a.marks.get(s);
+      if ((m === undefined ? "without" : this.markOf(m)) !== "under") outside.add(s);
+    }
+    if (outside.size === 0) return undefined;
+    let first: string | undefined;
+    let last: string | undefined;
+    for (const s of outside) {
+      const w = a.times.get(s);
+      if (w?.first !== undefined && (first === undefined || w.first < first)) first = w.first;
+      if (w?.last !== undefined && (last === undefined || w.last > last)) last = w.last;
+    }
+    const how: Partial<Record<SentHow, number>> = {};
+    for (const [k, v] of a.how) {
+      let n = 0;
+      for (const s of v) if (outside.has(s)) n++;
+      if (n > 0) how[k] = n;
+    }
+    return { ...(first !== undefined ? { first } : {}), ...(last !== undefined ? { last } : {}), how };
+  }
+
+  /** A known value's places (`TranscriptFinding.places`): its files, those
+   *  of sessions without Mandu first, then the newest; each with the
+   *  weakest mark of its sessions, their times and the Mandu sessions they
+   *  ran under. */
+  private placesOf(a: Acc): { places: ScanPlace[]; more: number } | undefined {
+    if (a.files === undefined || a.files.size === 0) return undefined;
+    const all = [...a.files].map(([file, f]): ScanPlace => {
+      let mandu: ManduStatus | undefined;
+      let first: string | undefined;
+      let last: string | undefined;
+      const ms = new Set<string>();
+      for (const s of f.sessions) {
+        const m = a.marks.get(s);
+        const st = m === undefined ? "without" : this.markOf(m);
+        mandu = weaker(mandu, st);
+        const w = a.times.get(s);
+        if (w?.first !== undefined && (first === undefined || w.first < first)) first = w.first;
+        if (w?.last !== undefined && (last === undefined || w.last > last)) last = w.last;
+        if (st !== "without") for (const x of this.sessionWindows.get(`${f.agent}\u0000${s}`) ?? []) ms.add(x);
+      }
+      const shown = redactShown(this.tilde(file), this.redact);
+      return {
+        agent: f.agent, file: shown, mandu: mandu ?? "without",
+        ...(first !== undefined ? { first } : {}), ...(last !== undefined ? { last } : {}),
+        sessions: f.sessions.size,
+        ...(ms.size > 0 ? { manduSessions: [...ms].slice(0, MAX_PLACE_MANDU_SESSIONS) } : {}),
+      };
+    });
+    all.sort((x, y) => Number(y.mandu === "without") - Number(x.mandu === "without") || (y.last ?? "").localeCompare(x.last ?? "") || x.file.localeCompare(y.file));
+    return { places: all.slice(0, MAX_PLACES), more: Math.max(0, all.length - MAX_PLACES) + (a.filesMore ?? 0) };
   }
 
   /** The findings so far: known values first, then by sessions, most first. */
@@ -1211,6 +1453,8 @@ export class TranscriptScanner {
       const hosts = this.sentHosts.get(id);
       const examples = this.examplesOf(a);
       const m = this.markCounts(a.marks);
+      const outside = this.outsideMandu(a, m.under);
+      const places = this.placesOf(a);
       return [{
         kind: a.kind,
         preview: a.preview,
@@ -1228,6 +1472,10 @@ export class TranscriptScanner {
         ...(examples.length > 0 ? { examples } : {}),
         ...(hosts !== undefined ? { sentToHosts: [...hosts].sort() } : {}),
         ...(a.test ? { looksLikeTest: true as const } : {}),
+        ...(a.masked !== undefined && a.masked.size > 0 ? { matchedMasked: a.masked.size } : {}),
+        ...(outside !== undefined ? { outsideMandu: outside } : {}),
+        ...(places !== undefined ? { places: places.places } : {}),
+        ...(places !== undefined && places.more > 0 ? { placesMore: places.more } : {}),
       }, a];
     });
     rows.sort(([x], [y]) => Number(y.kind === "known") - Number(x.kind === "known") || y.sessions - x.sessions || x.preview.localeCompare(y.preview));
@@ -1387,6 +1635,9 @@ export interface TranscriptScanCapped {
   overFiles: number;
   /** Could not be read. */
   readFailed: number;
+  /** Sessions read without the records stored compressed this Node cannot
+   *  decompress ({@link SessionMeta.compressedUnread}). */
+  compressed: number;
 }
 
 /** The whole answer of {@link scanAgentTranscripts}. */
@@ -1482,7 +1733,7 @@ export async function scanAgentTranscripts(opts: {
     providers: opts.providers ?? providersFromEnv(opts.env ?? {}),
     ...(opts.projectProviders ? { projectProviders: opts.projectProviders } : {}),
   });
-  const capped: TranscriptScanCapped = { overTime: 0, overBytes: 0, tooBig: 0, overFiles: 0, readFailed: 0 };
+  const capped: TranscriptScanCapped = { overTime: 0, overBytes: 0, tooBig: 0, overFiles: 0, readFailed: 0, compressed: 0 };
   const items: StoreItem[] = [];
   const notRead: Partial<Record<TranscriptAgent, number>> = {};
   const open: OpenStores = new Map();
@@ -1514,7 +1765,8 @@ export async function scanAgentTranscripts(opts: {
       let got;
       try { got = await it.read(); } catch { capped.readFailed++; continue; }
       bytes += it.size;
-      scanner.addSession(it.agent, it.session, got.texts, got.meta, got.acts);
+      if ((got.meta?.compressedUnread ?? 0) > 0) capped.compressed++;
+      scanner.addSession(it.agent, it.session, got.texts, got.meta, got.acts, it.path);
     }
     return { ...scanner.result(), known: scanner.knownCount, bytes, capped, limits, ms: now() - t0, ...(Object.keys(notRead).length > 0 ? { notRead } : {}) };
   } finally {
@@ -1601,6 +1853,60 @@ function recordedIdsIn(fd: number, size: number): { responseIds: string[]; agent
   return { responseIds: [...ids], agentSessionIds: [...sessions] };
 }
 
+/** The agent each attachment kind serves (its `launch_posture`'s target). */
+const ATTACHMENT_AGENT: Readonly<Record<AttachmentGap, TranscriptAgent>> = { "openclaw-plugin": "openclaw" };
+
+/** Is this an attachment's session (`openclaw:<agentId>`, confinement-posture.ts
+ *  `ATTACHMENT_SESSION_PREFIX`)? A launch's scope id never is. */
+export function isAttachmentSessionId(session: string): boolean {
+  return Object.values(ATTACHMENT_SESSION_PREFIX).some((p) => session.startsWith(p) && session.length > p.length);
+}
+
+/** One attachment's period, as the arbiter keeps it (cache-seals.ts
+ *  `attachmentPeriods`: written only by the human-plane attachment ops, on
+ *  the arbiter's clock), in ms since the epoch. */
+export interface AttachmentWindowSource {
+  session: string;
+  kind: string;
+  from: number;
+  to: number;
+}
+
+const RESPONSE_ID_SHAPE = /^[A-Za-z0-9_-]{8,128}$/;
+const AGENT_SESSION_ID_SHAPE = /^ses_[A-Za-z0-9]{8,120}$/;
+
+/** The ids each `tllm_call` event of one file recorded, with the event's
+ *  time: `model.responseId` and `model.agentSessionId`, in the shapes
+ *  {@link RESPONSE_ID_FIELD_RE} and {@link AGENT_SESSION_ID_FIELD_RE} keep.
+ *  A line that does not parse, is of another kind or has no time gives none. */
+function timedRecordedIdsIn(fd: number, size: number): Array<{ at: number; responseId?: string; agentSessionId?: string }> {
+  const buf = Buffer.alloc(size);
+  let off = 0;
+  while (off < size) {
+    const n = readSync(fd, buf, off, size - off, off);
+    if (n === 0) break;
+    off += n;
+  }
+  const out: Array<{ at: number; responseId?: string; agentSessionId?: string }> = [];
+  for (const l of buf.toString("utf8", 0, off).split("\n")) {
+    if (!l.includes('"tllm_call"') || !(l.includes('"responseId":"') || l.includes('"agentSessionId":"'))) continue;
+    let o: { kind?: unknown; ts?: unknown; model?: { responseId?: unknown; agentSessionId?: unknown } } | null;
+    try { o = JSON.parse(l) as typeof o; } catch { continue; }
+    if (o === null || typeof o !== "object" || o.kind !== "tllm_call") continue;
+    const at = Date.parse(String(o.ts ?? ""));
+    if (!Number.isFinite(at)) continue;
+    const r = o.model?.responseId;
+    const a = o.model?.agentSessionId;
+    const e = {
+      at,
+      ...(typeof r === "string" && RESPONSE_ID_SHAPE.test(r) ? { responseId: r } : {}),
+      ...(typeof a === "string" && AGENT_SESSION_ID_SHAPE.test(a) ? { agentSessionId: a } : {}),
+    };
+    if (e.responseId !== undefined || e.agentSessionId !== undefined) out.push(e);
+  }
+  return out;
+}
+
 /**
  * Mandu's sessions from its event store (`~/.mandu/events/*.ndjson`, one
  * file per session): the agent from the `launch_posture` event's `target`,
@@ -1612,15 +1918,29 @@ function recordedIdsIn(fd: number, size: number): { responseIds: string[]; agent
  * {@link EVENT_IDS_MAX_FILE_BYTES}, or past {@link EVENT_IDS_MAX_BYTES} in
  * all, is read at its ends only, so it gives no ids. Sessions of agents the
  * scan does not read are left out.
+ *
+ * An attachment's session (the OpenClaw plugin's `openclaw:<agentId>`) is
+ * never a window by its event file: its windows are `attachments`, the
+ * periods the arbiter recorded at `beginAttachment`, `renewAttachment` and
+ * `endAttachment` (human plane only), so no emit (a `launch_posture` from
+ * the data socket, or any other line of that file) can open or stretch one.
+ * Each period's ids are those of its session's `tllm_call` events timed
+ * inside it (the session's proxy is the service's, the same for every
+ * period); an id timed outside every period of its session is not taken.
  */
-export function manduWindowsFrom(eventsDir: string, limits: { maxFileBytes?: number; maxBytes?: number } = {}): ManduWindow[] {
+export function manduWindowsFrom(
+  eventsDir: string,
+  limits: { maxFileBytes?: number; maxBytes?: number } = {},
+  attachments: readonly AttachmentWindowSource[] = [],
+): ManduWindow[] {
   const out: ManduWindow[] = [];
   const maxFile = limits.maxFileBytes ?? EVENT_IDS_MAX_FILE_BYTES;
   let budget = limits.maxBytes ?? EVENT_IDS_MAX_BYTES;
   let names: string[];
-  try { names = readdirSync(eventsDir); } catch { return out; }
+  try { names = readdirSync(eventsDir); } catch { names = []; }
   for (const n of names) {
     if (!n.endsWith(".ndjson")) continue;
+    if (isAttachmentSessionId(n.slice(0, -".ndjson".length))) continue;
     const p = join(eventsDir, n);
     let fd: number | null = null;
     try {
@@ -1640,7 +1960,7 @@ export function manduWindowsFrom(eventsDir: string, limits: { maxFileBytes?: num
         ids = recordedIdsIn(fd, st.size);
       }
       out.push({
-        agent, from, to: Number.isFinite(end) ? end : st.mtimeMs,
+        agent, from, to: Number.isFinite(end) ? end : st.mtimeMs, session: n.slice(0, -".ndjson".length),
         ...(ids.responseIds.length > 0 ? { responseIds: ids.responseIds } : {}),
         ...(ids.agentSessionIds.length > 0 ? { agentSessionIds: ids.agentSessionIds } : {}),
       });
@@ -1648,6 +1968,48 @@ export function manduWindowsFrom(eventsDir: string, limits: { maxFileBytes?: num
       /* unreadable: no window */
     } finally {
       if (fd !== null) closeSync(fd);
+    }
+  }
+  // The attachments' periods, by session: one read of its event file.
+  const bySession = new Map<string, AttachmentWindowSource[]>();
+  for (const a of attachments) {
+    if (!isAttachmentKind(a.kind) || !a.session.startsWith(ATTACHMENT_SESSION_PREFIX[a.kind]) || !isAttachmentSessionId(a.session)) continue;
+    if (!Number.isFinite(a.from) || !Number.isFinite(a.to) || a.to < a.from) continue;
+    const l = bySession.get(a.session);
+    if (l === undefined) bySession.set(a.session, [a]);
+    else l.push(a);
+  }
+  for (const [session, periods] of bySession) {
+    let timed: Array<{ at: number; responseId?: string; agentSessionId?: string }> = [];
+    if (names.includes(`${session}.ndjson`)) {
+      let fd: number | null = null;
+      try {
+        const p = join(eventsDir, `${session}.ndjson`);
+        const st = statSync(p);
+        if (st.isFile() && st.size > 0 && st.size <= maxFile && st.size <= budget) {
+          budget -= st.size;
+          fd = openSync(p, "r");
+          timed = timedRecordedIdsIn(fd, st.size);
+        }
+      } catch {
+        /* unreadable: its periods are marked by time only */
+      } finally {
+        if (fd !== null) closeSync(fd);
+      }
+    }
+    for (const a of periods) {
+      const responseIds = new Set<string>();
+      const agentSessionIds = new Set<string>();
+      for (const e of timed) {
+        if (e.at < a.from || e.at > a.to) continue;
+        if (e.responseId !== undefined) responseIds.add(e.responseId);
+        if (e.agentSessionId !== undefined) agentSessionIds.add(e.agentSessionId);
+      }
+      out.push({
+        agent: ATTACHMENT_AGENT[a.kind as AttachmentGap], from: a.from, to: a.to, session,
+        ...(responseIds.size > 0 ? { responseIds: [...responseIds] } : {}),
+        ...(agentSessionIds.size > 0 ? { agentSessionIds: [...agentSessionIds] } : {}),
+      });
     }
   }
   return out;

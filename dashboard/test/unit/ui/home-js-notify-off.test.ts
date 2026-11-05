@@ -25,6 +25,18 @@
  * notifications that could never appear. A throw, from the test or a real
  * alarm, now makes the row say so for the tab.
  *
+ * Since 2026-10-26 (§4.25 *Only protection problems*) a "Notify me about"
+ * menu (Everything / Only protection problems / Nothing) sits beside the
+ * button while permission is granted; Only protection problems silences
+ * questions and rule changes and keeps the alarms.
+ *
+ * Since 2026-10-30 (§4.25 *The button does what it says*): the row's button
+ * acts on what it shows, not on a permission that changed since it was
+ * drawn (a stale tab's *Turn on* used to store Nothing, in every tab), and
+ * the row and Home's offer follow a permission the browser changes: the
+ * permissions API's `change` event where there is one, else the poll and
+ * the tab showing.
+ *
  * Drives the PRODUCT page script (public/js/home.js) in jsdom over the
  * shared fetch stub and Notification stub (home-js-fixtures.ts). Axes: none
  * (display only). Mandu-new test.
@@ -37,7 +49,7 @@ import { ASK, home, load, tick } from "./home-js-fixtures.js";
 
 const SETTINGS_URL = "http://127.0.0.1:4500/mandu/settings";
 const OFF_KEY = "mandu.home.notifyOff";
-const ON_WORDS = "On. You get a notification when an agent needs your OK, when protection fails, when the protection service stops under a running agent, and when another agent can reach Mandu's controls.";
+const ON_WORDS = "On. You get a notification when an agent needs your OK, when protection fails, when the protection service stops under a running agent, and when another agent can reach Mandu's controls, while a Mandu tab is open in this browser, also in the background.";
 const OFF_WORDS = "Off in this browser. The tab title still counts what waits.";
 /** A browser that already primed and saw egr-1. */
 const PRIMED = { "mandu.home.notifyPrimed": "1", "mandu.home.seenAsks": JSON.stringify(["egr-1"]) };
@@ -266,4 +278,444 @@ test("a real alarm whose constructor throws (a new ask) changes the On line for 
   const fresh = load({ url: SETTINGS_URL, storage: PRIMED });
   await tick();
   assert.equal(fresh.doc.getElementById("notify-state").textContent, ON_WORDS);
+});
+
+// ── Only protection problems (2026-10-26, §4.25 *Only protection problems*) ──
+// While permission is granted, the row's "Notify me about" menu picks
+// Everything (the default), Only protection problems, or Nothing (Turn off).
+// One key: absent is Everything, the old '1' is Nothing, 'alarms' is Only
+// protection problems. The alarms (protection failed, the service stopped
+// under a running agent, another agent reaching the controls) still notify
+// with Only protection problems; a question or a rule change does not, but
+// is still recorded as seen.
+
+const ALARMS_WORDS = "On for protection problems only. You get a notification when protection fails, when the protection service stops under a running agent, and when another agent can reach Mandu's controls, while a Mandu tab is open in this browser, also in the background. Not for questions or rule changes: the tab title still counts the questions waiting.";
+const PENDING = "GET policy/proposals?status=pending";
+/** A rule change your agent asked for. */
+const AGENT_RULE = {
+  id: "pp-7", status: "pending", requester: "Your agent", byAgent: true, reason: "need it",
+  headline: "Your agent wants to change a rule", rows: [[{ kind: "text", text: "Allow connecting to " }, { kind: "code", text: "example.net" }]],
+  createdAt: Date.now() - 60_000,
+};
+/** Primed for asks, rule changes, failed sessions and exposures; egr-1 seen. */
+const PRIMED_ALL = { ...PRIMED, "mandu.home.seenProposals": "[]", "mandu.home.seenFailed": "[]", "mandu.home.seenExposure": "[]" };
+const DOWN_HOME = { status: 503, body: { error: "the arbiter is not reachable", tenant: "live", unreachable: true } };
+/** Home with its agent s1 running and shown failed. */
+function failedHome() {
+  const vm = home({ waiting: [], verdict: "failed", headline: "Protection failed." });
+  (vm.agents as any[])[0] = { ...(vm.agents as any[])[0], state: "running", waiting: 0, holds: false };
+  return vm;
+}
+const exposedHome = () => home({ waiting: [], exposure: {
+  headline: "Another agent can reach Mandu's own controls.", sentence: "An agent was started without the file guard.",
+  fix: "Stop that agent.", fixParts: [{ kind: "text", text: "Stop that agent." }], since: 1_790_000_000_000, causes: [],
+} });
+const kindOf = (doc: any) => doc.getElementById("notify-kind");
+function choose(doc: any, value: string): void {
+  const sel = kindOf(doc);
+  sel.focus();
+  sel.value = value;
+  sel.dispatchEvent(new doc.defaultView.Event("change", { bubbles: true }));
+}
+
+test("Notify me about: granted shows the menu at Everything; each choice stores its value, sets the words, Send a test and the button, and keeps the focus", async () => {
+  const { doc, window } = load({ url: SETTINGS_URL, storage: PRIMED });
+  await tick();
+  const row = doc.getElementById("notify-kind-row");
+  const sel = kindOf(doc);
+  assert.equal(row.hidden, false, "granted: the menu");
+  assert.match(row.textContent, /^Notify me about/);
+  assert.equal(sel.closest("label"), row, "the menu is named by its label");
+  assert.deepEqual([...sel.options].map((o: any) => [o.value, o.textContent]),
+    [["all", "Everything"], ["alarms", "Only protection problems"], ["none", "Nothing"]]);
+  assert.equal(sel.value, "all", "Everything by default");
+  const state = doc.getElementById("notify-state");
+  const test = doc.getElementById("notify-test");
+  const btn = doc.getElementById("notify-enable");
+  const cases: [string, string | null, string, boolean, string][] = [
+    ["alarms", "alarms", ALARMS_WORDS, false, "Turn off"],
+    ["none", "1", OFF_WORDS, true, "Turn on"],
+    ["all", null, ON_WORDS, false, "Turn off"],
+  ];
+  for (const [value, stored, words, testHidden, label] of cases) {
+    choose(doc, value);
+    assert.equal(window.localStorage.getItem(OFF_KEY), stored, `${value}: stored`);
+    assert.equal(state.textContent, words, `${value}: the words`);
+    assert.equal(test.hidden, testHidden, `${value}: Send a test`);
+    assert.equal(btn.textContent, label, `${value}: the button`);
+    assert.equal(sel.value, value);
+    assert.equal(doc.activeElement, sel, `${value}: the menu keeps the focus`);
+    assert.equal(kindOf(doc), sel, "nothing drawn again");
+  }
+  // The button and the menu are one choice: Turn off is Nothing, Turn on is Everything.
+  choose(doc, "alarms");
+  btn.click();
+  assert.equal(sel.value, "none");
+  assert.equal(window.localStorage.getItem(OFF_KEY), "1");
+  btn.click();
+  assert.equal(sel.value, "all");
+  assert.equal(window.localStorage.getItem(OFF_KEY), null);
+});
+
+test("Notify me about: the old '1' reads as Nothing, 'alarms' as Only protection problems, and a value the page does not know as Everything", async () => {
+  for (const [stored, value, words] of [["1", "none", OFF_WORDS], ["alarms", "alarms", ALARMS_WORDS], ["later", "all", ON_WORDS]] as const) {
+    const { doc, notes } = load({ url: SETTINGS_URL, storage: { ...PRIMED_ALL, [OFF_KEY]: stored }, homeVm: failedHome() });
+    await tick();
+    assert.equal(kindOf(doc).value, value, stored);
+    assert.equal(doc.getElementById("notify-state").textContent, words, stored);
+    assert.equal(notes.length, value === "none" ? 0 : 1, `${stored}: a failed session ${value === "none" ? "notifies nothing" : "notifies"}`);
+  }
+});
+
+test("Notify me about: no menu while default, denied, or where the browser cannot notify", async () => {
+  for (const [what, opts] of [
+    ["default", { url: SETTINGS_URL, permission: "default", storage: PRIMED }],
+    ["denied", { url: SETTINGS_URL, permission: "denied", storage: PRIMED }],
+    ["unsupported", { url: SETTINGS_URL, storage: PRIMED, before: (w: any) => { delete w.Notification; } }],
+  ] as [string, Parameters<typeof load>[0]][]) {
+    const { doc, err } = load(opts);
+    assert.equal(err, null, what);
+    await tick();
+    assert.equal(doc.getElementById("notify-kind-row").hidden, true, what);
+  }
+});
+
+test("Only protection problems: a new ask and a new rule change notify nothing and are recorded as seen; switching back brings no backlog", async () => {
+  let pending: unknown[] = [];
+  const page = load({ url: SETTINGS_URL, storage: { ...PRIMED_ALL, [OFF_KEY]: "alarms" }, routes: { [PENDING]: () => ({ proposals: pending }) } });
+  await tick();
+  pending = [AGENT_RULE];
+  page.setHome(home({ waiting: [ASK, ASK2] }));
+  await poll(page.doc);
+  assert.equal(page.notes.length, 0, page.notes.map((x) => x.title).join(" | "));
+  assert.deepEqual(seen(page.window).sort(), ["egr-1", "egr-2"], "the ask is recorded as seen");
+  assert.deepEqual(JSON.parse(page.window.localStorage.getItem("mandu.home.seenProposals")), ["pp-7"], "the rule change too");
+  assert.match(page.doc.title, /^\(3\) /, "the tab title still counts them");
+  choose(page.doc, "all");
+  await poll(page.doc);
+  assert.equal(page.notes.length, 0, "Everything again: no backlog");
+  page.setHome(home({ waiting: [ASK, ASK2, ASK3] }));
+  await poll(page.doc);
+  assert.deepEqual(page.notes.map((x) => x.title), ["Mandu: Claude Code needs your OK"], "the next new ask notifies");
+});
+
+test("Only protection problems: a newly failed session, the service stopping after a read with a running agent, and an exposure each notify once", async () => {
+  let answer: unknown = home({ waiting: [] });
+  const page = load({ url: SETTINGS_URL, storage: { ...PRIMED_ALL, [OFF_KEY]: "alarms" }, routes: { "GET home": () => answer } });
+  await tick();
+  assert.equal(page.notes.length, 0);
+  answer = failedHome();
+  await poll(page.doc);
+  assert.deepEqual(page.notes.map((x) => x.title), ["Mandu: protection failed in Claude Code"]);
+  answer = DOWN_HOME; // the read before listed s1 running
+  await poll(page.doc);
+  assert.deepEqual(page.notes.map((x) => x.title).slice(1), ["Mandu: the protection service stopped"]);
+  answer = exposedHome();
+  await poll(page.doc);
+  assert.deepEqual(page.notes.map((x) => x.title).slice(2), ["Mandu: another agent can reach Mandu's controls"]);
+  assert.equal(page.notes.length, 3, "one each");
+});
+
+test("Only protection problems: Send a test says what it sends", async () => {
+  const { doc, notes } = load({ url: SETTINGS_URL, storage: { ...PRIMED, [OFF_KEY]: "alarms" } });
+  await tick();
+  doc.getElementById("notify-test").click();
+  assert.deepEqual(notes.map((x) => [x.title, x.body, x.tag]), [["Mandu: notifications work", "This is how Mandu tells you when protection fails.", "mandu-test"]]);
+  assert.equal(doc.getElementById("notify-test-result").textContent, SENT);
+});
+
+test("Notify me about: where storage fails, the choice holds for the tab", async () => {
+  let answer: unknown = home({ waiting: [] });
+  const { doc, notes } = load({
+    url: SETTINGS_URL, routes: { "GET home": () => answer },
+    before: (w) => {
+      const real = w.localStorage;
+      const fail = () => { throw new Error("SecurityError"); };
+      Object.defineProperty(w, "localStorage", { configurable: true, get: () => ({ getItem: fail, setItem: fail, removeItem: fail, key: real.key.bind(real), length: 0 }) });
+    },
+  });
+  await tick(); // the first poll primes this tab
+  choose(doc, "alarms");
+  assert.equal(kindOf(doc).value, "alarms");
+  assert.equal(doc.getElementById("notify-state").textContent, ALARMS_WORDS);
+  answer = home({ waiting: [ASK, ASK2] });
+  await poll(doc);
+  assert.equal(notes.length, 0, "an ask: nothing, for this tab");
+  answer = failedHome();
+  await poll(doc);
+  assert.deepEqual(notes.map((x) => x.title), ["Mandu: protection failed in Claude Code"], "an alarm still notifies");
+});
+
+test("another tab's Only protection problems: this tab's menu and words follow on the storage event", async () => {
+  const { doc, window } = load({ url: SETTINGS_URL, storage: PRIMED });
+  await tick();
+  window.localStorage.setItem(OFF_KEY, "alarms");
+  window.dispatchEvent(new window.StorageEvent("storage", { key: OFF_KEY, newValue: "alarms" }));
+  assert.equal(kindOf(doc).value, "alarms");
+  assert.equal(doc.getElementById("notify-state").textContent, ALARMS_WORDS);
+});
+
+// ── No thanks on Home's offer (2026-10-29, §4.25 *No thanks on Home's offer*) ──
+// The offer row showed on every Home visit while the permission was
+// `default`, and the only way to make it go was the browser's own prompt
+// (and Block, which the page can never undo). Now it names the alarms too,
+// and No thanks hides it in this browser (`mandu.home.notifyOfferHidden`,
+// not Settings' `notifyOff`) without asking, leaving one line for this load
+// that says where to turn them on later; the focus moves to its link.
+
+const OFFER_KEY = "mandu.home.notifyOfferHidden";
+const OFFER_WORDS = "Get a notification on this computer when an agent needs your OK or protection fails.";
+const LATER_WORDS = "You can turn them on later in Settings › Notifications.";
+/** A page with permission `default` that counts its `requestPermission` calls. */
+function asking(opts: Parameters<typeof load>[0] = {}) {
+  const page = load({ permission: "default", storage: PRIMED, ...opts });
+  let asked = 0;
+  page.window.Notification.requestPermission = () => { asked++; page.window.Notification.permission = "granted"; return Promise.resolve("granted"); };
+  return { ...page, asked: () => asked };
+}
+/** Storage that throws on every call (private mode). */
+function failingStorage(w: any): void {
+  const real = w.localStorage;
+  const fail = () => { throw new Error("SecurityError"); };
+  Object.defineProperty(w, "localStorage", { configurable: true, get: () => ({ getItem: fail, setItem: fail, removeItem: fail, key: real.key.bind(real), length: 0 }) });
+}
+
+test("Home's offer, permission default: its words name the alarms, with No thanks and Turn on, each described by the words", async () => {
+  const { doc, err } = asking();
+  assert.equal(err, null);
+  await tick();
+  const offer = doc.getElementById("notify-offer");
+  assert.equal(offer.hidden, false);
+  assert.equal(doc.getElementById("notify-offer-words").textContent, OFFER_WORDS);
+  const buttons = [...offer.querySelectorAll("button")];
+  assert.deepEqual(buttons.map((b: any) => b.textContent), ["No thanks", "Turn on"]);
+  for (const b of buttons) {
+    assert.equal(b.className, "btn small", `${b.textContent}: not primary`);
+    assert.equal(b.getAttribute("aria-describedby"), "notify-offer-words");
+  }
+  assert.equal(doc.getElementById("notify-offer-later").hidden, true, "no line before a press");
+});
+
+test("No thanks: stored in this browser, the offer goes, the line names Settings › Notifications with the focus on its link, and the browser is never asked", async () => {
+  const page = asking();
+  await tick();
+  const { doc, window } = page;
+  const no = doc.getElementById("notify-offer-no");
+  no.focus();
+  no.click();
+  await tick();
+  assert.equal(window.localStorage.getItem(OFFER_KEY), "1", "stored under its own key");
+  assert.equal(window.localStorage.getItem(OFF_KEY), null, "Settings' choice untouched");
+  assert.equal(doc.getElementById("notify-offer").hidden, true);
+  const later = doc.getElementById("notify-offer-later");
+  assert.equal(later.hidden, false);
+  assert.equal(later.textContent, LATER_WORDS);
+  const link = doc.getElementById("notify-offer-later-link");
+  assert.match(link.href, /\/settings#notifications$/);
+  assert.equal(doc.activeElement, link, "the focus is on the link, not lost");
+  assert.equal(page.asked(), 0, "requestPermission never called");
+  assert.equal(page.notes.length, 0);
+  // The link opens Settings at its Notifications card.
+  link.click();
+  await tick();
+  assert.equal(window.location.pathname, "/mandu/settings");
+  assert.equal(window.location.hash, "#notifications");
+});
+
+test("a reload with No thanks stored: no offer and no line; Settings still reads Off. with Turn on", async () => {
+  const home = asking({ storage: { ...PRIMED, [OFFER_KEY]: "1" } });
+  await tick();
+  assert.equal(home.doc.getElementById("notify-offer").hidden, true);
+  assert.equal(home.doc.getElementById("notify-offer-later").hidden, true, "the line was for that load only");
+  const settings = asking({ url: SETTINGS_URL, storage: { ...PRIMED, [OFFER_KEY]: "1" } });
+  await tick();
+  assert.equal(settings.doc.getElementById("notify-state").textContent, "Off.");
+  const btn = settings.doc.getElementById("notify-enable");
+  assert.equal(btn.hidden, false);
+  assert.equal(btn.textContent, "Turn on");
+});
+
+test("Settings' Turn on, granted, clears No thanks: asking means wanting them", async () => {
+  const page = asking({ url: SETTINGS_URL, storage: { ...PRIMED, [OFFER_KEY]: "1" } });
+  await tick();
+  page.doc.getElementById("notify-enable").click();
+  await tick();
+  assert.equal(page.asked(), 1, "Settings' Turn on still asks the browser");
+  assert.equal(page.window.localStorage.getItem(OFFER_KEY), null);
+  assert.equal(page.doc.getElementById("notify-state").textContent, ON_WORDS);
+});
+
+test("where storage fails, No thanks holds for the tab", async () => {
+  const page = asking({ storage: undefined, before: failingStorage });
+  assert.equal(page.err, null);
+  await tick();
+  assert.equal(page.doc.getElementById("notify-offer").hidden, false);
+  page.doc.getElementById("notify-offer-no").click();
+  await tick();
+  assert.equal(page.doc.getElementById("notify-offer").hidden, true);
+  assert.equal(page.doc.activeElement, page.doc.getElementById("notify-offer-later-link"));
+  await poll(page.doc);
+  assert.equal(page.doc.getElementById("notify-offer").hidden, true, "still hidden after a poll");
+  assert.equal(page.asked(), 0);
+});
+
+test("another tab's No thanks: this tab's offer goes on the storage event, with no line", async () => {
+  const { doc, window } = asking();
+  await tick();
+  assert.equal(doc.getElementById("notify-offer").hidden, false);
+  window.localStorage.setItem(OFFER_KEY, "1");
+  window.dispatchEvent(new window.StorageEvent("storage", { key: OFFER_KEY, newValue: "1" }));
+  assert.equal(doc.getElementById("notify-offer").hidden, true);
+  assert.equal(doc.getElementById("notify-offer-later").hidden, true, "the line is the pressing tab's");
+});
+
+// ── The button does what it says; the row follows the permission (2026-10-30, §4.25) ──
+// The row was drawn from `Notification.permission` only at load, on a press
+// and on a storage event, while its button acted on the live permission: a
+// tab drawn at `default` whose permission another tab then granted read
+// "Off." with Turn on, and its press stored Nothing, in every tab.
+
+const BLOCKED_WORDS = "Blocked in this browser. Allow notifications for this site in the browser settings.";
+/** A `navigator.permissions` whose notifications status the test can fire. */
+function permissionsApi(w: any): { status: any; queried: string[] } {
+  const status = new w.EventTarget();
+  const queried: string[] = [];
+  Object.defineProperty(w.navigator, "permissions", { configurable: true, value: { query: (d: { name: string }) => { queried.push(d.name); return Promise.resolve(status); } } });
+  return { status, queried };
+}
+/** Captures the page's poll (its one setInterval) so a test can run a tick. */
+function capturePoll(w: any): () => void {
+  let poll: () => void = () => { throw new Error("no poll registered"); };
+  w.setInterval = (fn: () => void) => { poll = fn; return 0; };
+  return () => poll();
+}
+
+test("(a) a tab drawn at default whose permission was granted elsewhere: Turn on leaves them on (no '1' stored) and the row reads On.", async () => {
+  const page = load({ url: SETTINGS_URL, permission: "default", storage: PRIMED });
+  await tick();
+  const btn = page.doc.getElementById("notify-enable");
+  assert.equal(btn.textContent, "Turn on");
+  assert.equal(btn.dataset.intent, "on", "the button keeps what it shows");
+  let asked = 0;
+  page.window.Notification.requestPermission = () => { asked++; return Promise.resolve("granted"); };
+  // Another tab's Turn on, Allow: the stored key was absent and stays absent, so no storage event.
+  page.window.Notification.permission = "granted";
+  btn.focus();
+  btn.click();
+  await tick();
+  assert.equal(page.window.localStorage.getItem(OFF_KEY), null, "Everything, not Nothing");
+  assert.equal(asked, 0, "granted already: nothing to ask");
+  assert.equal(page.doc.getElementById("notify-state").textContent, ON_WORDS);
+  assert.equal(btn.textContent, "Turn off");
+  assert.equal(page.doc.activeElement, btn, "the button keeps the focus");
+  // And they notify: the next new ask shows one.
+  page.setHome(home({ waiting: [ASK, ASK2] }));
+  await poll(page.doc);
+  assert.deepEqual(page.notes.map((x) => x.title), ["Mandu: Claude Code needs your OK"]);
+});
+
+test("(a) a stale Turn on where an earlier choice was Nothing turns them on; a stale Turn off where the permission went away still stores Nothing", async () => {
+  const on = load({ url: SETTINGS_URL, permission: "default", storage: { ...PRIMED, [OFF_KEY]: "1" } });
+  await tick();
+  on.window.Notification.permission = "granted";
+  on.doc.getElementById("notify-enable").click();
+  assert.equal(on.window.localStorage.getItem(OFF_KEY), null, "Turn on stores Everything");
+  assert.equal(on.doc.getElementById("notify-state").textContent, ON_WORDS);
+
+  const off = load({ url: SETTINGS_URL, storage: PRIMED });
+  await tick();
+  const btn = off.doc.getElementById("notify-enable");
+  assert.equal(btn.textContent, "Turn off");
+  let asked = 0;
+  off.window.Notification.requestPermission = () => { asked++; return Promise.resolve("default"); };
+  off.window.Notification.permission = "default"; // reset in the site panel
+  btn.click();
+  await tick();
+  assert.equal(asked, 0, "Turn off never asks the browser");
+  assert.equal(off.window.localStorage.getItem(OFF_KEY), "1", "Turn off stores Nothing");
+  assert.equal(off.doc.getElementById("notify-state").textContent, "Off.", "drawn from the live permission");
+  assert.equal(btn.textContent, "Turn on");
+});
+
+test("(b) the permissions change event: denied → granted redraws Blocked to On.; granted → default redraws with the focus kept", async () => {
+  let api!: { status: any; queried: string[] };
+  const page = load({ url: SETTINGS_URL, permission: "denied", storage: PRIMED, before: (w) => { api = permissionsApi(w); } });
+  assert.equal(page.err, null);
+  await tick();
+  assert.deepEqual(api.queried, ["notifications"]);
+  const state = page.doc.getElementById("notify-state");
+  const btn = page.doc.getElementById("notify-enable");
+  assert.equal(state.textContent, BLOCKED_WORDS);
+  assert.equal(btn.hidden, true);
+  // Unblocked in the site panel.
+  page.window.Notification.permission = "granted";
+  api.status.dispatchEvent(new page.window.Event("change"));
+  assert.equal(state.textContent, ON_WORDS);
+  assert.equal(btn.hidden, false);
+  assert.equal(btn.textContent, "Turn off");
+  assert.equal(page.doc.getElementById("notify-test").hidden, false, "Send a test is back");
+  // Reset to ask: the row says Off. and the focus stays on its button.
+  btn.focus();
+  page.window.Notification.permission = "default";
+  api.status.dispatchEvent(new page.window.Event("change"));
+  assert.equal(state.textContent, "Off.");
+  assert.equal(btn.textContent, "Turn on");
+  assert.equal(page.doc.getElementById("notify-test").hidden, true, "no Send a test for what cannot be shown");
+  assert.equal(page.doc.getElementById("notify-enable"), btn, "nothing drawn again");
+  assert.equal(page.doc.activeElement, btn, "the focus is kept");
+});
+
+test("(c) without the permissions API: a poll tick, or the tab showing, redraws the row and hides Home's offer", async () => {
+  let pollTick!: () => void;
+  const page = load({ permission: "default", storage: PRIMED, before: (w) => { pollTick = capturePoll(w); } });
+  assert.equal(page.err, null);
+  assert.equal(page.window.navigator.permissions, undefined, "jsdom has none");
+  await tick();
+  const offer = page.doc.getElementById("notify-offer");
+  assert.equal(offer.hidden, false);
+  assert.equal(page.doc.getElementById("notify-state").textContent, "Off.");
+  page.window.Notification.permission = "granted"; // Allow in another tab
+  pollTick();
+  assert.equal(offer.hidden, true, "the offer goes within a poll");
+  assert.equal(page.doc.getElementById("notify-state").textContent, ON_WORDS);
+  assert.equal(page.doc.getElementById("notify-enable").textContent, "Turn off");
+  // The tab showing again does the same.
+  page.window.Notification.permission = "denied";
+  await poll(page.doc);
+  assert.equal(page.doc.getElementById("notify-state").textContent, BLOCKED_WORDS);
+});
+
+test("(c) a permissions API that throws or rejects for notifications: the page loads and the poll still follows", async () => {
+  for (const query of [() => { throw new TypeError("notifications is not a valid PermissionName"); }, () => Promise.reject(new TypeError("unsupported"))]) {
+    let pollTick!: () => void;
+    const page = load({
+      url: SETTINGS_URL, permission: "denied", storage: PRIMED,
+      before: (w) => { pollTick = capturePoll(w); Object.defineProperty(w.navigator, "permissions", { configurable: true, value: { query } }); },
+    });
+    assert.equal(page.err, null);
+    await tick();
+    assert.equal(page.doc.getElementById("notify-state").textContent, BLOCKED_WORDS);
+    page.window.Notification.permission = "granted";
+    pollTick();
+    assert.equal(page.doc.getElementById("notify-state").textContent, ON_WORDS);
+  }
+});
+
+test("(d) Turn off, as shown, still turns them off; a poll with the permission unchanged draws nothing again", async () => {
+  let pollTick!: () => void;
+  const page = load({ url: SETTINGS_URL, storage: PRIMED, before: (w) => { pollTick = capturePoll(w); } });
+  await tick();
+  const btn = page.doc.getElementById("notify-enable");
+  assert.equal(btn.dataset.intent, "off");
+  btn.click();
+  assert.equal(page.window.localStorage.getItem(OFF_KEY), "1");
+  assert.equal(page.doc.getElementById("notify-state").textContent, OFF_WORDS);
+  assert.equal(btn.dataset.intent, "on");
+  // Send a test's line survives a poll while nothing changed.
+  btn.click();
+  page.doc.getElementById("notify-test").click();
+  const result = page.doc.getElementById("notify-test-result");
+  assert.equal(result.hidden, false);
+  pollTick();
+  assert.equal(result.hidden, false, "no redraw while the permission is unchanged");
 });

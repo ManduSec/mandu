@@ -616,8 +616,10 @@ the user's own lines and whose other commands are masked).
   `curl -H "Authorization: Bearer $STRIPE_KEY" https://api.stripe.com` is
   released at the wire **where the proxy can see the body** (plain HTTP, or
   TLS inspection, on by default, §11.5). What it cannot buy is any consumer
-  that needs the bytes locally: `psql` on the Postgres wire, `ssh -i`, a
-  SigV4 signature, `gpg`. Those are what `readers` is for.
+  that needs the bytes locally: `psql` on the Postgres wire, `ssh -i`,
+  `gpg`. Those are what `readers` is for. (A SigV4 signature was on this
+  list until 2026-10-24: the egress proxy now re-signs it,
+  [`aws-sigv4-resign.md`](aws-sigv4-resign.md).)
 - **`git add -A` under the baseline** commits the structured twin. Symbols
   are opaque, so the remote receives tokens, not values: a utility defect,
   not a leak. The `[mandu:secret]` note (§3.3) fires on the read, and a
@@ -751,7 +753,16 @@ Per notification, for an open whose file is a registered secret:
    answer: the reader may already write the file and `ftruncate` its own
    writable descriptor, so the truncation gives it nothing it lacked, and
    refusing would break every allow-listed tool that updates its own
-   credentials;
+   credentials. A refused open (the sweep's or the truncate's) drops the
+   process's record only when no other raw open of it is in flight and
+   nothing else made it a holder: a raw descriptor handed, an inheritance
+   or a flow (`TaintedSet::claim_raw`, `release_refused`). The record is
+   per process and the guard's workers answer two threads' opens at once,
+   so until 2026-10-27 a refusal that had found no record at its start
+   dropped the whole record while another thread's open of the same
+   process was being handed the real file, and the guard's own legs (its
+   connect, send and write checks) then judged a holder as no holder
+   (finding F2; the arbiter kept its row);
 4. the agent process, and a non-reader under `twin`, gets the twin's
    descriptor. Under the bind the guard hands over the twin re-opened by
    the path the agent named (`secret_open::view_reaches_twin`), because
@@ -778,7 +789,8 @@ launcher now snapshots each twin as written (size, SHA-256, device and inode;
 `launcher/src/twin-writes.ts`) and, after the agent exits, prints one line
 per registered file whose twin changed, was removed or was replaced, by path
 only, on every display setting, and lists them on the `session_exit` event
-(`discardedWrites`). A size is compared before any hash, so a twin grown by
+(`discardedWrites`), which the session's page in the dashboard lists under
+*Changes Mandu did not apply to your files* (dashboard.md §4.25b). A size is compared before any hash, so a twin grown by
 gigabytes costs one `lstat`, not a read. The printed path has its C0, DEL,
 C1 and Unicode format characters (`Cf`: the bidi overrides and isolates,
 zero-width characters) and U+2028/U+2029 as `?`, so a directory name a
@@ -839,6 +851,71 @@ real file only when its times lie more than 2 s before that look,
 `REAL_TIME_SLACK_NS`, since a write in the same timestamp tick keeps them,
 2026-10-17, CI pipeline 11426; else "could not check"), and
 removes the records; `mandu reap` reads them for a launcher that died.
+
+*The model is told at the call (2026-10-27).* The lines above reach the
+person, after the agent exits. Until this date the model learned nothing
+at the write, and the twin hides the loss from it: in the live drill
+demo-orders-sync-debug (Haiku 4.5, `secrets`) the model fixed a misnamed
+key by rewriting `orders-app/.env`; Edit's save was refused (`EACCES` on
+the rename, released as the tool's own error, confidentiality.md §7.1),
+`sed -i` too, and `cat > orders-app/.env << 'EOF'` landed in the twin (its
+output masked whole, path-derived, "do not assume it worked"). The sync run
+in the session then read the twin, the egress proxy put the passphrase
+into the request at its bound host, the run succeeded, and the model told
+the person "Fixed!" while the real `.env`, and so the person's own sync,
+was unchanged. No secret moved; the task failed silently. By §11.8's rule
+(every mask and every denial explains itself in the tool result), the
+call's result now says so:
+
+- The arbiter's classify op answers `twinWrites` on every verdict, masked
+  or public: the path tokens of the call's OWN input that it writes and
+  that name a registered file Mandu serves a twin of
+  (`arbiter/policy/twin-write-targets.ts`, then `namedTwinsFor` as for
+  the path-derived note's `namedTwins`). A shell command's write targets
+  are its output redirections (`>`, `>>`, `>|`, `&>`, `<>`, heredoc bodies
+  dropped), `tee`'s operands, the destination of `cp`, `mv`, `install`,
+  `ln`, `rsync`, the files of `sed -i` / `perl -i`, `dd of=` and
+  `truncate`; Claude Code's Write, Edit and MultiEdit give their absolute
+  `file_path`. The answer is given only for a session the file guard
+  confines (`sessionGuarded`: an attested `confined` launch record). Under
+  `gated` or with no record a program's write may reach the real file, and
+  the line would be false.
+- Both model proxies keep the tokens the call's input holds verbatim (at
+  most 3, `twinWriteTokens`) and add one `copy:` line to the
+  `[mandu:secret]` note (`twin-write-note.ts`, one module in both): the
+  file is protected; the agent and its programs see and change only its
+  placeholder copy; a change written into it stays there and replacing
+  the file (`sed -i`, `mv` onto it, a file tool's or an editor's save) is
+  refused; a run in the session may work off the copy, but the copy never
+  reaches the real file, which is unchanged; do not tell the user it is
+  fixed or saved; make the change where it is not secret (the code that
+  reads the file) or tell the user exactly what to change. It sits beside
+  the masked line on a masked result and after the program's text on a
+  released one (Edit's refused save, a clean-tree release of `sed -i`).
+- It is no oracle and releases nothing: the line is static text and the
+  model's own tokens, chosen by the model's input and the registry, never
+  by a result byte or a value, and no mask is raised or lowered by it. The
+  dashboard reads a `copy:` line as no mask (`secret-note.ts`
+  `noteMasks`). It names what a write of the file does, whether or not
+  this one ran; a write the reader misses (an interpreter's `open(…,
+  "w")`, a write by a script the command runs) gets no line.
+
+Writing the change through to the real file is a separate decision, not
+taken here: plan 16 §4.3 refuses write-back into a person's own `.env` and
+leaves it to its phase 5.
+
+Tests: arbiter `test/unit/twin-write-targets.test.ts` (the write shapes,
+the drill's three, what is no write) and
+`test/component/twin-writes-classify.test.ts` (the answer over the real
+IPC: masked and public, Codex's `cmd`, Edit's path; none for a read, an
+unregistered or new file, an unguarded or `gated` session, the axis off);
+both proxies' `test/unit/twin-write-note.test.ts` (one suite) and
+`test/unit/twin-write-copy-line.test.ts`; dashboard
+`test/unit/view-model/secret-note.test.ts`;
+`tests/stack/twin-write-copy-note.test.ts` (the drill's Edit, `sed -i`
+and heredoc through the real arbiter and both proxies in production
+wiring: the line on each, the heredoc still one symbol, none for a read,
+a plain file or an unguarded session, the passphrase in no request).
 
 Left as it was: what a program writes into the twin is served as written to
 every later open in the session, the agent's included, and is not
@@ -1201,7 +1278,12 @@ linked to its parent (Plan 13 D7; `exec-routing.md` §7.5).
 session holds any raw read, whatever the classify verdict. If the arbiter
 has a raw-open record for the call and cannot compute the fold, the result
 is rule (i). The interposer records before it injects, so "no record"
-means no raw bytes were handed out.
+means no raw bytes were handed out. An output rule the proxy does not
+recognise (anything but `secret`, `clear` and `mask`: a typo, a newer
+arbiter's rule, a malformed answer) is rule (i) too, and its reason says
+the rule was not recognised: only `clear` and `mask` can reach the release,
+and only past the backstop (and, for `mask`, its regexes) (2026-10-27,
+finding F-C; both model proxies).
 
 ### 4.3 The network exit
 
@@ -1777,13 +1859,63 @@ exemptions below:
    puts every vendor key whole in a neighbouring window.
    `secret-detectors.ts` and its scan-cache fingerprint are unchanged.
 
+**OpenClaw's Gateway credentials: one stable placeholder** (2026-10-27,
+`openclaw-gateway-credentials.ts`). `OPENCLAW_GATEWAY_TOKEN` and
+`OPENCLAW_GATEWAY_PASSWORD` authenticate OpenClaw's processes to each other,
+and a `mandu openclaw agent` client and the `mandu openclaw gateway run` it
+talks to are two launches. They are masked like any secret, and their
+placeholder is already the same in every launch: an environment secret's
+symbol is minted once per value (`registerEnvSecret` reuses the row by
+variable and value, with no session in the key, and the row is kept in the
+symbol store, so it survives an arbiter restart), under a random name that
+says nothing about the value. What broke was the run config: it kept the
+user's literal `gateway.auth.token`, so the Gateway expected the real token
+while the client sent the variable's placeholder, and OpenClaw 2026.3.12 and
+2026.7.1-2 (which read the variable before the config) refused every client
+with "gateway token mismatch" (openclaw-plugin.md §9, "OpenClaw's
+gateway-client fallback"). So, under `mandu openclaw`, after the environment
+mask the launch registers each literal credential of the run config
+(`gateway.auth.token` / `.password`, `gateway.remote.token` / `.password`,
+under the variable's name) and writes its placeholder in place. Every
+OpenClaw process of a Mandu launch holds the one placeholder; the raw value
+is in none of their environments nor run configs; it stays registered, so
+the value backstop masks it wherever it reaches a model and the egress gate
+holds it. A `${VAR}` reference or a SecretRef object is left (OpenClaw
+resolves it from the masked environment or its own store); an arbiter error
+leaves the file as written and says so, as the environment mask does. The
+accepted cost: a client outside Mandu holding the real token (a plain
+`openclaw agent`, a remote app) is refused by a Gateway under Mandu; the
+launch says so. Superseded: the first fix (2026-10-26) left the variable raw
+in the agent's environment; it also misread the cause as a per-session
+placeholder, which the e2e (`tests/stack/openclaw-gateway-token-env.test.ts`)
+now rules out (two launches, and one after a restart, hold the same one).
+The command line too (2026-10-27): a `--token <v>` / `--token=<v>` or
+`--password` on `mandu openclaw gateway …`, `agent …` or `tui …` would sit in
+the agent's `/proc/<pid>/cmdline`, which its own programs can read, so the
+launch registers the value and puts the same placeholder in its place, in
+the same spelling (`pinArgvGatewayCredentials`). Unlike the config, a value
+it cannot register refuses the launch, naming `OPENCLAW_GATEWAY_TOKEN` and
+`gateway.auth.token` instead; a `--token-file` / `--password-file` path is a
+file, not a value, and is left. Asserted over the real launcher
+(`launcher/test/component/openclaw-gateway-token-argv.test.ts`): for both
+spellings the raw token is in neither the agent's command line, environment
+nor run config, nor any model request, and both carry one placeholder.
+
 The design said `*PASSWORD*` plus the consumer table's known names from the
 start; the code had `_PASSWORD$` and `^PASSWORD$` only, so `PGPASSWORD`,
 `MYSQL_PWD`, `GITHUB_PAT`, `TF_TOKEN_*` and webhook URLs reached the agent
 raw until 2026-10-09 (`docs/usage.md` even recommended `PGPASSWORD` for
-Postgres, §11.1). A masked database password logs nothing in: no database
-protocol has a wire release. The ways out (`docs/usage.md`, for Postgres
-and MySQL alike) are a socket login that needs no password (Postgres's
+Postgres, §11.1). A masked database password logged nothing in: no database
+protocol had a wire release. Since 2026-10-24 a Postgres one does, on Linux
+under the connect guard: the egress proxy's database relay
+([`db-login-release.md`](db-login-release.md)) answers the server's SCRAM or
+md5 login with the password, a `~/.pgpass` line's at its own database (the
+file's wire grant) and, since 2026-10-25, `PGPASSWORD` at the database
+`PGHOST` names in the same launch environment (its wire grant; a binding of
+yours adds others; with no single TCP host each login is an Approvals card,
+db-login-release.md §3.3.1); MySQL's the same way (`~/.my.cnf` sections,
+`MYSQL_PWD` with `MYSQL_HOST`; native and caching_sha2). The
+other ways out (`docs/usage.md`) are a socket login that needs no password (Postgres's
 `peer`, MySQL's `auth_socket`, MariaDB's `unix_socket`, with the socket's
 folder under `unix_sockets.allow`), a program of the user's that is no SQL
 shell named as the password file's reader with `prints: nothing` and the
@@ -1846,10 +1978,15 @@ unit; launcher `secret-setup` unit; `tests/stack/env-sources.test.ts`.
 mediates `open()`; it cannot put a raw value into one process's environment
 at `execve` without rewriting the tracee's memory. So an env-var secret is
 twin-only: released at the wire, never raw to a program. That covers an
-HTTP bearer token, not a signing credential consumed from the environment
-(`AWS_SECRET_ACCESS_KEY` for SigV4). The launch notice names such a
-variable and the way out: keep it in its file (`~/.aws/credentials`), where
-the reader path applies.
+HTTP bearer token, and since 2026-10-24 an AWS signing key
+(`AWS_SECRET_ACCESS_KEY`): the program signs with the placeholder and the
+egress proxy re-signs each SigV4 request with the real key
+([`aws-sigv4-resign.md`](aws-sigv4-resign.md)). It does not cover another
+signing credential a program must hold (a GPG key, an SSH key in a
+variable) or a password a non-HTTP protocol sends other than a database
+login the relay answers (`PGPASSWORD` and `MYSQL_PWD` are, on Linux under
+the connect guard, db-login-release.md); for those the way out is the file,
+where the reader path applies.
 
 ### 11.5 The wire release is on by default
 
@@ -1931,7 +2068,10 @@ the openai-proxy) renders, each with the way out:
   user answers;
 - `twin:` (below);
 - `refused:` (a connection the egress proxy refused from the call's tree,
-  below).
+  below);
+- `copy:` (2026-10-27: the call writes a protected file, whose change
+  stays in its placeholder copy and never reaches the real file; how to
+  get the change made instead; §4.1, "The model is told at the call").
 
 The handling prompt tells the model to relay the note rather than retry.
 

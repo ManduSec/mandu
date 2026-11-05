@@ -75,15 +75,126 @@ test("an Always posts that one file to always-source; a file left keeps the card
   assert.match(card.textContent, /Done: ~\/ws\/app\/\.env may go there now\. Still in the way: ~\/data\/customers\.csv\./);
 });
 
-test("the last Always: the page says the next send goes", async () => {
-  const { doc } = load({
+/** An Always on the first of two files, its route answering with
+ *  `changeId` (none: an older server). */
+function firstAlways(changeId?: string) {
+  return load({
     url: APPROVALS_URL, homeVm: home({ waiting: [HOLDER] }),
-    routes: { "POST egress/approvals/egr-7/always-source": { applied: true, changeId: "chg-2", released: true, left: [] } },
+    routes: { "POST egress/approvals/egr-7/always-source": { applied: true, ...(changeId ? { changeId } : {}), released: false, left: ["/home/u/data/customers.csv"] } },
   });
+}
+
+test("an Always on a file that is not the last: the card's words end with Undo it in Approvals, a link to that rule change", async () => {
+  const { doc } = firstAlways("pc-000003");
+  await tick();
+  ([...doc.querySelectorAll('#approvals-waiting .ask[data-id="egr-7"] .ask-source-always')][0] as any).click();
+  await tick(30);
+  const card = doc.querySelector('#approvals-waiting .ask[data-id="egr-7"]');
+  const done = card.querySelector(".prompt-let-done");
+  assert.equal(words(done), "Done: ~/ws/app/.env may go there now. Still in the way: ~/data/customers.csv. Undo it in Approvals");
+  const links = [...done.querySelectorAll("a")] as any[];
+  assert.equal(links.length, 1);
+  assert.equal(links[0].textContent, "Undo it in Approvals");
+  assert.equal(links[0].getAttribute("href"), "/mandu/approvals/pc-000003", "the #48 landing: Rule changes, that change marked, its Undo");
+  assert.equal(links[0].dataset.ask, "pc-000003");
+  assert.equal(links[0].dataset.pageLink, "approvals");
+  assert.ok([...card.querySelectorAll(".ask-source-always")].some((b: any) => b.textContent === `Always: add ${H} to customers.csv`), "the next file's Always stays");
+  assert.equal(doc.querySelector("#approvals-waiting .answer-line"), null, "no line while a file is left");
+});
+
+test("an Always on a file that is not the last, from an older server (no change id): the words have no link", async () => {
+  const { doc } = firstAlways();
+  await tick();
+  ([...doc.querySelectorAll('#approvals-waiting .ask[data-id="egr-7"] .ask-source-always')][0] as any).click();
+  await tick(30);
+  const done = doc.querySelector('#approvals-waiting .ask[data-id="egr-7"] .prompt-let-done');
+  assert.equal(words(done), "Done: ~/ws/app/.env may go there now. Still in the way: ~/data/customers.csv.");
+  assert.equal(done.querySelector("a"), null);
+});
+
+test("the last Always on a card no answer line is drawn for: the words say every file may go there, with Undo it in Approvals", async () => {
+  const { doc } = released("pc-000004");
+  await tick();
+  // Taken out of its list: no place a poll draws, so no line either.
+  const card = doc.querySelector('#approvals-waiting .ask[data-id="egr-7"]');
+  doc.body.append(card);
+  ([...card.querySelectorAll(".ask-source-always")][1] as any).click();
+  await tick(30);
+  assert.equal(doc.querySelector(".answer-line"), null, "no answer line");
+  const said = card.querySelector(".ask-error");
+  assert.equal(words(said), "Done: every file may go there now, so the program's next send goes. Undo it in Approvals");
+  assert.equal(said.querySelector("a").getAttribute("href"), "/mandu/approvals/pc-000004");
+});
+
+/** The last Always over a mocked Home that, as the arbiter does, no longer
+ *  lists the question once its last file may go. */
+function released(changeId?: string, url = APPROVALS_URL) {
+  // eslint-disable-next-line prefer-const
+  let page: ReturnType<typeof load>;
+  page = load({
+    url, homeVm: home({ waiting: [RELEASED] }),
+    routes: { "POST egress/approvals/egr-7/always-source": () => (page.setHome(home({ waiting: [] })), { applied: true, ...(changeId ? { changeId } : {}), released: true, left: [] }) },
+  });
+  return page;
+}
+/** The question as Approvals has it with one file left in the way. */
+const RELEASED = {
+  ...HOLDER,
+  whatParts: HOLDER.sentence.slice(),
+  afterAllow: "Tell Claude Code to try again.",
+};
+const words = (x: any) => String(x.textContent).replace(/\s+/g, " ").trim(); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+test("the last Always: the card's place holds an answer line, with Undo it in Approvals on that rule change", async () => {
+  const { doc } = released("pc-000002");
   await tick();
   ([...doc.querySelectorAll('#approvals-waiting .ask[data-id="egr-7"] .ask-source-always')][1] as any).click();
   await tick(30);
-  assert.match(doc.getElementById("approvals-waiting").textContent, /every file may go there now, so the program's next send goes/);
+  const list = doc.getElementById("approvals-waiting");
+  assert.equal(list.querySelector('.ask[data-id="egr-7"]'), null, "the arbiter retired the question: its card is gone");
+  const lines = list.querySelectorAll(".answer-line");
+  assert.equal(lines.length, 1, "one line where the card was");
+  const line = lines[0];
+  assert.equal(line.getAttribute("role"), "status");
+  assert.equal(line.querySelector("strong").textContent, "Always allowed:");
+  assert.equal(words(line), `Always allowed: Claude Code's program wants to send data from ~/ws/app/.env and ~/data/customers.csv to ${H}. Tell Claude Code to try again. Undo it in Approvals`);
+  assert.deepEqual([...line.querySelectorAll("code")].map((c: any) => c.textContent), ["~/ws/app/.env", "~/data/customers.csv", H]);
+  const link = line.querySelector("a");
+  assert.equal(link.textContent, "Undo it in Approvals");
+  assert.equal(link.getAttribute("href"), "/mandu/approvals/pc-000002", "the #48 landing: Rule changes, that change marked, its Undo");
+  assert.equal(link.dataset.ask, "pc-000002");
+  assert.doesNotMatch(list.textContent, /After you answer|Change your answer/);
+  assert.doesNotMatch(doc.body.textContent, /After you answer/);
+});
+
+test("the last Always from an older server (no change id): the line has no link", async () => {
+  const { doc } = released();
+  await tick();
+  ([...doc.querySelectorAll('#approvals-waiting .ask[data-id="egr-7"] .ask-source-always')][1] as any).click();
+  await tick(30);
+  const line = doc.querySelector("#approvals-waiting .answer-line");
+  assert.ok(line, "the line is drawn");
+  assert.match(words(line), /^Always allowed: .* Tell Claude Code to try again\.$/);
+  assert.equal(line.querySelector("a"), null);
+});
+
+test("the last Always takes the focus the answer gives on, and a question the page opened at is no longer marked", async () => {
+  const { doc, window } = released("pc-000002", `${APPROVALS_URL}/egr-7`);
+  await tick();
+  assert.ok(doc.querySelector('#approvals-waiting .ask[data-id="egr-7"]').classList.contains("focus"), "the page opened at the question");
+  const btn = [...doc.querySelectorAll('#approvals-waiting .ask[data-id="egr-7"] .ask-source-always')][1] as any;
+  // Enter on the button: the browser drops the focus of the button the
+  // answer turns off to <body>.
+  btn.focus();
+  btn.click();
+  btn.disabled = false;
+  btn.blur();
+  btn.disabled = true;
+  await tick(30);
+  const line = doc.querySelector("#approvals-waiting .answer-line");
+  assert.equal(doc.activeElement, line, "the line has the focus");
+  assert.equal(window.location.pathname, "/mandu/approvals", "the URL no longer names the retired question");
+  assert.equal(doc.getElementById("approvals-focus-note").hidden, true, "no \"no longer waiting\" note");
 });
 
 test("a refusal (the file's rule changed meanwhile) is shown on the card, the buttons on again", async () => {

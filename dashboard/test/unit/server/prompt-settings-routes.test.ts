@@ -18,7 +18,12 @@
  *   - POST /api/prompt-filters/reveal {session, eventId, index} answers the
  *     original of a span the filter minted on its own in the human's text,
  *     and nothing else (a registered value, a merged span, a secret kind,
- *     harness text, a claimed event); never without the admin session.
+ *     harness text, a claimed event); never without the admin session;
+ *   - POST /api/policy/prompt-filters/try {text} (*Try a message*) needs
+ *     the admin session (the global gate), runs the dry run with origin
+ *     `human` whatever the body says, answers spans, kinds in the card's
+ *     words and actions but never a symbol nor the model's text, and passes
+ *     the bench's 400/413/501/502 through in the product's words.
  *
  * Axes: none is pinned (no arbiter; the fake answers as `secrets` would).
  */
@@ -29,7 +34,7 @@ import { DashboardServer, type PolicyDocArbiter } from "../../../src/server.js";
 import { ADMIN_OPTS, ADMIN_COOKIE } from "../admin-session.js";
 import type { EventSource, SessionRef } from "../../../src/event-source.js";
 import type { ManduEvent } from "../../../src/event-model.js";
-import { SETTINGS_REQUESTER, type PromptFiltersWire } from "../../../src/server/prompt-filter-routes.js";
+import { BENCH_MAX_CHARS, SETTINGS_REQUESTER, TRY_UNSUPPORTED, type FilterPromptWire, type PromptFiltersWire } from "../../../src/server/prompt-filter-routes.js";
 import { READ_ONLY_SETTINGS } from "../../../src/view-model/prompt-settings.js";
 
 const CSRF_ADMIN = { "X-Mandu-Control": "1", Cookie: ADMIN_COOKIE, "Content-Type": "application/json" };
@@ -283,6 +288,92 @@ test("POST reveal by event and index: the filter's own mint in the human's text 
     }
     assert.deepEqual(asked, [SYM], "nothing else was resolved");
     assert.equal((await reveal({ session: "s1", eventId: "e-own" })).status, 400, "an index is required");
+  } finally {
+    await h.close();
+  }
+});
+
+// ── POST /api/policy/prompt-filters/try ─────────────────────────────────────
+const tryIt = async (base: string, body: unknown, headers: Record<string, string> = CSRF_ADMIN) => {
+  const r = await fetch(`${base}/api/policy/prompt-filters/try`, { method: "POST", headers, body: JSON.stringify(body) });
+  return { status: r.status, body: (await r.json()) as Record<string, any> };
+};
+const DRY: FilterPromptWire = {
+  segments: [{
+    id: "bench", origin: "human", action: "rewrite", text: `mail ${SYM}`, skipped: 0, cached: false,
+    findings: [
+      { start: 5, end: 18, category: "pii.email", filterId: "pii", action: "mask", symbol: SYM, how: "pattern" },
+      { start: 19, end: 23, category: "acme.codename", filterId: "acme-dlp", action: "redact" },
+      { start: 24, end: 30, category: "secret.shape.github-token", filterId: "key-shapes", action: "ask" },
+    ],
+  }],
+  enforcing: true, dryRun: true, digest: { policy: "p0", packs: "k0", values: "v0" },
+};
+
+test("POST try: the admin session; origin human whatever the body says; spans, kinds and actions, never a symbol or the model's text", async () => {
+  const asked: unknown[] = [];
+  const { a } = arbiter({ async filterPromptDryRun(args: unknown) { asked.push(args); return DRY; } } as Partial<PolicyDocArbiter>);
+  const h = await start(a);
+  try {
+    const text = "mail ann@corp.test acme ghp_xx";
+    assert.equal((await tryIt(h.base, { text }, {})).status, 403, "no CSRF header");
+    const signedOut = await tryIt(h.base, { text }, CSRF_ONLY);
+    assert.equal(signedOut.status, 403, "no admin session");
+    assert.equal(asked.length, 0, "nothing reached the arbiter");
+    const r = await tryIt(h.base, { text, origin: "harness" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(asked, [{ agent: "dashboard", segments: [{ id: "bench", origin: "human", text }] }], "the person's own text, as a dry run");
+    assert.deepEqual(r.body, {
+      enforcing: true, action: "rewrite",
+      findings: [
+        { start: 5, end: 18, category: "pii.email", name: "An email address", named: false, action: "mask" },
+        { start: 19, end: 23, category: "acme.codename", name: "acme.codename", named: true, action: "redact" },
+        { start: 24, end: 30, category: "secret.shape.github-token", name: "A GitHub token", named: false, action: "ask" },
+      ],
+    });
+    assert.ok(!JSON.stringify(r.body).includes("$MDU:"), "no symbol and no model text in the answer");
+  } finally {
+    await h.close();
+  }
+});
+
+test("POST try: the bench's refusals pass through in the product's words", async () => {
+  const { a } = arbiter({ async filterPromptDryRun() { throw new Error("connect ECONNREFUSED /run/human.sock"); } } as Partial<PolicyDocArbiter>);
+  const h = await start(a);
+  try {
+    const empty = await tryIt(h.base, { text: "  " });
+    assert.deepEqual([empty.status, empty.body["error"]], [400, "Type a message to try."]);
+    const long = await tryIt(h.base, { text: "x".repeat(BENCH_MAX_CHARS + 1) });
+    assert.deepEqual([long.status, long.body["error"]], [413, "The message is longer than 65,536 characters."]);
+    const down = await tryIt(h.base, { text: "hello" });
+    assert.deepEqual([down.status, down.body["error"]], [502, "The protection service did not answer."], "the arbiter's words, which could name a path, stay out");
+  } finally {
+    await h.close();
+  }
+  const old = await start(arbiter({ filterPromptDryRun: undefined } as Partial<PolicyDocArbiter>).a);
+  try {
+    const r = await tryIt(old.base, { text: "hello" });
+    assert.deepEqual([r.status, r.body["error"]], [501, TRY_UNSUPPORTED]);
+  } finally {
+    await old.close();
+  }
+  const none = await start(undefined);
+  try {
+    const r = await tryIt(none.base, { text: "hello" });
+    assert.equal(r.status, 404);
+    assert.doesNotMatch(String(r.body["error"]), /arbiter/i);
+  } finally {
+    await none.close();
+  }
+});
+
+test("POST try: a filter that could not run answers the arbiter's reason, not the text", async () => {
+  const reason = "Mandu could not check this prompt: the prompt filter acme did not run, and your policy blocks the prompt when it cannot. Nothing was sent to the model.";
+  const { a } = arbiter({ async filterPromptDryRun() { return { ...DRY, segments: [{ id: "bench", origin: "human", action: "block", reason, skipped: 0, cached: false, findings: [] }] }; } } as Partial<PolicyDocArbiter>);
+  const h = await start(a);
+  try {
+    const r = await tryIt(h.base, { text: "hello" });
+    assert.deepEqual(r.body, { enforcing: true, action: "block", reason, findings: [] });
   } finally {
     await h.close();
   }

@@ -14,7 +14,11 @@
  *      (dist/prompt-filters/): the installed `mandu policy classifier-pack`
  *      pins the shipped copy, and that copy answers the plugin protocol;
  *   6. the SDK route preload ships with the permission-mode rule it
- *      requires beside it, and loads from dist/.
+ *      requires beside it, and loads from dist/;
+ *   7. the bundled arbiter's issuer bindings are the issuer files' table
+ *      (arbiter/policy/issuers/, inlined by the bundle; confidentiality.md
+ *      §2.3): every file's hosts answer as that issuer, and no issuer file
+ *      was left out.
  *
  * This is the mechanism that keeps `dist/` from silently rotting away from
  * source; the fuller wrapper-parity-against-dist axis is layered on top later.
@@ -23,7 +27,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -212,6 +216,55 @@ test("the bundled arbiter walks discoverSecrets on its worker thread (runtime-in
     const r = await c.discoverSecretsReport([home], home);
     assert.deepEqual(r.files.map((f) => f.path), [join(home, "proj", ".env")]);
     assert.doesNotMatch(stderr, /walking in-process/, "the bundled arbiter found and ran its worker");
+  } finally {
+    try { client?.close(); } catch { /* best-effort */ }
+    if (arb) { arb.kill("SIGTERM"); await once(arb, "exit", 5000); }
+  }
+});
+
+// The issuer table is data (arbiter/policy/issuers/, statically imported):
+// the bundle must inline every file, or a packaged install would release
+// with a different table than the source (confidentiality.md §2.3).
+test("the bundled arbiter's issuer bindings are the issuer files' table: every file's hosts answer as its issuer, none left out", async () => {
+  const dir = join(pkgRoot, "..", "arbiter", "policy", "issuers");
+  const files = readdirSync(dir).filter((f) => f.endsWith(".json"))
+    .map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")) as { id: string; name: string; hosts: string[]; shapes: string[] });
+  assert.ok(files.length >= 9, `the issuer files: ${files.length}`);
+  const sock = join(tmp, "arb-issuers.sock");
+  let arb: ChildProcess | undefined;
+  let client: { close: () => void } | undefined;
+  let stderr = "";
+  try {
+    arb = spawn(
+      "node",
+      ["--no-warnings=ExperimentalWarning", join(distDir, "arbiter.mjs")],
+      {
+        env: {
+          ...process.env, ...axesEnv("secrets"), MANDU_POLICY_FILE: join(tmp, "no-policy.yaml"),
+          MANDU_ARBITER_SOCK: sock, MANDU_HOME: join(tmp, "mandu-home-issuers"), MANDU_RUNTIME_DIR: join(tmp, "rt-issuers"),
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+    arb.stderr?.on("data", (c) => (stderr += c));
+    await waitForPaths(sock, { what: "the bundled arbiter", child: arb, output: () => stderr });
+    const mod = (await import(join(distDir, "arbiter-client.mjs"))) as {
+      ArbiterClient: new (sock: string) => {
+        connect(): Promise<void>;
+        whyHost(host: string): Promise<{ issuer?: { id: string; name: string; shapes: string[]; on: boolean } }>;
+        close(): void;
+      };
+    };
+    const c = new mod.ArbiterClient(sock);
+    client = c;
+    await c.connect();
+    for (const f of files) {
+      for (const h of f.hosts) {
+        assert.deepEqual((await c.whyHost(h)).issuer, { id: f.id, name: f.name, shapes: f.shapes, on: true }, `${h}: the bundled arbiter's issuer`);
+      }
+    }
+    assert.equal((await c.whyHost("api.stripe.com.evil.io")).issuer, undefined, "a lookalike host is no issuer's");
+    assert.doesNotMatch(stderr, /issuer bindings: /, "no issuer file was left out");
   } finally {
     try { client?.close(); } catch { /* best-effort */ }
     if (arb) { arb.kill("SIGTERM"); await once(arb, "exit", 5000); }

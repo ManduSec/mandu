@@ -3,8 +3,11 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deriveHealth, SECRETS_FIX, SECRETS_SENTENCE, TOOL_CANNOT_RUN_RE } from "../../src/session-health.js";
+import { readFileSync } from "node:fs";
+import { deriveHealth, NOT_A_PROTECTION_RE, SECRETS_FIX, SECRETS_PARTIAL_NOTE, SECRETS_SENTENCE, TOOL_CANNOT_RUN_RE } from "../../src/session-health.js";
+import { GAP_SENTENCE, gapExplanation, POSTURE_GAPS } from "../../src/confinement-posture.js";
 import type { ManduEvent } from "../../src/event-model.js";
+import { agentNotice } from "../../src/view-model/home.js";
 
 let n = 0;
 function ev(kind: string, extra: Record<string, unknown> = {}): ManduEvent {
@@ -72,7 +75,7 @@ test("broken while the reply filter's lookups fail (relay_mode.resolveFailure, t
   assert.equal(down.verdict, "broken");
   assert.equal(down.relay, "pty", "the relay still runs; only its lookups fail");
   assert.equal(down.relayFailure, why);
-  assert.match(down.reasons[0]!, /cannot resolve placeholders \(human-plane: 'desymbolize'.*symbols stay opaque/);
+  assert.match(down.reasons[0]!, /cannot resolve masked values \(human-plane: 'desymbolize'.*symbols stay opaque/);
   const up = deriveHealth([posture(["fs"]), ev("relay_mode", { mode: "pty", resolveFailure: why }), ev("relay_mode", { mode: "pty" }), turn()])!;
   assert.equal(up.verdict, "ok", up.reasons.join("; "));
   assert.equal(up.relayFailure, undefined);
@@ -84,6 +87,32 @@ test("a --version / quit-only launch (exit 0, no model call) is NOT broken; a no
   assert.match(quiet.reasons[0]!, /no model call/);
   const died = deriveHealth([posture(["fs"]), ev("session_exit", { code: 1 })])!;
   assert.equal(died.verdict, "broken");
+});
+
+// 2026-10-28: a subscription at its weekly limit: the model proxy records the
+// provider's 429 on the turn's tllm_call (`upstreamLimit`, hard). Before any
+// turn that is what stopped the session (`limit`, not `no-turn`), and the
+// product page says it in plain words: the AI plan's limit, not Mandu, and
+// when it resets.
+test("the AI provider's usage limit: its own cause and a plain product sentence", () => {
+  const weekly = { status: 429, unifiedStatus: "rejected", claim: "seven_day", resetsAt: "2026-10-28T21:00:00.000Z", retryAfterS: 45151, hard: true };
+  const limited = () => ev("tllm_call", { upstreamLimit: weekly, output: { symbolized: "⚠ no model response — upstream HTTP 429 (rate-limited until 2026-10-28 21:00 UTC (seven-day limit))", original: null, differs: false, symbols: [] } });
+  const h = deriveHealth([posture(["fs"]), limited(), ev("session_exit", { code: 0 })])!;
+  assert.equal(h.verdict, "broken");
+  assert.deepEqual(h.broken, ["limit"], "the limit, not a bare no-turn");
+  assert.deepEqual(h.providerLimit, { resetsAt: "2026-10-28T21:00:00.000Z" });
+  const notice = agentNotice(h, false, "s-1")!;
+  assert.match(notice, /Your AI plan's usage limit was reached, so the AI model did not answer and the agent stopped\. This limit is your AI provider's, not Mandu's\. It resets 2026-10-28 at 21:00 UTC\./);
+  assert.doesNotMatch(notice, /429|upstream|tllm|seven_day/, "plain words only");
+  // a short throttle the proxy retried is no limit
+  const spike = deriveHealth([posture(["fs"]), ev("tllm_call", { upstreamLimit: { status: 429, retryAfterS: 1, hard: false } }), ev("session_exit", { code: 0 })])!;
+  assert.deepEqual(spike.broken, ["no-turn"]);
+  assert.equal(spike.providerLimit, undefined);
+  // turns flowed, then the limit: noted, not broken
+  const later = deriveHealth([posture(["fs"]), turn(), limited(), ev("session_exit", { code: 0 })])!;
+  assert.equal(later.broken, undefined);
+  assert.ok(later.providerLimit);
+  assert.match(agentNotice(later, false)!, /did not answer some of the agent's requests/);
 });
 
 test("a broken verdict names its causes as codes for the product page, in the order of its reasons; none otherwise", () => {
@@ -251,7 +280,7 @@ test("bind-only (no file guard, finding 7): gated AMBER with no one-command fix;
     assert.equal(h.verdict, "degraded");
     assert.deepEqual(h.secrets, { posture: "gated", gap, sentence: SECRETS_SENTENCE.gated });
     assert.equal(h.reasons.length, 1);
-    assert.match(h.reasons[0]!, /mount layer still puts a placeholder/);
+    assert.match(h.reasons[0]!, /mount layer still puts a masked copy/);
     assert.match(h.reasons[0]!, /a file replaced while the AI runs is readable/);
     assert.match(h.reasons[0]!, gap === "guard-off" ? /turned off/ : /not available/);
     assert.doesNotMatch(h.reasons[0]!, /Upgrade once/);
@@ -265,7 +294,7 @@ test("gated with no available fix (userns-off / arbiter) offers none; confined s
   const confined = deriveHealth([ev("launch_posture", { live: ["fs"], dropped: [], secrets: { posture: "confined" } }), ev("relay_mode", { mode: "pty" }), turn()])!;
   assert.equal(confined.verdict, "ok");
   assert.equal(confined.secrets?.posture, "confined");
-  assert.match(confined.secrets!.sentence, /get a placeholder copy of each credential file, never the real one/);
+  assert.match(confined.secrets!.sentence, /get a masked copy of each credential file, never the real one/);
   assert.equal(deriveHealth([posture(["fs"])])!.secrets, undefined);
   // a malformed posture value is ignored, never rendered
   assert.equal(deriveHealth([ev("launch_posture", { live: [], dropped: [], secrets: { posture: "super-safe" } })])!.secrets, undefined);
@@ -292,4 +321,83 @@ test("PARITY: the dashboard's posture sentences + fixes equal the launcher's sin
     assert.equal(SECRETS_FIX[gap] ?? null, gapExplanation(gap).fix, gap);
   }
   for (const gap of Object.keys(SECRETS_FIX)) assert.ok(HOST_GAPS.includes(gap), `the dashboard names a gap the launcher does not: ${gap}`);
+});
+
+// ── the OpenClaw plugin attachment (docs/design/agents/openclaw-plugin.md §3.3, §3.4) ──
+
+/** The posture record the arbiter writes at `beginAttachment` (emitter arbiter). */
+const attachmentPosture = (extra: Record<string, unknown> = {}) => ev("launch_posture", {
+  emitter: "arbiter", boundary: "model_context", target: "openclaw", argv0: "openclaw-plugin", live: [],
+  dropped: ["mandu: secrets are GATED, not confined, in this OpenClaw Gateway.\n  Mandu is attached to your OpenClaw Gateway as a plugin, not running it."],
+  secrets: { posture: "gated", gap: "openclaw-plugin" }, humanPlaneWalled: false, ...extra,
+});
+
+test("the OpenClaw plugin's gap: AMBER, with its own sentence (no egress promise) and no one-command fix", () => {
+  const h = deriveHealth([attachmentPosture(), turn()])!;
+  assert.equal(h.verdict, "degraded");
+  assert.equal(h.secrets?.posture, "gated");
+  assert.equal(h.secrets?.gap, "openclaw-plugin");
+  assert.equal(h.secrets?.fix, undefined);
+  assert.equal(h.secrets?.sentence, GAP_SENTENCE["openclaw-plugin"]);
+  assert.notEqual(h.secrets?.sentence, SECRETS_SENTENCE.gated, "gated's sentence promises an egress check the plugin does not make");
+  assert.equal(h.reasons.length, 1, "the multi-line notice gives way to the one sentence");
+  assert.match(h.reasons[0]!, /^secrets are gated, not confined: The AI sees your secrets masked, because every model call goes through Mandu\./);
+  assert.match(h.reasons[0]!, /connect anywhere unchecked/);
+  assert.doesNotMatch(h.reasons[0]!, /sent out only where|Upgrade once/);
+});
+
+test("a believed posture record wins over a claimed one written first (a forgery on the data socket); all-claimed keeps the first", () => {
+  const forged = ev("launch_posture", { claimed: true, live: ["fs"], dropped: [], secrets: { posture: "confined" } });
+  const h = deriveHealth([forged, attachmentPosture(), turn()])!;
+  assert.equal(h.secrets?.posture, "gated", "the arbiter's record, not the claim");
+  assert.equal(h.secrets?.gap, "openclaw-plugin");
+  // an unwalled launch: every record a claim, the first one stands as before
+  const only = deriveHealth([forged, ev("launch_posture", { claimed: true, live: [], dropped: [], secrets: { posture: "gated", gap: "no-guard" } })])!;
+  assert.equal(only.secrets?.posture, "confined");
+});
+
+test("PARITY: the dashboard's posture module is the launcher's, byte for byte (scripts/copies/module-copies.mjs); every gap's fix and note come from it", () => {
+  const here = readFileSync(new URL("../../src/confinement-posture.ts", import.meta.url));
+  const source = readFileSync(new URL("../../../launcher/src/confinement-posture.ts", import.meta.url));
+  assert.ok(here.equals(source), "run `node scripts/copies/module-copies.mjs generate`");
+  for (const gap of POSTURE_GAPS) assert.equal(SECRETS_FIX[gap] ?? null, gapExplanation(gap).fix, gap);
+  assert.ok(POSTURE_GAPS.includes("openclaw-plugin"));
+  assert.equal(SECRETS_FIX["openclaw-plugin"], undefined);
+  assert.deepEqual(Object.keys(SECRETS_PARTIAL_NOTE).sort(), ["guard-off", "no-guard"]);
+});
+
+// ── protections that did not start, for the product page (dashboard.md §4.21) ──
+
+const NET_PROXY_DOWN = "mandu: service 'net-proxy' is on by default but failed to start: port busy";
+const FS_DEGRADED = "mandu: fs rung DEGRADED: fs-sync opted out (--no-fs-sync) — raw CWD, no prefix map";
+const NO_EXEC_BOX = "mandu: exec-box is on by default, but the mandu-exec-box bin is not built. build with: cd interceptors && cargo build — proceeding WITHOUT it (the listed commands run normally; --no-exec-box silences this).";
+const NO_GUARD = "mandu: the default-on whole-agent connect-guard is unavailable — the mandu-net-guard bin is not built; proceeding WITHOUT it (the landlock-net port wrap / netns stay the boundary). build with: …";
+const SEATBELT_DOWN = "mandu: the default-on whole-agent TCP confine (Seatbelt network rules) could not write its profile — proceeding WITHOUT it";
+const TRUST = "mandu: could not inherit workspace trust for the AgentView twin (no settings file) — claude may ask its \"Accessing workspace\" question once";
+
+test("droppedProtections: counts each dropped line a protection did not start, one and several", () => {
+  assert.equal(deriveHealth([posture(["fs"], [NET_PROXY_DOWN]), turn()])!.droppedProtections, 1);
+  assert.equal(deriveHealth([posture(["fs"], [NET_PROXY_DOWN, FS_DEGRADED, NO_EXEC_BOX]), turn()])!.droppedProtections, 3);
+  assert.equal(deriveHealth([posture(["fs", "net-proxy"]), turn()])!.droppedProtections, undefined, "a full launch: no count");
+  assert.equal(deriveHealth([turn()]), null, "no posture event: nothing");
+});
+
+test("droppedProtections: the gated line is the posture note's, a trust line is no protection; the chip still grades both", () => {
+  const gated = deriveHealth([ev("launch_posture", { live: ["fs"], dropped: [GATED_NOTICE], secrets: { posture: "gated", gap: "apparmor-userns" } }), turn()])!;
+  assert.equal(gated.droppedProtections, undefined);
+  const both = deriveHealth([ev("launch_posture", { live: ["fs"], dropped: [GATED_NOTICE, NET_PROXY_DOWN], secrets: { posture: "gated", gap: "apparmor-userns" } }), turn()])!;
+  assert.equal(both.droppedProtections, 1);
+  const trust = deriveHealth([posture(["fs"], [TRUST]), turn()])!;
+  assert.equal(trust.droppedProtections, undefined);
+  assert.equal(trust.verdict, "degraded", "the developer chip keeps its grade");
+  assert.ok(NOT_A_PROTECTION_RE.test("mandu: could not inherit directory trust for the AgentView twin (x) — codex may ask its \"Do you trust\" question once"));
+});
+
+test("droppedProtections: a Linux-only layer's absence counts on Linux, not on macOS; a Seatbelt line counts on macOS", () => {
+  const events = [posture(["fs"], [NO_EXEC_BOX, NO_GUARD, NET_PROXY_DOWN]), turn()];
+  assert.equal(deriveHealth(events, "linux")!.droppedProtections, 3);
+  assert.equal(deriveHealth(events)!.droppedProtections, 3, "no platform: every line counts");
+  assert.equal(deriveHealth(events, "darwin")!.droppedProtections, 1, "only the net-proxy line");
+  assert.equal(deriveHealth([posture(["fs"], [NO_EXEC_BOX]), turn()], "darwin")!.droppedProtections, undefined);
+  assert.equal(deriveHealth([posture(["fs"], [SEATBELT_DOWN]), turn()], "darwin")!.droppedProtections, 1, "the macOS mechanism's own failure is a real drop");
 });

@@ -104,7 +104,7 @@ type Db = InstanceType<typeof Database>;
 
 /** The store, opened read-only: by its URI where this SQLite takes one, else
  *  by its path. Throws when it cannot be opened. */
-function openReadOnly(from: string): { db: Db; via: "uri" | "path" } {
+export function openReadOnly(from: string): { db: Db; via: "uri" | "path" } {
   try {
     return { db: new Database(readOnlyUri(from), { readOnly: true }), via: "uri" };
   } catch {

@@ -8,7 +8,8 @@
  * admin session (a program the agent runs has neither). The page names the
  * secret by its opaque ref (view-model/secret-ref.ts); the route recomputes
  * the refs of the secrets that session RECORDED (agent-page.ts
- * `revealableSecrets`, over its believed events) and resolves only a match,
+ * `revealableSecrets`, over its believed events, or every event of an
+ * attachment session, event-model.ts `revealScopeEvents`) and resolves only a match,
  * through the source's human-plane read. So it is never a general
  * desymbolize: an unknown ref, another session's secret or a token the
  * session never recorded resolves nothing (404). The value goes back in the
@@ -19,7 +20,7 @@ import { type IncomingMessage, type ServerResponse } from "node:http";
 
 import { json, readJson } from "./http-util.js";
 import { type EventSource } from "../event-source.js";
-import { believedEvents } from "../event-model.js";
+import { revealScopeEvents } from "../event-model.js";
 import { toSessionViewModel } from "../view-model.js";
 import { revealableSecrets } from "../view-model/agent-page.js";
 import { SECRET_REF_RE, secretRef } from "../view-model/secret-ref.js";
@@ -49,9 +50,11 @@ export async function postSecretReveal(
     return;
   }
   // Only what the session's believed events recorded (a claimed event,
-  // arbiter-human-plane.md §10.2, cannot add a token to the set).
-  const believed = believedEvents(events);
-  const vm = believed.length ? toSessionViewModel(session, believed) : null;
+  // arbiter-human-plane.md §10.2, cannot add a token to the set), except an
+  // attachment session's, whose own proxy's records are all claims
+  // (event-model.ts revealScopeEvents, dashboard.md §4.25aj).
+  const scope = revealScopeEvents(events);
+  const vm = scope.length ? toSessionViewModel(session, scope) : null;
   const name = vm ? [...revealableSecrets(vm)].find((n) => secretRef(session, n) === ref) : undefined;
   if (!name) {
     json(res, 404, { error: "this session recorded no such secret" });

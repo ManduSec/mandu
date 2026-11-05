@@ -55,7 +55,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ArbiterSockMode } from "./arbiter-sock.js";
-import { describeSupervisor, disableCommand, OWN_STACK_NOTE, ownStackCommand, type StackSupervisor } from "./stack-supervisor.js";
+import { describeSupervisor, disableCommand, OWN_STACK_NOTE, ownStackCommand, serveUpgradeFix, type StackSupervisor } from "./stack-supervisor.js";
 import { compareVersions, parseVersion } from "./update-check.js";
 
 /** Which build of a release an arbiter's code is (hello `build`; mirrors
@@ -242,7 +242,10 @@ export function skewAction(i: SkewInput): SkewAction {
   // of its own.
   // Unless only an adopted arbiter is old and the service runs this mandu's
   // own code: then `mandu stop` is the fix (the service starts a current one).
-  const stop = i.supervisor && !adoptedByOurService(i.supervisor)
+  // The shipped unit running this mandu's own files is restarted onto them
+  // by `mandu serve upgrade` (runtime-instances.md §4.1d), whichever process is old.
+  const upgrade = i.supervisor ? serveUpgradeFix(i.supervisor, i.peers.length > 0) : null;
+  const stop = upgrade !== null ? upgrade : i.supervisor && !adoptedByOurService(i.supervisor)
     ? `${disableCommand(i.supervisor)}; or, to keep that service, run this mandu on its own stack: ${ownStackCommand(i.base)} (${OWN_STACK_NOTE})`
     : `mandu stop --stack ${i.base}`;
   if (v.kind === "build") return buildSkewAction(i, v, pid, stop);
@@ -311,6 +314,16 @@ function adoptedByOurService(s: StackSupervisor): boolean {
  *    stop it for good, or run this mandu on its own stack. */
 function supervisedRefusal(s: StackSupervisor, base: string, what: string, other: string): SkewAction {
   const svc = describeSupervisor(s);
+  const upgrade = serveUpgradeFix(s);
+  if (upgrade !== null) {
+    return {
+      kind: "refuse",
+      message:
+        `mandu: ${what}; refusing to launch against ${other}. They are run by ${svc}, from this mandu's own folder: ` +
+        `its files were updated, its processes still run the earlier code. Restart it on this mandu: ${upgrade}, ` +
+        `then run mandu again.`,
+    };
+  }
   const replace = `mandu stop --stack ${base}`;
   if (s.arbiterOutside === true) {
     const adopted =

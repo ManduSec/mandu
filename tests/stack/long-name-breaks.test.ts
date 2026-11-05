@@ -20,7 +20,8 @@
  *       320 px: the file is cut after each slash and the host after each
  *       dot into `.name-part`s drawn as inline boxes no wider than their
  *       line; the key stays `.code-whole`; the words read as the strings;
- *   B3  the served Home page: the short card's why line the same;
+ *   B3  the served Home page: the short card's why line the same, and
+ *       its line on which answers last the key and the host;
  *   B4  the oracle: no page or answer read here carries the key's value,
  *       and none a token (`$MDU`).
  *
@@ -71,6 +72,28 @@
  *       spaces (`pre-wrap`), and its command's code is `break-spaces`, so
  *       a space at the end of a line takes its room instead of hanging,
  *       box and all, past the column (Chromium at 320 px: 6 px past).
+ *   B12 (2026-10-28, *A session page's tab names its session*) the
+ *       served page's tab title names the agent, the folder's last name
+ *       and when the session started ("Mandu · Claude Code in services ·
+ *       Oct 28, 04:31"), and never the prompt, a value or a token.
+ *
+ * A fourth test (2026-10-30, *The folder stays in sight*): a row on Home and
+ * History says "<what you asked> in ~/folder" on one line, and until then a
+ * prompt of about 40 characters cut the folder away on a 390 px phone. Three
+ * sessions through the REAL proxy (a long prompt in `~/shop`, whose session
+ * reads a `.env` the proxy masks; "Fix it." in `~/api`; a short prompt in
+ * the long folder above), Home and History in a REAL headless Chromium
+ * (Playwright's headless shell; none found: the test skips), signed in, at
+ * 390 and 1280 px:
+ *
+ *   B13 every row's folder box lies inside its line, its last name in sight,
+ *       and the line's words are whole in the page; the long prompt is the
+ *       part cut (at 390 px), never `~/shop`;
+ *   B14 a short line shows whole; the long folder is capped at half its
+ *       line and cut at its start ("~" out of sight); nothing runs past the
+ *       window;
+ *   B15 the oracle: neither page, `/api/home` nor `/api/home/history`
+ *       carries the value or a token.
  *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON). What is
  * under test is where the served page lets a name break; the stack supplies
@@ -82,6 +105,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
 import { join } from "node:path";
+import type { ChildProcess } from "node:child_process";
 
 import { ArbiterServer } from "../../arbiter/ipc/server.js";
 import { ArbiterClient } from "../../arbiter/ipc/client.js";
@@ -97,6 +121,7 @@ import { resolveCssVars, stylesAt } from "../../dashboard/test/unit/ui/css-flatt
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { ADMIN_COOKIE, ADMIN_OPTS } from "../../dashboard/test/unit/admin-session.js";
 import { stateAxes } from "../lib/axes.js";
+import { chromiumBinary, READY, startChromium, stopChromium } from "../lib/chromium.js";
 import { humanSockIn } from "../lib/human-plane.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the axis under test
@@ -209,7 +234,10 @@ test("a long file and a long host break only at their slashes and dots on the se
     await servedProductPage(base, "/", (doc: any) => !!doc.querySelector("#home-waiting .ask .ask-sub code"), (doc) => {
       const sub = doc.querySelector("#home-waiting .ask .ask-sub");
       assert.ok(sub.textContent.startsWith(`${ask.why} `), sub.textContent);
-      assert.deepEqual(cuts(sub), CUTS, "the same names, the same cuts");
+      // Then its line on which answers last (dashboard.md §4.34 *Home's card
+      // says which answers last*) names the key and the host, cut the same.
+      assert.deepEqual(cuts(sub), [...CUTS, CUTS[0], CUTS[2]], "the same names, the same cuts");
+      assert.deepEqual(cuts(sub.querySelector(".ask-answers")), [CUTS[0], CUTS[2]]);
       noValue(doc.body.textContent, "the rendered Home page");
       assert.doesNotMatch(doc.body.textContent, /\$MDU/, "the rendered page carries no token");
     }, { css });
@@ -443,6 +471,11 @@ test("the session page's long folder breaks only at its slashes on the real stac
       assert.equal(cmd.whiteSpace, "break-spaces", "a space at a line's end takes its room inside the code, never hangs past the column");
       assert.equal(cmd.overflowWrap, "anywhere", "a word alone wider than the line still wraps inside");
       clean(doc.body.textContent, "the rendered session page");
+      // ── B12: the tab names the session, never what was asked ──
+      const title: string = doc.title;
+      assert.match(title, /(?:^|· )Mandu · Claude Code in services · [A-Z][a-z]{2} \d{1,2}(?:, \d{4})?, \d{2}:\d{2}$/, `the tab names the session: ${title}`);
+      assert.ok(!title.includes(q) && !title.includes(".env"), `the tab never holds the prompt: ${title}`);
+      clean(title, "the tab title");
     }, { css });
 
     // ── B9: the oracle ──
@@ -453,6 +486,212 @@ test("the session page's long folder breaks only at its slashes on the real stac
     }
   } finally {
     await proxy.close();
+    await dashboard.close();
+    data.close();
+    human.close();
+    await arbiter.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/** A DevTools client over Node's built-in WebSocket. */
+async function devtools(wsUrl: string) {
+  const ws = new WebSocket(wsUrl);
+  await new Promise<void>((resolve, reject) => {
+    ws.addEventListener("open", () => resolve(), { once: true });
+    ws.addEventListener("error", () => reject(new Error(`no DevTools at ${wsUrl}`)), { once: true });
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const waiting = new Map<number, (m: any) => void>();
+  ws.addEventListener("message", (ev) => {
+    const m = JSON.parse(String(ev.data));
+    if (typeof m.id === "number") waiting.get(m.id)?.(m);
+  });
+  let id = 1;
+  return {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    send(method: string, params: Record<string, unknown> = {}): Promise<any> {
+      const my = id++;
+      return new Promise((resolve) => { waiting.set(my, resolve); ws.send(JSON.stringify({ id: my, method, params })); });
+    },
+    close: () => ws.close(),
+  };
+}
+
+const BIN = chromiumBinary();
+/** What you asked, 120 characters; the server keeps 80 of it for the row. */
+const LONG_ASK = "Read the .env file in this folder, tell me which of its keys the staging deploy still reads, and say where each one is used.";
+/** The three sessions of the folder test: a long prompt in a short folder,
+ *  a short prompt in a short folder, and a short prompt in the long folder. */
+const ROWS = [
+  { id: `1791870000-${process.pid}`, ask: LONG_ASK, folder: "shop" },
+  { id: `1791870100-${process.pid}`, ask: "Fix it.", folder: "api" },
+  { id: `1791870200-${process.pid}`, ask: "Run the tests.", folder: FOLDER },
+] as const;
+/** One row's line as drawn: its box, its prompt's and its folder's, and
+ *  where the folder's first and last characters are. */
+interface Line { text: string; line: [number, number]; folder: [number, number]; first: [number, number]; last: [number, number]; promptCut: boolean; folderCut: boolean }
+
+test("Home's and History's rows keep the folder in sight in real Chromium at 390 and 1280 px: a long prompt is cut before it, a long folder at its start, a short line not at all, and no value is shown (secrets axes, explicit)", { skip: BIN === null ? "no headless Chromium (Playwright's headless shell) on this host" : false, timeout: 180_000 }, async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "mandu-long-names-rows-"));
+  const home = join(tmp, "home");
+  for (const r of ROWS) mkdirSync(join(home, ...r.folder.split("/")), { recursive: true });
+  const env = join(home, "shop", ".env");
+  writeFileSync(env, `STRIPE_KEY=${VALUE}\n`);
+  const sock = join(tmp, "arbiter.sock");
+  const humanSock = humanSockIn(tmp);
+  const arbiter = new ArbiterServer({
+    socketPath: sock, humanSocketPath: humanSock, dbPath: join(tmp, "symbols.sqlite"), eventDir: join(tmp, "events"), log: () => {},
+    confidentiality: true, integrity: false, // the `secrets` axes, stated
+  });
+  await arbiter.listen();
+  const data = new ArbiterClient(sock); await data.connect();
+  const human = new ArbiterClient(humanSock); await human.connect();
+  const dashboard = new DashboardServer({
+    source: new ArbiterEventSource({ socketPath: sock, humanSocketPath: humanSock }),
+    fileBrowserHome: home, configEnv: { MANDU_HOME: join(tmp, "mandu-home") }, log: () => {}, ...ADMIN_OPTS,
+  });
+  const base = `http://127.0.0.1:${await dashboard.listen(0)}`;
+  const seen: string[] = [];
+  const upstream: UpstreamFetcher = async ({ body }) => {
+    seen.push(body.toString("utf8"));
+    return { status: 200, headers: { "content-type": "text/event-stream" }, body: Readable.from([Buffer.from(buildTextSse("Done.", { deltas: 1 }), "utf8")]) };
+  };
+  // One proxy per session, as each launch starts its own.
+  const proxies = ROWS.map((r) => new AnthropicProxy({ arbiter: new ArbiterClientAdapter(data, human), upstream, sessionKey: r.id, log: () => {} }));
+  const clean = (body: string, where: string) => {
+    assert.ok(!body.includes(VALUE), `CONFIDENTIALITY VIOLATION: ${where} carries the value`);
+    assert.doesNotMatch(body, /\$MDU/, `${where} carries no token`);
+  };
+  const profile = join(tmp, "chrome");
+  let chrome: ChildProcess | null = null;
+  let page: Awaited<ReturnType<typeof devtools>> | null = null;
+  try {
+    for (const [i, r] of ROWS.entries()) {
+      const port = await proxies[i]!.listen(0);
+      const ws = join(home, ...r.folder.split("/"));
+      const ask = async (messages: unknown[]) => {
+        const res = await pageFetch(`http://127.0.0.1:${port}/v1/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-mandu-session-id": r.id, "anthropic-version": "2023-06-01" },
+          body: JSON.stringify({
+            model: "claude-opus-4", stream: true, max_tokens: 512, tools: [{ name: "Read", input_schema: { type: "object" } }],
+            system: [{ type: "text", text: `You are Claude Code.\n\n# Environment\n - Primary working directory: ${ws}\n - Platform: linux` }],
+            messages,
+          }),
+        });
+        assert.equal(res.status, 200, await res.text());
+      };
+      await ask([{ role: "user", content: r.ask }]);
+      // The long prompt's session reads the .env: its proxy masks the key.
+      if (r.folder === "shop") {
+        await ask([
+          { role: "user", content: r.ask },
+          { role: "assistant", content: [{ type: "tool_use", id: "toolu_lr_0", name: "Read", input: { file_path: env } }] },
+          { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_lr_0", content: `     1\tSTRIPE_KEY=${VALUE}\n` }] },
+        ]);
+      }
+    }
+    assert.ok(!seen.join("\n").includes(VALUE), "CONFIDENTIALITY VIOLATION: the model got the .env value");
+    // What each row says it asked (the server keeps the start of a long prompt).
+    const titles: Record<string, string> = {};
+    for (let i = 0; i < 400; i++) {
+      const h = JSON.parse(await (await pageFetch(`${base}/api/home/history`, { headers: { Cookie: ADMIN_COOKIE } })).text()) as { rows: { id: string; cwd?: string | null; title?: string | null }[] };
+      for (const x of h.rows) if (x.title && ROWS.some((r) => r.id === x.id && x.cwd === join(home, ...r.folder.split("/")))) titles[x.id] = x.title;
+      if (Object.keys(titles).length === ROWS.length) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.equal(Object.keys(titles).length, ROWS.length, `each session has its prompt and its folder: ${JSON.stringify(titles)}`);
+    assert.ok(titles[ROWS[0].id]!.length >= 60, `the long prompt stays long on its row: ${titles[ROWS[0].id]}`);
+
+    const started = await startChromium(BIN!, profile, `${base}${dashboard.adminLoginPath()}`);
+    chrome = started.proc;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let target: any = null;
+    for (let i = 0; i < 50 && target === null; i++) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const list = (await (await pageFetch(`http://127.0.0.1:${started.port}/json/list`)).json()) as any[];
+      target = list.find((x) => x.type === "page") ?? null;
+      if (target === null) await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(target, "the page is listed");
+    page = await devtools(target.webSocketDebuggerUrl);
+    const p = page;
+    const evaluate = async (expression: string): Promise<unknown> => (await p.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true })).result?.result?.value;
+    const until = async (expression: string, what: string): Promise<void> => {
+      for (let i = 0; i < 250; i++) {
+        if (await evaluate(expression) === true) return;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      assert.fail(`the page never showed ${what}`);
+    };
+    await until(`${READY} && location.pathname === "/"`, "Home after the sign-in link");
+    const ids = JSON.stringify(ROWS.map((r) => r.id));
+    /** The rows' lines in `lists`, once each row is drawn there with its folder. */
+    const lines = async (lists: string): Promise<{ rows: Record<string, Line>; scroll: number; page: string }> => {
+      const sel = (id: string) => lists.split(",").map((l) => `${l.trim()} .row.agent[data-session="${id}"] .prompt-line`).join(", ");
+      await until(`${ids}.every((id) => !!document.querySelector(${JSON.stringify(sel("ID"))}.replace(/ID/g, id)))`, `the rows in ${lists}`);
+      return JSON.parse(String(await evaluate(`new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(JSON.stringify((() => {
+        const box = (r) => [r.left, r.right];
+        const rows = {};
+        for (const id of ${ids}) {
+          const line = document.querySelector(${JSON.stringify(sel("ID"))}.replace(/ID/g, id));
+          const prompt = line.querySelector(".prompt-text"), folder = line.querySelector(".prompt-folder"), t = folder.querySelector("bdi").firstChild;
+          const range = document.createRange();
+          range.setStart(t, 0); range.setEnd(t, 1);
+          const first = box(range.getBoundingClientRect());
+          range.setStart(t, t.length - 1); range.setEnd(t, t.length);
+          rows[id] = { text: line.textContent, line: box(line.getBoundingClientRect()), folder: box(folder.getBoundingClientRect()), first, last: box(range.getBoundingClientRect()),
+            promptCut: prompt.scrollWidth > prompt.clientWidth, folderCut: folder.scrollWidth > folder.clientWidth };
+        }
+        return { rows, scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth, page: document.body.innerText };
+      })())))))`)));
+    };
+    const [long, short, deep] = ROWS;
+    const at = (where: string, width: number, drawn: Awaited<ReturnType<typeof lines>>) => {
+      const say = `${where} at ${width} px`;
+      for (const r of ROWS) {
+        const l = drawn.rows[r.id]!;
+        const folder = `~/${r.folder}`;
+        assert.equal(l.text, `${titles[r.id]} in ${folder}`, `${say}: the line's words are whole in the page`);
+        assert.ok(l.folder[0] >= l.line[0] - 0.5 && l.folder[1] <= l.line[1] + 0.5, `${say}: ${folder}'s box lies inside its line: ${JSON.stringify(l)}`);
+        assert.ok(l.last[0] >= l.folder[0] - 0.5 && l.last[1] <= l.folder[1] + 0.5, `${say}: ${folder}'s last name is in sight: ${JSON.stringify(l)}`);
+      }
+      // A long prompt in a short folder: the prompt is what is cut.
+      const a = drawn.rows[long.id]!;
+      if (width < 600) assert.ok(a.promptCut, `${say}: the long prompt is cut`);
+      assert.ok(!a.folderCut && a.first[0] >= a.folder[0] - 0.5, `${say}: ~/shop is whole: ${JSON.stringify(a)}`);
+      // A short line: nothing is cut.
+      const b = drawn.rows[short.id]!;
+      assert.ok(!b.promptCut && !b.folderCut, `${say}: a short line shows whole: ${JSON.stringify(b)}`);
+      // A folder past half its line: capped at half and cut at its start.
+      const c = drawn.rows[deep.id]!;
+      assert.ok(c.folderCut, `${say}: the long folder is cut: ${JSON.stringify(c)}`);
+      assert.ok(c.folder[1] - c.folder[0] <= (c.line[1] - c.line[0]) / 2 + 0.5, `${say}: at most half the line: ${JSON.stringify(c)}`);
+      assert.ok(c.first[1] <= c.folder[0] + 0.5, `${say}: cut at its start, "~" out of sight: ${JSON.stringify(c)}`);
+      assert.ok(!c.promptCut, `${say}: the short prompt beside it is whole`);
+      assert.equal(drawn.scroll, 0, `${say}: nothing runs past the window`);
+      clean(drawn.page, say);
+    };
+    for (const [where, path, lists] of [["Home", "/", "#home-agents, #home-earlier"], ["History", "/history", "#history-list"]] as const) {
+      await p.send("Page.navigate", { url: `${base}${path}` });
+      await until(`${READY} && location.pathname === ${JSON.stringify(path)}`, where);
+      for (const width of [390, 1280]) {
+        await p.send("Emulation.setDeviceMetricsOverride", { width, height: 844, deviceScaleFactor: 1, mobile: width < 600 });
+        at(where, width, await lines(lists));
+      }
+    }
+
+    // The oracle: the answers the pages are drawn from.
+    for (const route of ["/api/home", "/api/home/history"]) {
+      const r = await pageFetch(base + route, { headers: { Cookie: ADMIN_COOKIE } });
+      assert.equal(r.status, 200, `${route} is served`);
+      clean(await r.text(), route);
+    }
+  } finally {
+    page?.close();
+    await stopChromium(chrome, profile);
+    for (const x of proxies) await x.close().catch(() => {});
     await dashboard.close();
     data.close();
     human.close();

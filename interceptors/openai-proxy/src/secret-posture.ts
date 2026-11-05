@@ -17,6 +17,9 @@
  *
  * The posture names mirror the launcher's POSTURES (a parity test holds them
  * together; this package does not import the launcher). Mandu-new.
+ *
+ * One module, two copies (both model proxies); the source is
+ * interceptors/anthropic-proxy/src/secret-posture.ts: change it, then run `node scripts/copies/module-copies.mjs generate`.
  */
 
 /** Mirrors launcher/src/confinement-posture.ts `POSTURES`. */

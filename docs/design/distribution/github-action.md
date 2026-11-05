@@ -42,7 +42,7 @@ and the rootless work for Ubuntu 24.04:
 |---|---|---|
 | Unprivileged user namespaces | refused: the image sets `kernel.apparmor_restrict_unprivileged_userns=1` | no bind layer, no `exec-box` sandbox namespace, but the whole-agent **guard** needs only `no_new_privs` (seccomp user notification), so the posture is `confined` by the guard alone, with no root ([`rootless-confinement-ubuntu-2404.md`](../confidentiality/rootless-confinement-ubuntu-2404.md) §0.1, §0.2) |
 | The guard's binary | in the npm package (`dist/native/linux-x64/`, [`packaging.md`](packaging.md) §5) | nothing to build; `require-confinement` (on by default) refuses a run where it would not attach (§4) |
-| Node ≥ 22.13 | the image's default Node is older | the action sets up Node 22 (`actions/setup-node`, the pin Mandu's own workflows use) |
+| Node ≥ 22.15 | the image's default Node is older | the action sets up Node 22 (`actions/setup-node`, the pin Mandu's own workflows use) |
 | Landlock, seccomp | the runner kernel has both | the TCP confine and the guard come up as on a desktop |
 | bubblewrap | not installed | Codex's own command sandbox is a bubblewrap; without a profile that grants it a namespace every Codex command fails ([`codex-sandbox.ts`](../../../launcher/src/codex-sandbox.ts)). `setup: auto` runs `mandu setup --yes` for Codex (§4.3) |
 | Root | passwordless `sudo` | used only for the optional `mandu setup`, never at run time (§4.3) |

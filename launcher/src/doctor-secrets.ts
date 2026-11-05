@@ -35,8 +35,8 @@ import { TARGETS, isTarget, type Target } from "./types.js";
 import { hostIsWsl, windowsProfileSecretRoots } from "./wsl.js";
 import { resolveNativeBin } from "./services/native-bins.js";
 import { planSecretTwins } from "./secret-twins.js";
-import { gatherConfinement, realDoctorDeps, type DoctorDeps } from "./doctor.js";
-import { bindOnlyLines, gapExplanation, guardOnlyLines, onConfinementFailure, POSTURE_SENTENCE, type HostPosture } from "./confinement-posture.js";
+import { gatherConfinement, guardBlockedLines, realDoctorDeps, type ConfinementFacts, type DoctorDeps } from "./doctor.js";
+import { bindOnlyLines, gapExplanation, guardOnlyLines, onConfinementFailure, POSTURE_SENTENCE } from "./confinement-posture.js";
 import type { Layout } from "./services/layout.js";
 import { manduPath } from "./generated/mandu-paths.js";
 
@@ -67,7 +67,7 @@ export interface DoctorSecretsDeps {
   /** Which of these variable NAMES would be masked (values never sent). */
   envNames: (sock: string, names: string[]) => Promise<string[]>;
   /** `env` names a guard the user turned off (doctor.ts guardOptedOut). */
-  confinement: (env: Env) => HostPosture & { detail?: string };
+  confinement: (env: Env) => ConfinementFacts;
   resolveTarget: (p: string) => string | null;
   now: () => number;
   /** WSL: the Windows user profiles a launch also discovers, each as its own
@@ -165,7 +165,7 @@ export interface DoctorSecretsReport {
   roots: string[];
   /** WSL: the Windows profiles probed as second homes (empty elsewhere). */
   windowsProfiles: string[];
-  posture: HostPosture & { detail?: string };
+  posture: ConfinementFacts;
   arbiter: { kind: DryRunArbiter["kind"]; sock: string; axisOn: boolean | null } | null;
   /** What a launch would mask, one row per discovered file. */
   files: Array<{
@@ -405,6 +405,7 @@ export function renderSecrets(r: DoctorSecretsReport, home: string = r.roots[0] 
   L.push(`    ${POSTURE_SENTENCE[c.posture]}`);
   for (const line of guardOnlyLines(c)) L.push(`    ${line}`);
   for (const line of bindOnlyLines(c)) L.push(`    ${line}`);
+  for (const line of guardBlockedLines(c)) L.push(`    ${line}`);
   if (c.gap !== undefined) {
     const { cause, fix } = gapExplanation(c.gap);
     L.push(`    cause: ${cause}${c.detail ? ` (${c.detail})` : ""}`);

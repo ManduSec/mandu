@@ -736,6 +736,34 @@ test("plan 10 rule (iii): a mask regex hit masks the whole result; no hit releas
   assert.match(k2.rewrites[0]!.reason ?? "", /the value backstop failed \(scan socket gone\)/);
 });
 
+test("F-C (2026-10-27): an output rule the proxy does not recognise masks the whole exec_command result (fail-closed); clear with a clean backstop still releases", async () => {
+  // Only `clear` and `mask` may release: a typo, a newer arbiter's rule or a
+  // malformed answer is rule (i), even with a clean backstop.
+  for (const [i, rule] of (["release", "", undefined, "Clear", null, 7] as unknown[]).entries()) {
+    const arbiter = new MockArbiter({
+      classifyFn: trustedExec,
+      callTaintFn: () => ({ level: "no-model", ...TAINT_ROWS, rule: rule as "clear" }),
+      scanSecretValuesFn: () => ({ hits: [] }),
+    });
+    const id = `call_fc${i}`;
+    const { request, rewrites } = await rewriteRequest(execReq("count\n1204\n", { id }), { arbiter });
+    const r = rewrites[0]!;
+    assert.equal(r.symbolized, true, `rule ${JSON.stringify(rule)}: ${r.reason}`);
+    assert.equal(r.confidentiality, "no-model");
+    assert.equal(r.secretTaint?.maskWhole, true);
+    assert.equal(r.secretTaint?.rule, "secret", "reported as the rule it was treated as");
+    assert.match(r.reason ?? "", /psql read \.pgpass, and the output rule the arbiter sent \(.+\) is not one Mandu recognises; the whole output is secret \(fail-closed\)/);
+    const forwarded = fcoOutput(request, id);
+    assert.ok(!forwarded.includes("1204"), `rule ${JSON.stringify(rule)}: the output is gone from the model's view`);
+    assert.match(forwarded, /^\$MDU:exec_command\[[0-9a-f]{4}\]\n\n\[mandu:secret\] masked: psql read \/h\/\.pgpass/);
+  }
+  // control: the same answer with rule `clear` and the same clean backstop releases
+  const clear = new MockArbiter({ classifyFn: trustedExec, callTaintFn: () => ({ level: "no-model", ...TAINT_ROWS, rule: "clear" }), scanSecretValuesFn: () => ({ hits: [] }) });
+  const c = await rewriteRequest(execReq("count\n1204\n", { id: "call_fc_clear" }), { arbiter: clear });
+  assert.equal(c.rewrites[0]!.symbolized, false, c.rewrites[0]!.reason);
+  assert.ok(fcoOutput(c.request, "call_fc_clear").startsWith("count\n1204\n"));
+});
+
 test("plan 10: a denied open only adds the note; no taint, no op, or a non-exec tool changes nothing; a throwing callTaint masks (fail-closed)", async () => {
   const denied = new MockArbiter({
     classifyFn: trustedExec,

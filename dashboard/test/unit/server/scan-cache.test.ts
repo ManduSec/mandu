@@ -9,6 +9,8 @@
  *     launcher keeps it) is read again, and its `rev` changes;
  *   - no file, or one that does not read as a record: none, and a file
  *     that appears later is read;
+ *   - `keptRev` is the head's `rev` without building the page (null with
+ *     none kept, or a file that is not a record);
  *   - the route matcher names only `section/<x>` and `item/<x>`.
  * Axes: none (display only; the record is a `secrets`-mode scan). Mandu-new test.
  */
@@ -71,6 +73,23 @@ test("no file, or one that is not a record: none; a file that appears later is r
   writeFileSync(file, JSON.stringify(largeScanRecord({ known: 1, looks: 0, named: 0 })));
   utimesSync(file, new Date(), new Date(Date.now() + 10_000));
   assert.equal(cache.head().ran, true);
+});
+
+test("keptRev: the head's rev, without building the page; null with none kept or a file that is not a record", () => {
+  const file = join(dir, "c.json");
+  const cache = new LastScanCache(() => file);
+  assert.equal(cache.keptRev(), null);
+  writeFileSync(file, "{ not json");
+  assert.equal(cache.keptRev(), null);
+  assert.equal(cache.head().rev, null);
+  writeFileSync(file, JSON.stringify(largeScanRecord({ known: 1, looks: 2, named: 0 })));
+  utimesSync(file, new Date(), new Date(Date.now() + 20_000));
+  const fresh = new LastScanCache(() => file);
+  const rev = fresh.keptRev();
+  assert.match(rev ?? "", /^[A-Za-z0-9_-]{16}$/);
+  // The head, built after it, carries the same rev.
+  assert.equal(fresh.head().rev, rev);
+  assert.equal(cache.keptRev(), rev, "the same file: the same rev");
 });
 
 test("the route matcher: section/<x> and item/<x> only", () => {

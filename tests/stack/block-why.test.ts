@@ -6,7 +6,7 @@
  *   L1  a `.env` registered as a secret with no rule letting it go anywhere;
  *       the REAL net-proxy, wired as production wires it
  *       (`new ArbiterClientAdapter(new ArbiterClient(data), human)`),
- *       refuses a request that carries its key's placeholder to
+ *       refuses a request that carries its key's mask to
  *       api.stripe.com: 403, nothing forwarded;
  *   L2  the block's `net_action`, as the arbiter stored it, names the rule
  *       that decided it (`policy.ruleRef`, `egress:secret-unbound`) and the
@@ -20,7 +20,9 @@
  *       "A stop says Mandu asked you"); the key's *Your secrets* card says
  *       the same of its block, linking the same row (§4.25b, "A block says
  *       Mandu asked you"), and its time opens that blocked step (§4.25b,
- *       "A time opens its step");
+ *       "A time opens its step"); the served page, drawn, says "masked"
+ *       and "this computer" on its cards and story, never "placeholder"
+ *       nor "this machine" (§4.25u);
  *   L3b the REAL dashboard's inspector payload (`/api/events`, the trace's
  *       view-model) carries the same words and the same row on the blocked
  *       send's step (dashboard.md §4.2f, "A check says why", "…says it
@@ -55,6 +57,8 @@ import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import type { AgentPageVM, StoryStep } from "../../dashboard/src/view-model/agent-page.js";
 import { WHY_RULE_IDS } from "../../dashboard/src/view-model/block-why.js";
+import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
+import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { stateAxes } from "../lib/axes.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the axis under test
@@ -113,7 +117,7 @@ test("a send the real net-proxy refused says why on the real session page, from 
   const base = `http://127.0.0.1:${await dashboard.listen(0)}`;
 
   try {
-    // ── L1: the key's placeholder, refused at a host no rule lets it go to ──
+    // ── L1: the key's mask, refused at a host no rule lets it go to ──
     const reg = await human.registerSecret({ path: env, sessionKey: SESSION });
     assert.match(String(reg.symbol), /^\$MDU:nomodel_Read\[/, JSON.stringify(reg));
     const field = `${reg.symbol}.STRIPE_KEY`;
@@ -143,7 +147,7 @@ test("a send the real net-proxy refused says why on the real session page, from 
     let step: Extract<StoryStep, { kind: "action" }> | undefined;
     let page: AgentPageVM | undefined;
     for (let i = 0; i < 50 && !step; i++) {
-      const r = await fetch(`${base}/api/home/agent?session=${SESSION}`);
+      const r = await pageFetch(`${base}/api/home/agent?session=${SESSION}`);
       assert.equal(r.status, 200);
       page = (await r.json()) as AgentPageVM;
       step = page.story.flatMap((t) => t.steps).find((s): s is Extract<StoryStep, { kind: "action" }> => s.kind === "action" && s.outcome === "blocked");
@@ -151,23 +155,37 @@ test("a send the real net-proxy refused says why on the real session page, from 
     }
     assert.ok(step, "the blocked send is a step of the page");
     assert.match(step.sentence.map((p) => p.text).join(""), /^Mandu blocked a request to api\.stripe\.com that carried /);
-    assert.equal(step.note, "The request never left this machine.");
+    assert.equal(step.note, "The request never left this computer.");
     assert.equal(words(step.why!), "No rule lets this secret go to `api.stripe.com`. Mandu sends a secret only where a rule lets it go, or with your OK.");
     assert.equal(step.askId, row!.id, "the step says Mandu asked you, by the row it queued");
     const card = page!.secrets!.secrets.find((s) => s.what.some((p) => p.text === "STRIPE_KEY"));
     assert.ok(card, `Your secrets lists the key: ${JSON.stringify(page!.secrets)}`);
     const blockLine = card.lines.find((l) => /^Mandu blocked 1 attempt to send it to /.test(l.parts.map((p) => p.text).join("")));
     assert.ok(blockLine, `the key's card has its block: ${JSON.stringify(card.lines)}`);
-    assert.match(words(blockLine.parts), /^Mandu blocked 1 attempt to send it to `api\.stripe\.com`, at \S+, and asked for your OK in Approvals\. The request never left this machine\.$/);
+    assert.match(words(blockLine.parts), /^Mandu blocked 1 attempt to send it to `api\.stripe\.com`, at \S+, and asked for your OK in Approvals\. The request never left this computer\.$/);
     assert.deepEqual(blockLine.parts.filter((p) => p.ask), [{ kind: "text", text: "Approvals", ask: row!.id }], "the card's block links the row the arbiter queued");
     // Its time opens that very step under What happened (§4.25b, "A time
     // opens its step"): the block the arbiter stored, by the page's own id.
     assert.deepEqual(blockLine.parts.filter((p) => p.kind === "time").map((p) => p.step), [step.id], "the card's block time opens the blocked step");
     const all = JSON.stringify(page);
     assert.ok(!all.includes("$MDU:") && !all.includes(KEY), "no token and no value on the product page");
+    // The served page, drawn: its cards and its story use the product's
+    // words, "masked" and "this computer", never "placeholder" nor "this
+    // machine" (dashboard.md §4.25u), and show no value.
+    const text = (doc: { getElementById(id: string): { textContent: string | null } | null }, id: string) => doc.getElementById(id)?.textContent ?? "";
+    await servedProductPage(base, `/agents/${SESSION}`, (doc) => /STRIPE_KEY/.test(text(doc, "agent-secrets")) && /api\.stripe\.com/.test(text(doc, "agent-story")), (doc) => {
+      assert.match(text(doc, "agent-secrets"), /The AI got only its masked version, never the real value\./);
+      assert.match(text(doc, "agent-secrets"), /The request never left this computer\./);
+      for (const id of ["agent-secrets", "agent-story"]) {
+        const drawn = text(doc, id);
+        assert.doesNotMatch(drawn, /placeholder/i, `#${id}: ${drawn}`);
+        assert.doesNotMatch(drawn, /this machine/, `#${id}: ${drawn}`);
+        assert.ok(!drawn.includes(KEY) && !drawn.includes("$MDU:"), `#${id} shows no value and no token`);
+      }
+    });
 
     // ── L3b: the inspector's trace says the same, on the same block ──────────
-    const ev = await fetch(`${base}/api/events?session=${SESSION}`);
+    const ev = await pageFetch(`${base}/api/events?session=${SESSION}`);
     assert.equal(ev.status, 200);
     const { viewModel, counts } = (await ev.json()) as {
       counts?: { asks?: number; blocked?: number };

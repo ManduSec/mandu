@@ -307,6 +307,10 @@ test(
 // ── The real pip, where it is installed (CI's guest has none: self-SKIP) ─────
 
 const HAS_PIP = spawnSync("python3", ["-m", "pip", "--version"], { stdio: "ignore" }).status === 0;
+// Python 3.11.4 and later refuse brackets in a URL's user information
+// (urlsplit checks a bracketed part as an IPv6 host, CPython gh-103848); an
+// older one (macOS's /usr/bin/python3 is 3.9) parses them.
+const PY_REFUSES_BRACKETS = HAS_PIP && spawnSync("python3", ["-c", "import urllib.parse as u; u.urlsplit('https://b:x[c0de]@h/')"], { stdio: "ignore" }).status !== 0;
 
 test(
   "LIVE pip: pip reads the pip.conf TWIN (the percent-encoded token), goes through the session proxy (TLS inspected, trusting the session CA), and the index gets the REAL password in Basic; with the raw token in the URL Python cannot even parse it",
@@ -379,14 +383,17 @@ test(
       assert.ok(seen.length > 0 && seen.every((s) => s.authorization === basic(`builder:${PIP_PW}`)), `the index got the real password on every request${diag}`);
       assert.ok(!r.out.includes(PIP_PW), "pip printed no password");
       // The raw token (the twin before this change): Python's URL parser
-      // refuses the brackets in the user information; nothing reaches the index.
-      const rawTok = decodeURIComponent(/builder:([^@]+)@/.exec(reg.twin!)![1]!);
-      const before = join(dir, "pip-raw-token.conf");
-      writeFileSync(before, `[global]\nindex-url = https://builder:${rawTok}@pypi.corp.example/simple\n`);
-      const n = seen.length;
-      const old = await pip(before);
-      assert.notEqual(old.code, 0, `the raw token in the URL: ${old.out}`);
-      assert.equal(seen.length, n, "nothing reached the index");
+      // refuses the brackets in the user information; nothing reaches the
+      // index. Only a Python that refuses them (PY_REFUSES_BRACKETS) shows it.
+      if (PY_REFUSES_BRACKETS) {
+        const rawTok = decodeURIComponent(/builder:([^@]+)@/.exec(reg.twin!)![1]!);
+        const before = join(dir, "pip-raw-token.conf");
+        writeFileSync(before, `[global]\nindex-url = https://builder:${rawTok}@pypi.corp.example/simple\n`);
+        const n = seen.length;
+        const old = await pip(before);
+        assert.notEqual(old.code, 0, `the raw token in the URL: ${old.out}`);
+        assert.equal(seen.length, n, "nothing reached the index");
+      }
       console.error(`live pip: ${r.out.trim().split("\n")[0]}; ${seen.length} request(s) to the index, all with the real password put back`);
     } finally {
       await proxy.close();

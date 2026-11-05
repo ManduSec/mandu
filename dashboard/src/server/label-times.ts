@@ -10,7 +10,9 @@
  *   - `policyChanges`: the rule-change log, for a policy.yaml rule's time
  *     (human plane, as Approvals' *Rule changes* reads it);
  *   - `confidentialityState`: a Rules page label's own time, read only when
- *     a page label decides one of the files.
+ *     a page label decides one of the files; and the registered secrets'
+ *     files (`registeredFiles`), which name the file each placeholder
+ *     stands for (secret-path.ts, *Where it is kept*). One read serves both.
  * The arbiter-client pattern: a narrow interface over surfaces the
  * production wiring already builds (arbiter-adapter.ts `secrets` and
  * `policyDoc`); the stack test reads through that wiring.
@@ -22,6 +24,13 @@
 import type { PathLevelsEntryWire } from "../view-model/file-browser.js";
 import type { PolicyChangeRow } from "../view-model/policy-proposals.js";
 import { labelTimes, type LabelTime, type PageLabelTime } from "../view-model/later-labels.js";
+import { registeredFiles, type RegisteredSecretRef } from "../view-model/secret-path.js";
+
+/** The `confidentialityState` answer, as much as this module reads. */
+export interface LabelTimesState {
+  labels?: PageLabelTime[];
+  secrets?: RegisteredSecretRef[];
+}
 
 /** The arbiter's `pathLevels` bound (protocol.ts PATH_LEVELS_MAX). */
 export const PATH_LEVELS_CHUNK = 1000;
@@ -31,14 +40,14 @@ export const CHANGES_READ = 500;
 export interface LabelTimesArbiter {
   pathLevels?(paths: string[], home?: string): Promise<{ axis: boolean; levels: PathLevelsEntryWire[] }>;
   policyChanges?(limit?: number): Promise<{ changes: PolicyChangeRow[] }>;
-  confidentialityState?(): Promise<{ labels?: PageLabelTime[] }>;
+  confidentialityState?(): Promise<LabelTimesState>;
 }
 
 /** The three reads over a tenant's surfaces (the production wiring's
  *  `secrets` and `policyDoc`, arbiter-adapter.ts), each forwarded as the
  *  surface takes it. Undefined when neither surface is there. */
 export function labelTimesArbiter(
-  secrets: Pick<LabelTimesArbiter, "pathLevels"> & { confidentialityState(): Promise<{ labels?: PageLabelTime[] }> } | undefined,
+  secrets: Pick<LabelTimesArbiter, "pathLevels"> & { confidentialityState(): Promise<LabelTimesState> } | undefined,
   policyDoc: Pick<LabelTimesArbiter, "policyChanges"> | undefined,
 ): LabelTimesArbiter | undefined {
   if (!secrets && !policyDoc) return undefined;
@@ -52,7 +61,7 @@ export function labelTimesArbiter(
 export class LabelTimes {
   private readonly levels = new Map<string, PathLevelsEntryWire | null>();
   private changes: Promise<PolicyChangeRow[] | null> | undefined;
-  private pageLabels: Promise<PageLabelTime[] | null> | undefined;
+  private state: Promise<LabelTimesState | null> | undefined;
 
   constructor(private readonly arbiter: LabelTimesArbiter | undefined, private readonly home: string) {}
 
@@ -86,9 +95,20 @@ export class LabelTimes {
     return this.changes;
   }
 
-  private pageLabelTimes(): Promise<PageLabelTime[] | null> {
+  private confidentiality(): Promise<LabelTimesState | null> {
     const arb = this.arbiter;
-    this.pageLabels ??= arb?.confidentialityState ? arb.confidentialityState().then((s) => s.labels ?? [], () => null) : Promise.resolve(null);
-    return this.pageLabels;
+    this.state ??= arb?.confidentialityState ? arb.confidentialityState().then((s) => s, () => null) : Promise.resolve(null);
+    return this.state;
+  }
+
+  private async pageLabelTimes(): Promise<PageLabelTime[] | null> {
+    const s = await this.confidentiality();
+    return s ? s.labels ?? [] : null;
+  }
+
+  /** The registered secrets' files by base symbol (secret-path.ts
+   *  `registeredFiles`). Never throws: no arbiter, or no answer, is none. */
+  async registeredFiles(): Promise<Map<string, string>> {
+    return registeredFiles((await this.confidentiality())?.secrets);
   }
 }

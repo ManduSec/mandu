@@ -35,6 +35,7 @@ import { resetCurrentPolicyForTests } from "../../policy/compiled-policy.js";
 // @ts-expect-error -- a plain .mjs plugin (no types): it runs from a pinned copy
 import { classify } from "../../prompt-filter/plugins/local-classifier.mjs";
 import { stateAxes } from "../axes.js";
+import { NODE_COPY_SKIP } from "../node-copy.js";
 
 stateAxes("secrets"); // this suite states its axes (protection-modes.md §4)
 
@@ -159,7 +160,7 @@ test("a bad reply is retried once, then fails the run; an HTTP error fails at on
   assert.equal(r.stdout, "");
 });
 
-test("through a real arbiter (the generated pack): the model's span is redacted on human and harness text; a registered value never reaches the model", async () => {
+test("through a real arbiter (the generated pack): the model's span is redacted on human and harness text; a registered value never reaches the model", { skip: NODE_COPY_SKIP }, async () => {
   const m = await fakeModel((body) => {
     const user = (body.messages as Array<{ role: string; content: string }>)[1]!.content;
     return user.includes("Osprey") ? ans(["org.confidential", "Osprey"]) : ans();

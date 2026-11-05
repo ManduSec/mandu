@@ -19,7 +19,7 @@
  *
  *   S1  the saved setting is on, and the switch says On;
  *   S2  Settings opens again and its read of the setting (on) is held;
- *       the switch is turned off (typed OFF): the dashboard saves off, and
+ *       the switch is turned off (OFF typed in its box): the dashboard saves off, and
  *       the switch says Off while the service still runs on;
  *   S3  the held read comes: the switch stays Off, and the dashboard still
  *       says off;
@@ -43,6 +43,7 @@ import { ADMIN_COOKIE, ADMIN_OPTS } from "../../dashboard/test/unit/admin-sessio
 import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
+import { typeInOffBox, enterInOffBox } from "../../dashboard/test/unit/ui/protect-off.js";
 import { stateAxes } from "../lib/axes.js";
 import { humanSockIn } from "../lib/human-plane.js";
 import { holdingRelay } from "../lib/holding-relay.js";
@@ -139,8 +140,9 @@ test("Settings › Protection over the real dashboard: a read of the setting ask
       visit(doc, "home");
       visit(doc, "settings");
       assert.equal(await before.asked, 200, "Settings' read was answered (on), and held");
-      doc.defaultView.prompt = () => "OFF";
       press(doc);
+      typeInOffBox(doc, "OFF");
+      enterInOffBox(doc);
       await waitWhile(() => protectRow(doc).checked !== "false");
       assert.deepEqual(protectRow(doc), { checked: "false", name: "Off", text: STILL_ON }, "the flip's answer is drawn");
       assert.equal(await saved(), "off", "the dashboard saved off");

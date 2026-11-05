@@ -138,7 +138,7 @@ test("change: the first send asks (rows, what it would let, the warning); the se
     const text = (rows: unknown) => (rows as Array<Array<{ text: string }>>).map((r) => r.map((p) => p.text).join(""));
     assert.deepEqual(text(ask.body.rows), ["Add the model lab at http://203.0.113.9:8000, as your own model"]);
     assert.match(text(ask.body.wouldLet)[0]!, /^The models Mandu knows would change for lab/);
-    assert.match(text(ask.body.warnings)[0]!, /^lab would count as your own model, but http:\/\/203\.0\.113\.9:8000 is not on this machine or a private network address/);
+    assert.match(text(ask.body.warnings)[0]!, /^lab would count as your own model, but http:\/\/203\.0\.113\.9:8000 is not on this computer or a private network address/);
     assert.deepEqual(f.calls.map((c) => c.op), ["preview"], "asking writes nothing");
 
     const done = await h.post("/api/policy/models/change", { ...body, expected: ask.body.expected });

@@ -144,7 +144,7 @@ step of the workflow.
 | `summary`, `verbose` | `true`, `false` | the job summary; every protection layer in the log |
 | `mandu-version` | this release | the `@mandusec/mandu` version installed from npm |
 | `agent-version` | the newest Mandu tested | the agent's npm version; `none` uses the one on PATH |
-| `node-version` | `22` | Mandu needs Node 22.13 or later |
+| `node-version` | `22` | Mandu needs Node 22.15 or later |
 | `anthropic-api-key`, `claude-code-oauth-token`, `openai-api-key` | | the agent's login; Mandu masks it from the agent's programs |
 
 Outputs: `exit-code` (the agent's; `2` when the run was refused before it

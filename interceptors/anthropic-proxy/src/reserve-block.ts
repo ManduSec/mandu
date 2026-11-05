@@ -11,7 +11,8 @@
  * ONE MODULE, TWO COPIES: copied VERBATIM to interceptors/openai-proxy/src/
  * (Codex, reply-row-reservation.md §11.7), with reserve-context.ts; this is
  * the master, and tests/stack/reserve-layout-parity.test.ts
- * holds the copies equal.
+ * holds the copies equal. Change the anthropic-proxy copy, then run
+ * `node scripts/copies/module-copies.mjs generate`.
  *
  * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code (2026-09-30). The token
  * grammar is a local copy of arbiter/symbol-table/symbol-format.ts

@@ -263,3 +263,20 @@ test("ONE triage cache per registration: tools from different sessions share it"
   assert.equal(ullm.mainCalls.length, 2);
   assert.equal(ullm.triageCalls.length, 1);
 });
+
+test("an attachment with the sandbox block registers the confined-commands tier (openclaw-plugin.md §10); without it, none", () => {
+  const calls: Array<{ tier: unknown; sock: string }> = [];
+  const registerSandbox = (tier: unknown, deps: { arbiterSock: string }): void => { calls.push({ tier, sock: deps.arbiterSock }); };
+  const sandbox = { launcher: ["/opt/mandu/launcher/mandu-run.sh"], writeProtect: [] };
+  const hookless = async (): Promise<never> => { throw new Error("unused"); };
+  const withTier = makeFakeApi({ ...CFG, attachment: true, sandbox });
+  (withTier.api as { on?: unknown }).on = () => {};
+  registerInspectPlugin(withTier.api, baseOpts(new MockArbiter(), new MockUllm(), { registerSandbox, connectHookArbiter: hookless }));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], { tier: sandbox, sock: SOCK });
+  assert.ok(withTier.logs.some((l) => /sandbox backend mandu/.test(l)), "the registration line names the backend");
+  const without = makeFakeApi({ ...CFG, attachment: true });
+  (without.api as { on?: unknown }).on = () => {};
+  registerInspectPlugin(without.api, baseOpts(new MockArbiter(), new MockUllm(), { registerSandbox, connectHookArbiter: hookless }));
+  assert.equal(calls.length, 1);
+});

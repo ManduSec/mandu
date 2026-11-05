@@ -13,16 +13,19 @@
  * adapter (`makeApprovalsArbiter`) serves the page:
  *
  *   C1  the served Approvals page in jsdom, its served styles as a 320 px
- *       and a 375 px phone apply them: the six links (History since
- *       2026-10-18, Scan since 2026-10-21), Approvals current, the count
- *       "2" in its link, two rows of three columns, 10 px a side;
+ *       and a 375 px phone apply them: the seven links (History since
+ *       2026-10-18, Scan since 2026-10-21, Plugins since 2026-10-25),
+ *       Approvals current, the count "2" in its link, two rows of three
+ *       columns, 10 px a side, the Home word hidden (the brand links Home);
  *   C2  the model (nav-row.ts) over the served stylesheet: the links as
  *       drawn, and with 99 waiting, fit with room to spare at every window
- *       from 320 to 719 px (two rows below 500 px, one from there), every
- *       word shown; the row still scrolls where it must; and from 720 to
- *       1280 px the brand, the links and "Protection on" fit the bar;
- *   C4  at 499 and 719 px the Scan link opens the Scan page, marked as the
- *       current page, the History link History, and the brand Home;
+ *       from 320 to 829 px (two rows below 540 px, one from there; 799 and
+ *       520 until the Rules link's mark, 2026-10-25), the Home word hidden
+ *       there; the row still scrolls where it must; and from 830 to 1280 px
+ *       the brand, all seven links and "Protection on" fit the bar;
+ *   C4  at 539 and 829 px the Scan and Plugins links open their pages,
+ *       marked as the current page, the History link History, and the
+ *       brand Home;
  *   C3  the oracle: no page or answer read here carries the key's value,
  *       and the product side no token (`$MDU`).
  *
@@ -53,10 +56,10 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF: the axis under test
 
 const SESSION = `1791840000-${process.pid}`;
 const VALUE = `sk_live_navFitsCanary_${process.pid}_00000000`;
-const WORDS = ["Home", "Approvals", "Rules", "Settings", "History", "Scan"];
-const PAGES = ["home", "approvals", "rules", "settings", "history", "scan"];
+const WORDS = ["Home", "Approvals", "Rules", "Settings", "History", "Scan", "Plugins"];
+const PAGES = ["home", "approvals", "rules", "settings", "history", "scan", "plugins"];
 
-test("with two requests waiting the six page links fit a 320 px phone's row, on the real stack with its served styles, and no value is shown (secrets axes, explicit)", { timeout: 120_000 }, async () => {
+test("with two requests waiting the seven page links fit a 320 px phone's row, on the real stack with its served styles, and no value is shown (secrets axes, explicit)", { timeout: 120_000 }, async () => {
   const tmp = mkdtempSync(join(tmpdir(), "mandu-nav-fits-"));
   const home = join(tmp, "home");
   mkdirSync(join(home, "proj"), { recursive: true });
@@ -113,13 +116,14 @@ test("with two requests waiting the six page links fit a 320 px phone's row, on 
       await servedProductPage(base, "/approvals", counted, (doc) => {
         const where = `the Approvals page at ${width}px`;
         drawn = drawnNav(doc);
-        assert.deepEqual(drawn, { words: WORDS, pages: PAGES, current: 1, count: "2" }, `${where}: the six links, Approvals current, two waiting`);
+        assert.deepEqual(drawn, { words: WORDS, pages: PAGES, current: 1, count: "2", unsaved: "" }, `${where}: the seven links, Approvals current, two waiting, nothing not saved`);
         assert.equal(doc.defaultView.getComputedStyle(doc.getElementById("nav")).display, "grid", `${where}: two rows of three`);
         assert.equal(doc.getElementById("nav-approvals-count").parentElement.getAttribute("data-page-link"), "approvals", "the count sits in the Approvals link");
         for (const a of doc.querySelectorAll("#nav a")) {
           assert.equal(doc.defaultView.getComputedStyle(a).paddingLeft, "10px", `${where}: ${a.textContent.trim()} has 10px a side`);
           assert.equal(a.getAttribute("style"), null, "no inline style: the stylesheet decides");
-          assert.notEqual(doc.defaultView.getComputedStyle(a).display, "none", `${where}: ${a.textContent.trim()} is shown`);
+          const home = a.getAttribute("data-page-link") === "home";
+          assert.equal(doc.defaultView.getComputedStyle(a).display === "none", home, `${where}: ${a.textContent.trim()} is ${home ? "hidden (the brand links Home)" : "shown"}`);
         }
         noValue(doc.body.textContent, `the rendered Approvals page at ${width}px`);
         assert.doesNotMatch(doc.body.textContent, /\$MDU/, "the rendered page carries no token");
@@ -131,16 +135,16 @@ test("with two requests waiting the six page links fit a 320 px phone's row, on 
     const links: DrawnNav = drawn;
     const model = navRow(sheets);
     assert.equal(model.need(320, links), 255, "the drawn links need 255 px at 320 px (Chromium: 255.67)");
-    for (let w = 320; w <= 719; w++) {
+    for (let w = 320; w <= 829; w++) {
       for (const count of [links.count, "99"]) {
         const spare = model.spare(w, { ...links, count });
         assert.ok(spare >= MARGIN, `${w}px with ${count} waiting: ${spare}px to spare`);
       }
       assert.equal(model.at(w, "#nav", "overflow-x"), "auto", `${w}px: the row still scrolls where it must`);
-      assert.equal(model.hidden(w, "home"), false, `${w}px: the Home word is shown`);
-      assert.equal(model.rows(w, links), w < 500 ? 2 : 1, `${w}px: the rows`);
+      assert.equal(model.hidden(w, "home"), true, `${w}px: the Home word is hidden (the brand above links Home)`);
+      assert.equal(model.rows(w, links), w < 540 ? 2 : 1, `${w}px: the rows`);
     }
-    for (let w = 720; w <= 1280; w++) {
+    for (let w = 830; w <= 1280; w++) {
       for (const count of [links.count, "99"]) {
         const spare = model.bar(w, { ...links, count }, "Protection on");
         assert.ok(spare >= MARGIN, `${w}px with ${count} waiting: the bar has ${spare}px to spare`);
@@ -148,8 +152,8 @@ test("with two requests waiting the six page links fit a 320 px phone's row, on 
       assert.equal(model.hidden(w, "home"), false, `${w}px: the Home word is shown`);
     }
 
-    // ── C4: the Scan, History and brand links open their pages, at 499 and 719 px ──
-    for (const width of [499, 719]) {
+    // ── C4: the Scan, Plugins, History and brand links open their pages, at 539 and 829 px ──
+    for (const width of [539, 829]) {
       await servedProductPage(base, "/approvals", counted, async (doc) => {
         const shown = () => [...doc.querySelectorAll("#main > section[data-page]")].filter((x: any) => !x.hidden).map((x: any) => x.dataset.page);
         const marked = () => [...doc.querySelectorAll("#nav a")].filter((a: any) => a.getAttribute("aria-current") === "page").map((a: any) => a.dataset.pageLink);
@@ -157,6 +161,10 @@ test("with two requests waiting the six page links fit a 320 px phone's row, on 
         assert.deepEqual(shown(), ["scan"], `${width}px: the Scan link opens the Scan page`);
         assert.deepEqual(marked(), ["scan"], "and marks it the current page");
         assert.equal(doc.defaultView.location.pathname, "/scan");
+        doc.querySelector('#nav a[data-page-link="plugins"]').click();
+        assert.deepEqual(shown(), ["plugins"], `${width}px: the Plugins link opens the Plugins page`);
+        assert.deepEqual(marked(), ["plugins"], "and marks it the current page");
+        assert.equal(doc.defaultView.location.pathname, "/plugins");
         doc.querySelector('#nav a[data-page-link="history"]').click();
         assert.deepEqual(shown(), ["history"], "the History link opens History");
         assert.deepEqual(marked(), ["history"]);
@@ -169,7 +177,7 @@ test("with two requests waiting the six page links fit a 320 px phone's row, on 
     }
 
     // ── C3: the oracle ──
-    for (const route of ["/api/home", "/api/home/history", `/api/home/agent?session=${SESSION}`, "/approvals", "/history", "/scan", "/api/scan"]) {
+    for (const route of ["/api/home", "/api/home/history", `/api/home/agent?session=${SESSION}`, "/approvals", "/history", "/scan", "/api/scan", "/plugins", "/api/plugins"]) {
       const text = await (await pageFetch(base + route)).text();
       noValue(text, route);
       assert.doesNotMatch(text, /\$MDU/, `${route} carries no token`);

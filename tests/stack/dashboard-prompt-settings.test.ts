@@ -14,7 +14,11 @@
  *     with the CSRF header and the admin session;
  *   - a choice made there (a kind raised from "Remove it" to "Hide it") is a
  *     tightening applied at once, and the NEXT request through the real proxy
- *     carries the span masked instead of removed;
+ *     carries the span masked instead of removed. It is made on the served
+ *     Settings page with the keyboard, which waits for Enter (dashboard.md
+ *     §4.25 *A menu that saves at once waits for Enter from the keyboard*):
+ *     an Up arrow alone, then Escape, leaves the kind removed in the
+ *     arbiter; an Up arrow and Enter makes it, the focus back on the menu;
  *   - an exception added there is a relaxation: answered with a question and
  *     applied only when resent with what was shown; the next request carries
  *     the matching span as written, a non-matching one still masked; the
@@ -32,6 +36,25 @@
  *     agent page's data before the person let the span through, and the
  *     registered key never reaches the fake model raw.
  *
+ * And Try a message (dashboard.md §4.25y), on the same production wiring
+ * without a proxy: an email address and a registered secret's value in a
+ * tried message are marked; after an exception added on the same page the
+ * address is not; the try mints no symbol and writes no event (the
+ * confidentiality oracle for a dry run: no record may come to hold the
+ * typed secret); without the admin session it is refused.
+ *
+ * And an exception added on the served Settings page (dashboard.md §4.25n):
+ * the arbiter's question is asked on the page, in the form above its
+ * button, never in a browser dialog; Cancel leaves the arbiter's list as it
+ * was, Apply anyway adds the exception with its Undo, and the registered
+ * secret is on no page and in no answer.
+ *
+ * And Try a message follows the card on the served page (dashboard.md
+ * §4.25y *The answer follows the card*): after Try it marks an address, an
+ * exception added through the page's form draws the answer again for the
+ * tried text, the address unmarked, with no second press; no symbol and no
+ * registered secret on the page.
+ *
  * The Codex twin (the real openai-proxy, the Responses wire) is
  * dashboard-prompt-settings-codex.test.ts.
  *
@@ -40,7 +63,8 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -52,7 +76,10 @@ import { ArbiterClientAdapter } from "../../interceptors/anthropic-proxy/src/arb
 import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
-import { ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { ADMIN_COOKIE, ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
+import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
+import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { startScriptedAnthropic } from "../lib/fake-anthropic.js";
 import { humanSockIn } from "../lib/human-plane.js";
 import { stateAxes } from "../lib/axes.js";
@@ -135,7 +162,7 @@ test("Settings › Prompt filters and the note under the message over the real a
   const server = new DashboardServer({ source, policyDocArbiter: doc, approvalsArbiter: wired.arbiter, log: () => {}, ...ADMIN_OPTS });
   const port = await server.listen(0);
   const call = async (method: "GET" | "POST", path: string, body?: unknown, headers: Record<string, string> = { ...CSRF_ADMIN, "Content-Type": "application/json" }) => {
-    const r = await fetch(`http://127.0.0.1:${port}/api/${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const r = await pageFetch(`http://127.0.0.1:${port}/api/${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
     return { status: r.status, body: (await r.json().catch(() => ({}))) as Record<string, any> };
   };
   const ask = (text: string, history: string[] = []) => post(proxyPort, {
@@ -175,10 +202,41 @@ test("Settings › Prompt filters and the note under the message over the real a
     assert.equal((await say(`see ${TICKET} today`)).status, 200);
     assert.ok(sent().at(-1)!.includes("see [redacted: acme.ticket] today"), sent().at(-1));
 
-    // ── A choice: Hide it (a tightening), applied at once, in force next. ──
-    const hide = await call("POST", "policy/prompt-filters/change", { edit: { op: "set-prompt-action", category: "acme.ticket", action: "mask" } });
-    assert.equal(hide.status, 200, JSON.stringify(hide.body));
-    assert.equal(hide.body["applied"], true, JSON.stringify(hide.body));
+    // ── A choice: Hide it (a tightening), made on the Settings page with
+    // the keyboard, applied on Enter, in force next. ──
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ticketMenu = (d: any) => d.querySelector('#settings-prompt-kinds .prompt-kind[data-category="acme.ticket"] select.prompt-action');
+    const ticketAction = async () => ((await call("GET", "policy/prompt-filters")).body["settings"].kinds as Array<{ category: string; action: string }>).find((k) => k.category === "acme.ticket")?.action;
+    const pageTexts: string[] = [];
+    await servedProductPage(`http://127.0.0.1:${port}`, "/settings", (d) => !!ticketMenu(d), async (d) => {
+      const win = d.defaultView;
+      const key = (k: string) => ticketMenu(d).dispatchEvent(new win.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+      const up = () => {
+        const sel = ticketMenu(d);
+        sel.focus();
+        key("ArrowUp");
+        sel.value = "mask";
+        sel.dispatchEvent(new win.Event("change", { bubbles: true }));
+      };
+      assert.equal(ticketMenu(d).value, "redact");
+      up();
+      assert.equal(d.querySelector('.prompt-kind[data-category="acme.ticket"] .menu-wait').textContent, "Press Enter to change it to Hide it, or Escape to keep Remove it.");
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal(await ticketAction(), "redact", "an Up arrow alone changes nothing");
+      key("Escape");
+      assert.equal(ticketMenu(d).value, "redact", "Escape: the choice in force");
+      assert.equal(await ticketAction(), "redact");
+      up();
+      const sel = ticketMenu(d);
+      key("Enter");
+      await waitWhile(() => ticketMenu(d) === sel);
+      assert.equal(ticketMenu(d).value, "mask");
+      assert.equal(d.activeElement, ticketMenu(d), "the focus back on the kind's menu, drawn again");
+      assert.match(d.getElementById("prompt-notice").textContent, /: Hide it\. It applies to your next message\./);
+      pageTexts.push(d.body.textContent ?? "");
+    }, { headers: { Cookie: ADMIN_COOKIE } });
+    assert.equal(await ticketAction(), "mask", "Enter made it");
+    noFound("the Settings page", pageTexts.join("\n"), [KEY, TICKET]);
     const masked = `deploy ${TICKET} with ${KEY}`;
     assert.equal((await say(masked)).status, 200);
     const afterHide = sent().at(-1)!;
@@ -277,6 +335,10 @@ test("Settings › Prompt filters and the note under the message over the real a
     assert.equal(historyOpen.status, 200);
     assert.ok(!JSON.stringify(historyOpen.body).includes("ACME-2*") && historyOpen.body["patternsHidden"] === true, JSON.stringify(historyOpen.body));
     assert.ok(JSON.stringify((await call("GET", "policy/changes")).body).includes("ACME-2*"), "the admin's History shows it");
+    // Approvals › Rule changes names the card the change was made on (dashboard.md §4.25i).
+    const sentences = ((await call("GET", "policy/changes")).body["changes"] as Array<{ sentence: string }>).map((c) => c.sentence);
+    assert.ok(sentences.includes("You changed your prompt filters in Settings"), JSON.stringify(sentences));
+    assert.ok(!sentences.some((x) => /models/.test(x)), `no Prompt filters change says "models": ${JSON.stringify(sentences)}`);
 
     // ── The invariant: the registered key never reached the model raw. ──
     for (const b of sent()) assert.ok(!b.includes(KEY), "CONFIDENTIALITY VIOLATION: the registered key reached the model raw");
@@ -290,5 +352,282 @@ test("Settings › Prompt filters and the note under the message over the real a
     human.close();
     await arbiter.close();
     setAdminLayer(NO_ADMIN_LAYER);
+  }
+});
+
+/** Every line of every file under `dir` (the arbiter's event logs). */
+function eventLines(dir: string): number {
+  if (!existsSync(dir)) return 0;
+  let n = 0;
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    n += statSync(p).isDirectory() ? eventLines(p) : readFileSync(p, "utf8").split("\n").filter((l) => l.trim() !== "").length;
+  }
+  return n;
+}
+
+test("Settings › Prompt filters › Try a message over the real arbiter: an address and a registered secret are marked, an exception unmarks the address, nothing is minted or recorded (secrets axes)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-pf-try-"));
+  dirs.push(dir);
+  const dataSock = join(dir, "arbiter.sock");
+  const adminSock = join(dir, "admin.sock");
+  const humanSock = humanSockIn(dir);
+  const packs = join(dir, "prompt-filters");
+  mkdirSync(packs);
+  writeFileSync(join(packs, "mine.yaml"), "pack: mine\nversion: 1\npatterns:\n  - id: email\n    category: pii.email\n    regex: '[A-Za-z0-9._-]+@[A-Za-z0-9.-]+\\.[a-z]{2,}'\n");
+  const policyPath = join(dir, "policy.yaml");
+  // Hide it: a real run would mint a symbol for the address, so the count
+  // below would see one (the positive control at the end proves it).
+  writeFileSync(policyPath, "version: 1\nprompt_filters:\n  filters:\n    mine: on\n  actions:\n    pii.email: mask\n");
+  const dbPath = join(dir, "mandu.db");
+  const eventDir = join(dir, "events");
+  const arbiter = new ArbiterServer({
+    socketPath: dataSock, adminSocketPath: adminSock, humanSocketPath: humanSock, dbPath, eventDir,
+    policyPath, policyPollMs: 0, integrity: false, confidentiality: true, log: () => {},
+    promptPackDir: packs, adminPromptPackDir: null, adminPolicyDir: null, packDir: null, packKeysDir: join(dir, "keys"),
+  });
+  await arbiter.listen();
+  const data = new ArbiterClient(dataSock);
+  await data.connect();
+  const human = new ArbiterClient(humanSock);
+  await human.connect();
+  await data.registerEnvSecrets({ vars: [{ name: "STRIPE_API_KEY", value: KEY }] });
+  const wired = await makeApprovalsArbiter(dataSock, () => ({ socketPath: adminSock }));
+  assert.ok(wired?.policyDoc?.filterPromptDryRun, "the production adapter forwards the dry run");
+  const source = new ArbiterEventSource({ socketPath: dataSock, humanSocketPath: humanSock });
+  const server = new DashboardServer({ source, policyDocArbiter: wired.policyDoc, approvalsArbiter: wired.arbiter, log: () => {}, ...ADMIN_OPTS });
+  const port = await server.listen(0);
+  const call = async (path: string, body: unknown, headers: Record<string, string> = { ...CSRF_ADMIN, "Content-Type": "application/json" }) => {
+    const r = await pageFetch(`http://127.0.0.1:${port}/api/${path}`, { method: "POST", headers, body: JSON.stringify(body) });
+    return { status: r.status, body: (await r.json().catch(() => ({}))) as Record<string, any> };
+  };
+  const symbols = (): number => {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      return Number((db.prepare("SELECT COUNT(*) AS n FROM symbols").get() as { n: number | bigint }).n);
+    } finally {
+      db.close();
+    }
+  };
+  const ADDRESS = "ann@example.com";
+  const text = `mail ${ADDRESS} the key ${KEY} please`;
+  const at = (v: string) => ({ start: text.indexOf(v), end: text.indexOf(v) + v.length });
+  try {
+    // ── Refused without the admin session; nothing reaches the arbiter. ──
+    const before = { symbols: symbols(), events: eventLines(eventDir), sessions: (await human.sessions()).length };
+    const out = await call("policy/prompt-filters/try", { text }, { "X-Mandu-Control": "1", "Content-Type": "application/json" });
+    assert.equal(out.status, 403, JSON.stringify(out.body));
+
+    // ── The address and the registered secret are marked, in the card's words. ──
+    const r = await call("policy/prompt-filters/try", { text, origin: "harness" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body["enforcing"], true);
+    const found = r.body["findings"] as Array<{ start: number; end: number; category: string; name: string; action: string }>;
+    const email = found.find((f) => f.category === "pii.email");
+    assert.deepEqual(email && { start: email.start, end: email.end, name: email.name }, { ...at(ADDRESS), name: "An email address" }, JSON.stringify(found));
+    assert.equal(email!.action, "mask", "the kind's choice");
+    const key = found.find((f) => f.category.startsWith("secret.registered"));
+    assert.deepEqual(key && { start: key.start, end: key.end, name: key.name, action: key.action }, { ...at(KEY), name: "A secret Mandu already knows", action: "mask" }, JSON.stringify(found));
+    const answer = JSON.stringify(r.body);
+    assert.ok(!answer.includes("$MDU:"), "no symbol in the answer");
+    assert.ok(!answer.includes(KEY) && !answer.includes(ADDRESS), "spans of the typed text, never the text itself");
+
+    // ── The oracle: a dry run mints nothing and records nothing. ──
+    assert.deepEqual({ symbols: symbols(), events: eventLines(eventDir), sessions: (await human.sessions()).length }, before,
+      "CONFIDENTIALITY: a try created a symbol or a record that could hold the typed secret");
+
+    // ── An exception added on the same page lets the address through. ──
+    const exc = { op: "add-prompt-exception", category: "pii.email", match: "*@example.com" };
+    const q = await call("policy/prompt-filters/change", { edit: exc });
+    assert.equal(q.body["confirm"], true, JSON.stringify(q.body));
+    const agreed = await call("policy/prompt-filters/change", { edit: exc, expected: q.body["expected"] });
+    assert.equal(agreed.body["applied"], true, JSON.stringify(agreed.body));
+    const again = await call("policy/prompt-filters/try", { text });
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    const left = again.body["findings"] as Array<{ category: string; start: number; end: number }>;
+    assert.ok(!left.some((f) => f.category === "pii.email"), `the excepted address is no longer marked: ${JSON.stringify(left)}`);
+    assert.ok(left.some((f) => f.category.startsWith("secret.registered") && f.start === at(KEY).start), "the registered secret still is");
+    assert.equal(symbols(), before.symbols, "still nothing minted");
+
+    // ── The positive control: the same filter run for real mints, so the
+    // count above would have seen a try that did. ──
+    await data.filterPrompt({ agent: "control", segments: [{ id: "c", origin: "human", text: "mail bob@corp.test" }] });
+    assert.ok(symbols() > before.symbols, "a real run of the filter mints a symbol the count sees");
+  } finally {
+    await server.close?.();
+    wired.close();
+    data.close();
+    human.close();
+    await arbiter.close();
+  }
+});
+
+test("Settings › Prompt filters over the real arbiter: an exception added on the page asks on the page; Cancel leaves the arbiter's list as it was, Apply anyway adds it with its Undo; no secret on the page (secrets axes)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-pf-ask-"));
+  dirs.push(dir);
+  const dataSock = join(dir, "arbiter.sock");
+  const adminSock = join(dir, "admin.sock");
+  const humanSock = humanSockIn(dir);
+  const packs = join(dir, "prompt-filters");
+  mkdirSync(packs);
+  writeFileSync(join(packs, "mine.yaml"), "pack: mine\nversion: 1\npatterns:\n  - id: email\n    category: pii.email\n    regex: '[A-Za-z0-9._-]+@[A-Za-z0-9.-]+\\.[a-z]{2,}'\n");
+  const policyPath = join(dir, "policy.yaml");
+  writeFileSync(policyPath, "version: 1\nprompt_filters:\n  filters:\n    mine: on\n  actions:\n    pii.email: mask\n");
+  const arbiter = new ArbiterServer({
+    socketPath: dataSock, adminSocketPath: adminSock, humanSocketPath: humanSock, dbPath: join(dir, "mandu.db"), eventDir: join(dir, "events"),
+    policyPath, policyPollMs: 0, integrity: false, confidentiality: true, log: () => {},
+    promptPackDir: packs, adminPromptPackDir: null, adminPolicyDir: null, packDir: null, packKeysDir: join(dir, "keys"),
+  });
+  await arbiter.listen();
+  const data = new ArbiterClient(dataSock);
+  await data.connect();
+  await data.registerEnvSecrets({ vars: [{ name: "STRIPE_API_KEY", value: KEY }] });
+  const wired = await makeApprovalsArbiter(dataSock, () => ({ socketPath: adminSock }));
+  assert.ok(wired?.policyDoc);
+  const source = new ArbiterEventSource({ socketPath: dataSock, humanSocketPath: humanSock });
+  const server = new DashboardServer({ source, policyDocArbiter: wired.policyDoc, approvalsArbiter: wired.arbiter, log: () => {}, ...ADMIN_OPTS });
+  const port = await server.listen(0);
+  const MATCH = "*@example.com";
+  const answers: string[] = [];
+  const exceptions = async (): Promise<string[]> => {
+    const r = await pageFetch(`http://127.0.0.1:${port}/api/policy/prompt-filters`, { headers: CSRF_ADMIN });
+    const text = await r.text();
+    answers.push(text);
+    return (JSON.parse(text).settings.exceptions as Array<{ match: string }>).map((x) => x.match);
+  };
+  try {
+    assert.deepEqual(await exceptions(), []);
+    const pages: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await servedProductPage(`http://127.0.0.1:${port}`, "/settings", (d: any) => !d.getElementById("prompt-exception-form").hidden && d.querySelectorAll("#prompt-exception-kind option").length > 0, async (d: any) => {
+      const win = d.defaultView;
+      win.confirm = () => { throw new Error("window.confirm called"); };
+      const form = d.getElementById("prompt-exception-form");
+      const match = d.getElementById("prompt-exception-match");
+      const add = d.getElementById("prompt-exception-add");
+      const asked = () => form.querySelector(".ask-in-place");
+      const submit = () => {
+        add.focus();
+        form.dispatchEvent(new win.Event("submit", { cancelable: true }));
+      };
+      d.getElementById("prompt-exception-kind").value = "pii.email";
+      match.value = MATCH;
+      submit();
+      // The arbiter says it lets more reach the AI: asked in the form, above
+      // its button (dashboard.md §4.25n), its sentence holding the focus.
+      await waitWhile(() => !asked());
+      assert.equal(asked().nextElementSibling, form.querySelector(".form-actions"));
+      assert.ok(asked().querySelector(".ask-in-place-words").textContent.includes(MATCH), asked().textContent);
+      assert.equal(asked().querySelector(".ask-in-place-k")?.textContent, "This changes what Mandu protects:");
+      assert.ok(asked().querySelectorAll(".ask-in-place-list li").length > 0, "what it opens, as a list");
+      assert.equal(d.activeElement, asked().querySelector(".ask-in-place-words"), "the sentence, never Apply anyway");
+      // Cancel: nothing is sent; the arbiter's list is unchanged.
+      [...asked().querySelectorAll("button")].find((b: { textContent: string }) => b.textContent === "Cancel").click();
+      assert.equal(asked(), null);
+      assert.equal(d.activeElement, add, "the focus back on Add exception");
+      assert.equal(match.value, MATCH, "what was typed stays");
+      await new Promise((r) => setTimeout(r, 200));
+      assert.deepEqual(await exceptions(), [], "Cancel added nothing");
+      // Asked again, Apply anyway: added, with its Undo.
+      submit();
+      await waitWhile(() => !asked());
+      const yes = asked().querySelector(".ask-in-place-yes");
+      assert.equal(yes.textContent, "Apply anyway");
+      yes.focus();
+      yes.click();
+      // The notice, then the list read again and the box emptied.
+      await waitWhile(() => !d.getElementById("prompt-notice").textContent || match.value !== "");
+      assert.match(d.getElementById("prompt-notice").textContent, /^Added the exception for \*@example\.com\. It applies to your next message\./);
+      assert.equal(asked(), null);
+      assert.equal(match.value, "", "the box is empty again");
+      assert.deepEqual(await exceptions(), [MATCH], "the arbiter lists the exception");
+      const undo = [...d.querySelectorAll("#prompt-notice button")].find((b: { textContent: string }) => b.textContent === "Undo");
+      assert.ok(undo, "with its Undo");
+      pages.push(d.body.textContent ?? "");
+      undo.click();
+      await waitWhile(() => d.getElementById("prompt-notice").textContent !== "Undone.");
+      assert.deepEqual(await exceptions(), [], "Undo takes it back");
+      pages.push(d.body.textContent ?? "");
+    }, { headers: { Cookie: ADMIN_COOKIE } });
+    // The oracle: the registered secret is on no page and in no answer.
+    for (const text of [...pages, ...answers]) assert.ok(!text.includes(KEY), "CONFIDENTIALITY: the registered key reached the page");
+  } finally {
+    await server.close?.();
+    wired.close();
+    data.close();
+    await arbiter.close();
+  }
+});
+
+test("Settings › Prompt filters over the real arbiter: Try a message on the served page answers again after an exception added there, with no second press; no symbol and no secret on the page (secrets axes)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-pf-tryagain-"));
+  dirs.push(dir);
+  const dataSock = join(dir, "arbiter.sock");
+  const adminSock = join(dir, "admin.sock");
+  const humanSock = humanSockIn(dir);
+  const packs = join(dir, "prompt-filters");
+  mkdirSync(packs);
+  writeFileSync(join(packs, "mine.yaml"), "pack: mine\nversion: 1\npatterns:\n  - id: email\n    category: pii.email\n    regex: '[A-Za-z0-9._-]+@[A-Za-z0-9.-]+\\.[a-z]{2,}'\n");
+  const policyPath = join(dir, "policy.yaml");
+  writeFileSync(policyPath, "version: 1\nprompt_filters:\n  filters:\n    mine: on\n  actions:\n    pii.email: mask\n");
+  const arbiter = new ArbiterServer({
+    socketPath: dataSock, adminSocketPath: adminSock, humanSocketPath: humanSock, dbPath: join(dir, "mandu.db"), eventDir: join(dir, "events"),
+    policyPath, policyPollMs: 0, integrity: false, confidentiality: true, log: () => {},
+    promptPackDir: packs, adminPromptPackDir: null, adminPolicyDir: null, packDir: null, packKeysDir: join(dir, "keys"),
+  });
+  await arbiter.listen();
+  const data = new ArbiterClient(dataSock);
+  await data.connect();
+  await data.registerEnvSecrets({ vars: [{ name: "STRIPE_API_KEY", value: KEY }] });
+  const wired = await makeApprovalsArbiter(dataSock, () => ({ socketPath: adminSock }));
+  assert.ok(wired?.policyDoc?.filterPromptDryRun, "the production adapter forwards the dry run");
+  const source = new ArbiterEventSource({ socketPath: dataSock, humanSocketPath: humanSock });
+  const server = new DashboardServer({ source, policyDocArbiter: wired.policyDoc, approvalsArbiter: wired.arbiter, log: () => {}, ...ADMIN_OPTS });
+  const port = await server.listen(0);
+  const ADDRESS = "ann@example.com";
+  const TRIED = `mail ${ADDRESS} today`;
+  const pages: string[] = [];
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await servedProductPage(`http://127.0.0.1:${port}`, "/settings", (d: any) => !d.getElementById("settings-prompt-try").hidden && !d.getElementById("prompt-exception-form").hidden && d.querySelectorAll("#prompt-exception-kind option").length > 0, async (d: any) => {
+      const win = d.defaultView;
+      const answer = d.getElementById("prompt-try-answer");
+      const marks = (): string[] => [...answer.querySelectorAll("mark")].map((m: { textContent: string }) => m.textContent);
+      // Try it marks the address.
+      d.getElementById("prompt-try-text").value = TRIED;
+      d.getElementById("prompt-try-form").dispatchEvent(new win.Event("submit", { cancelable: true }));
+      await waitWhile(() => answer.hidden);
+      assert.deepEqual(marks(), [ADDRESS], answer.textContent);
+      assert.match(answer.textContent, /An email address: hidden\./);
+      assert.equal(answer.querySelector(".prompt-try-except"), null, "no exception in force yet");
+      // The box is edited after the try; the answer stays about what was tried.
+      d.getElementById("prompt-try-text").value = "something else";
+      // The exception, added through the page's form: asked, then Apply anyway.
+      const form = d.getElementById("prompt-exception-form");
+      d.getElementById("prompt-exception-kind").value = "pii.email";
+      d.getElementById("prompt-exception-match").value = "*@example.com";
+      form.dispatchEvent(new win.Event("submit", { cancelable: true }));
+      await waitWhile(() => !form.querySelector(".ask-in-place"));
+      form.querySelector(".ask-in-place .ask-in-place-yes").click();
+      await waitWhile(() => !d.getElementById("prompt-notice").textContent);
+      assert.match(d.getElementById("prompt-notice").textContent, /^Added the exception for \*@example\.com\./);
+      // With no second press, the answer is drawn again: the address unmarked.
+      await waitWhile(() => !answer.querySelector(".prompt-try-except"));
+      assert.deepEqual(marks(), [], answer.textContent);
+      assert.match(answer.textContent, /^Nothing in it would be held or masked\.What matches one of your exceptions is not marked/);
+      assert.equal(answer.querySelector(".prompt-try-stale"), null);
+      assert.equal(d.getElementById("prompt-try-error").textContent, "");
+      pages.push(d.body.innerHTML);
+    }, { headers: { Cookie: ADMIN_COOKIE } });
+    // The oracle: no symbol and no registered secret on the page.
+    for (const html of pages) {
+      assert.ok(!html.includes("$MDU"), "CONFIDENTIALITY: a symbol reached the page");
+      assert.ok(!html.includes(KEY), "CONFIDENTIALITY: the registered key reached the page");
+    }
+  } finally {
+    await server.close?.();
+    wired.close();
+    data.close();
+    await arbiter.close();
   }
 });

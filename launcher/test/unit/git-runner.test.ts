@@ -68,12 +68,13 @@ test("an exit: its code, stdout and stderr; the input reaches stdin; the hardene
 test("the deadline kills the call's whole process group and settles it as a failure", async () => {
   fakeGit(`sleep 30 & echo $!; sleep 30`);
   const t0 = Date.now();
-  // 1 s, not less: on macOS a fresh script's first exec can take over 300 ms
-  // (one run of the darwin set killed it before its echo).
-  const r = await defaultGitRunner(["log"], { cwd: dir, timeoutMs: 1000 });
-  assert.ok(Date.now() - t0 < 3000, `settled in ${Date.now() - t0} ms`);
+  // 2 s, not less: on macOS a fresh script's first exec can take over 300 ms,
+  // and over 1 s on a loaded Mac (two runs of the darwin set killed it before
+  // its echo, the second at 1 s on 2026-11-02).
+  const r = await defaultGitRunner(["log"], { cwd: dir, timeoutMs: 2000 });
+  assert.ok(Date.now() - t0 < 5000, `settled in ${Date.now() - t0} ms`);
   assert.equal(r.code, 1, "a killed call is a failure: the caller refuses or fails the repository");
-  assert.match(r.stderr, /killed at its 1000 ms deadline/);
+  assert.match(r.stderr, /killed at its 2000 ms deadline/);
   const bg = Number(r.stdout.trim());
   assert.ok(bg > 0);
   const end = Date.now() + 3000;
@@ -433,7 +434,9 @@ test("a session left open and idle does not keep the process alive", () => {
   const script = join(dir, "idle.mts");
   writeFileSync(script, [
     `import { openGitSession, GIT_SESSION_RUNNER_SOURCE } from ${JSON.stringify(join(process.cwd(), "src", "git-session.ts"))};`,
-    `const s = openGitSession({ sandbox: () => ({ bwrap: "/unused", flags: [] }), runnerCommand: () => ({ file: process.execPath, args: ["-e", GIT_SESSION_RUNNER_SOURCE] }) });`,
+    // ptraceScope: the session path whatever this host's Yama says (macOS has
+    // none: its per-call path would start the stand-in bubblewrap).
+    `const s = openGitSession({ sandbox: () => ({ bwrap: "/unused", flags: [] }), ptraceScope: () => 1, runnerCommand: () => ({ file: process.execPath, args: ["-e", GIT_SESSION_RUNNER_SOURCE] }) });`,
     `const r = await s.runner()(["--version"], { cwd: "/" });`,
     `console.log(r.code === 0 ? "answered" : "failed " + r.stderr);`,
   ].join("\n"));

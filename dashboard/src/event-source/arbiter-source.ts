@@ -255,7 +255,7 @@ export class ArbiterEventSource implements EventSource {
         runtime: deriveRuntime(events),
         origin: deriveOrigin(events),
         ...assertionVerdicts(events),
-        ...(deriveHealth(events) ? { health: deriveHealth(events)! } : {}),
+        ...(deriveHealth(events, process.platform) ? { health: deriveHealth(events, process.platform)! } : {}),
       };
       this.refCache.set(s.sessionId, {
         count: s.count ?? events.length,

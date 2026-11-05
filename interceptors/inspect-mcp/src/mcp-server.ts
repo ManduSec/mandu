@@ -34,7 +34,7 @@ import { declassifySymbol } from "./declassify-symbol.js";
 const JSONRPC_VERSION = "2.0";
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const SERVER_NAME = "mandu-inspect-symbol";
-const SERVER_VERSION = "0.2.0-beta.8"; // one product version: scripts/set-version.sh rewrites this line
+const SERVER_VERSION = "0.2.0-beta.9"; // one product version: scripts/set-version.sh rewrites this line
 
 // JSON-RPC error codes (subset).
 const ERR_PARSE = -32700;
@@ -70,7 +70,7 @@ export const INSPECT_SYMBOL_TOOL = {
     "for ALL inputs to a merge, join, comparison, or validation. Include every " +
     "original needed; mentioning another file in the instruction does not supply it. " +
     "For a JSON artifact, set output_format to json; the quarantine validates JSON before sealing it. " +
-    "Ask for the final artifact, then pass result_symbol directly to Write.content. " +
+    "Ask for the final artifact, then deliver result_symbol where the user asked for it: in your reply when they asked to be told or shown (they see its real text), as Write.content when they asked for a file; never write it over a file you were asked to read. " +
     "Provide an 'instruction' " +
     "describing what you need (e.g. 'summarize in 2-3 sentences', 'extract the " +
     "author and title', 'translate to English'). State WHAT information you " +

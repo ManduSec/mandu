@@ -313,9 +313,13 @@ const unzstd = (zlib as unknown as { zstdDecompressSync?: (b: Uint8Array) => Buf
 
 /** The sessions of an OpenClaw 9.x agent database: each `session_id` of
  *  `transcript_events`, its events the records a `.jsonl` line held. An
- *  event OpenClaw stored compressed (`event_zstd`) is read where this Node
- *  has zstd (22.15 and later) and skipped otherwise. */
-function openclawSessions(db: DatabaseSync): DbSession[] {
+ *  event OpenClaw stored compressed (`event_zstd`: from 2026.8, an event of
+ *  1 KiB or more that zstd shrinks, so the tool results a leak is in) is
+ *  read where this Node has zstd (22.15 and later); otherwise it is
+ *  skipped and counted (`meta.compressedUnread`), so the scan says the
+ *  session was not read in full. `decompress` overrides this Node's (tests;
+ *  null: none). */
+export function openclawSessions(db: DatabaseSync, decompress: ((b: Uint8Array) => Buffer) | null = unzstd ?? null): DbSession[] {
   const T = tablesOf(db);
   if (!T.has("transcript_events")) return [];
   const c = columnsOf(db, "transcript_events");
@@ -328,13 +332,15 @@ function openclawSessions(db: DatabaseSync): DbSession[] {
       id, bytes: num(a["b"]) ?? 0, updatedMs: ms(a["u"]),
       read: () => {
         const recs: unknown[] = [];
+        let unread = 0;
         for (const row of db.prepare(`SELECT ${pick(c, ["event_json", "event_zstd"])} FROM transcript_events WHERE session_id = ? ORDER BY seq`).all(id) as Row[]) {
           if (typeof row["event_json"] === "string") recs.push(parse(row["event_json"]));
-          else if (row["event_zstd"] instanceof Uint8Array && unzstd !== undefined) {
-            try { recs.push(parse(unzstd(row["event_zstd"]).toString("utf8"))); } catch { /* a torn row */ }
+          else if (row["event_zstd"] instanceof Uint8Array) {
+            if (decompress === null) { unread++; continue; }
+            try { recs.push(parse(decompress(row["event_zstd"]).toString("utf8"))); } catch { /* a torn row */ }
           }
         }
-        const meta: SessionMeta = {};
+        const meta: SessionMeta = unread > 0 ? { compressedUnread: unread } : {};
         return { texts: [...openclawSentTexts(recs, meta)], meta, acts: openclawActs(recs) };
       },
     });
@@ -355,10 +361,20 @@ export async function readJsonlRecords(file: string): Promise<unknown[]> {
   return out;
 }
 
+/** OpenClaw's archived transcripts (2026.7 and earlier, the JSONL store):
+ *  a session the person reset (`/new`, the Control UI's New session,
+ *  `sessions.reset`) is renamed `<session>.jsonl.reset.<time>`, one they
+ *  deleted `<session>.jsonl.deleted.<time>`, and OpenClaw keeps both on disk
+ *  (its own `session-transcript-hit` reads them as the session's history).
+ *  What they hold went to the model as any session's did. */
+export const OPENCLAW_ARCHIVED_TRANSCRIPT_RE = /\.jsonl\.(?:reset|deleted)\.[^/]+$/;
+
 /** Is `path` one of the transcript files of a source of `kind` rooted at
  *  `root`? The layouts: Goose's `<root>/<id>.jsonl` and
  *  `<root>/llm_request.<n>.jsonl`; OpenClaw's
- *  `<root>/<agent>/sessions/<session>.jsonl` and
+ *  `<root>/<agent>/sessions/<session>.jsonl` (and its archived
+ *  `.jsonl.reset.<time>` / `.jsonl.deleted.<time>`, {@link
+ *  OPENCLAW_ARCHIVED_TRANSCRIPT_RE}) and
  *  `<root>/<agent>/agent/openclaw-agent.sqlite`; a database source's root is
  *  the database itself. Pure. */
 export function isStoreFile(kind: StoreKind, root: string, path: string): boolean {
@@ -371,7 +387,8 @@ export function isStoreFile(kind: StoreKind, root: string, path: string): boolea
     case "goose-request-log":
       return dirname(path) === root && /^llm_request\.[^/]+\.jsonl$/.test(basename(path));
     case "openclaw-jsonl":
-      return dirname(dirname(dirname(path))) === root && basename(dirname(path)) === "sessions" && path.endsWith(".jsonl");
+      return dirname(dirname(dirname(path))) === root && basename(dirname(path)) === "sessions"
+        && (path.endsWith(".jsonl") || OPENCLAW_ARCHIVED_TRANSCRIPT_RE.test(basename(path)));
     case "openclaw-db":
       return dirname(dirname(dirname(path))) === root && basename(dirname(path)) === "agent" && basename(path) === "openclaw-agent.sqlite";
   }
@@ -447,7 +464,12 @@ export function storeItems(src: { agent: TranscriptAgent; kind: StoreKind; root:
             const logMeta: SessionMeta = { uncounted: true };
             return { texts: [...gooseRequestLogTexts(recs, new Date(f.st.mtimeMs).toISOString(), logMeta)], meta: logMeta };
           }
-          const meta: SessionMeta = {};
+          // OpenClaw's JSONL store is 2026.7's and earlier: it masked secret-
+          // looking values in what it SAVED (`logging.redactSensitive`), while
+          // the model got them as read (the masking before the model and the
+          // SQLite store came together in 2026.8.1), so a known value's mask
+          // in it is the value sent (transcript-scan.ts `savedMasked`)
+          const meta: SessionMeta = kind === "openclaw-jsonl" ? { savedMasked: true } : {};
           if (kind === "goose-jsonl") {
             const msgs = recs.filter((r): r is GooseMessage => typeof r === "object" && r !== null) as GooseMessage[];
             return { texts: [...gooseSentTexts(msgs, meta)], meta, acts: gooseActs(msgs) };

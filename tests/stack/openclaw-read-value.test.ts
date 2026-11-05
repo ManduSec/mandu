@@ -42,6 +42,12 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF: the default mode
 const SECRET = `CONFNET_TOKEN_CANARY_${process.pid}_5151`;
 const CONTROL = `CONFCTL_TOKEN_CANARY_${process.pid}_5152`;
 const SYMBOL_RE = /^\$MDU:nomodel_read\[[0-9a-f]{4,8}\]$/;
+/** A masked `read` of a no-model file ends with the protected-file note (confidentiality.md §7.1, "A protected file read whole"): the symbol is what comes before it. */
+const beforeNote = (s: string): string => {
+  const at = s.indexOf("\n\n[mandu:secret] masked: ");
+  if (at >= 0) assert.match(s.slice(at), /is a protected file that no AI model may read/, "the note says what the symbol is");
+  return at < 0 ? s : s.slice(0, at);
+};
 
 /** OpenClaw 2026.7.1's `read{path, limit}` of the first `limit` lines of a
  *  longer file (`sessions-*.js`: the selected lines, then
@@ -153,9 +159,9 @@ test("OpenClaw: a limited read of a no-model file registers the file's text, not
 
     // 1. the labelled read (its first line): masked whole, one symbol
     const masked = await forwarded(exfil, turn("toolu_oclv_1", "read", { path: vault, limit: 1 }, limited(vaultText, 1)));
-    assert.match(masked, SYMBOL_RE, `the labelled read reaches the model as one no-model symbol: ${masked}`);
+    assert.match(beforeNote(masked), SYMBOL_RE, `the labelled read reaches the model as one no-model symbol: ${masked}`);
     // (3) the symbol stands for the file's text, not OpenClaw's notice
-    assert.equal(await admin.resolve(masked), `Partner API token: ${SECRET}`, "the symbol's value is the file's text");
+    assert.equal(await admin.resolve(beforeNote(masked)), `Partner API token: ${SECRET}`, "the symbol's value is the file's text");
 
     // 2. the control, in ANOTHER session of the same arbiter: an unlabelled read stopping at the same line rides raw
     const controlWire = limited(controlText, 1);

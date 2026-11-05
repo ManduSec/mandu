@@ -122,8 +122,12 @@ test("a plain-HTTP CONNECT tunnel under TLS inspection: served by the plaintext 
     assert.ok(!leak.body.includes(SECRET_VALUE), "the refusal does not echo the value");
     assert.equal(dest.received.length, before, "the destination received nothing");
 
-    // (3) a symbol bound for an untrusted host: the per-symbol gate refuses
-    const sym = await plainThroughTunnel(port, dest.host, `/collect?k=${encodeURIComponent(SYM)}`);
+    // (3) a symbol bound for an untrusted host: the per-symbol gate refuses.
+    // The symbol as the agent writes it: the gate finds `$MDU:…[…]` as is,
+    // so a percent-encoded one would not reach it here (on Linux the
+    // sender's taint from (1) refused that one instead; macOS attributes no
+    // sender, conn-attr.ts reads /proc).
+    const sym = await plainThroughTunnel(port, dest.host, `/collect?k=${SYM}`);
     assert.equal(sym.status, 403, JSON.stringify(sym));
     assert.equal(dest.received.length, before, "still nothing");
   } finally {

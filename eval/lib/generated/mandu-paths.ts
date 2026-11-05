@@ -30,6 +30,7 @@ export type ManduPathName =
   | "browser-profile"
   | "launch-logs"
   | "dashboard-account"
+  | "serve-attachments"
   | "last-scan"
   | "events"
   | "events-test"
@@ -122,6 +123,8 @@ export const MANDU_PATHS: Readonly<Record<ManduPathName, ManduPathEntry>> = {
   "launch-logs": { name: "launch-logs", base: "state-root", rel: "launch-logs", kind: "dir", mode: 0o700, agentReadable: false, env: null },
   // the Mandu dashboard account: a username and a salted scrypt hash of its password, never the password (dashboard.md §6.z); `mandu dashboard --set-password` writes it
   "dashboard-account": { name: "dashboard-account", base: "state-root", rel: "dashboard-account.json", kind: "file", mode: 0o600, agentReadable: false, env: null },
+  // the attachment sessions `mandu serve` runs a model proxy for, each with its stable port (openclaw-plugin.md §3.2): `mandu serve attach` and `mandu openclaw install` write it, the service reads it
+  "serve-attachments": { name: "serve-attachments", base: "state-root", rel: "serve-attachments.json", kind: "file", mode: 0o600, agentReadable: false, env: null },
   // the last `mandu scan`'s report: kinds, masks, names, files, counts, hosts, dates, never a value (confidentiality-plan-17 §3 item 12)
   "last-scan": { name: "last-scan", base: "state-root", rel: "last-scan.json", kind: "file", mode: 0o600, agentReadable: false, env: null },
   // session history; holds originals

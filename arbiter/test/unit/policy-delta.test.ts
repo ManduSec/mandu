@@ -129,6 +129,28 @@ test("paths: the overlap hazard — a new strict lock that may take over from a 
   assertRelaxes(before, { paths: [...before.paths!, { path: "**/.env", level: "no-model" }] }, "paths", "** overlaps");
 });
 
+test("paths: the overlap hazard ignores a loser that only RELEASES (bindings, values:); others/extract still count", () => {
+  // Live 2026-10-28 (policy-setup-repo on Codex): another drill's `**` pattern
+  // bound to one host made the `.env` lock wait in the Inbox. A plain strict
+  // winner releases nothing, so taking over from a binding is no loss.
+  const bound: PolicyFileConfig = { paths: [{ path: "**/ws-*/bank/**", level: "no-model", bindings: ["parktax.test"] }] };
+  assertTightens(bound, { paths: [...bound.paths!, { path: "/tmp/w/ws-1/.env", level: "no-model" }] }, "beside a ** binding");
+  assertTightens(bound, { paths: [...bound.paths!, { path: "/tmp/w/ws-1/bank/statement.md", level: "no-model" }] }, "inside a ** binding");
+  const values: PolicyFileConfig = { paths: [{ path: "/srv/app", level: "any-model", values: { API_KEY: { bindings: ["api.example.com"] } } }] };
+  assertTightens(values, { paths: [...values.paths!, { path: "/srv/app/.env", level: "no-model" }] }, "under a values: entry");
+  // A lock that BECOMES plain strict beside a binding-only pattern tightens too.
+  assertTightens(
+    { paths: [...bound.paths!, { path: "/tmp/w/ws-1/.env", level: "any-model" }] },
+    { paths: [...bound.paths!, { path: "/tmp/w/ws-1/.env", level: "no-model" }] },
+    "raise beside a ** binding",
+  );
+  // The fields that can be stricter than plain strict still make it a hazard.
+  assertRelaxes({ paths: [{ path: "**/bank/**", level: "no-model", others: "deny", readers: ["bankcli"] }] },
+    { paths: [{ path: "**/bank/**", level: "no-model", others: "deny", readers: ["bankcli"] }, { path: "/tmp/w/.env", level: "no-model" }] }, "paths", "others: deny");
+  assertRelaxes({ paths: [{ path: "/srv/app", level: "no-model", extract: "TOKEN=(\\S+)" }] },
+    { paths: [{ path: "/srv/app", level: "no-model", extract: "TOKEN=(\\S+)" }, { path: "/srv/app/.env", level: "no-model" }] }, "paths", "extract");
+});
+
 test("paths: making a label with readers plain strict RELAXES (non-readers go from denied to the twin)", () => {
   assertRelaxes(
     { paths: [{ path: "/home/u/.aws", level: "no-model", readers: ["aws"], others: "deny" }] },

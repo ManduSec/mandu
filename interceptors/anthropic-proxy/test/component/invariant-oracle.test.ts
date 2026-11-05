@@ -527,6 +527,59 @@ test("confidentiality OFF-dual: no level field ⇒ the TRUSTED body forwards raw
   }
 });
 
+// Plan 10 §4.2 over the real proxy path, finding F-C (2026-10-27): only the
+// output rules `clear` and `mask` may release a tainted tree's Bash output;
+// one the proxy does not recognise masks it whole, like rule (i).
+function bashRequest(callId: string, output: string): string {
+  return JSON.stringify({
+    model: "claude-opus-4",
+    stream: true,
+    system: "You are Claude Code.",
+    messages: [
+      { role: "user", content: "List the cards" },
+      { role: "assistant", content: [{ type: "tool_use", id: callId, name: "Bash", input: { command: "psql -c 'select * from cards'" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: callId, content: output }] },
+    ],
+  });
+}
+
+test("plan 10 e2e, F-C: an output rule the proxy does not recognise masks the Bash result whole, though the backstop is clean; clear releases", async () => {
+  // The secret is one the backstop does not know (a row psql printed), so
+  // only the rule stands between it and the model.
+  const ROW = "alice,4111-1111-1111-1111";
+  let rule: unknown = "release";
+  const arbiter = new MockArbiter({
+    classifyFn: () => ({ trust: "TRUSTED", category: null, reason: "mock: integrity off" }),
+    callTaintFn: () => ({ level: "no-model", rule: rule as "clear", files: ["/h/.pgpass"], apps: ["psql"], mask: [], root: "bash-1", denied: [] }),
+    scanSecretValuesFn: () => ({ hits: [] }),
+  });
+  const upstream = new MockUpstream({ sse: buildToolUseSse({ id: "tu_done", name: "TodoWrite", input: { todos: [] } }) });
+  const proxy = new AnthropicProxy({ arbiter, upstream: upstream.fetcher, log: () => {} });
+  const port = await proxy.listen(0);
+  try {
+    for (const [i, bad] of (["release", undefined] as unknown[]).entries()) {
+      rule = bad;
+      assert.equal((await call(port, bashRequest(`toolu_fc${i}`, `${ROW}\n`))).status, 200);
+      const forwarded = upstream.requests[i]!.bodyText;
+      assert.ok(!forwarded.includes(ROW), `INVARIANT (rule ${JSON.stringify(bad)}): the row never reaches the model request`);
+      assert.match(forwarded, /\$MDU:Bash\[[0-9a-f]{4,8}\]/, "symbol token present");
+      assert.match(forwarded, /\[mandu:secret\] masked: psql read \/h\/\.pgpass/);
+    }
+    rule = "clear";
+    assert.equal((await call(port, bashRequest("toolu_fc_clear", `${ROW}\n`))).status, 200);
+    assert.ok(upstream.requests[2]!.bodyText.includes(ROW), "control: rule clear releases");
+  } finally {
+    await proxy.close();
+  }
+  const byCall = Object.fromEntries((arbiter.eventsOfKind("tool_result") as Array<Record<string, any>>).map((e) => [e.callId, e]));
+  for (const id of ["toolu_fc0", "toolu_fc1"]) {
+    assert.equal(byCall[id].secretTaint.maskWhole, true, id);
+    assert.equal(byCall[id].secretTaint.rule, "secret", id);
+    assert.ok(!JSON.stringify(byCall[id].output.symbolized).includes(ROW), `${id}: the model-side repr leaks the row`);
+  }
+  assert.equal(byCall["toolu_fc_clear"].secretTaint.maskWhole, false);
+});
+
 /** The live i19 shape (2026-09-26): a trusted Write confirmation whose path
  *  holds a "9", then an untrusted `wc -l` whose whole output is "9". */
 function shortValueRequest(bashOutput: string, writeConfirmation: string): string {

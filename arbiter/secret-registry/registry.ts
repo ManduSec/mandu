@@ -21,6 +21,7 @@
  *
  * Mandu-new (no reference origin).
  */
+import { isKubeconfigPath, kubeconfigPublicValues } from "../policy/kubeconfig.js";
 import { readFileSync, realpathSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, join, resolve } from "path";
@@ -532,9 +533,15 @@ function mintFields(
  *  leaves writable to its world, as `.claude.json`. */
 const HOME_WIRE_FILES: readonly string[] = [
   ".npmrc", ".config/pip/pip.conf", ".pip/pip.conf",
+  // Each line's password at its own database, and each section's of
+  // ~/.my.cnf at the database it names (db-login-release.md).
+  ".pgpass", ".my.cnf",
   ".cursor/mcp.json", ".config/Claude/claude_desktop_config.json", "Library/Application Support/Claude/claude_desktop_config.json",
   ".codeium/windsurf/mcp_config.json", ".config/Code/User/mcp.json", "Library/Application Support/Code/User/mcp.json",
   ".gemini/settings.json", ".config/zed/settings.json", ".continue/config.yaml", ".continue/config.json",
+  // kubectl's and helm's config (2026-10-24, kube-wire-release.md): a user's
+  // bearer token to the one cluster server its contexts name.
+  ".kube/config",
 ];
 
 /** Is `path` one of the launch HOME's own wire files (`HOME_WIRE_FILES`:
@@ -582,7 +589,7 @@ export interface WireServable {
  *  `https` = put back only in an HTTPS request; `any` = its declared URL is
  *  `http://`, so plain HTTP too; null = not a wire credential (its bindings,
  *  if any, are a label's, which this rule does not touch). */
-export type WireReleaseScheme = "https" | "any" | null;
+export type WireReleaseScheme = "https" | "any" | "postgres" | "mysql" | null;
 
 /**
  * Which scheme a symbol's value may be put back over. Derived, never stored:
@@ -596,6 +603,14 @@ export type WireReleaseScheme = "https" | "any" | null;
  *     `env:PIP_EXTRA_INDEX_URL`): `.password_http` (an `http://` index, the
  *     field says so since the row keeps no URL) answers `any`; any other field
  *     `https`;
+ *   - a database password variable's row (`env:PGPASSWORD`, `env:MYSQL_PWD`;
+ *     db-login-release.md §3.3, 2026-10-25): `postgres` / `mysql`, bound or
+ *     not, by whatever binding (the relay's login only);
+ *   - a FIELD row of a registered `.pgpass` (db-login-release.md): `postgres`
+ *     for a line naming one database (its span's wire), the relay's
+ *     login only; a line the current text no longer has: `postgres` too
+ *     (fail closed); a `*` host line (no wire): null; a `~/.my.cnf`
+ *     section's the same, `mysql`;
  *   - a FIELD row of an agent's own key file a launch granted to a host
  *     (`grantScheme`, auth-grants.ts; agent-sign-in.md §3): `any` only for a
  *     plain-HTTP loopback grant at that destination, else `https`;
@@ -621,6 +636,12 @@ export function wireReleaseScheme(
     if (granted !== undefined) return granted;
   }
   if (row.tool === ENV_TOOL) {
+    // A database client's password variable (db-login-release.md §3.3,
+    // 2026-10-25): only ever a login password, so put back only in that
+    // database's login (the relay), whatever binds it: its own automatic
+    // binding to `PGHOST` / `MYSQL_HOST`, or one of yours.
+    if (row.origin === "env:PGPASSWORD") return "postgres";
+    if (row.origin === "env:MYSQL_PWD") return "mysql";
     if (!/^env:PIP_(EXTRA_)?INDEX_URL$/.test(row.origin)) return null;
     return row.field.endsWith(".password_http") ? "any" : "https";
   }
@@ -628,12 +649,14 @@ export function wireReleaseScheme(
   const shape = secretFileShape(row.origin);
   // An MCP config's HTTP server credential (secret-discovery.md §2.10) is
   // a wire credential too: its span says whether its URL is https.
-  if (shape !== "npmrc" && shape !== "pip-conf" && mcpConfigKind(row.origin) === null) return null;
+  // A kubeconfig's bearer token (kube-wire-release.md) is one too: https only.
+  const db = shape === "pgpass" ? "postgres" as const : /(^|\/)\.my\.cnf$/.test(row.origin) ? "mysql" as const : null;
+  if (shape !== "npmrc" && shape !== "pip-conf" && db === null && mcpConfigKind(row.origin) === null && !isKubeconfigPath(row.origin)) return null;
   // The field's OWN file version: the base row of that origin whose hash the
   // field symbol shares (a re-registered file's rows carry their own hash).
   const fmt = getActiveFormat();
   const hash = fmt.extractHash(name);
-  if (hash === null) return "https";
+  if (hash === null) return db ?? "https";
   const cacheKey = `${row.origin}\u0000${hash}`;
   let spans = opts.cache?.get(cacheKey);
   if (spans === undefined) {
@@ -647,8 +670,9 @@ export function wireReleaseScheme(
     opts.cache?.set(cacheKey, spans);
   }
   const span = spans?.find((s) => s.key === row.field);
-  if (!span) return "https";
+  if (!span) return db ?? "https";
   if (!span.wire) return null;
+  if (span.wire.scheme === "postgres" || span.wire.scheme === "mysql") return span.wire.scheme;
   return span.wire.httpsOnly ? "https" : "any";
 }
 
@@ -697,6 +721,48 @@ export function wireServableTwin(symbolMap: SymbolMap, path: string, opts: { dir
 }
 
 /**
+ * Whether a registered `~/.pgpass` can be served to its known consumers
+ * (`pg_dump`, any libpq program that is not a printer) as its twin
+ * (db-login-release.md §3.3): every password line names one database (its
+ * span's `postgres` wire) and its field symbol is BOUND to that database
+ * (the registration does that for the launch HOME's file only), so the
+ * session's database relay puts each password back in that database's own
+ * login. A `*` host line (no relay, no binding) makes the file not
+ * servable: its consumer is then asked, as before. Found by the live
+ * client run (live-clients.md §2.3, 2026-10-25): pg_dump was asked for the
+ * raw file, refused where nobody answers, and then sent no password. Pure
+ * over the symbol table.
+ */
+export function wireServableDbTwin(symbolMap: SymbolMap, path: string): WireServable {
+  const no = (why: string): WireServable => ({ servable: false, why, hosts: [] });
+  if (basename(path) !== ".pgpass") return no("not a .pgpass");
+  let base: { name: string; value: string; created: number } | null = null;
+  for (const [name, e] of symbolMap.symbols) {
+    if (e.obsoleted_at !== null || e.tool !== REGISTRY_TOOL || e.field !== null) continue;
+    if (e.origin !== path || !isSecret(e.confidentiality) || e.integrity !== "trusted") continue;
+    if (base === null || e.created_at > base.created) base = { name, value: e.value, created: e.created_at };
+  }
+  if (base === null) return no("not registered");
+  const x = extractSecretSpans(path, base.value);
+  if (x.spans.length === 0) return no("no password in the file");
+  const fmt = getActiveFormat();
+  const hash = fmt.extractHash(base.name);
+  if (hash === null) return no("no field symbols");
+  const level = symbolMap.symbols.get(base.name)!.confidentiality;
+  const hosts: string[] = [];
+  for (const span of x.spans) {
+    if (span.comment) continue;
+    if (!span.wire || span.wire.scheme !== "postgres") return no(`${span.key} names no one database (a * host), so no relay puts it back`);
+    const row = symbolMap.symbols.get(fmt.generate({ tool: REGISTRY_TOOL, hash, field: span.key, level }));
+    if (!row || row.obsoleted_at !== null || row.value !== span.value) return no(`${span.key} has no field symbol`);
+    if (!(row.bindings ?? []).some((b) => b.toLowerCase() === span.wire!.host)) return no(`${span.key} is not bound to ${span.wire.host}`);
+    if (!hosts.includes(span.wire.host)) hosts.push(span.wire.host);
+  }
+  if (hosts.length === 0) return no("no password in the file");
+  return { servable: true, why: `the session's database relay puts each password back in its own database's login (${hosts.join(", ")})`, hosts };
+}
+
+/**
  * The structured twin text of a registered path, re-rendered from the symbol
  * table (the base row's bytes + the field rows' names), or null when the path
  * is not registered or has no field rows. The read-twin rule compares a Read
@@ -742,6 +808,23 @@ export function structuredTwinWithSecretsFor(
 }
 
 /**
+ * The registered text of `path`: the newest active base row the registry
+ * minted from that labelled file (the real file's bytes as of its last
+ * registration), or null. Read by the kubeconfig upstream rule
+ * (kube-wire-release.md), which needs the real CA and client key. Pure over
+ * the symbol table.
+ */
+export function registeredFileText(symbolMap: SymbolMap, path: string): string | null {
+  let base: { value: string; created: number } | null = null;
+  for (const e of symbolMap.symbols.values()) {
+    if (e.obsoleted_at !== null || e.field !== null || !isRegisteredFileRow(e)) continue;
+    if (e.origin !== path || !isSecret(e.confidentiality)) continue;
+    if (base === null || e.created_at > base.created) base = { value: e.value, created: e.created_at };
+  }
+  return base?.value ?? null;
+}
+
+/**
  * The paths of every registered file (plan 10 §11.8, "A key listing"):
  * the origins of the active base rows the registry minted from a labelled
  * file (`isRegisteredFileRow`, no field, a secret level). Sorted. No twin is
@@ -778,6 +861,9 @@ export interface RegisteredTwin {
   nameRows?: string[];
   names?: string[];
   nameLines?: string[];
+  /** A kubeconfig's structural values (kubeconfig.ts
+   *  `kubeconfigPublicValues`): no bare-token piece of its base row. */
+  publicTokens?: string[];
 }
 
 /** Render the structured twin of base row `baseName` (value `value`, path
@@ -813,7 +899,12 @@ function renderRegisteredTwin(
     if (span.name) { nameRows.push(name); nameTexts.add(span.value); } else { otherTexts.add(span.value); otherTexts.add(value.slice(span.start, span.end)); }
   }
   secrets.delete("");
-  const twin: RegisteredTwin = { text: renderStructuredTwin(value, x.spans, (s) => tokens.get(s.key)!), secrets: [...secrets] };
+  const twin: RegisteredTwin = {
+    text: renderStructuredTwin(value, x.spans, (s) => tokens.get(s.key)!), secrets: [...secrets],
+    // A kubeconfig's structure (its server URL, namespace, names) is no
+    // piece of its row (live-clients.md §3.3).
+    ...(isKubeconfigPath(path) ? { publicTokens: kubeconfigPublicValues(value) } : {}),
+  };
   // A name that is also another field's text is that field's: still a fingerprint.
   const names = [...nameTexts].filter((t) => t !== "" && !otherTexts.has(t));
   if (names.length === 0) return twin;
@@ -1085,15 +1176,24 @@ export function isOwnTextRow(
  */
 export function registerEnvSecret(
   symbolMap: SymbolMap,
-  args: { name: string; value: string; sessionKey?: string; rules?: EnvSecretRules; bindings?: readonly string[] },
+  args: {
+    name: string; value: string; sessionKey?: string; rules?: EnvSecretRules; bindings?: readonly string[];
+    /** The other variables of the same launch environment (2026-10-25):
+     *  `PGHOST` / `PGPORT` for `PGPASSWORD`, `MYSQL_HOST` /
+     *  `MYSQL_TCP_PORT` for `MYSQL_PWD` (secret-extract.ts
+     *  `dbEnvWireHost`). Absent: no such binding. */
+    launchEnv?: Readonly<Record<string, string | undefined>>;
+  },
   dbPath?: string,
 ): RegisterEnvSecretResult {
-  const span = envSecretSpan(args.name, args.value, args.rules ?? {});
+  const span = envSecretSpan(args.name, args.value, args.rules ?? {}, args.launchEnv);
   if (span === null) return { symbol: null, reason: `not a secret variable: ${args.name}` };
   // A sourced variable's bound hosts (policy.yaml env.sources[].bindings):
   // the egress gate releases its value there without an ask. Plan 10
   // §11.13.1: pip's index variable's password is bound to its index host,
   // derived from the value itself (the launcher's environment, the human's).
+  // db-login-release.md §3.3 (2026-10-25): `PGPASSWORD` / `MYSQL_PWD` to the
+  // database `PGHOST` / `MYSQL_HOST` of the same environment names.
   const bindings = span.wire ? withBinding(args.bindings ? [...args.bindings] : undefined, span.wire.host) : args.bindings ? [...args.bindings] : [];
   const key = {
     tool: ENV_TOOL,

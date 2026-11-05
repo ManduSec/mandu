@@ -1,15 +1,21 @@
 {
   "name": "@mandusec/openclaw-inspect-plugin",
-  "version": "0.2.0-beta.8",
+  "version": "0.2.0-beta.9",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Mandu U-LLM channel for OpenClaw: an OpenClaw PLUGIN TOOL exposing inspect_symbol (OpenClaw has no MCP client, so the inspect-mcp stdio server cannot mount — docs/design/testing/agent-e2e-harness.md §8). The security core is REUSED, not reimplemented: the tool calls interceptors/inspect-mcp/src/inspect-symbol.ts (resolve via arbiter → quarantined U-LLM → RE-SYMBOLIZE → emit) with the same ArbiterClientAdapter + ullm-client deps; only the mount layer (api.registerTool vs MCP JSON-RPC) is new. Fail-closed; success results are pure-symbolic. Zero runtime deps (loaded by OpenClaw via jiti as raw .ts).",
+  "description": "Mandu for OpenClaw: an OpenClaw plugin exposing inspect_symbol and declassify_symbol, plus (in a resident Gateway attached to `mandu serve`) the before_tool_call tamper policy and the message_sending reply check (docs/design/agents/openclaw-plugin.md) (OpenClaw has no MCP client, so the inspect-mcp stdio server cannot mount — docs/design/testing/agent-e2e-harness.md §8). The security core is REUSED, not reimplemented: the tool calls interceptors/inspect-mcp/src/inspect-symbol.ts (resolve via arbiter → quarantined U-LLM → RE-SYMBOLIZE → emit) with the same ArbiterClientAdapter + ullm-client deps; only the mount layer (api.registerTool vs MCP JSON-RPC) is new. Fail-closed; success results are pure-symbolic. Zero runtime deps (loaded by OpenClaw via jiti as raw .ts).",
   "main": "index.ts",
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.12"
+    },
+    "install": {
+      "minHostVersion": ">=2026.3.12"
+    }
   },
   "mandu": {
     "siblings": [
@@ -20,8 +26,9 @@
     "pretypecheck": "node ../../scripts/install-deps.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pretest": "node ../../scripts/install-deps.mjs",
-    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
-    "test:unit": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts"
+    "test": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts test/component/*.test.ts",
+    "test:unit": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/unit/*.test.ts",
+    "test:component": "MANDU_AXES_STRICT=1 MANDU_HOME=/dev/null/mandu-test-home MANDU_POLICY_FILE=/dev/null/mandu-test-no-policy.yaml tsx --test test/component/*.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

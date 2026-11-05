@@ -22,6 +22,8 @@
 //!    supervisor-connected and returns success — the tracee reaches the peer.
 //!  • DENY: a `connect` to an unlisted destination returns `-EACCES` — the
 //!    IP/port-precise deny the port-only Landlock layer cannot express.
+//!  • REDIRECT: a `connect` to a database a `--redirect` names is performed to
+//!    the relay's loopback port, and the tracee's socket reaches the relay.
 //!  • AF_UNIX PASSTHROUGH: a `connect` to a unix socket is NOT blocked — the
 //!    arbiter's own IPC keeps working under the guard.
 //!  • NONBLOCKING: a nonblocking `connect` is replicated (EINPROGRESS handed back;
@@ -48,7 +50,7 @@ use std::net::TcpListener;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
 
-use net_supervisor::guard::{parse_rule, GuardPolicy, NoResolver, WslGuard};
+use net_supervisor::guard::{parse_redirects, parse_rule, GuardPolicy, NoResolver, WslGuard};
 use net_supervisor::guard_kernel::{
     handle_connect_notif, install_connect_filter_self, recv_notif, tracee_shares_our_netns,
     GuardConfig, GuardOutcome,
@@ -183,6 +185,45 @@ fn guard_denies_connect_to_unlisted_destination() {
         "tracee's connect() returned -EACCES (the IP/port-precise deny)"
     );
     eprintln!("DENY PASS: unlisted connect to 127.0.0.1:{port} → EACCES in the tracee");
+}
+
+#[test]
+#[ignore]
+fn guard_redirects_a_database_connect_to_its_relay() {
+    // The database login release (db-login-release.md): the tracee connects
+    // to the database's address; the guard performs the connect to the
+    // relay's loopback port instead, and the tracee's socket reaches it.
+    let (listener, relay) = loopback_listener();
+    let db = std::net::Ipv4Addr::new(10, 255, 255, 1);
+    let policy = GuardPolicy::new(vec![parse_rule(&format!("tcp:127.0.0.0/8:{relay}")).unwrap()])
+        .with_redirects(parse_redirects(&[format!("tcp:{db}:5432=127.0.0.1:{relay}")]).unwrap());
+    let cfg = GuardConfig::new(Arc::new(policy), no_resolver());
+    let Some((outcome, child_exit)) = drive_one_connect(ConnectRecipe::TcpTo { ip: db, port: 5432 }, &cfg) else { return /* SKIP */ };
+    match outcome {
+        GuardOutcome::AllowedSupervised { ip, port, answered } => {
+            assert_eq!((ip.to_string(), port), ("127.0.0.1".to_string(), relay), "decided and performed at the relay");
+            if is_no_route(answered) {
+                eprintln!("SKIP: no working loopback in this env (answered errno {answered})");
+                return;
+            }
+            assert_eq!(answered, 0);
+        }
+        other => panic!("expected AllowedSupervised at the relay, got {other:?}"),
+    }
+    assert_eq!(child_exit, Some(EXIT_CONNECTED), "the tracee's connect to the database returned 0");
+    listener.set_nonblocking(true).unwrap();
+    assert!(listener.accept().is_ok(), "the relay accepted the tracee's connection");
+
+    // The same connect with no redirect: the database itself is not allowed.
+    let plain = cfg_policy(GuardPolicy::new(vec![parse_rule(&format!("tcp:127.0.0.0/8:{relay}")).unwrap()]));
+    let Some((outcome, child_exit)) = drive_one_connect(ConnectRecipe::TcpTo { ip: db, port: 5432 }, &plain) else { return };
+    assert!(matches!(outcome, GuardOutcome::Denied { .. }), "{outcome:?}");
+    assert_eq!(child_exit, Some(libc::EACCES));
+    eprintln!("REDIRECT PASS: {db}:5432 performed at the relay 127.0.0.1:{relay}; denied without the redirect");
+}
+
+fn cfg_policy(policy: GuardPolicy) -> GuardConfig {
+    GuardConfig::new(Arc::new(policy), no_resolver())
 }
 
 #[test]

@@ -202,7 +202,7 @@ test("the served page: the raw read with its later-mask time, the warn line, and
     const conf = cards.filter((c) => /staging\.conf/.test(c.textContent!));
     assert.equal(conf.length, 1);
     const [warn, ownWords, changeIt, ...moreWarn] = [...conf[0]!.querySelectorAll(".secret-line.warn")] as HTMLElement[];
-    assert.match(warn!.textContent!, /^The AI read its real value at \d{2}:\d{2}, before it was marked a secret\. From \d{2}:\d{2} on it got a placeholder in its place, in 2 requests\.$/);
+    assert.match(warn!.textContent!, /^The AI read its real value at \d{2}:\d{2}, before it was marked a secret\. From \d{2}:\d{2} on the AI got it masked, in 2 requests\.$/);
     assert.equal(warn!.querySelectorAll("time").length, 2);
     // The AI's 10:41 reply quoted the file, and Mandu forwards the AI's own
     // replies as written: the card says so, next, never "only a placeholder".
@@ -282,7 +282,7 @@ test("the 10:38 block says why, from the rule its event recorded; the 10:39 send
     const why = stripe.querySelector(".step.blocked .what .note.why") as HTMLElement;
     assert.ok(why, "the blocked send draws its why");
     assert.equal(why.textContent, "Why: No rule lets this secret go to api.stripe.com. Mandu sends a secret only where a rule lets it go, or with your OK.");
-    assert.equal(why.previousElementSibling!.textContent, "The request never left this machine.", "under the note");
+    assert.equal(why.previousElementSibling!.textContent, "The request never left this computer.", "under the note");
     assert.equal(doc.querySelectorAll("#agent-story .note.why").length, 1);
   });
 });
@@ -307,7 +307,7 @@ test("Your secrets tells STRIPE_KEY's block and its later send in the order they
   const page = (await (await pageFetch(`${base}/api/home/agent?session=${ID}`)).json()) as Served;
   const stripe = page.secrets.secrets.find((s) => /STRIPE_KEY/.test(words(s.what)))!;
   assert.deepEqual(stripe.lines.map((l) => words(l.parts)).slice(1, 3), [
-    `Mandu blocked 1 attempt to send it to api.stripe.com, at <${moved("2026-10-05T01:38:07.123Z")}>, and asked for your OK in Approvals. The request never left this machine.`,
+    `Mandu blocked 1 attempt to send it to api.stripe.com, at <${moved("2026-10-05T01:38:07.123Z")}>, and asked for your OK in Approvals. The request never left this computer.`,
     `Mandu sent its real value only to api.stripe.com (1 request, at <${moved("2026-10-05T01:39:24.292Z")}>), where it was allowed to go.`,
   ]);
   await servedPage(`/agents/${ID}`, (doc) => !!doc.querySelector("#agent-secrets .secret-card"), (doc) => {
@@ -317,7 +317,7 @@ test("Your secrets tells STRIPE_KEY's block and its later send in the order they
     const block = lines.findIndex((l) => /^Mandu blocked/.test(l.textContent!));
     const send = lines.findIndex((l) => /^Mandu sent its real value/.test(l.textContent!));
     assert.ok(block > 0 && send === block + 1, "the block, then the send");
-    assert.match(lines[block]!.textContent!, /^Mandu blocked 1 attempt to send it to api\.stripe\.com, at \d{2}:\d{2}, and asked for your OK in Approvals\. The request never left this machine\.$/);
+    assert.match(lines[block]!.textContent!, /^Mandu blocked 1 attempt to send it to api\.stripe\.com, at \d{2}:\d{2}, and asked for your OK in Approvals\. The request never left this computer\.$/);
     assert.match(lines[send]!.textContent!, /^Mandu sent its real value only to api\.stripe\.com \(1 request, at \d{2}:\d{2}\), where it was allowed to go\.$/);
     assert.equal(lines[block]!.querySelector("time")!.getAttribute("datetime"), moved("2026-10-05T01:38:07.123Z"));
     assert.equal(lines[send]!.querySelector("time")!.getAttribute("datetime"), moved("2026-10-05T01:39:24.292Z"));
@@ -362,7 +362,11 @@ test("Your secrets says the 10:38 block asked for your OK, linking the row its e
     // links its file to Rules (§4.25b *A card opens its file in Rules*).
     const rules = [...doc.querySelectorAll("#agent-secrets a.secret-rule-link")] as HTMLAnchorElement[];
     assert.deepEqual(rules.map((a) => a.getAttribute("href")).sort(), ["/rules?file=~/mandu-try/.env", "/rules?file=~/mandu-try/deploy/staging.conf"], "the tour's two files, each its card's own link");
-    assert.equal([...doc.querySelectorAll("#agent-secrets a")].length, rules.length + 1, "and no other link");
+    // And each finds its other sessions on History (§4.25b *A card finds
+    // its other sessions*, queue #250), searched for the same file.
+    const sessions = [...doc.querySelectorAll("#agent-secrets a.secret-sessions-link")] as HTMLAnchorElement[];
+    assert.deepEqual(sessions.map((a) => a.getAttribute("href")).sort(), ["/history?q=~%2Fmandu-try%2F.env", "/history?q=~%2Fmandu-try%2Fdeploy%2Fstaging.conf"], "each file's card searches History for it");
+    assert.equal([...doc.querySelectorAll("#agent-secrets a")].length, rules.length + sessions.length + 1, "and no other link");
     const links = [...doc.querySelectorAll("#agent-secrets .secret-line a")] as HTMLAnchorElement[];
     assert.equal(links.length, 1, "one link in Your secrets' lines");
     const line = links[0]!.closest(".secret-line")!;
@@ -383,11 +387,11 @@ test("the 10:39 send, let out on the person's one-time OK, claims no standing pe
   assert.doesNotMatch(send, /is allowed/, "the OK was for one request: no permission still holds");
   // The turn's one request is not "each".
   const allowed = page.story.find((t) => t.prompt !== null && /^I allowed it once/.test(t.prompt))!;
-  assert.equal(allowed.summary, "1 request left this machine with your secret STRIPE_KEY filled in, to a destination allowed to receive it.");
+  assert.equal(allowed.summary, "1 request left this computer with your secret STRIPE_KEY filled in, to a destination allowed to receive it.");
   await servedPage(`/agents/${ID}`, (doc) => doc.querySelectorAll("#agent-story .turn").length > 0 && !!doc.querySelector("#agent-secrets .secret-card"), (doc) => {
     const turns = [...doc.querySelectorAll("#agent-story .turn")] as HTMLElement[];
     const turn = turns.find((t) => /^I allowed it once/.test(t.querySelector(".q-text")?.textContent ?? ""))!;
-    assert.equal(turn.querySelector(".turn-summary")!.textContent, "1 request left this machine with your secret STRIPE_KEY filled in, to a destination allowed to receive it.");
+    assert.equal(turn.querySelector(".turn-summary")!.textContent, "1 request left this computer with your secret STRIPE_KEY filled in, to a destination allowed to receive it.");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tile = ([...doc.querySelectorAll("#agent-facts .tile")] as any[]).find((t) => /^1 send with a real value filled in$/.test(`${t.querySelector(".big").textContent} ${t.querySelector(".lbl").textContent}`));
     assert.ok(tile, "the sends tile");
@@ -398,7 +402,7 @@ test("the 10:39 send, let out on the person's one-time OK, claims no standing pe
     assert.equal(doc.activeElement!.getAttribute("data-outcome"), "sent", "the press lands on the send");
     assert.ok(doc.activeElement!.classList.contains("shown"));
     assert.doesNotMatch(doc.getElementById("agent-secrets").textContent, /is allowed to go/);
-    assert.doesNotMatch(doc.getElementById("agent-story").textContent, /1 request left this machine[^.]*each to/);
+    assert.doesNotMatch(doc.getElementById("agent-story").textContent, /1 request left this computer[^.]*each to/);
   });
 });
 
@@ -414,8 +418,12 @@ test("Your secrets: 10:38, 10:39 and 10:41 open the block, the send and the Read
     `${moved("2026-10-05T01:42:05.942Z")} -> -`,
   ], "each time opens the step its line tells of; the first masked request is no step");
   await servedPage(`/agents/${ID}`, (doc) => !!doc.querySelector("#agent-secrets .secret-card") && !!doc.querySelector("#agent-story [data-step-id]"), (doc) => {
-    const links = [...doc.querySelectorAll("#agent-secrets .step-link")] as HTMLButtonElement[];
+    const links = [...doc.querySelectorAll("#agent-secrets .secret-lines .step-link")] as HTMLButtonElement[];
     assert.deepEqual(links.map((b) => b.textContent), [hhmm(moved("2026-10-05T01:38:07.123Z")), hhmm(moved("2026-10-05T01:39:24.292Z")), hhmm(moved("2026-10-05T01:41:29.686Z"))]);
+    // Where it went (§4.25b): its "How it came in" time opens that step too.
+    const pathLinks = [...doc.querySelectorAll("#agent-secrets .secret-path .step-link")] as HTMLButtonElement[];
+    assert.ok(pathLinks.length > 0, "a card's path names when it came in");
+    assert.ok(pathLinks.every((b) => [...doc.querySelectorAll("#agent-story [data-step-id]")].some((x: any) => x.dataset.stepId === b.dataset.opens)), "each opens a step the page draws");
     const stepOf = (b: HTMLButtonElement) => [...doc.querySelectorAll("#agent-story [data-step-id]")].find((x: any) => x.dataset.stepId === b.dataset.opens) as HTMLElement | undefined;
     assert.ok(links.every((b) => stepOf(b)), "each opens a step the page draws");
     const shown = () => ([...doc.querySelectorAll("#agent-story .step.shown")] as HTMLElement[]).map((x) => x.textContent!);
@@ -602,7 +610,11 @@ test("the 10:42 turn says what the file's card says: the AI read staging.conf's 
     assert.equal(line.querySelector("time")!.getAttribute("datetime"), READ);
     const titles = ([...at.querySelectorAll(".mask-chip.secret")] as HTMLElement[]).map((c) => c.title);
     assert.equal(titles.length, 3);
-    for (const title of titles) assert.equal(title, `A secret, masked here. The AI read its real value at ${hhmm(READ)}, before it was marked a secret.`);
+    // The Read's chip names its file, as its right half does (dashboard.md
+    // §4.25b *A masked result's chip names its secret*); the reply's two
+    // carry no name.
+    const early = `masked here. The AI read its real value at ${hhmm(READ)}, before it was marked a secret.`;
+    assert.deepEqual([...titles].sort(), [`A secret, ${early}`, `A secret, ${early}`, `Your secret staging.conf, ${early}`]);
     const others = turns.filter((x) => x !== at).flatMap((x) => ([...x.querySelectorAll(".mask-chip.secret")] as HTMLElement[]).map((c) => c.title));
     assert.ok(others.length >= 4);
     for (const title of others) assert.match(title, /masked: the AI never got the real value$/);

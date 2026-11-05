@@ -720,6 +720,84 @@ test("a relayed upstream error (429) is surfaced on the tllm_call output, not a 
   }
 });
 
+// REGRESSION (live 2026-10-28, the nightly VM): a subscription at its WEEKLY
+// limit answered every request 429 with `unified-status: rejected` and a
+// Retry-After of 12.5 h. The proxy retried it like a spike, twelve times over
+// about three minutes, so Claude Code sat on its spinner with no answer and
+// the drill runner timed the turn out. A plan's quota is relayed at once.
+const WEEKLY_LIMIT_HEADERS = {
+  "retry-after": "45151",
+  "x-should-retry": "true",
+  "anthropic-ratelimit-unified-status": "rejected",
+  "anthropic-ratelimit-unified-representative-claim": "seven_day",
+  "anthropic-ratelimit-unified-reset": "1793221200",
+  "anthropic-ratelimit-unified-7d-status": "rejected",
+  "anthropic-ratelimit-unified-7d-utilization": "1.0",
+  "anthropic-ratelimit-unified-5h-status": "allowed",
+  "anthropic-ratelimit-unified-5h-utilization": "0.0",
+};
+test("a plan's usage limit (429, quota rejected) is relayed at once, and the tllm_call says which limit until when", async () => {
+  let calls = 0;
+  const upstream: UpstreamFetcher = async () => {
+    calls++;
+    return upResp(429, { type: "error", error: { type: "rate_limit_error", message: "This request would exceed your account's rate limit. Please try again later." } }, WEEKLY_LIMIT_HEADERS);
+  };
+  const sleep = fakeSleep();
+  const arbiter = new MockArbiter();
+  const proxy = new AnthropicProxy({ arbiter, upstream, log: () => {}, retry: { maxAttempts: 12, baseDelayMs: 1 }, sleep: sleep.fn } as never);
+  const port = await proxy.listen(0);
+  try {
+    const res = await call(port, "POST", "/v1/messages", messagesBody("untrusted", true));
+    assert.equal(res.status, 429, "the upstream 429 reaches the agent");
+    assert.equal(calls, 1, "one upstream attempt: a weekly limit is no transient spike");
+    assert.equal(sleep.delays.length, 0, "no backoff slept");
+    assert.match(res.body, /rate_limit_error/, "the upstream's own body, unchanged");
+    const tllm = arbiter.eventsOfKind("tllm_call")[0];
+    assert.ok(tllm, "the relayed limit is recorded");
+    const lim = (tllm as { upstreamLimit?: Record<string, unknown> }).upstreamLimit;
+    assert.deepEqual(lim, {
+      status: 429, unifiedStatus: "rejected", claim: "seven_day",
+      fiveHour: { status: "allowed", utilization: 0 },
+      sevenDay: { status: "rejected", utilization: 1 },
+      resetsAt: "2026-10-28T21:00:00.000Z", retryAfterS: 45151, hard: true,
+    });
+    assert.match(tllm!.output!.symbolized, /upstream HTTP 429 \(rate-limited until 2026-10-28 21:00 UTC \(seven-day limit\)\)/);
+  } finally {
+    await proxy.close();
+  }
+});
+
+test("a short throttle is still absorbed by the retries, and its relayed 429 says so without `hard`", async () => {
+  let calls = 0;
+  const upstream: UpstreamFetcher = async () => { calls++; return upResp(429, { type: "error", error: { type: "rate_limit_error" } }, { "retry-after": "1" }); };
+  const sleep = fakeSleep();
+  const arbiter = new MockArbiter();
+  const proxy = new AnthropicProxy({ arbiter, upstream, log: () => {}, retry: { maxAttempts: 3, baseDelayMs: 1 }, sleep: sleep.fn } as never);
+  const port = await proxy.listen(0);
+  try {
+    const res = await call(port, "POST", "/v1/messages", messagesBody("untrusted", false));
+    assert.equal(res.status, 429);
+    assert.equal(calls, 3, "retried to the cap");
+    assert.deepEqual(sleep.delays, [1000, 1000]);
+    const lim = (arbiter.eventsOfKind("tllm_call")[0] as { upstreamLimit?: { hard: boolean; retryAfterS?: number } }).upstreamLimit;
+    assert.deepEqual(lim, { status: 429, retryAfterS: 1, hard: false });
+  } finally {
+    await proxy.close();
+  }
+});
+
+test("a 200 answer carries no upstreamLimit", async () => {
+  const arbiter = new MockArbiter();
+  const proxy = new AnthropicProxy({ arbiter, upstream: async () => upResp(200, { type: "message", role: "assistant", content: [{ type: "text", text: "hi" }] }), log: () => {} } as never);
+  const port = await proxy.listen(0);
+  try {
+    await call(port, "POST", "/v1/messages", messagesBody("untrusted", false));
+    assert.equal((arbiter.eventsOfKind("tllm_call")[0] as { upstreamLimit?: unknown }).upstreamLimit, undefined);
+  } finally {
+    await proxy.close();
+  }
+});
+
 test("529 overloaded is also retried", async () => {
   let calls = 0;
   const upstream: UpstreamFetcher = async () => {

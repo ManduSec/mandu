@@ -8,7 +8,11 @@
  * (`--ink-4`) and two scoped ones, so a `.dim` anywhere else drew in its
  * parent's ink, mostly the full `--ink`: Approvals' wide-change foot, Your rules' Patterns and Places captions, an opened
  * rule's "Your rule, this file only", Add a rule's "This folder:", Keys
- * Mandu found's not-offered line and its empty list. jsdom draws nothing but
+ * Mandu found's not-offered line and its empty list. Since 2026-10-31 the
+ * page draws no not-offered line: as shipped it hides the picker
+ * (dashboard.md §4.25t), so the line under it is measured with the picker
+ * offered (MANDU_EXPERIMENTAL_POLICY_MODEL=1, which the route reads per
+ * request). jsdom draws nothing but
  * runs the cascade and inherits `color` as a browser does, so the served
  * page runs with its served stylesheets.
  *
@@ -19,8 +23,12 @@
  * real DashboardServer over the production adapter serves Rules and
  * Approvals, signed in:
  *
- *   K1  Rules, with Keys Mandu found and Add a rule opened and the file's
- *       rule opened, light and dark: every `.dim` with words reads
+ *   K0  as shipped (no flag) the route says `offered: false`, and the
+ *       served Rules page, Keys Mandu found opened, hides the picker, its
+ *       preview and its line, and draws no "not offered" words;
+ *   K1  Rules, with the picker offered, Keys Mandu found and Add a rule
+ *       opened and the file's rule opened, light and dark: every `.dim`
+ *       with words reads
  *       `--ink-4` in a row and `--ink-3` anywhere else, never the full or
  *       the second ink; the lines above and the folder's count of its
  *       rules are among them;
@@ -65,6 +73,7 @@ delete process.env.MANDU_EXPERIMENTAL_POLICY_MODEL; // the picker as shipped
 after(() => {
   resetCurrentPolicyForTests("claude-code");
   if (FLAG !== undefined) process.env.MANDU_EXPERIMENTAL_POLICY_MODEL = FLAG;
+  else delete process.env.MANDU_EXPERIMENTAL_POLICY_MODEL;
 });
 
 const VALUE = `sk_live_dimInkCanary_${process.pid}_0`;
@@ -201,7 +210,21 @@ test("the product page over the real arbiter: every secondary line reads the not
       }
     };
 
-    // ── K1: Rules ──
+    // ── K0: Rules as shipped: the picker is not drawn ──
+    const shipped = JSON.parse(await read("/api/suggestions", CSRF_ADMIN)) as { model?: { offered: boolean } };
+    assert.equal(shipped.model?.offered, false, "the picker as shipped: not offered");
+    await servedProductPage(base, "/rules", (doc: Doc) => !!doc.querySelector(`#files-tree .row.file-rule[data-path="${env}"]`), async (doc: Doc) => {
+      doc.getElementById("suggest-open").click();
+      await waitWhile(() => doc.getElementById("files-suggested-view").hidden || !doc.querySelector("#files-suggested-list .empty-row"));
+      for (const id of ["suggest-model", "suggest-model-preview", "suggest-model-status"]) assert.equal(doc.getElementById(id).hidden, true, `as shipped: #${id} is hidden`);
+      assert.doesNotMatch(doc.getElementById("files-suggested-view").textContent, /not offered/, "as shipped: no line about a feature it does not have");
+      noValue(doc.body.textContent, "the rendered Rules page as shipped");
+    }, { headers: signedIn, css: "" });
+
+    // ── K1: Rules, the picker offered ──
+    process.env.MANDU_EXPERIMENTAL_POLICY_MODEL = "1";
+    const offered = JSON.parse(await read("/api/suggestions", CSRF_ADMIN)) as { model?: { offered: boolean } };
+    assert.equal(offered.model?.offered, true, "with the flag the picker is offered");
     await servedProductPage(base, "/rules", (doc: Doc) => !!doc.querySelector(`#files-tree .row.file-rule[data-path="${env}"]`), async (doc: Doc) => {
       doc.getElementById("suggest-open").click();
       await waitWhile(() => doc.getElementById("files-suggested-view").hidden || !doc.getElementById("suggest-model-why").textContent || !doc.querySelector("#files-suggested-list .empty-row"));
@@ -215,13 +238,14 @@ test("the product page over the real arbiter: every secondary line reads the not
         /^\d+ rules$/,
         /^Your rule, this file only$/,
         /^This folder:$/,
-        /^Asking a model to suggest rules is not offered yet: it is still being tested\.$/,
-        /^No suggestions\. Press Scan for keys/,
+        /^Off: only Mandu's own scan\. Names only: a model reads the names of your files/,
+        /^No keys waiting\.$/,
       ]);
       // ── K4: Rules' column heads ──
       readsAA(doc, "Rules", ".files-heads span", ["File or folder", "Which AI may read it", "Where it may be sent"]);
       noValue(doc.body.textContent, "the rendered Rules page");
     }, { headers: signedIn, css: "" });
+    delete process.env.MANDU_EXPERIMENTAL_POLICY_MODEL;
 
     // ── K2: Approvals ──
     await servedProductPage(base, "/approvals", (doc: Doc) => !!doc.querySelector("#approvals-proposals .proposal-confirm"), async (doc: Doc) => {

@@ -22,6 +22,14 @@
  *   4. The agent page names the main model of a session the launcher bound
  *      to a declared entry (the source's `sessionUpstream`, production
  *      wiring: the parity leg for that op).
+ *   5. A refused Save speaks the form's words (#203, dashboard.md §4.25l):
+ *      the validator's 422 lines start with the exact keys and hold the
+ *      exact phrase the page's map keys on (a rewording fails here, not
+ *      silently on the page); the page's two checks before Save match the
+ *      validator's patterns on the same samples; the SERVED Settings page
+ *      draws an own model at a LAN http address refused as "Address: …
+ *      tick Send without encryption …" with Address marked, a Name with a
+ *      space refused before sending, and policy.yaml unchanged.
  */
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -36,7 +44,11 @@ import { resetCurrentPolicyForTests } from "../../arbiter/policy/compiled-policy
 import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
-import { ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { ADMIN_COOKIE, ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
+import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
+import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
+import { MODEL_NAME_RE, validatePolicyDocument } from "../../arbiter/policy/policy-file-validate.js";
 import { stateAxes } from "../lib/axes.js";
 import { humanSockIn } from "../lib/human-plane.js";
 
@@ -89,7 +101,7 @@ test("Settings › Models over the real arbiter: add asks then applies, test con
   const port = await server.listen(0);
   const base = `http://127.0.0.1:${port}`;
   const post = async (path: string, body?: unknown) => {
-    const r = await fetch(base + path, { method: "POST", headers: { ...CSRF_ADMIN, "Content-Type": "application/json" }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const r = await pageFetch(base + path, { method: "POST", headers: { ...CSRF_ADMIN, "Content-Type": "application/json" }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
     return { status: r.status, body: (await r.json()) as Record<string, unknown> };
   };
   const change = async (body: Record<string, unknown>) => {
@@ -105,7 +117,7 @@ test("Settings › Models over the real arbiter: add asks then applies, test con
 
   try {
     // 0. No model of your own yet: the your-own-model rule says no model reads it.
-    const panelNow = async () => (await (await fetch(`${base}/api/policy/panel`)).json()) as { panel: { models: Array<{ name: string; local: boolean }>; yourRules: Array<{ id: string; warning?: string }> } };
+    const panelNow = async () => (await (await pageFetch(`${base}/api/policy/panel`)).json()) as { panel: { models: Array<{ name: string; local: boolean }>; yourRules: Array<{ id: string; warning?: string }> } };
     const lockRow = (p: Awaited<ReturnType<typeof panelNow>>) => p.panel.yourRules.find((r) => r.id.includes("contract.md"));
     assert.match(lockRow(await panelNow())?.warning ?? "", /^No AI of your own is listed, so no AI reads this file/);
 
@@ -147,7 +159,7 @@ test("Settings › Models over the real arbiter: add asks then applies, test con
     const undo = await post(`/api/policy/changes/${encodeURIComponent(removed.changeId)}/undo`);
     assert.equal(undo.status, 200, JSON.stringify(undo.body));
     assert.equal((await gate.modelEndpoints())[0]?.model, "qwen2.5", "Undo brings the entry back as it was");
-    const history = (await (await fetch(`${base}/api/policy/changes?limit=10`)).json()) as { changes: Array<{ sentence: string }> };
+    const history = (await (await pageFetch(`${base}/api/policy/changes?limit=10`)).json()) as { changes: Array<{ sentence: string }> };
     assert.ok(history.changes.some((c) => c.sentence === "You changed your models in Settings"));
 
     // 3b. The helper's model, and one server at its /v1 base.
@@ -179,9 +191,65 @@ test("Settings › Models over the real arbiter: add asks then applies, test con
       kind: "tllm_call", view: "AgentView", emitter: "anthropic-proxy", boundary: "model_context",
       input: { symbolized: "hello", original: null, differs: false, symbols: [] }, output: null, invariant: { violatedInvariant: false },
     } as never);
-    const agent = (await (await fetch(`${base}/api/home/agent?session=sess-models-e2e`)).json()) as { found: boolean; mainModel: { words: string; local: boolean } | null };
+    const agent = (await (await pageFetch(`${base}/api/home/agent?session=sess-models-e2e`)).json()) as { found: boolean; mainModel: { words: string; local: boolean } | null };
     assert.equal(agent.found, true);
     assert.deepEqual(agent.mainModel, { words: "Main model: your own model (ollama)", local: true });
+
+    // 5. A refused Save in the form's words (#203).
+    const unchanged = readFileSync(policyPath);
+    const lan = await post("/api/policy/models/change", { action: "add", model: { name: "My Ollama", url: "http://192.168.1.20:11434", local: true, allowPlainHttp: false, tokenEnv: TOKEN_VAR } });
+    assert.equal(lan.status, 422, JSON.stringify(lan.body));
+    assert.equal(lan.body.error, "This model entry is not valid.");
+    const problems = lan.body.problems as string[];
+    assert.ok(problems.some((p) => p.startsWith("name: must be 1-64 letters, digits, _ . - ")), JSON.stringify(problems));
+    const plain = problems.find((p) => p.startsWith("url: 'My Ollama' is on another machine"));
+    assert.ok(plain, JSON.stringify(problems));
+    assert.ok(plain.endsWith("add allow_plain_http: true to accept that"), "the phrase the page rewords, word for word");
+    const tokenLine = (await post("/api/policy/models/change", { action: "add", model: { name: "lab", url: "https://lab.example", tokenEnv: "$OLLAMA_KEY" } })).body.problems as string[];
+    assert.deepEqual(tokenLine, ["token_env: must be an environment variable NAME (the token itself never goes in policy.yaml)"]);
+    const cloudLine = (cloud.body.problems as string[]).find((p) => p.startsWith("model: "));
+    assert.ok(cloudLine?.endsWith("or remove local: true"), JSON.stringify(cloud.body.problems));
+    assert.deepEqual(readFileSync(policyPath), unchanged, "a refusal writes nothing");
+    assert.doesNotMatch(JSON.stringify([lan.body, tokenLine]), /sk-e2e-model-TOKEN-value/);
+
+    await servedProductPage(base, "/settings", (doc) => !!doc.querySelector('#settings-models .model-row[data-name="ollama"]'), async (doc) => {
+      const w = doc.defaultView;
+      // The page's two checks before Save (home.js modelFormMisses) refuse
+      // exactly what the validator refuses, on the same samples.
+      const misses = w.eval("modelFormMisses") as (m: { name: string; tokenEnv: string }) => { fields: string[] } | null;
+      const refuses = (entry: Record<string, unknown>, key: string) =>
+        validatePolicyDocument({ version: 1, models: [{ url: "https://m.example", ...entry }] } as never).some((p) => p.startsWith(`models[0].${key}: `));
+      for (const n of ["ollama", "ollama-2", "lab_1.v2", "A.b-C_9", "a".repeat(64), "a".repeat(65), "My Ollama", " lab", "ollama!", "é", "x/y", "$x"]) {
+        const page = misses({ name: n, tokenEnv: "" }) !== null;
+        assert.equal(page, !MODEL_NAME_RE.test(n), `name ${JSON.stringify(n)}: the arbiter's MODEL_NAME_RE`);
+        assert.equal(page, refuses({ name: n }, "name"), `name ${JSON.stringify(n)}: the validator`);
+      }
+      for (const t of ["OLLAMA_API_KEY", "_KEY", "key2", "K", "$OLLAMA_KEY", "1KEY", "MY KEY", "MY-KEY", "KEY=x", "ключ"]) {
+        assert.equal(misses({ name: "m", tokenEnv: t }) !== null, refuses({ name: "m", token_env: t }, "token_env"), `token variable ${JSON.stringify(t)}`);
+      }
+
+      const field = (id: string) => doc.getElementById(id);
+      const err = field("model-error");
+      field("model-open").click();
+      field("model-name").value = "lab";
+      field("model-url").value = "http://192.168.1.20:11434";
+      field("model-url").dispatchEvent(new w.Event("input", { bubbles: true }));
+      field("model-local").checked = true;
+      field("model-local").dispatchEvent(new w.Event("change", { bubbles: true }));
+      assert.equal(field("model-plain-http").disabled, false, "the box the refusal names is there to tick");
+      field("model-form").requestSubmit();
+      await waitWhile(() => err.textContent === "");
+      assert.equal(err.textContent, "This model entry is not valid. Address: 'lab' is on another machine and would receive local-model files in the clear; use https, reach it through a loopback tunnel (ssh -L), or tick Send without encryption to accept that");
+      assert.equal(field("model-url").getAttribute("aria-invalid"), "true");
+      assert.deepEqual([...doc.querySelectorAll("#model-form [aria-invalid]")].map((f: { id: string }) => f.id), ["model-url"]);
+
+      field("model-name").value = "My Ollama";
+      field("model-form").requestSubmit();
+      assert.equal(err.textContent, "Not saved. Name: use 1 to 64 letters, digits, _ . or - (no spaces).", "answered before sending");
+      assert.equal(field("model-name").getAttribute("aria-invalid"), "true");
+      assert.doesNotMatch(doc.documentElement.outerHTML, /sk-e2e-model-TOKEN-value/);
+    }, { headers: { Cookie: ADMIN_COOKIE } });
+    assert.deepEqual(readFileSync(policyPath), unchanged, "the page's refused Saves wrote nothing");
   } finally {
     await server.close();
     wired.close();

@@ -89,6 +89,19 @@ test("program output beside the notice is never forwarded: the whole result take
   }
 });
 
+test("a mixed result is masked whole even when the classify calls it public (2026-10-26: a word of the quoted notice is prose, no longer a path)", async () => {
+  const arbiter = new MockArbiter({ classifyFn: () => ({ trust: "TRUSTED", category: null, reason: "mock: public", confidentiality: "public" }), scanSecretValuesFn: () => ({ hits: [] }) });
+  for (const body of [`${FRAMED}\n${PROGRAM_BYTES}`, `Exit code 1\n${NOTICE}`]) {
+    const out = await rewriteRequest(request(body + BUDGET_TAIL), { arbiter, execGateNotices: notices() });
+    const text = forwarded(out);
+    assert.match(text, SYM_RE, `masked: ${JSON.stringify(body.slice(0, 40))}`);
+    assert.ok(!text.includes(PROGRAM_BYTES) && !text.includes("mandu-exec-gate"), text);
+  }
+  // no gate record: the public verdict stands as before
+  const plain = await rewriteRequest(request(`${FRAMED}\n${PROGRAM_BYTES}`), { arbiter });
+  assert.ok(forwarded(plain).includes(PROGRAM_BYTES));
+});
+
 test("no record for the call (another call, a restarted proxy) → the result is classified as before", async () => {
   const arbiter = new MockArbiter({ classifyFn: secretEverything, scanSecretValuesFn: () => ({ hits: [] }) });
   const other = await rewriteRequest(request(FRAMED), { arbiter, execGateNotices: notices("toolu_other") });

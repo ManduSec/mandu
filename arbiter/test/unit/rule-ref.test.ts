@@ -124,6 +124,15 @@ test("decideDesymbolization: confidentiality branches carry their catalog ruleRe
   );
   // Plan 10 §11.13.1: the wire twin's https-only rule (server-composed).
   assertCataloged(wireSchemeRefusal({ boundary: "network", destination: "api.example", scheme: "http" }, "https")!.ruleRef, "egress:secret-https-only");
+  // db-login-release.md: a .pgpass grant only in the relay's login.
+  for (const scheme of ["http", "https", undefined] as const) {
+    assertCataloged(wireSchemeRefusal({ boundary: "network", destination: "db.internal:5432", ...(scheme ? { scheme } : {}) }, "postgres")!.ruleRef, "egress:secret-db-login-only");
+  }
+  assert.equal(wireSchemeRefusal({ boundary: "network", destination: "db.internal:5432", scheme: "postgres" }, "postgres"), null);
+  assert.equal(wireSchemeRefusal({ boundary: "network", destination: "my.internal:3306", scheme: "mysql" }, "mysql"), null);
+  assertCataloged(wireSchemeRefusal({ boundary: "network", destination: "my.internal:3306", scheme: "postgres" }, "mysql")!.ruleRef, "egress:secret-db-login-only");
+  assertCataloged(wireSchemeRefusal({ boundary: "network", destination: "my.internal:3306", scheme: "http" }, "mysql")!.ruleRef, "egress:secret-db-login-only");
+  assert.ok(wireSchemeRefusal({ boundary: "network", destination: "registry.example", scheme: "postgres" }, "https"), "an https credential never in a database login");
   // …and its position rule (2026-10-09, server-composed).
   assertCataloged(wirePositionRefusal({ boundary: "network", destination: "api.example", positions: ["body"] }, true)!.ruleRef, "egress:secret-wire-position");
 });

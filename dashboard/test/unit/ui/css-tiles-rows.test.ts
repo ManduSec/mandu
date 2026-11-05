@@ -115,7 +115,7 @@ test("E3: wherever auto-fit's rows were already even, the stylesheet draws auto-
  *  blocked, sent, waiting, and (6) reached the AI unmasked. */
 function pageWith(n: number) {
   const page = JSON.parse(JSON.stringify(AGENT));
-  const card = { what: [T("The file "), { kind: "code", text: "~/ws/.env" }], level: "No AI", saw: "masked", ref: "bbbbbbbbbbbbbbbbbbbbbbb1", lines: [{ tone: "good", parts: [T("The AI got only a placeholder, never the real value.")] }] };
+  const card = { what: [T("The file "), { kind: "code", text: "~/ws/.env" }], level: "No AI", saw: "masked", ref: "bbbbbbbbbbbbbbbbbbbbbbb1", lines: [{ tone: "good", parts: [T("The AI got only its masked version, never the real value.")] }] };
   page.secrets = { mode: "secrets", flagged: false, more: 0, counts: { masked: 1, early: n >= 4 ? 1 : 0 }, secrets: [card] };
   page.blocked = 1;
   page.sent = 1;

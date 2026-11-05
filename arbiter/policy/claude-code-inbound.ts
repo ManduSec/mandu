@@ -675,7 +675,7 @@ const INSPECT_CONTENT_KIND_RE =
  * CONTENT_KINDS sync contract extends to this map). */
 const ARTIFACT_NEXT_STEP =
   "The result_symbol is opaque by design. Re-inspection, rereading, or declassification cannot reveal untrusted data to you. " +
-  "If your instruction requested the final artifact, pass result_symbol directly as Write.content or in your reply. " +
+  "If your instruction requested the final artifact, deliver result_symbol where the user asked for it: in your reply when they asked to be told or shown (they see its real text), as Write.content when they asked for a file. " +
   "If more processing is needed, call inspect_symbol with ALL original symbols together and the final transformation, " +
   "using output_format=json for JSON artifacts. For completeness checks include all originals and the candidate, " +
   "and request the complete corrected artifact. content_kind describes the input, not output correctness.";
@@ -1307,7 +1307,9 @@ export function isStructuredTwinText(
   if (typeof twinRendering !== "string" && holdsSecretText(t, twinRendering.secrets)) return false;
   if (t === "" || t.length > EXEC_TWIN_OUTPUT_MAX) return false;
   let tokens = 0;
-  for (const tok of t.match(SYMBOL_TOKEN_GLOBAL_RE) ?? []) {
+  // A `.pgpass` twin's tokens are escaped as libpq reads them
+  // (`escapedTwinTokens`): tokens too, judged the same way.
+  for (const tok of [...(t.match(SYMBOL_TOKEN_GLOBAL_RE) ?? []), ...escapedTwinTokens(t)]) {
     if (!isAllocated(tok)) return false;
     tokens++;
   }
@@ -1934,12 +1936,28 @@ export function wholeFileTwinTextToken(text: string | null): string | null {
   return SYMBOL_ONLY_RE.test(t) ? t : null;
 }
 
+/** The `$MDU:*` tokens a `.pgpass` twin holds with their `:` and `\`
+ *  escaped (`$MDU\:nomodel_Read[ab12].app.password`, secret-extract.ts
+ *  `encodeToken` "pgpass", which libpq unescapes; db-login-release.md),
+ *  unescaped. Pure; at most 64. */
+export function escapedTwinTokens(text: string): string[] {
+  const out: string[] = [];
+  if (!text.includes("$MDU\\:")) return out;
+  for (const m of text.matchAll(/\$MDU\\:(?:[A-Za-z0-9_[\].]|\\[\\:])+/g)) {
+    const t = m[0].replace(/\\(.)/g, "$1");
+    const tok = t.match(SYMBOL_TOKEN_GLOBAL_RE)?.[0];
+    if (tok !== undefined && t === tok) out.push(tok);
+    if (out.length >= 64) return out;
+  }
+  return out;
+}
+
 /** The `$MDU:*` tokens a twin holds in an encoding its program decodes
  *  (plan 10 §11.13.1, secret-extract.ts `encodeToken`): percent-encoded
- *  (`%24MDU%3A…`) or base64 (a run that decodes to exactly one token).
- *  Pure; at most 64. */
+ *  (`%24MDU%3A…`), base64 (a run that decodes to exactly one token), or
+ *  escaped as a `.pgpass` holds it (`escapedTwinTokens`). Pure; at most 64. */
 export function encodedTwinTokens(text: string): string[] {
-  const out: string[] = [];
+  const out: string[] = escapedTwinTokens(text);
   const whole = new RegExp(`^(?:${SYMBOL_TOKEN_RE.source})$`);
   for (const m of text.matchAll(/%24MDU%3A[A-Za-z0-9_.~%-]+/g)) {
     let t: string;

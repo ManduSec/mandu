@@ -43,12 +43,16 @@ import {
 } from "../opencode-global-code.js";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { AgentUserConfig, OpenAiRoute, OpencodeAuthTypes, OpencodeV2Input } from "../agent-model-route.js";
+import type { AgentUserConfig, ModelRef, OpenAiRoute, OpencodeAuthTypes, OpencodeV2Input, RouteApi } from "../agent-model-route.js";
+import {
+  OPENCLAW_OPENROUTER_BASEURL_SINCE, isGoogleApi, isOllamaApi, isOpenrouterId, isVertexApi, openclawCliModel, openclawOpenrouterId, openclawOpenrouterKey,
+  openclawOpenrouterReach, openclawOpenrouterUnlisted,
+} from "../agent-model-route.js";
 import { opencodeGeneration, opencodePolicyFence, type OpencodeGeneration, type OpencodeLayer } from "../opencode-config.js";
 import { compareAgentVersions, parseAgentVersion } from "../agent-versions.js";
 import type { LaunchPlan } from "../types.js";
 import type { Layout } from "./layout.js";
-import { parseJson5 } from "./json5.js";
+import { openclawConfigPath, parseConfigObject } from "./openclaw-config-read.js";
 import { IncludeError, resolveOpenclawIncludes } from "./openclaw-include.js";
 import { openclawRunsLocally } from "../openclaw-argv.js";
 import { MANDU_POLICY_SERVER, inspectMcpConfigDoc, policyMcpServerEntry } from "./mcp.js";
@@ -112,11 +116,17 @@ export interface AgentConfigInput {
   opencodeGeneration?: OpencodeGeneration;
 }
 
-/** Where a routed OpenAI-family provider points: the proxy's per-provider
- *  prefix (anthropic-proxy route.ts OPENAI_ROUTE_PREFIX). The agent appends
- *  `/chat/completions` or `/responses`. */
-export function openaiRouteBaseUrl(proxyUrl: string, id: string): string {
-  return `${proxyUrl}/_mandu/openai/${encodeURIComponent(id)}`;
+/** Where a routed provider points: the proxy's per-provider prefix
+ *  (anthropic-proxy route.ts OPENAI_ROUTE_PREFIX; GOOGLE_ROUTE_PREFIX for a
+ *  Gemini provider, model-wires.md §5; OLLAMA_ROUTE_PREFIX for an Ollama
+ *  one, model-wires.md "The Ollama wire"). The agent appends
+ *  `/chat/completions` or `/responses`, `/models/{model}:…`, or `/api/chat`. */
+export function openaiRouteBaseUrl(proxyUrl: string, id: string, api?: RouteApi): string {
+  // Vertex AI: OpenClaw keeps only the baseUrl's origin, and the proxy
+  // serves the session's Vertex provider at its root (model-wires.md §4.1).
+  if (api !== undefined && isVertexApi(api)) return proxyUrl.replace(/\/+$/, "");
+  const family = api !== undefined && isGoogleApi(api) ? "google" : api !== undefined && isOllamaApi(api) ? "ollama" : "openai";
+  return `${proxyUrl}/_mandu/${family}/${encodeURIComponent(id)}`;
 }
 
 /** The session/batch headers both agents deliver per request. Unlike claude's
@@ -264,7 +274,7 @@ export function buildOpenclawWrapDoc(
         // (the proxy reads exactly that wire) and the user's model entries
         // cleaned of anything that routes.
         ...Object.fromEntries((input.openaiRoutes ?? []).map((r) => [r.id, {
-          baseUrl: openaiRouteBaseUrl(input.proxyUrl, r.id),
+          baseUrl: openaiRouteBaseUrl(input.proxyUrl, r.id, r.api),
           api: r.api,
           headers: sessionHeaders(input),
           models: [...(routedModels[r.id] ?? [])],
@@ -351,7 +361,7 @@ export function buildOpencodeWrapDoc(
       // prefix. Any wire its models speak lands there, and the proxy gates
       // Chat Completions and the Responses API and refuses the rest.
       ...Object.fromEntries(routes.map((r) => [r.id, {
-        options: { baseURL: openaiRouteBaseUrl(input.proxyUrl, r.id), headers: sessionHeaders(input) },
+        options: { baseURL: openaiRouteBaseUrl(input.proxyUrl, r.id, r.api), headers: sessionHeaders(input) },
       }])),
     },
   };
@@ -467,8 +477,11 @@ export function withOpencodeV2Routing(user: Json, ours: Json): Json {
  * 2026.7.1 refuse `--model openai/gpt-5.5` ("is not allowed for agent
  * main") and run an allowed model instead of a non-anthropic primary;
  * 2026.9.6 refuses the override; 2026.3.12 does not enforce the allowlist
- * and runs normally with it. The user's anthropic entries (aliases, params)
- * are kept.
+ * for `--model` and runs normally with it, but its mid-session switches
+ * (`session_status`, `sessions_spawn`, cron) do, by EXACT key: there a
+ * `<p>/*` key is the literal model `*` (fenceOpenclawOpenrouter replaces
+ * the openrouter one; measured 2026-10-25). The user's anthropic entries
+ * (aliases, params) are kept.
  */
 export function fenceOpenclawModelAllowlist(merged: Json, routed: readonly string[] = []): Json {
   const agents = (merged["agents"] !== null && typeof merged["agents"] === "object" && !Array.isArray(merged["agents"])
@@ -486,6 +499,94 @@ export function fenceOpenclawModelAllowlist(merged: Json, routed: readonly strin
     if (providers.some((p) => lower.startsWith(`${p.toLowerCase()}/`))) allow[ref] = entry;
   }
   return { ...merged, agents: { ...agents, defaults: { ...defaults, models: allow } } };
+}
+
+/** Does this OpenClaw release send an openrouter model it does not know to
+ *  openrouter.ai whatever the provider's baseUrl (agent-model-route.ts,
+ *  "OpenClaw's openrouter bypass")? A version the launch could not read
+ *  counts as one that does (fail-closed). */
+export function openclawOpenrouterBypasses(version: string | null | undefined): boolean {
+  return !openclawAtLeast(version, OPENCLAW_OPENROUTER_BASEURL_SINCE);
+}
+
+/**
+ * The OpenClaw openrouter fence (supported-agents.md §2.1, "The openrouter
+ * bypass"; decided 2026-10-25). On a release that sends an openrouter model
+ * it does not know straight to openrouter.ai (before 2026.3.22, or a version
+ * the launch could not read), with `openrouter` routed through the proxy:
+ *   - every openrouter model the run can reach (its configured references,
+ *     the argv's `--model`, the allowlist's openrouter keys) is listed in the
+ *     run's `models.providers.openrouter.models` (`{id, name}` for one the
+ *     user does not list): an inline model carries the provider's baseUrl,
+ *     the proxy's route. A catalog model listed so keeps its catalog
+ *     metadata where the entry is silent (applyConfiguredProviderOverrides);
+ *   - the allowlist's openrouter entries are exactly those listed models: a
+ *     wildcard (`openrouter/*`, which the run's allowlist fence writes for a
+ *     routed provider) is the literal model `*` on these releases, an
+ *     allowlisted model is selectable mid-session (`/model`, the
+ *     `session_status` tool, `sessions_spawn`, cron: measured on 2026.3.12,
+ *     an unlisted one is refused "is not allowed"), so a wildcard goes.
+ * `merged` is the doc after fenceOpenclawModelAllowlist. Pure. On a release
+ * that honours the baseUrl, or without a routed openrouter, the doc is
+ * returned as it is.
+ */
+export function fenceOpenclawOpenrouter(
+  merged: Json, version: string | null | undefined, extra: readonly ModelRef[] = [],
+): { doc: Json; notes: string[] } {
+  if (!openclawOpenrouterBypasses(version)) return { doc: merged, notes: [] };
+  const models = isJsonObj(merged["models"]) ? merged["models"] : {};
+  const providers = isJsonObj(models["providers"]) ? models["providers"] : {};
+  const key = Object.keys(providers).find((k) => isOpenrouterId(k));
+  if (key === undefined || !isJsonObj(providers[key])) return { doc: merged, notes: [] };
+  const entry = providers[key] as Json;
+  const reach = openclawOpenrouterReach(merged, extra);
+  const list = Array.isArray(entry["models"]) ? [...entry["models"] as unknown[]] : [];
+  const pinned: string[] = [];
+  for (const { id } of reach.ids) {
+    if (reach.listed.has(id) || pinned.includes(id)) continue;
+    list.push({ id, name: id });
+    pinned.push(id);
+  }
+  const listed = [...new Set([...reach.listed, ...pinned])];
+  const agents = isJsonObj(merged["agents"]) ? merged["agents"] : {};
+  const defaults = isJsonObj(agents["defaults"]) ? agents["defaults"] : {};
+  const allowIn = isJsonObj(defaults["models"]) ? defaults["models"] : {};
+  const allow: Json = {};
+  for (const [k, v] of Object.entries(allowIn)) {
+    const slash = k.indexOf("/");
+    if (slash > 0 && isOpenrouterId(k.slice(0, slash))) continue;
+    allow[k] = v;
+  }
+  const userEntry = (id: string): unknown => {
+    for (const [k, v] of Object.entries(allowIn)) {
+      const slash = k.indexOf("/");
+      if (slash > 0 && isOpenrouterId(k.slice(0, slash)) && !k.includes("*") && openclawOpenrouterId(k.slice(slash + 1)) === id) return v;
+    }
+    return {};
+  };
+  for (const id of listed) allow[openclawOpenrouterKey(id)] = userEntry(id);
+  const doc: Json = {
+    ...merged,
+    models: { ...models, providers: { ...providers, [key]: { ...entry, models: list } } },
+    agents: { ...agents, defaults: { ...defaults, models: allow } },
+  };
+  const v = version ? `OpenClaw ${version}` : "an OpenClaw release Mandu cannot read";
+  const notes = [
+    `on ${v} an openrouter model OpenClaw does not know goes to openrouter.ai around Mandu, so this run's openrouter models are ` +
+    `exactly ${listed.length > 0 ? listed.join(", ") : "none"}${pinned.length > 0 ? ` (${pinned.join(", ")} listed for this run)` : ""}; ` +
+    "switching to another openrouter model is refused. OpenClaw 2026.3.22 and later honour the route for every model.",
+  ];
+  return { doc, notes };
+}
+
+/** The openrouter models of a run's config that the running OpenClaw would
+ *  send to openrouter.ai around Mandu (none on a release that honours the
+ *  baseUrl, or with no routed openrouter): the check the launch runs over
+ *  the file it writes, after every fence (writeAgentConfig refuses on any). Pure. */
+export function openclawOpenrouterLeaks(doc: Json, version: string | null | undefined, extra: readonly ModelRef[] = []): string[] {
+  if (!openclawOpenrouterBypasses(version)) return [];
+  const { missing, wildcards } = openclawOpenrouterUnlisted(doc, extra);
+  return [...missing.map((m) => `${m.id} (${m.where})`), ...wildcards.map((w) => `${w} (agents.defaults.models)`)];
 }
 
 /**
@@ -1219,12 +1320,7 @@ export function userConfigPath(
   env: Record<string, string | undefined>,
   home = homedir(),
 ): string {
-  if (target === "openclaw") {
-    return (
-      env["OPENCLAW_CONFIG_PATH"] ||
-      join(env["OPENCLAW_STATE_DIR"] || join(home, ".openclaw"), "openclaw.json")
-    );
-  }
+  if (target === "openclaw") return openclawConfigPath(env, home);
   return (
     env["OPENCODE_CONFIG"] ||
     join(env["XDG_CONFIG_HOME"] || join(home, ".config"), "opencode", "opencode.json")
@@ -1237,9 +1333,7 @@ export function userConfigPath(
  * that is not a JSON5 object.
  */
 export function parseAgentConfigText(text: string): Json {
-  const parsed = parseJson5(text);
-  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Json;
-  throw new Error("not a JSON object");
+  return parseConfigObject(text);
 }
 
 /**
@@ -1434,7 +1528,15 @@ export function writeAgentConfig(
   const merged = mergeConfig(user, input.opencodeGeneration === 2 ? withOpencodeV2Routing(user, ours) : ours);
   let out = merged;
   if (target === "openclaw") {
-    const execHost = fenceOpenclawExecHost(fenceOpenclawModelAllowlist(merged, (plan.openaiRoutes ?? []).map((r) => r.id)));
+    // The openrouter fence (supported-agents.md §2.1, "The openrouter
+    // bypass"): on a release that sends an openrouter model it does not know
+    // to openrouter.ai, every openrouter model the run can reach is listed
+    // under the routed provider, and the allowlist names no other.
+    const cliModel = openclawCliModel(plan.argv);
+    const extra = cliModel !== null ? [cliModel] : [];
+    const openrouter = fenceOpenclawOpenrouter(fenceOpenclawModelAllowlist(merged, (plan.openaiRoutes ?? []).map((r) => r.id)), plan.agentVersion, extra);
+    for (const n of openrouter.notes) warn(`agent-config: ${n}`);
+    const execHost = fenceOpenclawExecHost(openrouter.doc);
     for (const w of execHost.warnings) warn(`agent-config: WARNING: ${w}`);
     const codeMode = fenceOpenclawCodeMode(execHost.doc, plan.agentVersion);
     for (const w of codeMode.warnings) warn(`agent-config: WARNING: ${w}`);
@@ -1450,6 +1552,17 @@ export function writeAgentConfig(
     const workspace = fenceOpenclawWorkspace(memory.doc, plan.argv, plan.cwd);
     for (const n of workspace.notes) warn(`agent-config: ${n}`);
     out = workspace.doc;
+    // Fail-closed: the file this run writes is checked as OpenClaw will read
+    // it. A model it could run that would go to openrouter.ai around Mandu
+    // aborts the launch (the caller marks a throw here failClosedFatal).
+    const leaks = openclawOpenrouterLeaks(out, plan.agentVersion, extra);
+    if (leaks.length > 0) {
+      throw new Error(
+        `agent-config: refusing to launch openclaw: on ${plan.agentVersion ? `OpenClaw ${plan.agentVersion}` : "this OpenClaw release"} ` +
+        `the openrouter model${leaks.length === 1 ? "" : "s"} ${leaks.join(", ")} would go to openrouter.ai directly, around Mandu's model ` +
+        "proxy. List each in models.providers.openrouter.models, or update OpenClaw to 2026.3.22 or later.",
+      );
+    }
   }
   // Never through a link planted in the scope dir (safe-file.ts).
   publishFile(path, JSON.stringify(out, null, 2) + "\n");
@@ -1463,6 +1576,16 @@ export function writeAgentConfig(
         ...(pure ? { [OPENCODE_PURE_ENV]: "1" } : {}),
       },
     };
+  }
+  // OpenClaw's Azure OpenAI client reads AZURE_OPENAI_BASE_URL (then
+  // AZURE_OPENAI_RESOURCE_NAME) before the provider's baseUrl (model-wires.md
+  // §8.1): pinned at the route, it cannot send an Azure call around the
+  // proxy, whatever the user's environment or `.env` held (OpenClaw's config
+  // `env` and dotenv never replace a set variable; a config that sets them is
+  // refused at launch, agent-model-route.ts, as is a second Azure provider).
+  const azure = (plan.openaiRoutes ?? []).find((r) => r.api === "azure-openai-responses");
+  if (target === "openclaw" && azure !== undefined) {
+    return { envVar: AGENT_CONFIG_ENV_VAR[target], path, env: { AZURE_OPENAI_BASE_URL: openaiRouteBaseUrl(input.proxyUrl, azure.id, azure.api) } };
   }
   return { envVar: AGENT_CONFIG_ENV_VAR[target], path };
 }

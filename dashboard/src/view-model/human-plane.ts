@@ -33,6 +33,14 @@ export interface HumanPlaneLaunchVM {
   posture: string;
   session: string | null;
   begunAt: number | null;
+  /** An attachment's kind (openclaw-plugin.md §3.3): it has no pid (0).
+   *  Absent for a launch. */
+  attachment?: string;
+}
+
+/** An attachment kind in the product's words. */
+function attachmentWords(kind: string): string {
+  return kind === "openclaw-plugin" ? "Mandu's plugin in an OpenClaw Gateway" : `an attachment (${kind})`;
 }
 
 export interface HumanPlaneVM {
@@ -55,7 +63,7 @@ const WHAT_IT_IS: DetailSection = {
 const WHILE_EXPOSED: DetailSection = {
   label: "While exposed",
   items: [
-    { text: "Every confined session's guard is not believed: each secret open gets the placeholder, each protected write is refused, and each shell result is masked once the session holds a raw read. Fail closed, by design; nothing is let through." },
+    { text: "Every confined session's guard is not believed: each secret open gets the masked copy, each protected write is refused, and each shell result is masked once the session holds a raw read. Fail closed, by design; nothing is let through." },
     { text: "Each confined launcher prints a warning naming the launch below and the fix, a line when it ends, and a recap after its agent exits. The arbiter-admin stream has one event per change (config_change, humanPlane)." },
     { text: "Fix: stop the launch below, or start it again with its file guard on (not --mode off, not --no-net-guard). Its end is seen within a second, also when its launcher dies." },
   ],
@@ -78,6 +86,7 @@ export function toHumanPlaneVM(status: HumanPlaneStatus | null | undefined): Hum
     posture: String(l.posture ?? "unknown"),
     session: typeof l.session === "string" && l.session !== "" ? l.session : null,
     begunAt: typeof l.begunAt === "number" ? l.begunAt : null,
+    ...(typeof l.attachment === "string" && /^[a-z][a-z0-9-]{0,40}$/.test(l.attachment) ? { attachment: l.attachment } : {}),
   }));
   const exposed = status.exposed || launches.length > 0;
   if (!exposed) {
@@ -95,7 +104,7 @@ export function toHumanPlaneVM(status: HumanPlaneStatus | null | undefined): Hum
         items: [
           { text: `Exposed${since !== null ? " since" : ""}`, ...(since !== null ? { ms: since } : {}) },
           ...(launches.length > 0
-            ? launches.map((l) => ({ text: `${l.pid > 0 ? `pid ${l.pid}` : "an unreadable launch record (fail closed)"}${l.session ? `, session ${l.session}` : ""}: mode ${l.mode}, posture ${l.posture}, no wall` }))
+            ? launches.map((l) => ({ text: `${l.attachment !== undefined ? attachmentWords(l.attachment) : l.pid > 0 ? `pid ${l.pid}` : "an unreadable launch record (fail closed)"}${l.session ? `, session ${l.session}` : ""}: mode ${l.mode}, posture ${l.posture}, no wall` }))
             : [{ text: "The arbiter could not read its launch records, so it counts the plane as exposed (fail closed)." }]),
         ],
       },
@@ -159,7 +168,12 @@ const MODE_WORDS: Record<string, string> = {
 function exposureCause(l: HumanPlaneLaunchVM, agents: ReadonlyMap<string, HomeExposureAgent>): HomeExposureCause {
   const t = (text: string): HomeExposurePart => ({ kind: "text", text });
   let parts: HomeExposurePart[];
-  if (l.pid <= 0) parts = [t("an agent Mandu could not name")];
+  if (l.attachment !== undefined) {
+    const row = l.session ? agents.get(l.session) : undefined;
+    parts = row && l.session
+      ? [{ kind: "link", text: row.agent, to: "agent", session: l.session }, t(`, ${attachmentWords(l.attachment)}, no file guard`)]
+      : [t(`${attachmentWords(l.attachment)}, no file guard`)];
+  } else if (l.pid <= 0) parts = [t("an agent Mandu could not name")];
   else {
     const rest = `, ${MODE_WORDS[l.mode] ?? `mode ${l.mode}`}, no file guard`;
     const row = l.session ? agents.get(l.session) : undefined;
@@ -170,6 +184,20 @@ function exposureCause(l: HumanPlaneLaunchVM, agents: ReadonlyMap<string, HomeEx
   return { pid: l.pid, session: l.session, words: parts.map((p) => p.text).join(""), parts };
 }
 
+/** How to avoid a plugin session's cost, in the product's words: Home's
+ *  notice (`homeExposure`) and the Plugins page's card (plugins.ts) say the
+ *  same (openclaw-plugin.md §3.2, "weaken + warn"). Each command is marked
+ *  `run`: the page gives it a Copy (dashboard.md §4.25b). */
+export const PLUGIN_EXPOSURE_FIX: readonly HomeTextPart[] = [
+  { kind: "text", text: "To avoid it, run the Gateway under Mandu instead (" },
+  { kind: "code", text: "mandu openclaw gateway", run: true },
+  { kind: "text", text: "), or stop the Mandu service while you use your other agents (" },
+  { kind: "code", text: "mandu serve stop", run: true },
+  { kind: "text", text: "); " },
+  { kind: "code", text: "mandu openclaw uninstall", run: true },
+  { kind: "text", text: " detaches it for good." },
+];
+
 /** The product page's projection: null unless exposed (unknown says
  *  nothing: the page claims nothing it cannot back). `agents`: the rows
  *  Home draws, so a cause names its agent as its row does. */
@@ -178,18 +206,31 @@ export function homeExposure(vm: HumanPlaneVM | undefined, agents: readonly Home
   const byId = new Map(agents.map((a) => [a.id, a] as const));
   const causes = vm.launches.slice(0, 5).map((l) => exposureCause(l, byId));
   const one = vm.launches.length <= 1;
-  const fixParts: HomeTextPart[] = [
+  const plugins = vm.launches.filter((l) => l.attachment !== undefined).length;
+  const launchFix: HomeTextPart[] = plugins === vm.launches.length ? [] : [
     { kind: "text", text: `Stop ${one ? "that agent" : "those agents"}, or start ${one ? "it" : "them"} again with the file guard on (without ` },
     { kind: "code", text: "--mode off" },
     { kind: "text", text: " or " },
     { kind: "code", text: "--no-net-guard" },
     { kind: "text", text: "). Your other agents work normally again as soon as " + (one ? "it ends" : "they end") + "." },
   ];
+  // A plugin session (openclaw-plugin.md §3.3; the maintainer's "weaken +
+  // warn", 2026-10-25): Mandu's plugin in a resident OpenClaw Gateway holds
+  // this as long as the Mandu service runs it. Say so, and how to avoid it.
+  const pluginFix: HomeTextPart[] = plugins === 0 ? [] : [
+    { kind: "text", text: `${launchFix.length > 0 ? " " : ""}Mandu's plugin in your OpenClaw Gateway causes this for as long as it runs. ` },
+    ...PLUGIN_EXPOSURE_FIX,
+  ];
+  const fixParts: HomeTextPart[] = [...launchFix, ...pluginFix];
+  const allPlugins = plugins > 0 && plugins === vm.launches.length;
   return {
-    headline: "Another agent can reach Mandu's own controls.",
+    headline: allPlugins ? "Your OpenClaw Gateway can reach Mandu's own controls." : "Another agent can reach Mandu's own controls.",
     sentence:
-      `${one ? "An agent was" : `${vm.launches.length} agents were`} started without the file guard, so ${one ? "its" : "their"} programs can reach Mandu's own controls. ` +
-      "Until " + (one ? "it stops" : "they stop") + ", Mandu does not trust the reports of your other agents' file guards: those agents get placeholders instead of secret files, " +
+      (allPlugins
+        ? "Mandu's plugin runs in your OpenClaw Gateway, outside any file guard, so the Gateway's programs can reach Mandu's own controls. While it runs"
+        : `${one ? "An agent was" : `${vm.launches.length} agents were`} started without the file guard, so ${one ? "its" : "their"} programs can reach Mandu's own controls. ` +
+          "Until " + (one ? "it stops" : "they stop")) +
+      ", Mandu does not trust the reports of your other agents' file guards: those agents get masked copies of secret files, " +
       "their changes to protected files are blocked, and their command output is masked. Your secrets stay protected; some work in those agents may fail.",
     fix: fixParts.map((p) => p.text).join(""),
     fixParts,

@@ -19,6 +19,12 @@
  *   - Undo in one card leaves the other cards' notices, and their Undo, as
  *     they were; an undone or refused notice has no button.
  *
+ * Since 2026-10-26 (#139) a Settings notice also ends with See it in
+ * Approvals after its Undo, a link to that change at its Rule changes row
+ * (dashboard.md §4.25 *… and on Settings*), named by its card and
+ * described by the notice's words; no link for an answer with no pc-/pp-
+ * id, and none on "Undone." or a refusal.
+ *
  * Drives the PRODUCT page script (public/js/home.js) in jsdom over the
  * shared fetch stub (home-js-fixtures.ts) and the server's own view models.
  * Axes: none (display only). Mandu-new test.
@@ -74,7 +80,6 @@ function settings(undo: unknown = undefined) {
     "POST policy/prompt-filters/change": (b: { edit: { action: string } }) => { action = b.edit.action; return { applied: true, changeId: "pc-3" }; },
     "POST policy/changes/pc-2/undo": undo ?? (() => { level = "local-model"; return { ok: true }; }),
   } });
-  page.window.confirm = () => true;
   return page;
 }
 
@@ -112,7 +117,7 @@ test("Settings: three notices open at once are three Undo buttons, each named by
     assert.ok(controlName(b).startsWith(b.textContent), "its own word first (a voice command says what it sees)");
     assert.match(description(b), card.words, "described by its notice's words");
     assert.doesNotMatch(description(b), /Undo/, "the words alone, not the button");
-    assert.equal(doc.getElementById(card.notice).textContent, description(b) + "Undo", "the whole notice, nothing more");
+    assert.equal(doc.getElementById(card.notice).textContent, description(b) + "Undo" + "See it in Approvals", "the whole notice, nothing more");
   }
   assert.deepEqual(nameFaults(doc.getElementById("page-settings")), { shared: [], unnamed: [] }, "no two controls on Settings share a name");
 });
@@ -164,4 +169,78 @@ test("Rules: the notice's Undo is named \"Undo the change in Your rules\" and de
   assert.equal(controlName(b), "Undo the change in Your rules");
   assert.equal(description(b), "Now always blocked.");
   assert.deepEqual(nameFaults(doc.getElementById("page-rules")), { shared: [], unnamed: [] });
+});
+
+const LINKED = [
+  { notice: "models-notice", card: "Models" },
+  { notice: "labels-notice", card: "Sensitivity labels" },
+  { notice: "prompt-notice", card: "Prompt filters" },
+];
+const linkIn = (doc: Doc, notice: string) => [...doc.querySelectorAll(`#${notice} a`)];
+
+/** Settings whose three change routes answer with `changeId`, and whose
+ *  undo of it answers `undo`. */
+function settingsAnswering(changeId: unknown, undo: unknown = { ok: true }) {
+  const routes: Record<string, unknown> = {
+    "GET policy/panel": () => panelOf([OLLAMA, LAB]),
+    "GET policy/sensitivity-labels": () => labelsOf("local-model"),
+    "GET policy/prompt-filters": () => promptsOf("mask"),
+    "POST policy/models/change": () => ({ applied: true, changeId, note: NOTE }),
+    "POST policy/sensitivity-labels/change": () => ({ applied: true, changeId, note: "" }),
+    "POST policy/prompt-filters/change": () => ({ applied: true, changeId }),
+  };
+  if (typeof changeId === "string") routes[`POST policy/changes/${changeId}/undo`] = undo;
+  return load({ url: SETTINGS_URL, routes });
+}
+
+test("Settings: each card's notice ends with See it in Approvals after its Undo, a link to that change's Rule changes row, named by its card and described by its notice", async () => {
+  const { doc } = settingsAnswering("pc-000007");
+  await tick();
+  await threeChanges(doc);
+  for (const { notice, card } of LINKED) {
+    const box = doc.getElementById(notice);
+    const links = linkIn(doc, notice);
+    assert.equal(links.length, 1, `${notice} has its link`);
+    const [a] = links;
+    assert.ok(a.matches('a.change-link[href="/mandu/approvals/pc-000007"]'), "the change at its Rule changes row (the page is served under /mandu)");
+    assert.equal(a.dataset.ask, "pc-000007", "Approvals opens marked at that row");
+    assert.equal(a.dataset.pageLink, "approvals");
+    assert.equal(a.textContent, "See it in Approvals");
+    const [undo] = undoIn(doc, notice);
+    assert.equal(box.lastElementChild, a, "the link comes last");
+    assert.equal(a.previousElementSibling, undo, "right after the Undo: Tab goes words, Undo, link");
+    assert.equal(controlName(a), `See it in Approvals: the change in ${card}`, "named by its card, its own words first");
+    assert.notEqual(description(a), "");
+    assert.equal(description(a), description(undo), "described by the notice's words, as its Undo is");
+  }
+  assert.match(description(linkIn(doc, "models-notice")[0]), /Restart a running agent to use it there\.$/, "the restart sentence stays in the words, before the link");
+  const names = LINKED.map(({ notice }) => controlName(linkIn(doc, notice)[0]));
+  assert.equal(new Set(names).size, names.length, "no two links share a name");
+});
+
+test("Settings: an answer with no change id, or an id of another shape, draws no link", async () => {
+  for (const id of [undefined, "x-000007", 7]) {
+    const { doc } = settingsAnswering(id);
+    await tick();
+    await threeChanges(doc);
+    for (const { notice } of LINKED) {
+      assert.equal(doc.getElementById(notice).hidden, false, `${notice} is shown (${String(id)})`);
+      assert.equal(linkIn(doc, notice).length, 0, `${notice} has no link (${String(id)})`);
+    }
+  }
+});
+
+test("Settings: Undone. and a refused Undo leave no link in their notice", async () => {
+  for (const undo of [{ ok: true }, { status: 409, body: { error: "This change was already undone." } }]) {
+    const { doc } = settingsAnswering("pc-000007", undo);
+    await tick();
+    await threeChanges(doc);
+    for (const { notice } of LINKED) {
+      undoIn(doc, notice)[0].click();
+      await tick(30);
+      const text = doc.getElementById(notice).textContent;
+      assert.ok("status" in undo ? /already undone/.test(text) : /^Undone\./.test(text), `${notice} says what happened: ${text}`);
+      assert.equal(linkIn(doc, notice).length, 0, `${notice} has no link after its Undo`);
+    }
+  }
 });

@@ -30,6 +30,7 @@
  * at the end. The SSE framing is the repackers' (text-repack.ts).
  */
 
+import { NdjsonFramer } from "./ollama-ndjson.js";
 import { SseFramer } from "./openai-sse.js";
 import {
   colonScanStart,
@@ -66,6 +67,8 @@ export interface ReplyMediaWire {
   withTexts(raw: string, texts: ReadonlyMap<string, string>): string;
   snapshotTexts(raw: string): string[];
   mapSnapshot(raw: string, fn: (t: string) => string): string;
+  /** How the stream is cut into events (absent: SSE). */
+  framer?: () => { push(chunk: string): string[]; rest(): string };
 }
 
 const NONE: WireRead = { texts: [], calls: [], closes: [], snapshot: false };
@@ -292,6 +295,104 @@ export const RESPONSES_WIRE: ReplyMediaWire = {
   },
 };
 
+// ── Google Gemini ───────────────────────────────────────────────────────────
+
+/** A candidate's run key and its reply text parts (not thoughts). */
+function geminiCandidates(d: Json): Array<{ key: string; cand: Json; texts: Json[]; calls: string[] }> {
+  const cands = d["candidates"];
+  if (!Array.isArray(cands)) return [];
+  return cands.flatMap((c, i) => {
+    if (!isObj(c)) return [];
+    const content = c["content"];
+    const parts = isObj(content) && Array.isArray(content["parts"]) ? content["parts"] : [];
+    const texts = parts.filter((p): p is Json => isObj(p) && typeof p["text"] === "string" && p["thought"] !== true);
+    const calls = parts.flatMap((p) => {
+      const fc = isObj(p) ? (p["functionCall"] ?? p["function_call"]) : undefined;
+      return isObj(fc) ? [typeof fc["name"] === "string" ? fc["name"] : "a tool"] : [];
+    });
+    return [{ key: `cand:${typeof c["index"] === "number" ? c["index"] : i}`, cand: c, texts, calls }];
+  });
+}
+
+/** The Gemini SSE stream (model-wires.md §4.3): one answer object per event;
+ *  a candidate's text parts are its run, a `finishReason` closes it. No
+ *  snapshot events. */
+export const GEMINI_WIRE: ReplyMediaWire = {
+  read(raw) {
+    const d = eventData(raw);
+    if (!d) return NONE;
+    const r: WireRead = { texts: [], calls: [], closes: [], snapshot: false };
+    for (const c of geminiCandidates(d)) {
+      const text = c.texts.map((p) => p["text"] as string).join("");
+      if (text !== "") r.texts.push({ key: c.key, text });
+      r.calls.push(...c.calls);
+      const fr = c.cand["finishReason"];
+      if (fr !== null && fr !== undefined && fr !== "") r.closes.push(c.key);
+    }
+    return r;
+  },
+  withTexts(raw, texts) {
+    const d = eventData(raw);
+    if (!d) return raw;
+    let changed = false;
+    for (const c of geminiCandidates(d)) {
+      const t = texts.get(c.key);
+      if (t === undefined || c.texts.length === 0) continue;
+      // the run's text in its first part, the others emptied
+      c.texts.forEach((p, i) => { p["text"] = i === 0 ? t : ""; });
+      changed = true;
+    }
+    return changed ? serialize(raw, d) : raw;
+  },
+  snapshotTexts: () => [],
+  mapSnapshot: (raw) => raw,
+};
+
+// ── Ollama ──────────────────────────────────────────────────────────────────
+
+/** One NDJSON line's object, or null. */
+function lineData(raw: string): Json | null {
+  const t = raw.trim();
+  if (t === "") return null;
+  try {
+    const v: unknown = JSON.parse(t);
+    return isObj(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The Ollama NDJSON stream (model-wires.md, "The Ollama wire"): one answer
+ *  object per line; `message.content` is the reply's one run, the `done`
+ *  line closes it. No snapshot events. */
+export const OLLAMA_WIRE: ReplyMediaWire = {
+  read(raw) {
+    const d = lineData(raw);
+    const msg = d?.["message"];
+    if (!d || !isObj(msg)) return d?.["done"] === true ? { ...NONE, closes: ["*"] } : NONE;
+    const r: WireRead = { texts: [], calls: [], closes: [], snapshot: false };
+    if (typeof msg["content"] === "string" && msg["content"] !== "") r.texts.push({ key: "message", text: msg["content"] });
+    const calls = msg["tool_calls"];
+    if (Array.isArray(calls)) {
+      for (const c of calls) {
+        const fn = isObj(c) ? c["function"] : undefined;
+        r.calls.push(isObj(fn) && typeof fn["name"] === "string" ? fn["name"] : "a tool");
+      }
+    }
+    if (d["done"] === true) r.closes.push("*");
+    return r;
+  },
+  withTexts(raw, texts) {
+    const d = lineData(raw);
+    const t = texts.get("message");
+    if (!d || t === undefined || !isObj(d["message"])) return raw;
+    return `${JSON.stringify({ ...d, message: { ...d["message"], content: t } })}\n`;
+  },
+  snapshotTexts: () => [],
+  mapSnapshot: (raw) => raw,
+  framer: () => new NdjsonFramer(),
+};
+
 // ── the stream filter ───────────────────────────────────────────────────────
 
 export interface ReplyMediaStreamOptions extends ReplyMediaOptions {
@@ -303,7 +404,7 @@ interface Queued { raw: string; read: WireRead; override?: Map<string, string> }
 interface Carry { key: string; raw: string; read: WireRead; full: string; cut: number }
 
 export class ReplyMediaFilter {
-  private readonly framer = new SseFramer();
+  private readonly framer: { push(chunk: string): string[]; rest(): string };
   private out: string[] = [];
   private holding = false;
   private readonly queue: Queued[] = [];
@@ -316,7 +417,9 @@ export class ReplyMediaFilter {
   private scan: ColonScan = colonScanStart();
   private readonly calls: string[] = [];
 
-  constructor(private readonly wire: ReplyMediaWire, private readonly opts: ReplyMediaStreamOptions) {}
+  constructor(private readonly wire: ReplyMediaWire, private readonly opts: ReplyMediaStreamOptions) {
+    this.framer = wire.framer?.() ?? new SseFramer();
+  }
 
   /** Feed a raw SSE chunk; the bytes to relay now. Never throws. */
   feed(chunk: string): string {
@@ -559,5 +662,33 @@ export async function gateResponsesJsonReply(obj: Json, opts: ReplyMediaStreamOp
   if (r.changed || r.withheld.length > 0) opts.onResult?.(r);
   if (!r.changed) return false;
   parts.forEach((p, i) => { p["text"] = r.texts[i]; });
+  return true;
+}
+
+/** A Gemini answer (an object, or the chunks of a JSON-array stream): the
+ *  reply text parts of every candidate, in order. */
+export async function gateGeminiJsonReply(body: unknown, opts: ReplyMediaStreamOptions): Promise<boolean> {
+  const chunks = (Array.isArray(body) ? body : [body]).filter(isObj);
+  const found = chunks.map(geminiCandidates).flat();
+  const parts = found.flatMap((c) => c.texts);
+  if (parts.length === 0) return false;
+  const call = found.flatMap((c) => c.calls)[0];
+  const r = await gateReplyTexts(parts.map((p) => p["text"] as string), call, opts);
+  if (r.changed || r.withheld.length > 0) opts.onResult?.(r);
+  if (!r.changed) return false;
+  parts.forEach((p, i) => { p["text"] = r.texts[i]; });
+  return true;
+}
+
+/** An Ollama answer (`stream: false`): its message's content. */
+export async function gateOllamaJsonReply(body: unknown, opts: ReplyMediaStreamOptions): Promise<boolean> {
+  const msg = isObj(body) ? body["message"] : undefined;
+  if (!isObj(msg) || typeof msg["content"] !== "string" || msg["content"] === "") return false;
+  const calls = msg["tool_calls"];
+  const call = Array.isArray(calls) && calls.length > 0 ? "a tool" : undefined;
+  const r = await gateReplyTexts([msg["content"]], call, opts);
+  if (r.changed || r.withheld.length > 0) opts.onResult?.(r);
+  if (!r.changed) return false;
+  msg["content"] = r.texts[0];
   return true;
 }

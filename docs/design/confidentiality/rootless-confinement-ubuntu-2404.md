@@ -425,6 +425,17 @@ the notice, doctor and the dashboard reason say what it covers (a placeholder
 over each credential file found at launch) and what it misses (a file the
 host replaces while the agent runs).
 
+**Posture by coverage (2026-10-25).** The decision is made over what a
+session covers, one row per chokepoint (`Coverage`: model context, files,
+exec, egress, replies, Mandu's own state; `resolvePosture`). A launch's host
+facts derive into a coverage (`hostCoverage`; the files row is the table
+above), so `resolveHostPosture(f)` is `resolvePosture(hostCoverage(f))` and
+answers exactly what it did. An attachment, Mandu attached to an agent it
+does not run, declares its coverage instead and carries a gap of its own
+(`openclaw-plugin`, `gated`, with a sentence that makes no egress promise:
+docs/design/agents/openclaw-plugin.md §3.4). The module ships byte for byte
+in the dashboard and the arbiter too (`scripts/copies/module-copies.mjs`).
+
 ## 3. What was built
 
 ### 3.1 Default degrade, explicit strictness
@@ -1159,7 +1170,7 @@ for bwrap + userns without the guard, with a `HostGap`:
 
 | Gap | When | Cause shown | Fix |
 | --- | --- | --- | --- |
-| `no-guard` | the guard binary does not resolve (no prebuilt for this machine; a checkout that has not run `scripts/build-native.sh`) | the file guard is not available, so a credential file replaced while the AI runs is readable | none as one command (the cause names the build step) |
+| `no-guard` | the guard binary does not resolve (no prebuilt for this machine; a checkout that has not run `scripts/build-native.sh`), or it resolves but cannot start here (`guardStartsHere`: a container's default seccomp profile refuses its `pidfd_getfd`, packaging.md §3.1; doctor adds a line saying so) | the file guard is not available, so a credential file replaced while the AI runs is readable | none as one command (the cause names the build step) |
 | `guard-off` | the user turned it off: `--no-net-guard`, `MANDU_NET_GUARD=0`, `net-guard = false`, `--no-kernel` / `MANDU_NO_KERNEL` | the file guard is turned off (same consequence) | none (drop the opt-out) |
 
 The bind still goes up (the partial layer is kept, never removed), and every

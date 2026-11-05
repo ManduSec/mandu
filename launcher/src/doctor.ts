@@ -55,6 +55,7 @@ import { adminBwrap, type AdminBwrap } from "./bwrap-path.js";
 import { NODE_FLOOR, bypassWords, nodeEnvProxyFix, nodeEnvProxyGap, nodeMeetsFloor, type NodeEnvProxyGap } from "./node-floor.js";
 import { GOOSE_KEYCHAIN_VIA, probeAgentLogin, realGooseKeyringItem, realLoginProbeDeps, type GooseSubagentLogin, type LoginProbeDeps, type LoginStatus } from "./agent-login.js";
 import { gatherWslFacts, wslVersion, type WslFacts } from "./wsl.js";
+import { NODE_HAS_ZSTD, chatgptZstdProblem } from "./agent-model-route.js";
 import {
   checkAgentVersion, OPENCODE2_ENV, OPENCODE_V1_MAJOR, OPENCODE_V2_MAJOR, opencode2Enabled, opencodeInstall, opencodeTested, parseAgentVersion,
   probeAgentVersionLooking, rangeWords, supportStatusOf, type AgentVersionCheck,
@@ -71,6 +72,12 @@ import { doctorUpdateFacts, launcherVersion, updateChannel, updateRows, type Upd
 import { lastScanLine, lastScanPath, readLastScan, secretsBeforeMandu, type LastScan } from "./scan-kept.js";
 import { commitWords, gatherVersionReport, realVersionDeps, type Problem, type VersionReport } from "./version-report.js";
 import { expandTrust, isTrusted, mountDestination, readTrustLookups, visibleRemoteMounts, type RemoteMountFacts, type TrustLookup } from "./remote-mounts.js";
+import { guardStartsHere } from "./opencode2-confidentiality.js";
+import { NET_GUARD_CANNOT_START } from "./net-guard-setup.js";
+import { gatherOpenclawAttach, realAttachDeps, sandboxRows, type OpenclawAttachFacts } from "./openclaw-install-command.js";
+import { attachmentExposureLines, gatherAttachments, humanPlaneStatusOf, routeLostLines, sandboxLostLines, type AttachmentProxy } from "./serve-attachments.js";
+import { ROUTE_FIX, routeVerdict } from "./openclaw-attach.js";
+import { probeIdentity } from "./services/primitives.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -95,7 +102,11 @@ export interface DoctorFacts {
    *  PATH, or a fixture without the probe. */
   pathNode?: { path: string; gap: NodeEnvProxyGap };
   git: string | null;
-  agents: { claude: boolean; codex: boolean };
+  /** The agents Mandu runs that are on PATH: Claude Code and Codex by
+   *  name, the rest (`others`: opencode, goose, openclaw) as found. Claude
+   *  Code missing is a ✗ only when no other one is there either (an
+   *  OpenClaw-only machine needs no Claude Code). */
+  agents: { claude: boolean; codex: boolean; others?: string[] };
   /** Is each agent logged in (agent-login.ts; existence checks only, never a
    *  credential's contents)? Optional so older fixtures still type. */
   logins?: { claude: LoginStatus; codex: LoginStatus; goose?: LoginStatus };
@@ -139,7 +150,7 @@ export interface DoctorFacts {
   /** The secret-confinement posture a launch on this host would get
    *  (rootless-confinement-ubuntu-2404.md §3.3), and the kernel-knob detail
    *  behind a gap (src/userns.ts `usernsGapHint`). */
-  confinement: HostPosture & { detail?: string };
+  confinement: ConfinementFacts;
   /** Plan 10 §12.3: what Claude Code's own settings say about ITS sandbox and
    *  credential mask, so a user sees the double-mask hazard before a launch.
    *  null = no settings file carries a `sandbox` section. */
@@ -181,6 +192,15 @@ export interface DoctorFacts {
   /** The last `mandu scan`'s kept report (scan-kept.ts, plan 17 §3 item
    *  12): null when none was kept. Optional: absent renders no row. */
   lastScan?: LastScan | null;
+  /** The OpenClaw service Gateway's attachment (`mandu openclaw install`,
+   *  openclaw-plugin.md §8): does the user's openclaw.json still route
+   *  through the session's service proxy, with the plugin enabled? null or
+   *  absent: no attachment configured (no row). */
+  openclawAttach?: OpenclawAttachFacts | null;
+  /** `mandu serve`'s attachment sessions (serve-attachments.ts
+   *  gatherAttachments, openclaw-plugin.md §3.2): each proxy, its
+   *  registration and posture. Empty or absent: none (no section). */
+  serveAttachments?: AttachmentProxy[] | null;
 }
 
 /** The sandbox Mandu's sandboxed git runners (the launcher's launch-prep
@@ -341,6 +361,10 @@ export interface DoctorDeps {
    *  `nestedSandboxProbeArgv`)? Optional: a fixture without it answers true,
    *  never the host's bwrap. */
   nestingOk?: () => boolean;
+  /** Can the resolved guard bin start here (opencode2-confidentiality.ts
+   *  `guardStartsHere`, the probe the launch's guard step runs)? Optional:
+   *  a fixture without it answers true, never the host's guard. */
+  guardStarts?: (bin: string) => boolean;
   /** Mandu's own bubblewrap facts. Optional: a fixture without it reports
    *  none, never the host's. */
   bwrapGrant?: () => BwrapGrantFacts;
@@ -392,6 +416,13 @@ export interface DoctorDeps {
    *  `readLastScan`). Optional: a fixture without it reads none, never the
    *  host's. */
   lastScan?: (env: Env) => LastScan | null;
+  /** The OpenClaw attachment facts (openclaw-install-command.ts
+   *  gatherOpenclawAttach). Optional: a fixture without it reads none, never
+   *  the host's openclaw.json. */
+  openclawAttach?: (env: Env, layout: Layout) => Promise<OpenclawAttachFacts | null>;
+  /** The service's attachment sessions (serve-attachments.ts). Optional: a
+   *  fixture without it reads none, never the host's. */
+  serveAttachments?: (env: Env) => Promise<AttachmentProxy[]>;
 }
 
 /** The cases where a macOS launch keeps Claude Code's sandbox on instead
@@ -565,6 +596,7 @@ export const realDoctorDeps: DoctorDeps = {
   agentVersion: (bin) => probeAgentVersionLooking(bin),
   gooseLogin: (env) => ({ readGooseConfig: realLoginProbeDeps(env).readGooseConfig!, keyringItem: realGooseKeyringItem(env) }),
   codexBwrapProbe: realCodexSandboxProbe,
+  guardStarts: (bin) => guardStartsHere(bin),
   nestingOk: () => {
     const bwrap = resolveWrapBwrap();
     if (bwrap === null) return false;
@@ -599,6 +631,12 @@ export const realDoctorDeps: DoctorDeps = {
   updateFacts: (env, installed) =>
     doctorUpdateFacts({ env, version: launcherVersion(), installed, interactive: process.stdout.isTTY === true, channel: updateChannel(Layout.detect(import.meta.url, env)) }),
   lastScan: (env) => readLastScan(lastScanPath(env, env["HOME"] || homedir())),
+  openclawAttach: (env, layout) => gatherOpenclawAttach(env, realAttachDeps(layout)),
+  serveAttachments: (env) => gatherAttachments(env, {
+    uid: process.getuid?.(),
+    probe: (port) => probeIdentity("127.0.0.1", port),
+    humanPlaneStatus: (e) => humanPlaneStatusOf(e),
+  }),
 };
 
 /** Did the user turn the whole-agent guard off for launches? The launch's
@@ -612,6 +650,40 @@ export function guardOptedOut(env: Env, readConfig?: (p: string) => string | nul
   }
 }
 
+/** Did the user turn the egress gate off for launches (MANDU_NET_PROXY=0,
+ *  `net-proxy = false` in config.toml)? The launch's own parse, as
+ *  guardOptedOut. */
+export function egressGateOptedOut(env: Env, readConfig?: (p: string) => string | null): boolean {
+  try {
+    return parseLaunch(["--target", "shell", "--", "true"], { ...loadConfigEnv(env, readConfig), ...env }).requested.netProxy === false;
+  } catch {
+    return false;
+  }
+}
+
+/** Doctor's confinement facts: the host posture, the kernel-knob detail
+ *  behind a gap, whether a guard bin that is there cannot start, and whether
+ *  launches run without the egress gate. */
+export type ConfinementFacts = HostPosture & { detail?: string; guardBlocked?: true; egressGateOff?: true };
+
+/** The lines under the posture when launches run without the egress gate:
+ *  the posture sentence's "sent out only where a rule or your OK allows"
+ *  does not hold then (confinement-posture.ts EGRESS_GATE_OFF_LINE, the
+ *  launch's line under a gated posture). */
+export function egressGateOffLines(c: ConfinementFacts): string[] {
+  if (c.egressGateOff !== true) return [];
+  return [
+    `${NO} the egress gate is off for launches (MANDU_NET_PROXY=0 or net-proxy = false in config.toml): what programs the AI runs send is not checked for a secret${c.posture === "gated" ? ", so a credential file they read can be sent anywhere" : ""}`,
+  ];
+}
+
+/** The line under a posture whose guard bin is there but cannot start
+ *  (packaging.md §3.1). Empty otherwise. */
+export function guardBlockedLines(c: ConfinementFacts): string[] {
+  if (c.guardBlocked !== true) return [];
+  return [`Mandu's file guard is installed but cannot start here: ${NET_GUARD_CANNOT_START}. A launch runs without it.`];
+}
+
 /** The confinement posture a launch here would get. The SAME probe and
  *  resolution the launch uses, so doctor cannot promise what a launch won't do.
  *  `env` (optional) names a guard the user turned off (`guard-off`). */
@@ -621,6 +693,11 @@ export function gatherConfinement(deps: DoctorDeps, env?: Env): DoctorFacts["con
   const bwrap = linux && deps.commandExists("bwrap");
   const userns = linux && bwrap && deps.usernsOk();
   const guardOff = linux && env !== undefined && guardOptedOut(env, deps.readKnob);
+  // The SAME resolver and probe the launch uses (net-guard-setup.ts), so
+  // doctor cannot promise a guard the launch will not find or cannot start
+  // (packaging.md §3.1: a container's seccomp profile can refuse it).
+  const guardBin = linux && !guardOff ? (deps.nativeBin ?? resolveNativeBin)("mandu-net-guard") : null;
+  const guardBlocked = guardBin !== null && !(deps.guardStarts?.(guardBin) ?? true);
   const host = resolveHostPosture({
     platform,
     bwrap,
@@ -630,17 +707,21 @@ export function gatherConfinement(deps: DoctorDeps, env?: Env): DoctorFacts["con
     // PATH lookup: seatbelt-profile.ts SANDBOX_EXEC), as secret-setup.ts asks.
     sandboxExec: platform === "darwin" && sandboxExecAvailable(deps.commandExists),
     landlockReadBlock: false,
-    // The SAME resolver the launch uses (net-guard-setup.ts), so doctor cannot
-    // promise a guard the launch will not find.
     // A guard the user turned off is no guard (sandbox-security-review
     // finding 7: without it the bind alone is `gated`, gap `guard-off`).
-    guard: linux && !guardOff && (deps.nativeBin ?? resolveNativeBin)("mandu-net-guard") !== null,
+    guard: guardBin !== null && !guardBlocked,
     guardOff,
     // The launch runs the same probe before it binds (secret-setup.ts).
     ...(userns ? { nesting: deps.nestingOk?.() ?? true } : {}),
   });
   const usernsGap = host.gap === "apparmor-userns" || host.gap === "userns-off";
-  return { ...host, ...(usernsGap ? { detail: usernsGapHint(deps.readKnob) } : {}) };
+  const egressGateOff = env !== undefined && egressGateOptedOut(env, deps.readKnob);
+  return {
+    ...host,
+    ...(usernsGap ? { detail: usernsGapHint(deps.readKnob) } : {}),
+    ...(guardBlocked ? { guardBlocked: true as const } : {}),
+    ...(egressGateOff ? { egressGateOff: true as const } : {}),
+  };
 }
 
 /** Claude Code's own sandbox settings (plan 10 §12.3), read with the same
@@ -698,8 +779,13 @@ export async function gatherFacts(env: Env, layout: Layout, deps: DoctorDeps): P
   const kernel: Record<string, boolean> = {};
   const loginDeps = { env, home: env["HOME"] || homedir(), fileExists: deps.fileExists, platform: deps.platform() };
   const nativeBin = deps.nativeBin ?? resolveNativeBin;
-  const agents = { claude: deps.commandExists("claude"), codex: deps.commandExists("codex") };
   const opencodeBin = deps.commandExists("opencode") ? "opencode" : deps.commandExists("opencode2") ? "opencode2" : null;
+  const agents = {
+    claude: deps.commandExists("claude"),
+    codex: deps.commandExists("codex"),
+    others: [opencodeBin === null ? null : "opencode", ...(["goose", "openclaw"] as const).map((a) => (deps.commandExists(a) ? a : null))]
+      .filter((a): a is string => a !== null),
+  };
   // No probe injected ⇒ no version read (a fixture never runs the host's agent).
   const versionOf = deps.agentVersion ?? ((): string | null => null);
   for (const cp of CHOKEPOINTS) {
@@ -782,6 +868,8 @@ export async function gatherFacts(env: Env, layout: Layout, deps: DoctorDeps): P
     ...(deps.homeFacts ? { home: deps.homeFacts(env) } : {}),
     ...(deps.updateFacts ? { update: await deps.updateFacts(env, layout.mode === "installed") } : {}),
     ...(deps.lastScan ? { lastScan: deps.lastScan(env) } : {}),
+    ...(deps.openclawAttach ? { openclawAttach: await deps.openclawAttach(env, layout).catch(() => null) } : {}),
+    ...(deps.serveAttachments ? { serveAttachments: await deps.serveAttachments(env).catch(() => null) } : {}),
     ...(deps.platform() === "linux" ? { ptraceScope: ptraceScopeFacts(deps.readKnob) } : {}),
     ...(deps.platform() === "linux"
       ? {
@@ -1206,7 +1294,7 @@ export function loginRow(agent: "claude" | "codex" | "goose", s: LoginStatus, re
   }
   return relevant
     ? `  ${NO} ${agent} login: none found; ${s.howTo}`
-    : `  ${DOT} ${agent} login: none found (only needed for \`mandu codex\`: ${s.howTo})`;
+    : `  ${DOT} ${agent} login: none found (only needed for \`mandu ${agent}\`: ${s.howTo})`;
 }
 
 /** A Goose login row: the session's (`goose login`) or its subagents'
@@ -1454,6 +1542,136 @@ export function pathNodeRows(p: DoctorFacts["pathNode"]): string[] {
   }
 }
 
+/** The OpenClaw attachment rows (openclaw-plugin.md §8): the plugin, the
+ *  route to the service proxy, model entries around it. Empty when no
+ *  attachment is configured. */
+export function openclawAttachRows(a: OpenclawAttachFacts | null | undefined): string[] {
+  if (!a) return [];
+  const L: string[] = [];
+  if (a.unreadable !== undefined) {
+    L.push(`  ${NO} ${a.unreadable}: the Gateway may not load it, and Mandu cannot check its route`);
+    return L;
+  }
+  const s = a.state!;
+  const session = a.session ?? "(no session named)";
+  const svc = a.service;
+  // The verdict the service's route check makes over the same state
+  // (attachment-contract.ts routeVerdict, openclaw-plugin.md §3.6); the
+  // rows below say each problem it names, and the fix.
+  const v = a.verdict ?? routeVerdict(s, svc?.ok ? svc.url : null);
+  const plugin = v.problems.find((p) => p.code.startsWith("plugin-"));
+  if (plugin === undefined) {
+    L.push(`  ${OK} the Mandu plugin is enabled in ${a.configPath} (session ${session})`);
+  } else {
+    L.push(`  ${NO} ${plugin.detail} (${a.configPath}): no tamper policy, no reply check`);
+    L.push(`      fix: ${ROUTE_FIX}`);
+  }
+  // Every route problem (Route 1: one per routed provider that lost its
+  // route, and the providers added since the install).
+  const routes = v.problems.filter((p) => p.code === "route-direct" || p.code === "route-elsewhere");
+  if (svc !== undefined && !svc.ok) {
+    L.push(`  ${NO} Mandu's service proxy for ${session} is not running (${svc.why}): the Gateway's model calls fail until it is`);
+    L.push("      fix: mandu serve start");
+  } else if (routes.length === 0) {
+    const others = (s.providerRoutes ?? []).map((p) => p.id);
+    const who = `${(s.checkAnthropic === false ? others : ["Anthropic", ...others]).join(", ")} calls go`;
+    L.push(`  ${OK} ${who} to Mandu's service proxy (${svc?.ok ? svc.url : s.routeUrl}), each on to its provider's own address`);
+  } else {
+    for (const route of routes) L.push(`  ${NO} ${route.detail}: tool results reach the model unmasked`);
+    L.push(`      fix: ${ROUTE_FIX}`);
+  }
+  if ((a.unprotected ?? []).length > 0) {
+    L.push(`  ${NO} left unprotected by your choice (mandu openclaw install --leave-unprotected): ${a.unprotected!.join(", ")}; their models read tool results unmasked`);
+  }
+  // The built-in openai on a ChatGPT sign-in sends zstd bodies, which the
+  // proxy reads only on a Node.js with zstd (model-wires.md §9.3).
+  const zstd = chatgptZstdProblem((s.providerRoutes ?? []).map((p) => ({ id: p.id, api: p.wire })), NODE_HAS_ZSTD);
+  if (zstd !== null) {
+    L.push(`  ${NO} ${zstd}`);
+    L.push("      fix: update Node.js to 22.15 or later, then mandu serve upgrade");
+  }
+  // A route Mandu cannot verify (model-wires.md §9.1): the Gateway's
+  // environment, which can send Azure OpenAI calls elsewhere, was not read.
+  for (const u of v.problems.filter((p) => p.code === "route-unverified")) {
+    L.push(`  ${NO} ${u.detail}`);
+    L.push("      fix: run the Gateway where Mandu can read its environment (Linux, the same user), or mandu openclaw uninstall");
+  }
+  const models = v.problems.find((p) => p.code === "model-bypass");
+  if (models !== undefined) {
+    L.push(`  ${NO} ${models.detail}`);
+    L.push(`      fix: ${ROUTE_FIX} (the install drops those fields)`);
+  }
+  // The model fence (openclaw-plugin.md §3.6, "The model fence"): each hole
+  // is one model switch away from a model around the proxy.
+  const fence = v.problems.filter((p) => p.code === "model-fence");
+  for (const f of fence) L.push(`  ${NO} ${f.detail}`);
+  if (fence.length > 0) L.push(`      fix: ${ROUTE_FIX} (the install puts the fence back, or names the openrouter model to list)`);
+  if (!v.routed) {
+    L.push(`  ${DOT} a Gateway keeps the config it loaded until it restarts: a change to this file takes effect at its next restart`);
+  }
+  // The confined-commands tier (openclaw-plugin.md §10.6): the config's
+  // sandbox keys and the plugin's report that the "mandu" backend is its own.
+  if (a.sandbox) L.push(...sandboxRows(a.sandbox, { ok: OK, no: NO, dot: DOT }));
+  if (s.conversationAccess) L.push(`  ${DOT} the plugin was granted conversation access; it needs none`);
+  L.push(`  ${DOT} the plugin refuses obvious attempts to change this, but the agent's programs run as you and can`);
+  L.push("    still change it (a policy, not a boundary); `mandu openclaw gateway` runs the Gateway confined instead");
+  return L;
+}
+
+/** The service's attachment rows (openclaw-plugin.md §3.2): each session's
+ *  proxy and registration, its posture, and, while one is live, what it
+ *  costs confined launches and how to avoid it (the maintainer's "weaken +
+ *  warn", 2026-10-25). Empty when there is none. */
+export function serveAttachmentRows(list: readonly AttachmentProxy[] | null | undefined): string[] {
+  if (!list || list.length === 0) return [];
+  const L: string[] = [];
+  for (const a of list) {
+    if (!a.declared) {
+      L.push(`  ${DOT} ${a.session} is still registered with the arbiter but no longer declared; its lease runs out within a minute`);
+      continue;
+    }
+    if (a.healthy) L.push(`  ${OK} ${a.session}: the service's proxy answers on 127.0.0.1:${a.port}`);
+    else {
+      L.push(`  ${NO} ${a.session}: no service proxy serves it (${a.problem ?? "unknown"}): the Gateway's model calls fail until one does`);
+      L.push("      fix: mandu serve start (mandu serve status says why)");
+    }
+    if (a.registered === false) L.push(`  ${NO} ${a.session} is not registered with the arbiter: the service keeps its proxy stopped until it is`);
+    // The service's own route check (openclaw-plugin.md §3.6): what it found
+    // in the config it watches, said loudly with the fix.
+    const lost = routeLostLines(a.session, a.route);
+    if (lost.length > 0) {
+      L.push(`  ${NO} ${lost[0]}`);
+      L.push(`      ${lost[1]}`);
+    } else if (a.route?.state === "routed") {
+      L.push(`  ${OK} the service checks ${a.route.config}: it routes ${a.session} through Mandu (last read ${a.route.checkedAt})`);
+    } else if (a.route?.state === "pending") {
+      L.push(`  ${DOT} ${a.route.config} does not route ${a.session} through Mandu yet: mandu openclaw install`);
+    }
+    // The service's check of the confined-commands tier (openclaw-plugin.md §10.6).
+    const tier = sandboxLostLines(a.session, a.sandbox ?? null);
+    if (tier.length > 0) {
+      L.push(`  ${NO} ${tier[0]}`);
+      L.push(`      ${tier[1]}`);
+    } else if (a.sandbox?.state === "held") {
+      L.push(`  ${OK} the service checks the confined-commands tier: ${a.session}'s commands run in Mandu's box (last read ${a.sandbox.checkedAt})`);
+    }
+    if (a.secrets !== null) {
+      L.push(`  ${OK} the service registered ${a.secrets.registered} secret file${a.secrets.registered === 1 ? "" : "s"} for it (of ${a.secrets.found} found under your home and the agent's workspace)`);
+    } else {
+      L.push(`  ${NO} the service has not registered its secret files yet: its proxy stays stopped until it has (mandu serve status says why)`);
+    }
+  }
+  const p = list[0]!;
+  L.push(`  ${DOT} posture ${p.posture} (gap ${p.gap}): ${p.sentence}`);
+  const live = list.filter((a) => a.registered === true).map((a) => a.session);
+  const [cost, avoid] = attachmentExposureLines(live);
+  if (cost !== undefined) {
+    L.push(`  ${NO} ${cost}`);
+    L.push(`      ${avoid}`);
+  }
+  return L;
+}
+
 export function renderDoctor(f: DoctorFacts): string {
   const L: string[] = [];
   L.push("Mandu doctor");
@@ -1465,10 +1683,13 @@ export function renderDoctor(f: DoctorFacts): string {
     : `  ${NO} Node.js ${f.node.version} is TOO OLD: Mandu needs ${NODE_FLOOR} or newer (nvm install 22)`);
   for (const row of pathNodeRows(f.pathNode)) L.push(row);
   L.push(f.git ? `  ${OK} git ${f.git}` : `  ${NO} git not found: without it the AI works in your folder directly, with no separate working copy`);
-  L.push(f.agents.claude ? `  ${OK} Claude Code is installed (claude)` : `  ${NO} Claude Code is not installed: npm i -g @anthropic-ai/claude-code`);
+  const anotherAgent = f.agents.codex || (f.agents.others ?? []).length > 0;
+  L.push(f.agents.claude ? `  ${OK} Claude Code is installed (claude)`
+    : anotherAgent ? `  ${DOT} Claude Code is not installed (only needed for \`mandu claude\`)`
+    : `  ${NO} Claude Code is not installed: npm i -g @anthropic-ai/claude-code`);
   L.push(f.agents.codex ? `  ${OK} Codex is installed (codex)` : `  ${DOT} Codex is not installed (only needed for \`mandu codex\`)`);
   if (f.logins) {
-    L.push(loginRow("claude", f.logins.claude, true));
+    L.push(loginRow("claude", f.logins.claude, f.agents.claude || !anotherAgent));
     L.push(loginRow("codex", f.logins.codex, f.agents.codex));
     if (f.logins.goose) {
       L.push(loginRow("goose", f.logins.goose, true));
@@ -1545,6 +1766,8 @@ export function renderDoctor(f: DoctorFacts): string {
   L.push(`    ${POSTURE_SENTENCE[c.posture]}`);
   for (const line of guardOnlyLines(c)) L.push(`    ${line}`);
   for (const line of bindOnlyLines(c)) L.push(`    ${line}`);
+  for (const line of guardBlockedLines(c)) L.push(`    ${line}`);
+  for (const line of egressGateOffLines(c)) L.push(`    ${line}`);
   for (const row of bwrapGrantRows(f.bwrapGrant)) L.push(row);
   for (const row of remoteMountRows(f.remoteMounts)) L.push(row);
   const yamaRow = ptraceScopeRow(f.ptraceScope);
@@ -1593,6 +1816,20 @@ export function renderDoctor(f: DoctorFacts): string {
     }
   }
   L.push("");
+
+  const attachRows = openclawAttachRows(f.openclawAttach);
+  if (attachRows.length > 0) {
+    L.push("OpenClaw service Gateway (mandu openclaw install)");
+    for (const row of attachRows) L.push(row);
+    L.push("");
+  }
+
+  const serveRows = serveAttachmentRows(f.serveAttachments);
+  if (serveRows.length > 0) {
+    L.push("Mandu service attachments (mandu serve)");
+    for (const row of serveRows) L.push(row);
+    L.push("");
+  }
 
   const models = modelRows(f.models);
   if (models.length > 0) {

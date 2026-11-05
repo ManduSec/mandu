@@ -57,7 +57,7 @@ test("fileLabel: each source in the page's words, and only the person's own rule
   assert.equal(fileLabel(e("/home/u/ws/.launchdeck/auth.json", "no-model", "shape:tool-login-file"), HOME).from, "Built in: a tool's saved sign-in");
   assert.equal(fileLabel(e("/home/u/ws/api/http-client.private.env.json", "no-model", "shape:*.private.env.json"), HOME).from, "Built in: HTTP client private settings");
   const written = fileLabel(e("/home/u/ws/out.txt", "any-model", "derived:/home/u/ws/out.txt"), HOME);
-  assert.deepEqual([written.source, written.from], ["written", "Written by the AI after it read a secret"]);
+  assert.deepEqual([written.source, written.from], ["written", "Made from a secret: something that held a secret wrote it"]);
   const key = fileLabel(e("/home/u/.config/k", "no-model", "label:/home/u/.config/k", "models"), HOME);
   assert.deepEqual([key.source, key.removable], ["model-key", false]);
   const none = fileLabel(e("/home/u/ws/README.md", "public", null), HOME);
@@ -297,8 +297,8 @@ test("whyWords: without a reader list, the programs known to need it, else a pla
   // Plan 13 D8 (12): a program neither vetted nor vouched for reads the
   // placeholder copy; the entry and the warning say so, and name the fix
   const unvetted = whyWords({ ...base, readers: ["deploy", "ssh-add"], others: null }, e("/home/u/.pgpass", "no-model", "label:/home/u/.pgpass", "policy"), [], HOME);
-  assert.equal(unvetted.lines.find((l) => l.term === "Programs that get the real file")!.text, "deploy (reads the placeholder copy), ssh-add");
-  assert.equal(unvetted.lines.find((l) => l.term === "Warning")!.text, "deploy is not a program Mandu knows keeps a file's contents out of what it prints, so it reads the placeholder copy. If you are sure it does, write { app: deploy, prints: nothing }.");
+  assert.equal(unvetted.lines.find((l) => l.term === "Programs that get the real file")!.text, "deploy (reads the masked copy), ssh-add");
+  assert.equal(unvetted.lines.find((l) => l.term === "Warning")!.text, "deploy is not a program Mandu knows keeps a file's contents out of what it prints, so it reads the masked copy. If you are sure it does, write { app: deploy, prints: nothing }.");
   // the arbiter's word wins (its readersReadTwin)
   const judgedTwin = whyWords({ ...base, readers: ["deploy"], readersReadTwin: [false], others: null }, e("/home/u/.pgpass", "no-model", "label:/home/u/.pgpass", "policy"), [], HOME);
   assert.equal(judgedTwin.lines.find((l) => l.term === "Programs that get the real file")!.text, "deploy");

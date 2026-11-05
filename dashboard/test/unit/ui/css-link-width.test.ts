@@ -17,8 +17,10 @@
  *   K2  the pages as jsdom draws them with the styles a 1280, 390 and 320 px
  *       window applies: the session page's and History's "Back to home",
  *       Home's "1 rule change your agent asked for is in Approvals" and
- *       "1 more question in Approvals", and the session page's "1 rule
- *       change this agent asked for is in Approvals" each compute
+ *       "1 more question in Approvals" (and its longest words, "2 more
+ *       questions in Approvals, all from sessions that have ended"), and
+ *       the session page's "1 rule change this agent asked for is in
+ *       Approvals" each compute
  *       `align-self: flex-start` in a column flexbox; the words are as
  *       before.
  *
@@ -81,10 +83,14 @@ const ROUTES = {
   "GET home/history": { total: 1, rows: [HISTORY_ROW], next: null },
 };
 const HOME = home({ waiting: [1, 2, 3, 4].map((i) => ({ ...ASK, id: `egr-${i}` })) });
+/** Three questions an agent waits on and two from sessions that have ended:
+ *  the link's longest words, "2 more questions in Approvals, all from
+ *  sessions that have ended". */
+const HOME_ENDED = home({ waiting: [1, 2, 3, 4, 5].map((i) => ({ ...ASK, id: `egr-${i}`, askerEnded: i > 3 })) });
 
 /** The page at `path`, its styles as each window applies them. */
-async function page(path: string): Promise<{ doc: El; at: (width: number) => void }> {
-  const { doc } = load({ url: BASE + path, homeVm: HOME, routes: ROUTES });
+async function page(path: string, homeVm = HOME): Promise<{ doc: El; at: (width: number) => void }> {
+  const { doc } = load({ url: BASE + path, homeVm, routes: ROUTES });
   await tick(40);
   const sheet = doc.createElement("style");
   doc.head.append(sheet);
@@ -102,12 +108,14 @@ test("K2: Back to home on the session page and on History, and the links to Appr
   const agent = await page("/agents/s1");
   const history = await page("/history");
   const homePage = await page("/");
+  const endedPage = await page("/", HOME_ENDED);
   const cases: Array<[string, { doc: El; at: (w: number) => void }, string, string]> = [
     ["the session page's Back to home", agent, "#page-agent .page-head > a.back", "Back to home"],
     ["the session page's link to its rule change", agent, "#agent-waiting > a.more", "1 rule change this agent asked for is in Approvals"],
     ["History's Back to home", history, "#page-history .page-head > a.back", "Back to home"],
     ["Home's link to the rule change", homePage, "#home-waiting > a.more[data-ask]", "1 rule change your agent asked for is in Approvals"],
     ["Home's link to the other questions", homePage, "#home-waiting > a.more:not([data-ask])", "1 more question in Approvals"],
+    ["Home's link to questions from sessions that have ended", endedPage, "#home-waiting > a.more:not([data-ask])", "2 more questions in Approvals, all from sessions that have ended"],
   ];
   for (const [what, { doc, at }, selector, words] of cases) {
     const link = doc.querySelector(selector);

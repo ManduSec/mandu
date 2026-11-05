@@ -1,9 +1,10 @@
 /**
  * after-the-fact — the `[mandu:secret] masked after the fact` note
  * (confidentiality.md §7.1, "Masked after the fact"; 2026-10-05).
- * Mandu-new (no reference origin). A MIRROR of
- * interceptors/anthropic-proxy/src/after-the-fact.ts (no cross-package import;
- * each package's unit test pins the same note bytes).
+ * Mandu-new (no reference origin). ONE MODULE, TWO COPIES (both model
+ * proxies, no cross-package import): the source is
+ * interceptors/anthropic-proxy/src/after-the-fact.ts; change it, then run
+ * `node scripts/copies/module-copies.mjs generate`.
  *
  * Every request re-sends the whole history, and the request rewrite
  * re-classifies every tool_result in it. Once a file is labelled (or a value

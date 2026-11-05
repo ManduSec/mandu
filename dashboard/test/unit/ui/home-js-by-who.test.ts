@@ -257,6 +257,12 @@ test("§4.25aa: Hosts and AI tabs; the tab chosen is remembered; arrow keys move
     "Always sees it masked: ~/.ssh and everything inside; ~/contracts and everything inside; ~/proj/.env",
   ]);
   assert.equal(rowNamed(doc, "vllm-1").querySelector(".by-who-about").textContent, "Your own AI, on this computer.");
+  // Your own AI lists only what differs from Any AI, and a line for the rest under it (queue item #98).
+  assert.deepEqual(listsOf(rowNamed(doc, "vllm-1")), ["May read it when it asks: ~/contracts and everything inside"]);
+  const rest = rowNamed(doc, "vllm-1").querySelector(".by-who-groups > .by-who-rest");
+  assert.equal(rest?.textContent, "The rest (4): as Any AI, above.");
+  assert.equal(rest.previousElementSibling.className, "by-who-group", "under its list");
+  assert.equal(rowNamed(doc, "Any AI").querySelector(".by-who-rest"), null, "Any AI keeps its full lists");
   // Home wraps around to Programs; a fresh page opens the tab last chosen.
   tabs(doc)[2].dispatchEvent(new window.KeyboardEvent("keydown", { key: "Home", bubbles: true }));
   assert.equal(selected(doc), "Programs");
@@ -276,6 +282,37 @@ test("§4.25aa: no secret rule says so; rules partly read say the lists may miss
   const partial = page({ byWho: { ...VM, partial: true } });
   await tick();
   assert.match(partial.doc.getElementById("by-who-note").textContent, /^Some rules made on this page could not be read, so these lists may miss files\. /);
+});
+
+test("§4.25aa: an empty list that could not read every rule says so, never 'No rule of yours' (queue item #164)", async () => {
+  // The page's rules unread and nothing in policy.yaml: each tab says what
+  // was read, and the note keeps only the tab's own words.
+  const unread = toByWhoVM([], null, { partial: true });
+  const { doc } = page({ byWho: unread });
+  await tick();
+  assert.equal(card(doc).hidden, false);
+  const seen: string[] = [];
+  for (const b of tabs(doc)) {
+    b.click();
+    const key = b.id.replace("by-who-tab-", "") as "programs" | "hosts" | "models";
+    seen.push(key);
+    assert.equal(doc.querySelector("#by-who-list .empty")?.textContent,
+      "No rule in policy.yaml makes a file secret. The rules made on this page could not be read, so they are not listed here.", key);
+    assert.doesNotMatch(card(doc).textContent, /No rule of yours/, key);
+    const note = doc.getElementById("by-who-note").textContent;
+    assert.doesNotMatch(note, /could not be read/, `${key}: the note does not say it twice`);
+    assert.equal(note, unread[key].note, `${key}: the tab's own note stays`);
+  }
+  assert.deepEqual(seen, ["programs", "hosts", "models"]);
+  // Read in full and empty: today's line.
+  const read = page({ byWho: toByWhoVM([], null, { partial: false }) });
+  await tick();
+  assert.equal(read.doc.querySelector("#by-who-list .empty").textContent, "No rule of yours makes a file secret yet.");
+  // Partial with rows: no empty line, and the note keeps its sentence.
+  const rows = page({ byWho: { ...VM, partial: true } });
+  await tick();
+  assert.equal(rows.doc.querySelector("#by-who-list .empty"), null);
+  assert.match(rows.doc.getElementById("by-who-note").textContent, /^Some rules made on this page could not be read, so these lists may miss files\. /);
 });
 
 test("§4.25aa: the card's words pass the product sweep (no inspector term, masked never placeholder)", async () => {
@@ -320,5 +357,84 @@ test("§4.25aa: a file that opens its rule is the same chip in the link colour, 
       const ratio = contrastRatio(value(sel, "color"), value("code", "background"));
       assert.ok(ratio >= 4.5, `${theme}: ${sel} reads ${ratio.toFixed(2)}:1 on the chip`);
     }
+  }
+});
+
+// ── A rule on a path where nothing is says so (§4.25aa *A rule on nothing*, queue item #225) ──
+
+/** ~/shop/.env is there, ~/shop/.evn (its misspelling) is not; ~/gone/.env
+ *  (one value of it per host) is not either; ~/shop/*.key matches nothing;
+ *  ~/old/.env has no row under Your rules. */
+const LOST_VM = toByWhoVM(byWhoRules([
+  { path: "/home/u/shop/.env", level: "no-model", bindings: ["api.stripe.com"], recursive: false, readers: ["deploy"] },
+  { path: "/home/u/shop/.evn", level: "no-model", bindings: ["api.stripe.com"], recursive: false, readers: ["deploy"] },
+  { path: "/home/u/shop/*.key", level: "no-model", bindings: [], recursive: false },
+  { path: "/home/u/gone/.env", level: "no-model", bindings: [], recursive: false, values: [{ key: "STRIPE_KEY", bindings: ["api.stripe.com"] }], wholeBindings: [] },
+  { path: "/home/u/old/.env", level: "no-model", bindings: [], recursive: false },
+], []), [], { home: "/home/u" });
+const LOST_PANEL = { panel: { available: true, verdictsKnown: true, queue: [], yourRules: [
+  lockRow("/home/u/shop/.env", "exact"),
+  { ...lockRow("/home/u/shop/.evn", "exact"), missing: true },
+  { ...lockRow("/home/u/shop/*.key", "exact"), covers: "pattern", missing: true, plain: { subject: "/home/u/shop/*.key", reach: "every matching file", effect: "No AI" } },
+  { ...lockRow("/home/u/gone/.env", "exact"), missing: true },
+] } };
+const LOST = "(nothing at this path)";
+
+test("§4.25aa: on each tab a file whose rule names a path where nothing is says so after it, in the plain words; no other does (queue item #225)", async () => {
+  const { doc, err } = load({ url: "http://127.0.0.1:4500/mandu/rules", routes: { "GET policy/panel": LOST_PANEL, "GET policy/by-who": { byWho: LOST_VM } } });
+  await tick();
+  assert.equal(err, null);
+  // Your rules says it under ~/shop/.evn and ~/gone/.env (and never under the pattern).
+  assert.ok(treeRowOf(doc, "/home/u/shop/.evn").querySelector(".file-missing"));
+  assert.equal(treeRowOf(doc, "/home/u/shop/.env").querySelector(".file-missing"), null);
+  const seen: string[] = [];
+  for (const [i, where] of [[0, ["deploy", "Gets a masked copy"]], [1, ["api.stripe.com", "Gets the real value without asking"]], [2, ["Any AI", "Always sees it masked"]]] as const) {
+    tabs(doc)[i].click();
+    await tick();
+    const [name, group] = where;
+    const evn = fileIn(doc, name, group, "~/shop/.evn");
+    assert.equal(evn.textContent, "~/shop/.evn " + LOST, `${name}: after its name`);
+    const more = evn.querySelector(".by-who-more");
+    assert.equal(more.textContent, " " + LOST, "in the grey words beside it, as reach and how are");
+    assert.equal(more.className, "by-who-more", "no colour, no icon of its own");
+    const button = evn.querySelector("button.by-who-link");
+    assert.equal(button.getAttribute("aria-label"), "Show the rule for ~/shop/.evn in Your rules " + LOST);
+    assert.equal(button.textContent, "~/shop/.evn", "the button holds the chip alone");
+    const env = fileIn(doc, name, group, "~/shop/.env");
+    assert.equal(env.textContent, "~/shop/.env", `${name}: the real file has no mark`);
+    assert.equal(env.querySelector("button").getAttribute("aria-label"), "Show the rule for ~/shop/.env in Your rules");
+    seen.push(selected(doc));
+  }
+  assert.deepEqual(seen, ["Programs", "Hosts", "AI"]);
+  // A pattern rule is never marked; a rule with no row under Your rules is not either.
+  tabs(doc)[2].click();
+  await tick();
+  assert.equal(fileIn(doc, "Any AI", "Always sees it masked", "~/shop/*.key").textContent, "~/shop/*.key every matching file");
+  const old = fileIn(doc, "Any AI", "Always sees it masked", "~/old/.env");
+  assert.equal(old.textContent, "~/old/.env", "no row: the page does not know");
+  assert.equal(old.querySelector("button"), null);
+  // A value of a file whose rule names nothing is marked as its file is.
+  assert.equal(fileIn(doc, "Any AI", "Always sees it masked", "~/gone/.env").textContent, "~/gone/.env " + LOST);
+  tabs(doc)[1].click();
+  await tick();
+  const value = fileIn(doc, "api.stripe.com", "Gets the real value without asking", "~/gone/.env: STRIPE_KEY");
+  assert.equal(value.textContent, "~/gone/.env: STRIPE_KEY " + LOST);
+  assert.equal(value.querySelector("button").getAttribute("aria-label"), "Show the rule for ~/gone/.env: STRIPE_KEY in Your rules " + LOST);
+  // The button still opens its rule's row, which says the full sentence.
+  fileIn(doc, "api.stripe.com", "Gets the real value without asking", "~/shop/.evn").querySelector("button").click();
+  await tick();
+  assertOpened(doc, "/home/u/shop/.evn", "a rule on nothing");
+  assert.match(doc.querySelector("#files-tree .file-detail").textContent, /Nothing at this path on this computer/);
+});
+
+test("§4.25aa: the mark follows Your rules as drawn: with no flag on the row there is no mark (queue item #225)", async () => {
+  const plain = { panel: { ...LOST_PANEL.panel, yourRules: LOST_PANEL.panel.yourRules.map((r) => ({ ...r, missing: undefined })) } };
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/rules", routes: { "GET policy/panel": plain, "GET policy/by-who": { byWho: LOST_VM } } });
+  await tick();
+  for (const b of tabs(doc)) {
+    b.click();
+    await tick();
+    assert.doesNotMatch(card(doc).textContent, /nothing at this path/, b.textContent);
+    for (const x of [...doc.querySelectorAll("#by-who-list button")] as any[]) assert.doesNotMatch(x.getAttribute("aria-label"), /nothing/);
   }
 });

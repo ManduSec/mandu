@@ -20,6 +20,13 @@
  *     (twin-writes.ts `staleScopeDiscardedWrites`; plan 10 §4.1);
  *   - a DEAD legacy `${base}/arbiter.sock` file (it would win the
  *     resolution order in arbiter-sock.ts and break the next launch);
+ *   - the service's attachment directories (`attachments/<session>/`, the
+ *     proxy pool of `mandu serve`, openclaw-plugin.md §3.2) whose pool, the
+ *     service's main process its record names, is gone: a live one, a
+ *     dashboard by its title, is never touched (nor its proxies or port
+ *     files); once it is gone, a proxy still running there (its lifeline
+ *     should have ended it) is stopped after its title confirms it, and the
+ *     directory goes; the pool's own record goes with its dead pid;
  *   - qemu guests the VM test harnesses registered (`vm-guests/<id>.json`,
  *     scripts/lib/guest-registry.sh) whose OWNER harness is gone: a live one
  *     is stopped only after its pid's start time and cmdline CONFIRM it is
@@ -252,7 +259,9 @@ export interface ReapAction {
     | "rm-stale-scope-dir"
     | "rm-dead-legacy-sock"
     | "kill-orphan-guest"
-    | "rm-dead-guest";
+    | "rm-dead-guest"
+    | "kill-orphan-attachment-proxy"
+    | "rm-stale-attachment";
   /** What to remove (dirs/links/socket files) or the instance dir of a kill.
    *  For the guest kinds: the registry entry. */
   path: string;
@@ -690,6 +699,11 @@ async function planReapIn(baseH: DirHandle, base: string, deps: ReapDeps, notes:
   // scratch dir goes. An unregistered qemu is never seen here at all.
   planGuests(baseH, base, deps, actions, notes);
 
+  // 1d. The service's attachment directories (`attachments/`, the proxy pool
+  // of `mandu serve`, openclaw-plugin.md §3.2): kept while the pool its
+  // record names lives (a dashboard by its title); collected once it is gone.
+  planAttachments(baseH, base, deps, actions, notes);
+
   // 2. Dangling `current` (existsSync follows the link; false = dangling).
   const link = join(base, "current");
   if (lstatIn(baseH, "current")?.isSymbolicLink() && !existsSync(link)) {
@@ -724,6 +738,59 @@ async function planReapIn(baseH: DirHandle, base: string, deps: ReapDeps, notes:
   }
 
   return actions;
+}
+
+/** The proxy's canonical title (anthropic-proxy server-main.ts). */
+const PROXY_CMDLINE = /^mandu-anthropic-proxy(\0|\s|$)/;
+
+/** Is the pool a record names alive, as a dashboard (its title)? */
+function poolAlive(pid: number | null, deps: ReapDeps): boolean {
+  return pid !== null && deps.pidAlive(pid) && DASHBOARD_CMDLINE.test(deps.cmdlineOf(pid) ?? "");
+}
+
+function planAttachments(baseH: DirHandle, base: string, deps: ReapDeps, actions: ReapAction[], notes: string[]): void {
+  const h = openRegistry(baseH, "attachments", notes);
+  if (h === null) return;
+  const root = join(base, "attachments");
+  try {
+    for (const name of listDir(h)) {
+      const st = lstatIn(h, name);
+      if (st === null) continue;
+      if (name === "pool.json") {
+        const rec = manifestOf(readJsonIn(h, name));
+        if (st.isFile() && !poolAlive(rec?.pid ?? null, deps)) {
+          actions.push({ kind: "rm-stale-attachment", path: join(root, name), ...(rec ? { pid: rec.pid } : {}), detail: `attachments/pool.json: the pool${rec ? ` (pid ${rec.pid})` : ""} is gone` });
+        }
+        continue;
+      }
+      if (!st.isDirectory()) {
+        notes.push(`attachments/${name} skipped: ${st.isSymbolicLink() ? "a symbolic link" : "not a directory"}`);
+        continue;
+      }
+      let rec = null as { pid?: unknown; proxyPid?: unknown } | null;
+      try {
+        const dh = openDirIn(h, name);
+        try { rec = readJsonIn(dh, "pool.json") as { pid?: unknown; proxyPid?: unknown } | null; } finally { closeDir(dh); }
+      } catch (e) {
+        notes.push(`attachments/${name} skipped: ${(e as Error).message}`);
+        continue;
+      }
+      const pid = typeof rec?.pid === "number" ? rec.pid : null;
+      if (pid === null && deps.now() - st.mtimeMs < MANIFESTLESS_GRACE_MS) continue; // a pool writing it now
+      if (poolAlive(pid, deps)) continue; // a live service's: never touched
+      const proxy = typeof rec?.proxyPid === "number" ? rec.proxyPid : null;
+      if (proxy !== null && deps.pidAlive(proxy) && PROXY_CMDLINE.test(deps.cmdlineOf(proxy) ?? "")) {
+        actions.push({
+          kind: "kill-orphan-attachment-proxy", path: join(root, name), pid: proxy,
+          detail: `attachment ${name}: its pool${pid !== null ? ` (pid ${pid})` : ""} is gone; SIGTERM its proxy pid ${proxy}`,
+        });
+        continue;
+      }
+      actions.push({ kind: "rm-stale-attachment", path: join(root, name), detail: `attachment ${name}: its pool${pid !== null ? ` (pid ${pid})` : ""} is gone` });
+    }
+  } finally {
+    closeDir(h);
+  }
 }
 
 /**
@@ -767,6 +834,13 @@ export async function executeReapAction(action: ReapAction, base: string, deps: 
         }
       }
       removeUnderBase(base, action.path, "file");
+      break;
+    case "kill-orphan-attachment-proxy":
+      // Its directory goes at the next reap, once the proxy is gone.
+      if (PROXY_CMDLINE.test(deps.cmdlineOf(action.pid!) ?? "")) deps.kill(action.pid!, "SIGTERM");
+      break;
+    case "rm-stale-attachment":
+      removeUnderBase(base, action.path, ["dir", "file"]);
       break;
     case "kill-orphan-arbiter":
     case "kill-orphan-dashboard":

@@ -2,7 +2,8 @@
  * path-kinds.test — which rule paths are files on disk, the look the panel,
  * the by-who card and the Secrets labels take so a rule reaching everything
  * inside a file is worded as that file (dashboard.md §4.25f *A rule on a file
- * reads as a file*). Mandu-new.
+ * reads as a file*), and which have nothing there, so a rule on a misspelt
+ * or moved path says so (§4.25f *A rule on nothing says so*). Mandu-new.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -10,7 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { filePaths } from "../../../src/server/path-kinds.js";
+import { filePaths, pathKinds } from "../../../src/server/path-kinds.js";
 
 test("filePaths: a file and a link to one are files; a folder, a link to one, a missing path, a pattern (even one a file is named after) and a relative path are not", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "mandu-path-kinds-"));
@@ -47,4 +48,42 @@ test("filePaths: a look that does not answer in time (a hung mount) lists nothin
   answerLate!();
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual([...got], ["/w/deploy.token"]);
+});
+
+test("pathKinds: a missing path and one under a file (ENOTDIR) are missing; a file, a folder, a pattern and a relative path are not", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "mandu-path-kinds-"));
+  try {
+    const file = join(tmp, ".env");
+    const dir = join(tmp, "secrets");
+    writeFileSync(file, "x\n");
+    mkdirSync(dir);
+    const typo = join(tmp, ".evn");
+    const under = join(file, "inside");
+    const got = await pathKinds([file, dir, typo, under, join(tmp, "*.evn"), ".evn", typo]);
+    assert.deepEqual([...got.missing].sort(), [typo, under].sort());
+    assert.deepEqual([...got.files], [file]);
+    // filePaths is the files half, unchanged.
+    assert.deepEqual([...(await filePaths([file, dir, typo, under]))], [file]);
+    const none = await pathKinds([]);
+    assert.deepEqual([none.files.size, none.missing.size], [0, 0]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("pathKinds: a path that cannot be read (EACCES) or whose look does not answer in time is never called missing", async () => {
+  const fail = (code: string) => Object.assign(new Error(code), { code });
+  let answerLate: (() => void) | undefined;
+  const look = (p: string) =>
+    p === "/locked/.env" ? Promise.reject(fail("EACCES"))
+    : p === "/io/.env" ? Promise.reject(fail("EIO"))
+    : p === "/hung/.env" ? new Promise<{ isDirectory(): boolean }>((_, reject) => { answerLate = () => reject(fail("ENOENT")); })
+    : Promise.reject(fail("ENOENT"));
+  const got = await pathKinds(["/locked/.env", "/io/.env", "/hung/.env", "/gone/.env"], { timeoutMs: 30, look });
+  assert.deepEqual([...got.missing], ["/gone/.env"], "only the look that said ENOENT");
+  assert.equal(got.files.size, 0);
+  // A look that answers missing after the timer changes nothing already returned.
+  answerLate!();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual([...got.missing], ["/gone/.env"]);
 });

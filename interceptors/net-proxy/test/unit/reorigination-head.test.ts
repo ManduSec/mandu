@@ -114,6 +114,13 @@ test("Accept-Encoding becomes identity in place; hop-by-hop headers are dropped;
   );
 });
 
+test("Expect: 100-continue is not forwarded: the proxy answered it and sends the whole body (aws-sigv4-resign.md §4)", () => {
+  assert.equal(
+    reoriginationHead("PUT", "/b/k", { Host: "h", Expect: "100-continue", "Content-Length": "5" }, "h", 5),
+    head("PUT /b/k HTTP/1.1", "Host: h", "Content-Length: 5", "Accept-Encoding: identity"),
+  );
+});
+
 test("a header value holding a line break (a resolved value can) throws: nothing is sent (fail-closed)", () => {
   for (const bad of [`Bearer ${KEY}\r\nX-Smuggled: 1`, `${KEY}\n`, `a\0b`]) {
     assert.throws(() => reoriginationHead("GET", "/", { Host: "h", Authorization: bad }, "h", 0), /line break/);

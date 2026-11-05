@@ -15,19 +15,24 @@
  *   - the file is read once while it is unchanged;
  *   - behind the sign-in gate, signed out, each answers 401 before it runs;
  *     with the account's credentials, 200;
+ *   - before any scan (no file kept) the head is the step and the line
+ *     under it, "This page shows what it found when it finishes." (§4.25ai
+ *     *Before any scan, the step comes first*), Home's card without it;
+ *     once a scan is kept the next read has no such line, and its sections;
  *   - the oracle: no 8-character run of the planted value in any answer.
  * Axes: none (display only; the record is a `secrets`-mode scan, no arbiter,
  * no model). Mandu-new test.
  */
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DashboardServer, type DashboardServerOptions } from "../../src/server.js";
 import type { EventSource } from "../../src/event-source.js";
 import { ADMIN_OPTS } from "../unit/admin-session.js";
 import { largeScanRecord } from "../unit/view-model/large-scan-fixture.js";
+import { scanItemIdOf } from "../../src/view-model/last-scan.js";
 
 
 // Assembled at run time: this file holds no credential-shaped literal.
@@ -148,6 +153,43 @@ test("the head, a section's pages and its query, a row's examples; 404, 409; rea
   }
 });
 
+test("before any scan the head is the step and its line; once a scan is kept, the next read has neither and draws the findings", async () => {
+  const h = homeWith(null);
+  rmSync(h.file);
+  const { base, dash } = await serve(h);
+  const texts: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const get = async (path: string): Promise<any> => {
+    const res = await fetch(`${base}/api/${path}`);
+    const text = await res.text();
+    texts.push(text);
+    assert.equal(res.status, 200, path);
+    return JSON.parse(text);
+  };
+  try {
+    const none = (await get("scan")).scan;
+    assert.equal(none.ran, false);
+    assert.deepEqual(none.againParts, [{ kind: "text", text: "Run it in a terminal: " }, { kind: "code", text: "mandu scan", run: true }]);
+    assert.equal(none.stepNote, "This page shows what it found when it finishes.");
+    assert.deepEqual(none.sections, []);
+    assert.match(none.stopParts.map((p: { text: string }) => p.text).join(""), /^To keep your secrets from the AI from now on, start your agent with /);
+    const card = (await get("home")).scan;
+    assert.equal(card.ran, false);
+    assert.equal("stepNote" in card, false, "Home's card is not changed");
+
+    writeFileSync(h.file, JSON.stringify(largeScanRecord({ plant: PLANT, named: 3 })), { mode: 0o600 });
+    const kept = (await get("scan")).scan;
+    assert.equal(kept.ran, true);
+    assert.equal(kept.stepNote, null);
+    assert.deepEqual(kept.againParts.map((p: { text: string }) => p.text), ["Run it again: ", "mandu scan"]);
+    assert.ok(kept.sections.find((s: { id: string }) => s.id === "yours").items.length > 0, "the findings");
+    assert.doesNotMatch(texts[texts.length - 1]!, /shows what it found when it finishes/);
+    for (const text of texts) noValue("an answer", text);
+  } finally {
+    await dash.close();
+  }
+});
+
 test("behind the sign-in gate, signed out, each Scan read answers 401 before it runs; with the account, 200", async () => {
   const h = homeWith(largeScanRecord({ known: 1, looks: 30, named: 30, plant: PLANT }));
   const { base, dash } = await serve(h, { basicAuth: { user: "u", password: "scan pass words" } });
@@ -163,6 +205,67 @@ test("behind the sign-in gate, signed out, each Scan read answers 401 before it 
       assert.equal(ok.status, 200, `${path} with the account`);
       noValue(path, await ok.text());
     }
+  } finally {
+    await dash.close();
+  }
+});
+
+test("a row's places (§4.25ai *Where the real value is now*): the server looks whether each chat-history file is still there, a regular file under the home, its link not followed; a `..` is never looked at", async () => {
+  const placed = (file: string) => ({ agent: "claude-code", file, mandu: "without", first: "2026-10-27T00:37:00.000Z", sessions: 1 });
+  const rec = {
+    version: 1, ranAt: "2026-10-28T09:00:00.000Z", sessions: { "claude-code": 5 }, duringMandu: 0, known: 1, dropped: 0,
+    capped: { overTime: 0, overBytes: 0, tooBig: 0, overFiles: 0, readFailed: 0 }, suggestions: null,
+    findings: [{
+      kind: "known", preview: "TOKEN in ~/app/.env", source: { path: "~/app/.env", name: "TOKEN" }, sessions: 5, agents: ["claude-code"], how: { "command-output": 5 }, projects: [], duringMandu: 0,
+      examples: [{ at: "2026-10-27T00:37:00.000Z", agent: "claude-code", how: "command-output", command: "cat .env", mandu: "without" }],
+      places: [placed("~/.claude/projects/p/here.jsonl"), placed("~/.claude/projects/p/gone.jsonl"), placed("~/.claude/projects/p/link.jsonl"), placed("~/.claude/projects/../p/here.jsonl"), placed("~/.claude/projects/p")],
+    }],
+  };
+  const h = homeWith(rec);
+  mkdirSync(join(h.home, ".claude", "projects", "p"), { recursive: true });
+  writeFileSync(join(h.home, ".claude", "projects", "p", "here.jsonl"), "{}\n");
+  symlinkSync(join(h.home, ".claude", "projects", "p", "here.jsonl"), join(h.home, ".claude", "projects", "p", "link.jsonl"));
+  const { base, dash } = await serve(h);
+  try {
+    const res = await fetch(`${base}/api/scan/item/f0`);
+    assert.equal(res.status, 200);
+    const rows = ((await res.json()) as { detail: { where: { rows: Array<{ kind: string; file: string | null; now: string }> } } }).detail.where.rows;
+    assert.deepEqual(rows.filter((r) => r.kind === "history").map((r) => [r.file, r.now]), [
+      ["~/.claude/projects/p/here.jsonl", "Still there"],
+      ["~/.claude/projects/p/gone.jsonl", "Gone from this computer"],
+      ["~/.claude/projects/p/link.jsonl", "Gone from this computer"],
+      ["~/.claude/projects/../p/here.jsonl", "In it when the scan ran"],
+      ["~/.claude/projects/p", "Gone from this computer"],
+    ], "a link and a folder are no chat-history file; a `..` is not looked at");
+    // The head and a section's page are the cached page: no look at a file.
+    const head = await (await fetch(`${base}/api/scan`)).text();
+    assert.equal(head.includes("Still there"), false);
+  } finally {
+    await dash.close();
+  }
+});
+
+test("a link to the 26th of your secrets (§4.25ai *A session card opens its row*): its id is f25, and the section's second page, the read the Scan page reads on with, starts at it; no value in the answer", async () => {
+  const rec = largeScanRecord({ known: 30, looks: 5, named: 5, plant: PLANT });
+  const h = homeWith(rec);
+  const { base, dash } = await serve(h);
+  try {
+    const known = rec.findings.filter((f) => f.kind === "known");
+    assert.equal(known.length, 30);
+    assert.equal(scanItemIdOf(rec, known[25]!), "f25", "the link's id: the row's place in the section");
+    const head = await fetch(`${base}/api/scan`);
+    const scan = (await head.json()).scan;
+    const yours = scan.sections.find((s: { id: string }) => s.id === "yours");
+    assert.deepEqual([yours.total, yours.items.length, yours.next], [30, 25, 25], "the head draws the first 25 only");
+    assert.ok(!yours.items.some((i: { id: string }) => i.id === "f25"));
+    const res = await fetch(`${base}/api/scan/section/yours?after=25&rev=${encodeURIComponent(scan.rev)}`);
+    const text = await res.text();
+    assert.equal(res.status, 200);
+    const page = JSON.parse(text);
+    assert.deepEqual(page.items.map((i: { id: string }) => i.id), ["f25", "f26", "f27", "f28", "f29"]);
+    assert.match(JSON.stringify(page.items[0]), /SERVICE_KEY_25\b/, "the 26th secret's row");
+    assert.equal(page.next, null, "the section ends there");
+    noValue("scan/section/yours?after=25", text);
   } finally {
     await dash.close();
   }

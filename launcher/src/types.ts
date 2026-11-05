@@ -292,6 +292,15 @@ export interface LaunchPlan {
   noProxyExtra: string[];
   /** Session-CA cert path once MITM trust is wired (Part 2). */
   mitmCaCert?: string;
+  /** The egress proxy's database login relays (db-relays.ts), each with its
+   *  loopback port, set by the manager from the proxy it started: the
+   *  connect guard performs the agent tree's connects to each database on
+   *  its relay (`--redirect`). Absent: none (no password file or variable
+   *  names a database, the confidentiality axis off, or no egress proxy). */
+  dbRelays?: import("./db-relays.js").DbRelayBound[];
+  /** The file the agent's libpq trusts for the relays' TLS
+   *  (`PGSSLROOTCERT`; db-relays.ts `writeDbRootCert`). */
+  dbRootCert?: string;
   /** System CAs + the session CA in one PEM, for clients whose CA variable
    *  REPLACES the system store (curl, OpenSSL, requests, git); absent when no
    *  system bundle was found (then only the additive Node variable is set). */
@@ -301,6 +310,11 @@ export interface LaunchPlan {
    *  CA, by variable; these win over the session-only files so the user's CA
    *  survives TLS inspection (confidentiality-plan-12 F6). */
   mitmUserTrust?: Record<string, string>;
+  /** A JVM's trust store of the session's certificates and the user's own
+   *  JAVA_TOOL_OPTIONS (java-trust.ts, kube-wire-release.md §5): the env
+   *  composer sets JAVA_TOOL_OPTIONS from them. Absent under
+   *  MANDU_JAVA_TRUST=0 or without inspection. */
+  mitmJava?: { trustStore: string; userOptions?: string };
   /** exec-wrap PATH-shim dir once created (Part 2). */
   shimDir?: string;
   /**
@@ -559,6 +573,16 @@ export interface LaunchPlan {
    *  the launch when secrets cannot be confined, instead of the default degrade
    *  to the `gated` posture. Wins over --best-effort. Absent = off. */
   requireConfinement?: boolean;
+  /** --require-own-confinement (openclaw-plugin.md §10): `requireConfinement`
+   *  for this launch's own posture only; an unconfined launch or a plugin
+   *  session beside it is warned about, not refused. Absent = the full
+   *  --require-confinement rule. */
+  requireOwnConfinementOnly?: boolean;
+  /** --write-protect <path> (repeatable; openclaw-plugin.md §10): more paths
+   *  the agent's tree may not change, refused as policy.yaml
+   *  `write_protect.deny` entries are (write-protection.md §5). Only adds
+   *  protection. */
+  writeProtectExtra?: string[];
   /** Mask secret-shaped environment variables in the agent's environment
    *  (plan 10 §11.4). Default on; `--no-env-secrets` / `MANDU_ENV_SECRETS=0`. */
   envSecrets?: boolean;

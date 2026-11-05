@@ -36,6 +36,12 @@ test("readRefusals: the reads a note refused, only when refusing them is all it 
   assert.equal(readRefusals(""), null);
   assert.equal(noteMasks(DENIED), false);
   assert.equal(noteMasks(`${MASKED}\n${DENIED}`), true);
+  // plan 10 §4.1, "The model is told at the call": a `copy:` line only
+  // explains (Edit's refused save of a .env, released as its own error)
+  const COPY = "[mandu:secret] copy: orders-app/.env is a protected file: you and the programs you run see and change only its placeholder copy, never the user's real file.";
+  assert.equal(noteMasks(COPY), false, "a copy: line alone masks nothing");
+  assert.equal(noteMasks(`${MASKED}\n${COPY}`), true, "beside a masked line the step is still masked");
+  assert.deepEqual(readRefusals(`${DENIED}\n${COPY}`), { denied: 1, held: 0 }, "and it refuses no read");
 });
 
 test("refusedReadWords: the session page's words, counts only (never a program or a path)", () => {

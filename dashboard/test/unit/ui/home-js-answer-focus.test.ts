@@ -13,8 +13,8 @@
  *     line it leaves where its card was (dashboard.md §4.25 *An answer says
  *     what it did*, since 2026-10-22; before, the card that took its place,
  *     else the one before it, else the list's line); a rule change's answer
- *     to the next request, else the section's or the page's heading; never
- *     an answer button;
+ *     too, since 2026-10-25 (before, to the next request, else the section's
+ *     or the page's heading); never an answer button;
  *   - an answered row still drawn (Block instead, Undo) and a let-through's
  *     row keep it;
  *   - a refused answer gives it back to the button pressed, described by
@@ -150,7 +150,7 @@ test("Answered earlier: Block instead keeps the focus on its row, drawn again wi
   assert.equal(focused(doc), cardOf(doc, "approvals-answered", "egr-9"));
 });
 
-test("a rule change your agent asked for: the next request takes the focus; with none left, the page's heading", async () => {
+test("a rule change your agent asked for: the line its answer leaves takes the focus, each time; with none left, the block stays shown under it", async () => {
   const P1 = { id: "pp-000001", status: "pending", requester: "Your agent", createdAt: Date.now() - 60_000, rows: [[{ kind: "text", text: "Trust content from pypi.org" }]], wouldLet: [], capped: false, overBroad: false, reason: "" };
   const P2 = { ...P1, id: "pp-000002" };
   let pending = [P1, P2];
@@ -162,11 +162,14 @@ test("a rule change your agent asked for: the next request takes the focus; with
   await tick();
   press(button(cardOf(doc, "approvals-proposals", "pp-000001"), "Allow"));
   await tick(30);
-  assert.equal(focused(doc), cardOf(doc, "approvals-proposals", "pp-000002"));
+  const line = () => doc.querySelector("#approvals-proposals .answer-line");
+  assert.equal(focused(doc), line(), "the line where the card was");
+  assert.ok(cardOf(doc, "approvals-proposals", "pp-000002"), "the next request is still there");
   press(button(cardOf(doc, "approvals-proposals", "pp-000002"), "Not now"));
   await tick(30);
-  assert.equal(doc.getElementById("approvals-proposals-block").hidden, true);
-  assert.equal(focused(doc), doc.querySelector("#page-approvals h1"));
+  assert.equal(doc.getElementById("approvals-proposals-block").hidden, false, "shown under its line");
+  assert.match(line().textContent, /^Not now:/, "the next answer's line replaced the first");
+  assert.equal(focused(doc), line());
 });
 
 test("Undo: its row keeps the focus, drawn again as undone", async () => {
@@ -194,7 +197,21 @@ test("a let-through that worked: its row keeps the focus once its buttons go", a
   } });
   await tick();
   const row = doc.querySelector("#agent-story .prompt-note-item");
-  press(button(row, "Let it through in this message"));
+  // It asks in the row first (dashboard.md §4.25y); its Let it through
+  // answers from the button that asked, which goes off on its way.
+  const opener = button(row, "Let it through in this message");
+  opener.focus();
+  opener.click();
+  await tick();
+  const yes = button(row, "Let it through");
+  yes.focus();
+  yes.click();
+  const off = focused(doc);
+  assert.equal(off, button(row, "Let it through in this message"), "the answer goes from the button that asked");
+  assert.equal(off.disabled, true);
+  off.disabled = false;
+  off.blur();
+  off.disabled = true;
   await tick(30);
   assert.equal(row.querySelector("button.prompt-let-once"), null, "its buttons are gone");
   assert.equal(focused(doc), row);

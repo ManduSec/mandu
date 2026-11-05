@@ -67,8 +67,12 @@
 #     the AgentDojo corpus): runs only when the integrity axis is revived
 #     (docs/design/architecture/protection-modes.md §10).
 #
-# No macOS job: a maintainer runs the manifest's darwin entries on a Mac by hand
-# (docs/development.md, "Developing and testing on macOS").
+#   macos         the manifest's darwin entries (scripts/ci/macos-run.sh) on
+#                 GitHub's Apple silicon and Intel images, in the release check
+#                 and a manual run only, never a pull request; it never blocks
+#                 (continue-on-error: macOS is not a release gate). Master's
+#                 day-to-day macOS check is the maintainers' self-hosted Mac
+#                 (continuous-integration.md §12.6).
 
 name: CI
 
@@ -112,9 +116,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The engines floor (launcher/package.json ">=22.13.0", the first release with
-  # node:sqlite unflagged). Test at the floor so a newer-Node API cannot land.
-  NODE_VERSION: "22.13.0"
+  # The engines floor (launcher/package.json ">=22.15.0": node:sqlite unflagged
+  # from 22.13, zstd in node:zlib from 22.15). Test at the floor so a newer-Node
+  # API cannot land.
+  NODE_VERSION: "22.15.0"
 
 # While the repository is private, Actions minutes come out of the free plan's
 # monthly quota, and the GitLab pipeline already runs all of this (a superset)
@@ -375,3 +380,47 @@ jobs:
         # --strict-skips holds each to ci.maxSkip 0 (an unreachable advisory
         # database or a missing cargo-audit fails, never skips to green).
         run: node scripts/run-suites.mjs --only deps.audit-npm,deps.audit-cargo --strict-skips --out "$RUNNER_TEMP/suites"
+
+  macos:
+    # The macOS check (continuous-integration.md §12.6) on a clean Mac of each
+    # CPU: the release check (release.yml's call) and a manual run, never a
+    # pull request. A red is read and fixed, never a hold: macOS is not a
+    # release gate (packaging.md §11.3), so the job cannot fail the workflow.
+    name: macOS (${{ matrix.os }})
+    if: ${{ (!github.event.repository.private || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-26-intel]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
+
+      - name: OpenSSL 3
+        # The TLS suites need an OpenSSL 3; macOS's own openssl is LibreSSL.
+        run: |
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          echo "MANDU_CI_OPENSSL_PREFIX=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
+      - name: Run the darwin entries
+        # Installs every package (npm ci), runs the darwin kinds with a scratch
+        # HOME, and fails when a Seatbelt entry did not run in full.
+        run: scripts/ci/macos-run.sh --out "$RUNNER_TEMP/suites"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: macos-${{ matrix.os }}
+          path: ${{ runner.temp }}/suites/
+          retention-days: 14
+          if-no-files-found: ignore

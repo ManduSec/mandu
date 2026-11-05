@@ -580,7 +580,7 @@ expect_no "no failed Mandu user unit (the launch's scope)" 'mandu' /tmp/units-fa
 reap_check alice boot
 
 # ── step N18: an unsupported Node is refused in words (§3.4) ─────────────────
-# engines.node is >= 22.13 (node:sqlite). With Node 18 the install may go
+# engines.node is >= 22.15 (node:sqlite, zstd). With Node 18 the install may go
 # through (npm only warns on engines), so the refusal is the first run's:
 # bin/mandu.mjs checks the version before the bundle loads.
 step N18 "Node 18 is refused with a clear message"

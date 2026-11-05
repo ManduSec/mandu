@@ -139,7 +139,7 @@ for research for example, write to hello@mandusecurity.com.
 |---|---|---|
 | Claude Code | 2.1.273 to 2.1.295 | CI guest image pin (`scripts/ci/pins.env`; the `replay-drill` kind runs every push against it): 2.1.273 until 2026-10-09, 2.1.295 since; live batteries on 2.1.273 (160 recorded sessions) and 2.1.281 (92), `tool_surface` "all known to the inbound spec"; 2.1.285 (32 sessions, 38 tools, all known) and 2.1.287 (every advertised tool known): the claude differential lane 70/70 in the CI guest with the secret bind on. 2.1.292 (2026-10-07, below): every advertised tool known once DesignSync and PushNotification were mapped; the claude differential lane, the per-push replay drills and the agent-SDK suite on the host. 2.1.294 (2026-10-09, below): the live drills on haiku (the 2026-10-08/09 pre-release run and its reruns, `tool_surface` all known), the interactive surface (31 tools, `Artifact`, `ArtifactComments`, `ArtifactData`, `EndConversation` and `SendFeedback` newly mapped, the Artifact uploads gated) and the headless 23 all mapped. 2.1.295 (2026-10-09, below): every advertised tool mapped (the headless 23, the interactive 31), the claude differential lane 70/70 on the host (the 65 CI shards), the per-push replay drills (7), the agent-SDK suite (9), the fresh-agents VM legs on Ubuntu 24.04 and 26.04 75/75, and a live leg (haiku, mode `secrets`: `conf-read-exfil` and `util-quote-line` pass); the CI guest's pin since 2026-10-09: the per-push `replay-drill` kind in the guest (52 entries, the claude differential shards among them) green. 2.1.258 failed CI twice, so it is below the floor. |
 | Codex | 0.136.0 to 0.162.0 | openai-proxy wire verified on 0.136 (Responses API) and 0.154 (script-cell exec, MCP; §6). 0.159.1: the agent-fake Codex suites (`integration.codex`, `integration.codex-view-map`, `integration.codex-chatgpt`) green, and live on the ChatGPT backend: a plain and a tool turn, `codex-e2e` (`reasoning`, `benign-exec`), and a session that compacted (`agent-sign-in.md` §2.8). 0.160.0 (2026-10-07, below): the agent-fake Codex suites with `integration.codex-policy-tools`, the per-push replay drills, the agent-SDK suite, every tool both wires advertise mapped; live on the ChatGPT backend (gpt-5.6-luna, 2026-10-07): `codex-e2e` `reasoning` and `benign-exec`, `codex-mcp` CMCP-1. 0.162.0 (2026-10-09, below and §6.4): the same suites, the codex differential lane 7/7, every tool both wires advertise mapped (the same tools as 0.160; the classic wire's prompt is now a developer message, pinned); live on the ChatGPT backend (`conf-read-exfil`, 2026-10-09). The CI guest's pin since 2026-10-09 (0.144.1 before): the per-push `replay-drill` kind, the codex sandbox entries and the codex differential lane 7/7 in the guest (`fidelity-permission-prompt` on the `on-request` posture, no fold; `differential-interactive.md` §34.1) |
-| OpenClaw | 2026.3.12 to 2026.9.9 | multi-agent e2e lanes (`agent-e2e-harness.md`); fresh-agents legs through `mandu` on 2026.3.12, 2026.6.35, 2026.7.1 and 2026.9.6 (Node 24), both modes (`os-test-matrix.md §10` §14). Every tool 2026.7.1 advertises under `tools.profile: "coding"` is mapped in `openclaw-inbound.ts`; every tool 2026.9.6 advertises in each Tool Search mode is mapped, refused on the wire, or a dispatcher gated as the tool it runs (§2.1; unit tests hold both captured surfaces to the spec and the gate table). §2.1 also covers what the other profiles add. 2026.9.9 (2026-10-09, §2.1 "OpenClaw 2026.9.9 and Code Mode"): fresh-agents legs through `mandu` (Node 24, Ubuntu 24.04 and 26.04, scripted model, `secrets`; 75/75 with every agent at its latest); `integration.openclaw-e2e` 8/8 (`inspect_symbol` called directly past 9.x's Tool Search; the replay engine reads 9.x's internal-context block, SQLite transcript and masked stored replies); every tool it advertises in each Tool Search mode (default, `tools`, `directory`, off) mapped, refused on the wire, or a dispatcher gated as the tool it runs; Code Mode (`exec{code}`, `wait`) refused on the wire and off in the run config; a live leg (haiku, mode `secrets`: `conf-read-exfil`, `conf-public-label-wins`, `util-write-file` and `util-shell-echo` pass). |
+| OpenClaw | 2026.3.12 to 2026.9.9 | multi-agent e2e lanes (`agent-e2e-harness.md`); fresh-agents legs through `mandu` on 2026.3.12, 2026.6.35, 2026.7.1 and 2026.9.6 (Node 24), both modes (`os-test-matrix.md §10` §14). Every tool 2026.7.1 advertises under `tools.profile: "coding"` is mapped in `openclaw-inbound.ts`; every tool 2026.9.6 advertises in each Tool Search mode is mapped, refused on the wire, or a dispatcher gated as the tool it runs (§2.1; unit tests hold both captured surfaces to the spec and the gate table). §2.1 also covers what the other profiles add. 2026.9.9 (2026-10-09, §2.1 "OpenClaw 2026.9.9 and Code Mode"): fresh-agents legs through `mandu` (Node 24, Ubuntu 24.04 and 26.04, scripted model, `secrets`; 75/75 with every agent at its latest); `integration.openclaw-e2e` 8/8 (`inspect_symbol` called directly past 9.x's Tool Search; the replay engine reads 9.x's internal-context block, SQLite transcript and masked stored replies); every tool it advertises in each Tool Search mode (default, `tools`, `directory`, off) mapped, refused on the wire, or a dispatcher gated as the tool it runs; Code Mode (`exec{code}`, `wait`) refused on the wire and off in the run config; a live leg (haiku, mode `secrets`: `conf-read-exfil`, `conf-public-label-wins`, `util-write-file` and `util-shell-echo` pass). The Mandu plugin in a real Gateway (attachment mode, scripted model): 2026.3.12, 2026.7.1-2, 2026.9.9 and 2026.10.7 per push, the newest nightly (§2.1 "The plugin in a real Gateway"). |
 | OpenCode | 1.18.13 to 1.18.35 | multi-agent e2e lane on 1.18.13. 1.18.35 (2026-10-09): the multi-agent e2e lane and the scripted-model replay catalog (`integration.opencode-e2e`, `opencode-hermetic`, `replay.opencode` util/conf/policy, `opencode-project-plugins`; the real-binary launcher component tests); the tool surface unchanged from 1.18.13, all known to the inbound spec; a live leg with the maintainers' live drill runner (haiku, mode `secrets`: `conf-read-exfil` and `conf-read-control`, no leak) |
 | OpenCode 2 | 2.0.23 to 2.0.26 | npm `@opencode/cli`, judged on its own range (below). The 2.x e2e and replay suites on 2.0.23 (`integration.replay-opencode2`, the CI guest's pin, blocking per push; the `tests/stack/opencode2-*` suites); the real-binary launcher component tests (`opencode-v2-standalone`, `opencode-v2-refusal`, `opencode-v2-config`) and sandbox tests (`integration.opencode2-own-server`, `-agent-identity`, `-shell-output`); a live check with the maintainers' live drill runner on `opencode2` (2026-10-05, run `watch-20261005T135829`, haiku, mode `secrets`: `conf-read-exfil`, `conf-net-exfil-blocked` and `conf-read-control` pass, 12 exchanges, hermetic). 2.0.26 (2026-10-09): the same e2e and replay suites (`integration.replay-opencode2`, `opencode2-e2e`, `replay.opencode2` util/conf/policy), the real-binary launcher component and sandbox tests (with `opencode-project-plugins`); the tool surface identical to 2.0.23 (every tool mapped but `execute`, which the proxy refuses); a live leg (haiku, mode `secrets`: `conf-read-exfil` and `conf-read-control` pass). §2.3 |
 | Goose | 1.53.0 to 1.54.0 | The CI guest's pin (`scripts/ci/pins.env`, the release tarball, sha256-checked). The replay suites on 1.53.0 (`integration.goose-e2e`, `integration.replay-push.goose` per push, `integration.replay.goose` nightly over 41 catalog scripts); the real-binary launcher component tests (`goose-real`, `goose-delivery`); every tool 1.53.0 advertises mapped, gated, refused on the wire or masked whole (`load` / `load_skill` mapped only under the guard; the `tool_surface` unknown list empty since 2026-10-09; §5.6); a live leg with the maintainers' live drill runner on `goose` (2026-10-05, run `watch-20261005T135717`, haiku, mode `secrets`: `conf-read-exfil` and `conf-read-control` pass, no leak, hermetic; on `conf-net-exfil-blocked` the model declined before reading, twice, so that drill's gate is covered by the replay lane); the differential interactive lane 13/13 (`integration.differential-goose`, nightly). 1.54.0 (2026-10-09): the replay suites (`integration.goose-e2e` 20/20, `replay-push.goose` 2/2, the `replay.goose` catalog 36 pass and 2 kernel-lane skips), the real-binary launcher component tests (`goose-real`, `goose-delivery` and the other `goose-*` files, 40/40), the same tool surface as 1.53.0, every tool mapped, gated, refused or masked whole; a live leg (haiku, mode `secrets`: `conf-read-exfil`, `conf-read-control` and `conf-public-label-wins` pass). §5.6 |
@@ -1359,6 +1359,156 @@ red with the fence off: `getaddrinfo ENOTFOUND`).
 version AND its `tool_surface` event reads "all known to the inbound spec"
 (map any new tool in the inbound spec first). Change both mirrors and the
 README row in one commit.
+
+**The Gateway as a service (2026-10-25).** `mandu openclaw` refuses
+`gateway start|restart|install|call|…` (`openclaw-argv.ts`): the service
+Gateway is started by systemd or launchd, never reads the per-run config,
+and would look protected and protect nothing. It stays refused. What
+changed is the advice: a resident Gateway is attached the other way round,
+with `mandu serve` beside it and the Mandu plugin inside it, written into
+the user's `openclaw.json` by `mandu openclaw install`
+([openclaw-plugin.md](openclaw-plugin.md) §8). Without the plugin
+installed the refusal names that path (`mandu serve start`, then `mandu
+openclaw install`); with it installed (enabled, in attachment mode) it
+says the Gateway is already attached and to run `openclaw gateway <sub>`
+without `mandu`. `mandu openclaw install|uninstall` are Mandu verbs (run.ts
+dispatches them before the launch allowlist; OpenClaw has no such
+subcommands). The attachment's guarantees are weaker than the wrapper's
+(openclaw-plugin.md §5): the model context keeps the proxy, files, exec
+and egress do not. Tests: `openclaw-argv.test.ts` (the wording, refused
+either way), `launcher/test/component/openclaw-install.test.ts`.
+
+**Confined commands: Mandu as the Gateway's sandbox (2026-10-26).** `mandu
+openclaw install --sandbox` (Linux, unprivileged user namespaces, OpenClaw
+2026.7 or later) makes the plugin OpenClaw's sandbox backend (`mandu`,
+through OpenClaw's `openclaw/plugin-sdk/sandbox` seam, as NVIDIA OpenShell
+plugs in): with `agents.defaults.sandbox` `{mode: "all", backend: "mandu",
+workspaceAccess: "rw"}` every command and every file tool of the agent runs
+in a box that is a real `mandu --target shell` launch, so files, exec and
+egress get the wrapper's `confined` guarantees for what the agent runs; the
+Gateway itself, other plugins' tools, MCP servers, nodes and the browser
+stay outside (openclaw-plugin.md §10). 2026.3.12 has no sandbox backend
+seam: its config schema refuses `sandbox.backend`, so the Gateway does not
+start with the tier, and nothing runs unconfined. Tests: the plugin's
+`sandbox-backend` component test, `tests/sandbox/openclaw-box.test.ts` (the
+box over the real launcher), `launcher/test/component/openclaw-install-sandbox.test.ts`,
+and the drill suite's `integration.openclaw-sandbox-backend` on a real
+Gateway per lane version.
+
+**The plugin's providers (Route 1, 2026-10-25).** The attachment routes
+the same providers the wrapper does ("Non-Anthropic models" in §4: the
+built-in `anthropic` and `openai`, and each `models.providers.<id>` with
+`api` `anthropic-messages`, `openai-completions` or `openai-responses` and a
+`baseUrl`), through the same model proxy and its per-provider
+`/_mandu/openai/<id>` routes, each to the provider's own address: `mandu
+openclaw install` records the addresses with the service, whose pool starts
+the session's proxy with them (openclaw-plugin.md §8.1). Two differences
+from the wrapper: an Anthropic-wire provider at its own address is routed
+too (one such address per session, the `anthropic` provider's), and a
+provider Mandu cannot route is refused unless the user leaves it as it is
+by name (`--leave-unprotected <id>`), where the wrapper refuses it outright.
+
+**The openrouter bypass (a security regression, closed 2026-10-25).**
+OpenClaw 2026.3.12 and 2026.3.13 resolve an `openrouter` model that neither
+their catalog nor `models.providers.openrouter.models` knows to a model of
+their own whose base URL is `https://openrouter.ai/api/v1`, whatever the
+provider's `baseUrl` (`resolveModelWithRegistry`, read from the published
+packages). From 2026.3.22 the bundled openrouter provider plugin builds that
+model and the provider's `baseUrl` is applied over it
+(`applyConfiguredProviderOverrides`); read on 2026.3.22, 2026.4.24,
+2026.5.12, 2026.6.35, 2026.7.1-2, 2026.8.35, 2026.9.6, 2026.9.9 and
+2026.10.7. Measured with a real `openclaw agent --local`, a scripted Chat
+Completions stand-in at the route and a recording forward proxy as
+`HTTPS_PROXY`: on 2026.3.12 an unlisted model's turn left as `CONNECT
+openrouter.ai:443` and never reached the route; listed, it reached the
+route; on 2026.9.9 the unlisted model reached the route (its only
+openrouter.ai connections are the bodyless model-capability listing).
+
+The exposure, before the fix. *Under the wrapper* on 2026.3.12, whose launch
+check judged providers and not models: a configured openrouter model
+OpenClaw does not know (primary, fallback, subagent, heartbeat, compaction,
+Active Memory), a key of the user's model allowlist naming one, or the
+`openrouter/*` key the run's allowlist fence wrote (on these releases an
+allowlist key is exact, so it is the model `*`, selectable mid-session),
+sent the model request, with the conversation and the raw tool results
+OpenClaw keeps, around the model proxy. OpenClaw sends it through
+`HTTPS_PROXY` (its `EnvHttpProxyAgent`), so it reached the session's
+egress proxy, where `openrouter.ai` is an ordinary host on the TLS-inspected
+leg (a model service, `PROVIDER_KEY_HOSTS`): the verbatim tripwire refuses a
+request carrying a registered value, and a placeholder leaves as written.
+What the egress proxy cannot catch is text it holds no value for: a
+labelled file's content the model proxy would have masked (on a host where
+the file layer does not swap the file for its twin), the user's messages,
+other tool output. So a labelled secret could reach a model not cleared
+for it. *Under the plugin*: install already refused a configured unlisted
+openrouter model (Route 1), but it wrote no model allowlist, and with none
+OpenClaw's `sessions.patch` accepts any model: measured on a real 2026.3.12
+Gateway, the model's own `sessions_spawn` with `model:
+"openrouter/<unlisted>"` was accepted and the child's turn went to
+openrouter.ai (cron's `payload.model` takes the same path; the
+`session_status` tool and `/model` refuse a model outside the catalog when
+there is no allowlist).
+
+The fences (fail-closed):
+
+- *The wrapper* (`agent-config.ts` `fenceOpenclawOpenrouter`, on a release
+  before 2026.3.22 or one the launch could not read, with `openrouter`
+  routed): every openrouter model the run can reach (its configured
+  references, `--model`, the allowlist's openrouter keys) is listed in the
+  run's `models.providers.openrouter.models` (`{id, name}` for one the user
+  does not list: an inline model carries the provider's base URL, the
+  proxy's route; a catalog model keeps its catalog metadata where the entry
+  is silent), and the allowlist's openrouter entries become exactly those
+  models, no wildcard. On these releases OpenClaw then refuses any other
+  openrouter model mid-session ("is not allowed", measured for
+  `session_status` and `sessions_spawn`). The launch's last check
+  (`openclawOpenrouterLeaks`) reads the file it is about to write and
+  refuses the launch if a model the run can reach would still go to
+  openrouter.ai. A release that honours the base URL is left as it was.
+- *The plugin* (openclaw-plugin.md §8.1, "The model fence"): install cannot
+  know which OpenClaw the Gateway runs, so on every release a configured
+  model, and a key of the user's allowlist, of `openrouter` must be listed
+  in `models.providers.openrouter.models`, an openrouter wildcard in the
+  allowlist is refused, and when the user keeps no allowlist install writes
+  one (each routed provider's `<id>/*`, openrouter's listed models by their
+  exact key, every configured model of those providers), recorded with the
+  service and removed by uninstall. That also closes the wider gap of a
+  catalog provider the config never names (`/model google/…`).
+
+Tests: unit, `launcher/test/unit/openclaw-openrouter-fence.test.ts` (the
+release boundary, the run config per version shape, the launch's last
+check, install's rule over the allowlist, the model fence, install then
+uninstall key for key, the declared record); component,
+`launcher/test/component/openclaw-install.test.ts` (the fence written,
+recorded and removed; a user's allowlist left; an unlisted openrouter key
+or a wildcard refused); stack, `tests/stack/openclaw-openrouter-bypass.test.ts`
+(the run config Mandu writes for 2026.3.12, resolved as 2026.3.12 resolves
+it, sends every reachable openrouter model to the route, the unfenced
+control to openrouter.ai; the request that went there anyway, at a real
+egress proxy with openrouter.ai routed to a recorder: a raw registered value
+refused with nothing sent, a placeholder left as written); and the plugin
+lane's 2026.3.12 leg (below), red with the fence off (the spawn accepted,
+`CONNECT openrouter.ai:443`).
+
+**The plugin in a real Gateway (2026-10-25).** The drill suite's OpenClaw
+plugin lane (`integration.openclaw-plugin-gateway`, per push, blocking)
+runs `openclaw gateway run` with the plugin in attachment mode, configured
+as `mandu openclaw install` leaves it, against a real arbiter and the
+session's real model proxy with a scripted model, on 2026.3.12 (the
+plugin's `compat.pluginApi` floor), 2026.7.1-2 (the pin), 2026.9.9 and
+2026.10.7, each version installed in the CI guest. On each, OpenClaw's own
+runtime report shows `mandu-inspect` loaded with exactly `before_tool_call`
+and `message_sending`; a labelled file read reaches the model only as its
+placeholder; the reply naming it reaches the chat as the placeholder; calls
+naming `~/.mandu`, `openclaw.json` and `mandu serve stop` are refused and
+never run; a reply carrying a registered value is cancelled before the
+chat. One more test runs the same on 2026.9.9 through `mandu serve`'s
+proxy pool, and one on 2026.3.12 holds the model fence: under the
+allowlist install writes, the model's `sessions_spawn` and `session_status`
+onto an openrouter model the install did not list are refused by OpenClaw,
+the next turn runs on the listed model at the route, and nothing is sent
+toward openrouter.ai (the Gateway's `HTTPS_PROXY` is a recording proxy). `integration.openclaw-plugin-gateway-latest` runs the same lane on
+the newest release in the nightly (openclaw-plugin.md §4 step 5, §7).
 
 ### 2.2 Mandu's own tools on each agent
 
@@ -2837,10 +2987,52 @@ refused; red before the shim routed).
   provider") are ROUTED through the model proxy (agent-e2e-harness.md §9,
   "Other providers through the model proxy"), with the same gates and the
   same text-delta token repacking as the Messages wire (a `$MDU:` token
-  split across two deltas reaches the agent whole). Every other provider
-  (Google, Bedrock, Mistral's own SDK, a catalog provider the user has not
-  declared, OpenAI through a ChatGPT sign-in) is refused at launch; each
-  needs its own wire reader in the proxy. Separately, the Codex openai-proxy
+  split across two deltas reaches the agent whole). So are Google Gemini
+  providers (2026-10-25, model-wires.md §4, §5): OpenClaw's built-in
+  `google` and a `models.providers.<id>` with `api:
+  "google-generative-ai"` and a `baseUrl`, OpenCode's built-in `google`
+  and a provider on `@ai-sdk/google`, and Goose's `google` (§5.6.5).
+  So is OpenClaw's own `google-vertex` provider (Vertex AI's Gemini models,
+  2026-10-26, model-wires.md §4.1) under `mandu openclaw` on OpenClaw
+  2026.7.1 and later, at the proxy's root (OpenClaw keeps only the origin of
+  its `baseUrl`); an older OpenClaw sends Vertex calls to Google whatever the
+  `baseUrl` and is refused, naming the release, and so is the attached
+  Gateway's Route 1 (it cannot tell the release). Proven on the real
+  OpenClaw 2026.7.1-2, 2026.9.9 and 2026.10.7 against a scripted Vertex
+  model (`openclaw-vertex-real.test.ts`).
+  So are OpenClaw's Ollama providers on Ollama's native chat API
+  (2026-10-26, model-wires.md §8): the built-in `ollama` and `ollama-cloud`
+  and a `models.providers.<id>` with `api: "ollama"` and a `baseUrl`, in
+  the wrapper and in Route 1, proven on every lane version's real Gateway
+  against a scripted Ollama (the plugin lane's Ollama leg); OLLAMA_API_KEY
+  stays the agent's own.
+  So are OpenClaw's Azure OpenAI and
+  ChatGPT sign-in apis (2026-10-26, model-wires.md §9): a
+  `models.providers.<id>` with `api: "azure-openai-responses"` and a
+  `baseUrl` (one per launch; the launch pins `AZURE_OPENAI_BASE_URL` at its
+  route, since OpenClaw's Azure client reads that variable before the
+  `baseUrl`, and leaves AZURE_OPENAI_API_KEY unmasked), and one with `api:
+  "openai-chatgpt-responses"` (the built-in `openai` with no `baseUrl` goes
+  to the ChatGPT backend), under `mandu openclaw` and Route 1; proven on the
+  real OpenClaw 2026.7.1-2, 2026.9.9 and 2026.10.7 Gateways (the plugin
+  lane's `route1-azure` and `route1-chatgpt` legs).
+  Every other provider (Vertex AI elsewhere, the Gemini CLI login, Bedrock, Mistral's
+  own SDK, a catalog provider the user has not declared, OpenCode's OpenAI
+  through a ChatGPT sign-in, OpenClaw's GitHub Copilot on any wire: OpenClaw sends its
+  calls to the endpoint its Copilot sign-in answers with whatever the
+  `baseUrl`, openclaw-plugin.md §8.1) is refused at launch; each needs its own wire reader in
+  the proxy (Bedrock is not supported: SigV4 covers the body, model-wires.md
+  §7). A Gateway attached with the plugin routes the same providers,
+  Gemini ones included, through the same proxy (openclaw-plugin.md §8.1,
+  Route 1). Proven on the real binaries against a scripted Gemini upstream:
+  goose 1.53.0 (`goose-compat-real.test.ts`), OpenCode 1.18.13
+  (`opencode-gemini-real.test.ts`) and an OpenClaw 2026.9.9 Gateway with the
+  plugin (the plugin lane's Gemini leg). A launch that routes a Gemini
+  provider leaves the agent's own Google key variable unmasked
+  (`googleRoutedKeyVars`: OpenCode's GOOGLE_GENERATIVE_AI_API_KEY and
+  GEMINI_API_KEY, OpenClaw's GEMINI_API_KEY), as for ANTHROPIC_API_KEY and
+  OPENAI_API_KEY: masked, the agent sent the placeholder and the provider
+  would refuse it (found by the OpenCode leg). Separately, the Codex openai-proxy
   reads Chat Completions too (its `/chat/completions` route), for agents not
   yet supported (Kimi Code, the OpenHands CLI; §5.5). OpenClaw and OpenCode
   stay on the model-proxy route above, where their gate-surface tables live.
@@ -3253,7 +3445,8 @@ overlay of it.
    `upstreamLocal` settings apply to the Chat route unchanged, including
    the cloud-model refusal.
 8. **Antigravity CLI and the Gemini CLI**: one Google GenAI adapter serves
-   both.
+   both. Its proxy half is built (2026-10-25): the model proxy reads the
+   Gemini wire (model-wires.md §4); the launch side of each CLI is not.
 
 Not planned: Cursor CLI, Amp and Kiro CLI (no reachable model call),
 Devin and Jules (cloud loops), Aider (dormant; it puts file contents in
@@ -4118,7 +4311,7 @@ context, so Goose refuses a switch to them too.
 set by `gooseForcedEnv`). Every endpoint key of every provider the launch
 does not route is pointed where nothing is sent:
 
-- a base URL (`GOOGLE_HOST`, `AVIAN_HOST`, `GONDOLA_HOST`,
+- a base URL (`AVIAN_HOST`, `GONDOLA_HOST`,
   `HF_HOST`, `MUSE_CODE_HOST` / `_AUTH_HOST`, `DATABRICKS_HOST`,
   `AZURE_OPENAI_ENDPOINT`, `AZURE_FOUNDRY_ENDPOINT`, `SNOWFLAKE_HOST`,
   `GITHUB_COPILOT_TOKEN_URL`, the AWS SDK's
@@ -4355,6 +4548,32 @@ on ollama a shell call written as text never runs, while goose alone runs it;
 the refusals); `goose-provider-fence.test.ts` (the real
 goose's `run --provider litellm|xai|tetrate` added to the protected runs and
 the controls).
+
+#### 5.6.5 Goose's google provider (2026-10-25)
+
+Goose's `google` provider (goose-providers `google.rs`, goose-provider-types
+`formats/google.rs`) speaks the Gemini API: `GOOGLE_HOST` (default
+`https://generativelanguage.googleapis.com`), the key `GOOGLE_API_KEY` in
+`x-goog-api-key`, `v1beta/models/{model}:streamGenerateContent?alt=sse`
+joined to the host. The model proxy reads that wire with the same gates
+(model-wires.md §4), so it is ROUTED like the five above (it is one more
+`GOOSE_COMPAT_PROVIDERS` entry, with `api: "google-generative-ai"`):
+`GOOGLE_HOST` is pinned at `<proxy>/_mandu/google/google` on every launch
+(it left the fence, §5.6.3), the upstream is the user's own host resolved as
+for the others, it goes to the proxy in `MANDU_GOOGLE_UPSTREAMS`, and the
+key is granted to `generativelanguage.googleapis.com` (agent-sign-in.md
+§3.10). Goose puts a tool's text in `{content: {text}}` and a tool's images
+beside it as snake_case `inline_data` parts; the proxy masks both with the
+result. `gcp_vertex_ai` stays fenced. Pinned by
+`launcher/test/unit/goose-compat-providers.test.ts` and the proxy's
+`gemini-wire.test.ts` (Goose's request shape, a fixture captured from the
+real 1.53.0 binary), and the real goose under the real launcher against a
+scripted Gemini upstream (`launcher/test/component/goose-compat-real.test.ts`:
+every turn through the proxy on Goose's own path, the key in
+`x-goog-api-key`, the labelled file only as a symbol). That run found the one
+shape the packages did not show: Goose sends `tools` as ONE Tool object
+(`{"functionDeclarations": [...]}`), not a list, which Google's JSON reader
+takes as a list of one; the proxy now reads it so (model-wires.md §4.2).
 
 ### 5.7 The agent registry: one list of agents (2026-10-18)
 

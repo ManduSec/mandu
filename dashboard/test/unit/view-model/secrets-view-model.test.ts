@@ -241,6 +241,38 @@ test("dashboard.md §4.25f a rule on a file reads as a file: a subtree label who
   assert.equal(toSecretsPanel(state).labels[0]!.pathIsFile, undefined, "not looked at: as before");
 });
 
+test("dashboard.md §4.25f a rule on nothing says so: a label whose path is missing, exact or recursive, is marked missing; a pattern, a present path and one not looked at are not", () => {
+  const label = (path: string, more: { recursive?: boolean; glob?: boolean } = {}) => ({ path, level: "no-model", bindings: [], recursive: true, source: "user", updatedAt: 1, declassifies: false, ...more });
+  const state = {
+    enabled: true,
+    secrets: [],
+    labels: [
+      label("/w/old-shop/.env"),
+      label("/w/gone.token", { recursive: false }),
+      label("/w/*.pem", { glob: true }),
+      label("/w/deploy.token"),
+      label("/w/unread"),
+    ],
+  };
+  // What server/path-kinds.ts found: files and missing (an unreadable path
+  // is in neither; a pattern is never looked at, here marked as if it were).
+  const files = new Set(["/w/deploy.token"]);
+  const missing = new Set(["/w/old-shop/.env", "/w/gone.token", "/w/*.pem"]);
+  const rows = toSecretsPanel(state, files, missing).labels;
+  assert.deepEqual(rows.map((r) => [r.path, r.missing ?? null, r.pathIsFile ?? null]), [
+    ["/w/old-shop/.env", true, null],
+    ["/w/gone.token", true, null],
+    ["/w/*.pem", null, null],
+    ["/w/deploy.token", null, true],
+    ["/w/unread", null, null],
+  ]);
+  // pathIsFile stays for recursive labels only, now that files holds exact paths too.
+  const exactFile = toSecretsPanel({ ...state, labels: [label("/w/one.txt", { recursive: false })] }, new Set(["/w/one.txt"]), new Set()).labels[0]!;
+  assert.equal(exactFile.pathIsFile, undefined);
+  assert.equal(exactFile.missing, undefined);
+  assert.ok(!("missing" in toSecretsPanel(state, files).labels[0]!), "not looked at: no field, as before");
+});
+
 test("isConfidentialityLevel accepts exactly the four levels", () => {
   assert.equal(isConfidentialityLevel("public"), true);
   assert.equal(isConfidentialityLevel("any-model"), true);

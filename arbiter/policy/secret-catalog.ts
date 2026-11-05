@@ -29,7 +29,7 @@
  * Mandu-new (no reference origin): designed in docs/design/confidentiality/confidentiality.md;
  * reuses fs-outbound's SENSITIVE_PATHS as the single curated prefix source.
  */
-import { withoutGrepExclusions } from "./exclusion-flags.js";
+import { SEARCH_EXCLUSION_SHELL_TOOLS, withoutSearchExclusions } from "./exclusion-flags.js";
 import { homedir } from "os";
 import { isAbsolute, resolve as resolvePath } from "path";
 import { SENSITIVE_PATHS, normalizeFsPath } from "./fs-outbound.js";
@@ -773,10 +773,16 @@ export function findSecretPathsInText(
   const joined = text.replace(/\\\r?\n/g, "");
   const spelled = withCurrentDirSpelled(joined);
   const variants = [...new Set([text, joined, spelled])];
+  // A plain word that occurs ONLY inside a quoted run of words (a message's
+  // text: `"September bank statement"`) is prose, not a path (2026-10-26,
+  // `quotedProseWords`); a word anywhere else, or anything shaped like a
+  // path inside the quotes (`bank/statement.pdf`, `.env`, `$PWD/bank`),
+  // is still read.
+  const prose = quotedProseWords(joined);
   for (const tx of variants) {
     for (let token of tx.split(TEXT_TOKEN_SPLIT)) {
       token = token.replace(/^["']+|["']+$/g, "");
-      if (token === "") continue;
+      if (token === "" || isProseToken(token, prose)) continue;
       tokens.push({ t: token, exact: tx === text });
       for (const v of shellSpellings(token)) tokens.push({ t: v, exact: false });
     }
@@ -940,9 +946,98 @@ function tokenSegments(token: string): string[] {
   return segs;
 }
 
+/** Programs that run an argument as code (a shell, an interpreter, a
+ *  command runner, a remote or elevated shell, an editor's command): a
+ *  command naming one keeps every quoted word (quotedProseWords). */
+const CODE_RUNNERS: ReadonlySet<string> = new Set([
+  "bash", "sh", "zsh", "dash", "ksh", "mksh", "fish", "csh", "tcsh", "busybox", "eval", "exec", "source", ".",
+  "ssh", "su", "sudo", "doas", "runuser", "pkexec", "xargs", "parallel", "watch", "timeout", "nohup", "nice", "ionice",
+  "env", "stdbuf", "unbuffer", "setsid", "flock", "chroot", "script", "expect", "time", "command", "builtin",
+  "deno", "bun", "nodejs", "tclsh", "wish", "osascript", "pwsh", "powershell", "awk", "gawk", "mawk", "nawk",
+  "sed", "find", "docker", "podman", "kubectl", "tmux", "screen", "make", "vim", "vi", "nvim", "emacs", "ed", "ex",
+  "jq", "yq", "sqlite3", "psql", "mysql", "trap", "alias", "function", "crontab", "at", "batch",
+]);
+
+/** A word that is prose when it stands in a quoted run of words: letters,
+ *  digits, `_` and `-` only (no `/`, `.`, `~`, `$`, glob or quote: nothing
+ *  a path or an expansion is written with). */
+const PROSE_WORD_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * The plain words of `text` that occur ONLY inside a quoted run of words
+ * (2026-10-26): the text of a message or a commit (`tools/mail send x
+ * "Re: Q3" "September bank statement"`), where `bank` is a word and not the
+ * labelled `bank/` folder. Live on the Claude subscription drills
+ * (demo-scam-email, Haiku 4.5): such a send was masked whole as "the
+ * command names a secret file", and the model never learned the mail went.
+ *
+ * A word is left out only when EVERY occurrence of it is a whole
+ * {@link PROSE_WORD_RE} word inside a quoted segment holding whitespace;
+ * anywhere else it is read as before (fail-closed): an unquoted `bank`
+ * argument, a single-word quoted `"bank"`, a heredoc's body, anything with
+ * a `/`, a `.` or an expansion inside the quotes (`-m "move
+ * bank/statement.pdf"`, `"$PWD/bank"`), `bank` glued to more text. Pure.
+ */
+export function quotedProseWords(text: string): Set<string> {
+  const inProse = new Set<string>();
+  // A quoted run a program runs as code (`bash -c "ls bank"`, `ssh h "cat
+  // bank"`, `python3 -c "…"`, `eval "…"`, `find -exec sh -c '…'`) is no
+  // prose: with any such program anywhere in the command, nothing is left
+  // out.
+  for (const { w, sep } of shellWords(text)) {
+    if (sep) continue;
+    const name = dequoted(w).replace(/^\\/, "").split("/").pop() ?? "";
+    if (CODE_RUNNERS.has(name) || /^(?:python|perl|ruby|php|node|lua)[\d.]*$/.test(name)) return inProse;
+    if (name === "git" && /(?:^|\s)(?:-c|--config-env|alias\.)/.test(text)) return inProse;
+  }
+  const elsewhere = new Set<string>();
+  const words = (s: string): string[] => s.split(/[\s;|&<>()=,:]+/).map((x) => x.replace(/[?!.]+$/, "")).filter((x) => x !== "");
+  // walk the text: quoted segments (with their escapes) and the rest
+  let rest = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === "\\" && i + 1 < text.length) { rest += c + text[++i]!; continue; }
+    if (c !== "'" && c !== '"') { rest += c; continue; }
+    let j = i + 1;
+    let body = "";
+    while (j < text.length && text[j] !== c) {
+      if (c === '"' && text[j] === "\\" && j + 1 < text.length) { body += text[j]! + text[j + 1]!; j += 2; continue; }
+      body += text[j]!;
+      j++;
+    }
+    if (j >= text.length) { rest += text.slice(i); break; } // unterminated: read as written
+    if (/\s/.test(body)) {
+      for (const w of body.split(/\s+/)) {
+        if (w === "") continue;
+        // a word with trailing punctuation is still a word; anything else is read
+        const bare = w.replace(/[,;:?!.)]+$/, "").replace(/^[(]+/, "");
+        if (PROSE_WORD_RE.test(bare)) inProse.add(bare);
+        else for (const x of words(w)) elsewhere.add(x);
+      }
+    } else {
+      elsewhere.add(body);
+    }
+    rest += " ";
+    i = j;
+  }
+  for (const x of words(rest)) elsewhere.add(x);
+  for (const x of rest.split(/\s+/)) if (x !== "") elsewhere.add(x);
+  for (const w of [...inProse]) if (elsewhere.has(w)) inProse.delete(w);
+  return inProse;
+}
+
+/** Is `token` (a whitespace-split piece of the text) one of `prose`'s
+ *  words, alone or with the punctuation prose puts after a word (`bank,`)
+ *  or around it (`(bank)`)? */
+function isProseToken(token: string, prose: ReadonlySet<string>): boolean {
+  if (prose.size === 0) return false;
+  const m = /^[(]*([A-Za-z0-9_-]+)[,;:?!.)]*$/.exec(token);
+  return m !== null && prose.has(m[1]!);
+}
+
 /** A word with the shell's quoting removed: `$'…'` / `$"…"` openers,
  *  quotes and backslashes (`va""ult`, `vau\lt`, `'vault'/x`). Pure. */
-function dequoted(word: string): string {
+export function dequoted(word: string): string {
   return word
     .replace(/\$'((?:[^'\\]|\\.)*)'/g, (_m, body: string) => decodeAnsiC(body))
     .replace(/\$"/g, '"')
@@ -1381,7 +1476,7 @@ function withoutSubstitutions(text: string): string {
 /** The words of a command, in order, with its separators (`;`, `&`, `|`,
  *  `(`, `)`, a backtick, a newline, a redirection's `<` / `>`) kept as
  *  their own entries. Pure. */
-function shellWords(text: string): Array<{ w: string; sep: boolean }> {
+export function shellWords(text: string): Array<{ w: string; sep: boolean }> {
   // Quote-aware: a space or a separator inside quotes, or escaped, stays in
   // its word (`"my vault"`, `my\ vault`, `'fix cd - handling'`); the quotes
   // stay in the word too (callers dequote).
@@ -1778,14 +1873,16 @@ export function labelForClassify(
   for (const key of CLASSIFY_PARAM_KEYS) {
     if (typeof p[key] === "string") sources.push(p[key] as string);
   }
-  // exclusion-flags.md (2026-10-18): the shell command (`command`, or
-  // Codex's `cmd`, and the origin when it is that same text) is read with
-  // each `--exclude-dir=NAME` word of one plain grep blanked: no grep opens
-  // it. Never a typed path field, in both passes below.
+  // exclusion-flags.md (2026-10-18, rg and `--exclude=` 2026-10-27): the
+  // shell command (`command`, or Codex's `cmd`, and the origin when it is
+  // that same text) is read with each exclusion word of a grep or rg
+  // segment blanked (`--exclude-dir=NAME`, `--exclude=…`, a negated
+  // `-g '!…'`): no grep or rg opens it as the labelled path. Never a typed
+  // path field, in both passes below.
   // (`cmd` first, as the openai-proxy's `originFor` reads it)
   const commandText = typeof p["cmd"] === "string" ? p["cmd"] as string : typeof p["command"] === "string" ? p["command"] as string : undefined;
-  const shellTool = typeof req.tool === "string" && ["Bash", "bash", "shell", "exec_command", "local_shell", "exec"].includes(req.tool);
-  const scanned = (s: string): string => shellTool && s === commandText && !typed.has(s) ? withoutGrepExclusions(s) : s;
+  const shellTool = typeof req.tool === "string" && SEARCH_EXCLUSION_SHELL_TOOLS.has(req.tool);
+  const scanned = (s: string): string => shellTool && s === commandText && !typed.has(s) ? withoutSearchExclusions(s) : s;
   const workdir = callWorkdir(req.tool, p, req.workdirDefault, req.callStartDir, req.workdirTools);
   // A RELATIVE `workdir` the agent honours (2026-10-17): Codex joins it to
   // its own directory, so it is no base (`callWorkdir`), but the command

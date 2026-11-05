@@ -1,7 +1,10 @@
 /**
  * history-stepped-in.test — dashboard.md §4.25ae *Only the sessions where
  * Mandu stepped in*: the pure rule History's switch keeps a row by
- * (`steppedIn`, read off the row the page draws) and the paging over the
+ * (`historyFlagged`: `steppedIn`, a session that ran with protection
+ * off, or one where a protection did not start (`lessProtection`, since
+ * Shoemaker #267), read off the row the page draws; `steppedIn` alone stays
+ * false for those rows, as Home's last-stepped-in line asks it) and the paging over the
  * kept rows (`historyPageWhere`): it keeps matches only, stops at `limit`
  * rows or at the scan budget, and its `next` lets the following read go on
  * past a long run of plain sessions; `buildHistoryViewModel` carries
@@ -11,7 +14,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { SessionRef } from "../../../src/event-source/contract.js";
-import { buildHistoryViewModel, historyPageWhere, homeAgentRow, steppedIn, HISTORY_ONLY_STEPPED_IN, HISTORY_PAGE_MAX, HISTORY_SCAN_BUDGET, type HomeAgent, type HomeSessionFacts } from "../../../src/view-model/home.js";
+import type { ManduEvent } from "../../../src/event-model.js";
+import { deriveHealth, type SessionHealth } from "../../../src/session-health.js";
+import { buildHistoryViewModel, historyFlagged, historyPageWhere, homeAgentRow, steppedIn, HISTORY_ONLY_STEPPED_IN, HISTORY_PAGE_MAX, HISTORY_SCAN_BUDGET, type HomeAgent, type HomeSessionFacts } from "../../../src/view-model/home.js";
 
 const ref = (id: string, over: Partial<SessionRef> = {}): SessionRef => ({
   id, label: `task ${id}`, labelFrom: "prompt", eventCount: 3, firstTs: "2026-09-01T10:00:00.000Z", lastTs: "2026-09-01T10:05:00.000Z", violated: false, agent: "claude", status: "idle", ...over,
@@ -49,6 +54,57 @@ test("steppedIn over the row History draws: facts, the waiting count and the lis
   assert.equal(row(ref("a", { violated: true }), undefined), true);
   // Flows alone (an item handed over as it is) are not a step-in.
   assert.equal(row(ref("a"), facts({ stats: { flows: 4, secret: 0, complete: 4, egressAllowed: 0, egressBlocked: 0, egressPending: 0 } })), false);
+});
+
+test("historyFlagged keeps what steppedIn keeps and a session that ran with protection off; steppedIn of an Off row stays false", () => {
+  const row = { ...plain, protectionOff: false };
+  assert.equal(historyFlagged(row), false, "a plain row is not kept");
+  const offRow = { ...row, protectionOff: true };
+  assert.equal(historyFlagged(offRow), true, "protection was off: its counts line says so first");
+  assert.equal(steppedIn(offRow), false, "Mandu did not step in: Home's last-stepped-in line never names it");
+  const kinds: Array<Partial<typeof plain>> = [
+    { secrets: { masked: 1, early: 0 } }, { secrets: { masked: 0, early: 2 } }, { untrusted: 1 },
+    { blocked: 1 }, { sent: 3 }, { waiting: 1 }, { holds: false },
+  ];
+  for (const over of kinds) {
+    for (const protectionOff of [false, true]) {
+      const r = { ...row, ...over, protectionOff };
+      assert.equal(steppedIn(r), true);
+      assert.equal(historyFlagged(r), true, `${JSON.stringify(over)}, off ${protectionOff}`);
+    }
+  }
+  // Over the row History draws: the facts' recorded mode, never guessed.
+  const drawn = (f: HomeSessionFacts | undefined) => homeAgentRow(ref("a"), f, 0, false);
+  assert.equal(historyFlagged(drawn(facts({ off: true }))), true);
+  assert.equal(steppedIn(drawn(facts({ off: true }))), false);
+  assert.equal(historyFlagged(drawn(facts())), false);
+  assert.equal(historyFlagged(drawn(undefined)), false, "an unreadable session: no mode recorded, not kept");
+});
+
+const NET_PROXY_DOWN = "mandu: service 'net-proxy' is on by default but failed to start: 127.0.0.1:8790 is occupied — proceeding WITHOUT it (opt out explicitly with --no-net-proxy to silence this)";
+
+test("historyFlagged keeps a session where a protection did not start; steppedIn of that row stays false (Shoemaker #267)", () => {
+  const row = { ...plain, protectionOff: false };
+  const less = { ...row, lessProtection: true as const };
+  assert.equal(historyFlagged(less), true, "its row's amber \"less protection than usual\" says why it is listed");
+  assert.equal(steppedIn(less), false, "Mandu did not step in: Home's last-stepped-in line never names it");
+  assert.equal(historyFlagged(row), false, "a plain row without the mark is still dropped");
+  assert.equal(historyFlagged({ ...row, lessProtection: undefined }), false);
+  // Over the row History draws: the listing's health, read off the
+  // launcher's own record (a protection's line among its `dropped`).
+  const launch = (dropped: string[]) => ({
+    id: "e0", sessionId: "a", turn: 0, ts: "2026-09-01T10:00:00.000Z", seq: 0, callId: null, parentId: null,
+    kind: "launch_posture", view: "HumanView", boundary: "shell", emitter: "launcher", target: "claude", live: ["fs"], dropped,
+    input: null, output: null, invariant: { violatedInvariant: false },
+  } as unknown as ManduEvent);
+  const drawn = (health: SessionHealth | null) => homeAgentRow(ref("a", health ? { health } : {}), facts(), 0, false);
+  const dropped = deriveHealth([launch([NET_PROXY_DOWN])]);
+  assert.equal(dropped?.droppedProtections, 1);
+  assert.equal(drawn(dropped).lessProtection, true);
+  assert.equal(historyFlagged(drawn(dropped)), true);
+  assert.equal(steppedIn(drawn(dropped)), false);
+  assert.equal(historyFlagged(drawn(deriveHealth([launch([])]))), false, "every protection started");
+  assert.equal(historyFlagged(drawn(null)), false, "no launch record: nothing claimed");
 });
 
 const ids = (r: { page: SessionRef[] }) => r.page.map((s) => s.id);

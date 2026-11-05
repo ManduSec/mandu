@@ -44,6 +44,11 @@
  * formats/ollama.rs), which no wire gate sees: its route is marked
  * `textCalls`, and the proxy ends a response whose text carries that
  * markup (openai-sse.ts).
+ * And `google` (2026-10-25, supported-agents.md §5.6.5): Goose's Gemini
+ * provider, one more GOOSE_COMPAT_PROVIDERS entry with `api:
+ * "google-generative-ai"`, its GOOGLE_HOST pinned at
+ * `<proxy>/_mandu/google/google` (the proxy's Gemini route, model-wires.md
+ * §4) and its upstream sent as MANDU_GOOGLE_UPSTREAMS.
  * Goose sends its own `agent-session-id` header only, so the session is the
  * per-launch proxy's key (as for Codex), and no header env is needed.
  *
@@ -65,7 +70,7 @@
  * URL is in its definition (11 of the bundled ones take it from an env key,
  * `${LMSTUDIO_HOST}/v1/…`; the other 37 are literal), and its wire is not
  * one the launch maps onto the proxy; and every built-in provider with its
- * own wire (google, bedrock, gcp_vertex_ai, databricks, ollama, …). They are
+ * own wire the proxy does not read (bedrock, gcp_vertex_ai, databricks, …). They are
  * FENCED instead (below): a launch that names one is refused, and a switch
  * to one mid-session sends nothing. A recipe's
  * settings outrank the env: `run --recipe` is read before the launch and
@@ -133,9 +138,11 @@ import { gooseFlagValues, gooseValueFlags, readGooseArgv } from "./goose-argv.js
 /** The anthropic provider: Goose's default under Mandu when none is named. */
 export const GOOSE_ROUTED_PROVIDER = "anthropic";
 
-/** Goose's built-in Chat Completions providers with an env host, routed
- *  through the proxy's OpenAI route of the same id (module header). */
-export type GooseCompatProvider = "litellm" | "openrouter" | "ollama" | "xai" | "tetrate";
+/** Goose's built-in providers with an env host routed through the proxy's
+ *  route of the same id (module header): the Chat Completions ones under
+ *  its OpenAI prefix, `google` (the Gemini API, 2026-10-25) under its
+ *  Google prefix. */
+export type GooseCompatProvider = "litellm" | "openrouter" | "ollama" | "xai" | "tetrate" | "google";
 
 /** Goose's built-in providers the launch routes through the model proxy. */
 export type GooseRoutedProvider = "anthropic" | "openai" | GooseCompatProvider;
@@ -154,6 +161,8 @@ export interface GooseCompatSpec {
   path: string;
   /** the key variable of its API key; null when it takes none */
   keyVar: string | null;
+  /** the wire it speaks, when not Chat Completions (the proxy route it gets) */
+  api?: "google-generative-ai";
 }
 
 export const GOOSE_COMPAT_PROVIDERS: readonly GooseCompatSpec[] = [
@@ -165,6 +174,10 @@ export const GOOSE_COMPAT_PROVIDERS: readonly GooseCompatSpec[] = [
   { provider: "ollama", hostKey: "OLLAMA_HOST", defaultHost: "localhost", path: "v1/chat/completions", keyVar: null },
   { provider: "xai", hostKey: "XAI_HOST", defaultHost: "https://api.x.ai/v1", path: "chat/completions", keyVar: "XAI_API_KEY" },
   { provider: "tetrate", hostKey: "TETRATE_HOST", defaultHost: "https://api.router.tetrate.ai", path: "v1/chat/completions", keyVar: "TETRATE_API_KEY" },
+  // The Gemini API (goose-providers google.rs: GOOGLE_HOST, the key in
+  // `x-goog-api-key`, `v1beta/models/{model}:streamGenerateContent?alt=sse`
+  // joined to the host); the proxy reads that wire (model-wires.md §4)
+  { provider: "google", hostKey: "GOOGLE_HOST", defaultHost: "https://generativelanguage.googleapis.com", path: "v1beta/models/{model}:streamGenerateContent?alt=sse", keyVar: "GOOGLE_API_KEY", api: "google-generative-ai" },
 ];
 
 export const GOOSE_ROUTED_PROVIDERS: readonly GooseRoutedProvider[] = ["anthropic", "openai", ...GOOSE_COMPAT_PROVIDERS.map((c) => c.provider)];
@@ -233,7 +246,7 @@ export function gooseOpenAiRoutes(routing: GooseRouting | undefined): OpenAiRout
   // The Chat Completions providers; Ollama's client also runs a tool call
   // written in the model's text, so its route says so (module header).
   for (const c of routing?.compat ?? []) {
-    out.push({ id: c.provider, api: "openai-completions", upstream: c.upstream, ...(c.provider === "ollama" ? { textCalls: true } : {}) });
+    out.push({ id: c.provider, api: gooseCompatSpec(c.provider)?.api ?? "openai-completions", upstream: c.upstream, ...(c.provider === "ollama" ? { textCalls: true } : {}) });
   }
   return out;
 }
@@ -255,10 +268,12 @@ export function gooseRoutedKeyVars(routing: GooseRouting | undefined): string[] 
   });
 }
 
-/** Where a Chat Completions provider's host key points under the launch:
- *  the proxy's route of the provider's own id. Pure. */
+/** Where a routed provider's host key points under the launch: the proxy's
+ *  route of the provider's own id (the Google prefix for the Gemini one).
+ *  Pure. */
 export function gooseCompatUrl(proxyUrl: string, provider: GooseCompatProvider): string {
-  return `${proxyUrl.replace(/\/+$/, "")}/_mandu/openai/${provider}`;
+  const family = gooseCompatSpec(provider)?.api === "google-generative-ai" ? "google" : "openai";
+  return `${proxyUrl.replace(/\/+$/, "")}/_mandu/${family}/${provider}`;
 }
 
 /** How one fenced key is spelled so that Goose sends nothing anywhere. */
@@ -297,9 +312,9 @@ export interface GooseFence {
  */
 export const GOOSE_PROVIDER_FENCE: readonly GooseFence[] = [
   // built-in providers with an env host (goose providers/*.rs); the five
-  // Chat Completions ones (GOOSE_COMPAT_PROVIDERS) are pinned at their proxy
-  // route instead (gooseForcedEnv), which refuses one the launch did not route
-  { key: "GOOGLE_HOST", provider: "google", form: "url" },
+  // Chat Completions ones and google (GOOSE_COMPAT_PROVIDERS) are pinned at
+  // their proxy route instead (gooseForcedEnv), which refuses one the launch
+  // did not route
   { key: "AVIAN_HOST", provider: "avian", form: "url" },
   { key: "GONDOLA_HOST", provider: "gondola", form: "url" },
   { key: "HF_HOST", provider: "huggingface", form: "url" },

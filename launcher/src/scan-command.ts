@@ -23,6 +23,7 @@ import { keepLastScan, suggestionsLine, writeLastScan, type KeepDeps } from "./s
 import { connectHost, liveDashboards, scanPageUrl } from "./live-dashboards.js";
 import { signInWords, type SignInWith } from "./dashboard-sign-in.js";
 import { openUrl, type OpenOutcome } from "./browser-open.js";
+import { openclawAttachmentInstalled } from "./openclaw-install-command.js";
 import { colorOn, colors, PLAIN, type Style } from "./term-style.js";
 
 type Env = Record<string, string | undefined>;
@@ -43,7 +44,7 @@ export interface ScanWire {
   dropped: number;
   known: number;
   bytes: number;
-  capped: { overTime: number; overBytes: number; tooBig: number; overFiles: number; readFailed: number };
+  capped: { overTime: number; overBytes: number; tooBig: number; overFiles: number; readFailed: number; compressed?: number };
   ms: number;
   /** The riskier sessions (absent from an older arbiter). */
   risk?: { skippedPrompts: number; skippedWithSecret: number; envDumps: number };
@@ -130,6 +131,26 @@ export interface FindingWire {
    *  time does (the exact join; absent until the arbiter has it). */
   sessionsUnderMandu?: number;
   sessionsByTime?: number;
+  /** Of `sessions`, those where it was found by the mask the agent saved in
+   *  place of the value (OpenClaw 2026.7 and earlier; transcript-scan.ts
+   *  `matchedMasked`); absent from an older arbiter, or when none. */
+  matchedMasked?: number;
+  /** When some sessions ran under Mandu and some did not: the dates and
+   *  ways of those that did not (transcript-scan.ts `outsideMandu`), which
+   *  the report counts as leaked. Absent from an older arbiter, and when no
+   *  session ran under Mandu or every one did. */
+  outsideMandu?: { first?: string; last?: string; how: Partial<Record<How, number>> };
+}
+
+/** The line that says a finding was matched by the agent's saved mask, not
+ *  the value: OpenClaw 2026.7 and earlier sent the value to the AI and kept
+ *  only its first 6 and last 4 characters in what it saved. Null when it
+ *  was not. */
+export function maskedMatchLine(f: Pick<FindingWire, "matchedMasked" | "sessions">): string | null {
+  const n = f.matchedMasked ?? 0;
+  if (n <= 0) return null;
+  const where = n === f.sessions ? (n === 1 ? "That session" : "Those sessions") : `${plural(n, "session")} of them`;
+  return `${where}: found by the masked copy OpenClaw saved (the value's first 6 and last 4 characters); OpenClaw 2026.7 and earlier sent the value itself to the AI and masked only what it saved.`;
 }
 
 export interface ScanArgs {
@@ -333,6 +354,34 @@ function manduSplit(f: FindingWire): { under: number; byTime: number; without: n
   return { under, byTime, without: Math.max(0, f.sessions - under - byTime) };
 }
 
+/**
+ * A finding as the report counts it leaked (plan 17 §2): its sessions not
+ * under Mandu, with their dates and ways (`outsideMandu`; an older arbiter
+ * gives only the counts, so its dates and ways stay the finding's own),
+ * and `under`, the sessions under Mandu, said apart ({@link underLine}). A
+ * session marked by time only is counted with the leaked ones, the mark
+ * not being a verdict (item 6). With none under Mandu, the finding itself.
+ */
+function leaked(f: FindingWire): FindingWire & { under: number } {
+  const s = manduSplit(f);
+  if (s.under === 0) return { ...f, under: 0 };
+  const o = f.outsideMandu;
+  const { first: _f, last: _l, ...rest } = f;
+  const first = o !== undefined ? o.first : f.first;
+  const last = o !== undefined ? o.last : f.last;
+  return {
+    ...rest, sessions: s.without + s.byTime, how: o?.how ?? f.how, under: s.under,
+    ...(first !== undefined ? { first } : {}), ...(last !== undefined ? { last } : {}),
+  };
+}
+
+/** The line under a leaked finding for its sessions under Mandu, where the
+ *  AI saw only a placeholder: never counted as leaked (plan 17 §2). Null
+ *  when none. */
+function underLine(n: number): string | null {
+  return n > 0 ? `${n === 1 ? "1 more session" : `${n} more sessions`} ran under Mandu: there the AI saw only a placeholder` : null;
+}
+
 /** One finding's summary line, for an older arbiter's answer (no example). */
 function detail(f: FindingWire): string {
   const when = f.sessions === 1 ? day(f.last) : `last ${day(f.last)}`;
@@ -453,16 +502,22 @@ function spread(f: FindingWire): string {
  *  would have done. `pad` is the indent of the lines under the number. */
 function storyLines(f: FindingWire, pad: string, opts: { withMandu: boolean }): string[] {
   const e = storyExample(f);
-  if (e === undefined) return [`${pad}${detail(f)}`];
+  const maskedLine = maskedMatchLine(f);
+  // Counted as leaked: the sessions not under Mandu; those under it apart.
+  const lf = leaked(f);
+  const under = underLine(lf.under);
+  if (e === undefined) return [`${pad}${detail(lf)}`, ...(under !== null ? [`${pad}${under}.`] : []), ...(maskedLine !== null ? [`${pad}${maskedLine}`] : [])];
   const out: string[] = [];
-  if (f.sessions > 1) {
-    const ways = howsByCount(f).map((h) => `${HOW_WORDS[h] ?? h} in ${f.how[h]}`).join(", ");
-    out.push(`${pad}${spread(f)} (${ways}). The newest:`);
+  if (lf.sessions > 1) {
+    const ways = howsByCount(lf).map((h) => `${HOW_WORDS[h] ?? h} in ${lf.how[h]}`).join(", ");
+    out.push(`${pad}${spread(lf)} (${ways}). The newest:`);
   }
   out.push(`${pad}${exampleHead(e, false)}`);
   out.push(`${pad}  ${didLine(e)}`);
   out.push(`${pad}  ${wentLine(e, f)}`);
+  if (maskedLine !== null) out.push(`${pad}  ${maskedLine}`);
   for (const l of nextLines(f, e.how)) out.push(`${pad}  ${l}`);
+  if (under !== null && lf.sessions > 0) out.push(`${pad}${under}.`);
   if (opts.withMandu) out.push(`${pad}${unrun(e.agent) ? unrunLine(e.agent) : withManduLine(e.how)}`);
   return out;
 }
@@ -539,7 +594,14 @@ function cappedLines(c: ScanWire["capped"]): string[] {
   if (c.tooBig > 0) out.push(`${plural(c.tooBig, "transcript")} over 512 MiB not read`);
   if (c.overFiles > 0) out.push(`${plural(c.overFiles, "transcript")} past the file cap not read`);
   if (c.readFailed > 0) out.push(`${plural(c.readFailed, "transcript")} could not be read`);
+  if ((c.compressed ?? 0) > 0) out.push(`${plural(c.compressed!, "OpenClaw session")} not read in full: OpenClaw keeps its longer messages compressed, and Mandu reads those on Node 22.15 or later`);
   return out;
+}
+
+/** Sessions the scan read without part of their record (`capped.compressed`):
+ *  a report with no leak says "none found in what it read", never "none". */
+function partlyRead(r: ScanWire): boolean {
+  return (r.capped.compressed ?? 0) > 0;
 }
 
 /** The riskier sessions, one line each (plan 17 §3 item 10). */
@@ -617,6 +679,9 @@ function sendLines(r: ScanWire): string[] {
 export interface RenderOpts {
   all: boolean;
   style?: Style;
+  /** The agents Mandu is attached to now (an OpenClaw with Mandu's plugin,
+   *  {@link ScanDeps.attached}): the advice says they are protected. */
+  attached?: readonly string[];
   dashboard?: string;
   suggestions?: string | null;
 }
@@ -629,7 +694,7 @@ export interface RenderOpts {
  * answer, so none can be here.
  */
 export function renderScan(r: ScanWire, opts: RenderOpts): string {
-  return opts.all ? renderLong(r, opts.style ?? PLAIN) : renderCompact(r, opts);
+  return opts.all ? renderLong(r, opts.style ?? PLAIN, opts.attached) : renderCompact(r, opts);
 }
 
 /** Seen only in sessions while Mandu ran, by the time alone: there the AI
@@ -647,14 +712,16 @@ const HOW_ORDER = Object.keys(HOW_SHORT) as How[];
 /** The line under a finding in the compact report: its sessions, how it got
  *  there (the three most common ways; a tie in HOW_SHORT's order), and the
  *  command, shortened, when one way and one command is all the record shows. */
-function compactDetail(f: FindingWire, st: Style): string {
+function compactDetail(full: FindingWire, st: Style): string {
+  // Counted as leaked: the sessions not under Mandu ({@link leaked}).
+  const f = leaked(full);
   const when = f.sessions === 1 ? day(f.last) : `last ${day(f.last)}`;
   const rank = (h: How): number => { const i = HOW_ORDER.indexOf(h); return i < 0 ? HOW_ORDER.length : i; };
   const ways = (Object.entries(f.how) as Array<[How, number]>).sort((a, b) => b[1] - a[1] || rank(a[0]) - rank(b[0])).map(([h]) => h);
   const how = ways.slice(0, 3).map((h) => HOW_SHORT[h] ?? h).join(", ");
   const e = storyExample(f);
   const cmd = how !== "" && ways.length === 1 && e?.command !== undefined ? `: ${shortCommand(e.command)}` : "";
-  const note = byTimeOnly(f) ? st.dim(" (only while Mandu ran, by time)") : "";
+  const note = byTimeOnly(full) ? st.dim(" (only while Mandu ran, by time)") : "";
   return `${[`${plural(f.sessions, "session")}${when ? `, ${when}` : ""}`, `${how}${cmd}`].filter((p) => p !== "").join(" · ")}${note}`;
 }
 
@@ -739,6 +806,53 @@ function compactHead(r: ScanWire): string {
 /** A row of the closing block: `  Protect your agents:  mandu claude`. */
 const row = (label: string, text: string): string => `  ${`${label}:`.padEnd(22)}${text}`;
 
+/** What Mandu attaches to an agent that runs on its own (its Gateway as a
+ *  service), by agent: OpenClaw's plugin (openclaw-plugin.md §8). */
+const ATTACHMENT: Partial<Record<AgentId, string>> = { openclaw: "Mandu's plugin" };
+
+/** The command that protects an agent: its launch (`mandu claude`), or for
+ *  OpenClaw the plugin's install. */
+const protectCommand = (a: AgentId): string => (a === "openclaw" ? "mandu openclaw install" : `mandu ${a === "claude-code" ? "claude" : a}`);
+
+/** The most commands one row names (the dashboard's too, start-commands.ts). */
+const PROTECT_MAX = 2;
+
+/**
+ * The agents to name in the closing advice (plan 17 §2): those Mandu runs
+ * that the scan read, most sessions first, split into the ones to protect
+ * and the ones already protected (`attached`: Mandu's plugin installed in
+ * OpenClaw's config, openclaw-install-command.ts
+ * `openclawAttachmentInstalled`). None read: null (the advice names
+ * `mandu claude` and `mandu codex`, as before). A launch (`mandu claude`)
+ * leaves no mark to tell it is the way the person starts the agent, so
+ * only an attachment counts as protected. Pure.
+ */
+export function protectPlan(r: Pick<ScanWire, "sessions">, attached: readonly string[] = []): { protect: AgentId[]; has: AgentId[] } | null {
+  const read = (Object.entries(r.sessions) as Array<[AgentId, number | undefined]>)
+    .filter(([a, n]) => (n ?? 0) > 0 && !unrun(a))
+    .sort(([a, x], [b, y]) => (y ?? 0) - (x ?? 0) || agentRank(a) - agentRank(b))
+    .map(([a]) => a);
+  if (read.length === 0) return null;
+  const has = read.filter((a) => ATTACHMENT[a] !== undefined && attached.includes(a));
+  return { protect: read.filter((a) => !has.includes(a)), has };
+}
+
+/** The agents to protect as one row's words, as the dashboard names them
+ *  (start-commands.ts `startCommandParts`): `a  (or b)`, the agents with
+ *  the most sessions; one agent alone, OpenClaw, its launch as the other
+ *  way (`mandu openclaw install  (or mandu openclaw)`). `gap` is the space
+ *  before `(or`: two in the compact report's rows, one in a sentence. */
+function protectList(protect: readonly AgentId[], st: Style, gap = "  "): string {
+  const cmds = protect.length === 1 && protect[0] === "openclaw" ? [protectCommand("openclaw"), "mandu openclaw"] : protect.slice(0, PROTECT_MAX).map(protectCommand);
+  return cmds.length === 1 ? st.cyan(cmds[0]!) : `${st.cyan(cmds[0]!)}${gap}(or ${st.cyan(cmds[1]!)})`;
+}
+
+/** `OpenClaw has Mandu's plugin`, for the agents already protected. */
+function hasWords(has: readonly AgentId[]): string {
+  const what = [...new Set(has.map((a) => ATTACHMENT[a]!))];
+  return `${agentNames(has)} ${has.length === 1 ? "has" : "have"} ${listWords(what)}`;
+}
+
 /**
  * The default report, compact (the maintainer's layout, 2026-10-22): the
  * words are direct ("leaked to the AI") because only this terminal report
@@ -766,12 +880,18 @@ function renderCompact(r: ScanWire, opts: RenderOpts): string {
     known.forEach((f, i) => {
       lines.push(`  ${st.red(String(i + 1).padStart(width))}  ${findingTitle(f, st)}`);
       lines.push(`${pad}${compactDetail(f, st)}`);
+      const under = underLine(leaked(f).under);
+      if (under !== null) lines.push(`${pad}${st.dim(under)}`);
+      const masked = maskedMatchLine(f);
+      if (masked !== null) lines.push(`${pad}${st.dim(masked)}`);
       const sent = sentLine(r, f, st);
       if (sent !== null) lines.push(`${pad}${sent}`);
     });
     lines.push("", `  → ${known.length === 1 ? "Rotate it now, where it was issued." : `Rotate these ${known.length} now, where they were issued.`}`);
   } else {
-    lines.push(`${st.bold(st.green("✓ None of your secrets leaked to the AI"))} ${st.dim(`(Mandu found ${r.known === 0 ? "none" : r.known} on this computer)`)}`);
+    lines.push(partlyRead(r)
+      ? `${st.bold(st.yellow("! None of your secrets leaked to the AI in what Mandu could read"))} ${st.dim("(see the note above)")}`
+      : `${st.bold(st.green("✓ None of your secrets leaked to the AI"))} ${st.dim(`(Mandu found ${r.known === 0 ? "none" : r.known} on this computer)`)}`);
   }
   if (shaped.length > 0 || tests.length > 0 || named.length > 0 || r.dropped > 0) lines.push("");
   if (shaped.length > 0) {
@@ -808,10 +928,24 @@ function renderCompact(r: ScanWire, opts: RenderOpts): string {
     // hold reaches the AI as before (the long report says so).
     // Said as security, in green (the maintainer, 2026-10-22: "highlight
     // it's secure"), but only of what Mandu holds: never "everything".
-    lines.push(st.green(st.bold(known.length > 0
-      ? `✓ With Mandu, ${known.length === 1 ? "this secret stays" : `these ${known.length} secrets stay`} safe: the AI sees only a $MDU:… placeholder, and your agent still does its work.`
-      : "✓ With Mandu, your secrets stay safe: the AI sees only a $MDU:… placeholder, and your agent still does its work.")));
-    lines.push(row("Protect your agents", `${st.cyan("mandu claude")}  (or ${st.cyan("mandu codex")})`));
+    // The agents named are those the scan read; one already protected (an
+    // OpenClaw with Mandu's plugin) is said to be, not told to protect
+    // again (the OpenClaw plugin video, 2026-10-27).
+    const plan = protectPlan(r, opts.attached);
+    const which = known.length === 0 ? "your secrets" : known.length === 1 ? "this secret" : `these ${known.length} secrets`;
+    if (plan !== null && plan.protect.length === 0) {
+      lines.push(st.green(st.bold(`✓ ${hasWords(plan.has)}: the AI now sees ${which} only as a $MDU:… placeholder, and your agent still does its work.`)));
+      lines.push(row("Check it", st.cyan("mandu doctor")));
+    } else {
+      lines.push(st.green(st.bold(known.length > 0
+        ? `✓ With Mandu, ${known.length === 1 ? "this secret stays" : `these ${known.length} secrets stay`} safe: the AI sees only a $MDU:… placeholder, and your agent still does its work.`
+        : "✓ With Mandu, your secrets stay safe: the AI sees only a $MDU:… placeholder, and your agent still does its work.")));
+      if (plan === null) lines.push(row("Protect your agents", `${st.cyan("mandu claude")}  (or ${st.cyan("mandu codex")})`));
+      else {
+        lines.push(row(plan.protect.length === 1 ? `Protect ${agentNames(plan.protect)}` : "Protect your agents", protectList(plan.protect, st)));
+        for (const a of plan.has) lines.push(row(AGENT_NAME[a] ?? a, `has ${ATTACHMENT[a]}  (${st.cyan("mandu doctor")} checks it)`));
+      }
+    }
   }
   const all = `Everything: ${st.cyan("mandu scan --all")}`;
   lines.push(order.length > 0 ? row("One in full", `${st.cyan("mandu scan --show 1")}   ${all}`) : row("Everything", st.cyan("mandu scan --all")));
@@ -821,7 +955,7 @@ function renderCompact(r: ScanWire, opts: RenderOpts): string {
 
 /** The long report (`--all`): every finding's story, the sends by host,
  *  every footnote in full. */
-function renderLong(r: ScanWire, st: Style): string {
+function renderLong(r: ScanWire, st: Style, attached: readonly string[] = []): string {
   const lines: string[] = [];
   const span = r.from && r.to ? ` (${day(r.from)} to ${day(r.to)})` : "";
   lines.push(`mandu scan: read ${sessionWords(r.sessions)} on this computer${span}.`);
@@ -846,7 +980,9 @@ function renderLong(r: ScanWire, st: Style): string {
     lines.push("");
     lines.push(`${known.length === 1 ? "It is" : "They are"} still where ${known.length === 1 ? "it was" : "they were"} found: change ${known.length === 1 ? "it" : "them"} where ${known.length === 1 ? "it was" : "they were"} issued.`);
   } else {
-    lines.push(st.bold(st.green(`None of the ${plural(r.known, "secret")} Mandu found on this computer leaked to the AI in these sessions.`)));
+    lines.push(partlyRead(r)
+      ? st.bold(st.yellow(`None of the ${plural(r.known, "secret")} Mandu found on this computer leaked to the AI in what it could read of these sessions (see the note above).`))
+      : st.bold(st.green(`None of the ${plural(r.known, "secret")} Mandu found on this computer leaked to the AI in these sessions.`)));
   }
   const rows = (list: FindingWire[], stories: number): void => {
     list.forEach((f, i) => {
@@ -900,7 +1036,15 @@ function renderLong(r: ScanWire, st: Style): string {
   lines.push("");
   const others = unrunRead(r);
   if (others.length > 0) lines.push(`Mandu does not run ${agentNames(others)} yet; the agents it runs: ${RUN_COMMANDS}.`);
-  if (others.length === 0 || Object.entries(r.sessions).some(([a, k]) => (k ?? 0) > 0 && !unrun(a))) lines.push(`To keep your secrets from the AI from now on: ${st.cyan("mandu claude")} (or ${st.cyan("mandu codex")}).`);
+  if (others.length === 0 || Object.entries(r.sessions).some(([a, k]) => (k ?? 0) > 0 && !unrun(a))) {
+    // The agents the scan read, as the compact report names them.
+    const plan = protectPlan(r, attached);
+    if (plan === null) lines.push(`To keep your secrets from the AI from now on: ${st.cyan("mandu claude")} (or ${st.cyan("mandu codex")}).`);
+    else {
+      if (plan.protect.length > 0) lines.push(`To keep your secrets from the AI from now on: ${protectList(plan.protect, st, " ")}.`);
+      if (plan.has.length > 0) lines.push(`${hasWords(plan.has)}: there the AI now sees your secrets only as placeholders (${st.cyan("mandu doctor")} checks ${plan.has.length === 1 ? "it" : "them"}).`);
+    }
+  }
   lines.push(`To share the counts, with no value, path or name: ${st.cyan("mandu scan --share")}`);
   if (order.length > 0) lines.push(`To see one finding in full (every way it got there, up to 10 examples each): ${st.cyan("mandu scan --show <n>")}, n from 1 to ${order.length}`);
   return `${lines.join("\n")}\n`;
@@ -952,7 +1096,8 @@ export function renderShow(r: ScanWire, n: number, st: Style = PLAIN): string | 
     const sent = ex.find((e) => e.mandu !== "under" && e.mandu !== "by-time") ?? ex[0];
     if (sent !== undefined && sent.mandu !== "under") {
       const to = [...new Set(ex.filter((e) => e.mandu !== "under").map((e) => `${AGENT_NAME[e.agent] ?? e.agent}'s to ${providerName(e)}`))].join(", ");
-      lines.push(`     Each time, ${how === "ai-wrote" ? "the AI had it already, and it went back with each later request" : `${noun(f)} left this computer in the agent's next request`}: ${to}.`);
+      // A session under Mandu sent a placeholder: "each time" is the others.
+      lines.push(`     Each time${ex.some((x) => x.mandu === "under") ? " not under Mandu" : ""}, ${how === "ai-wrote" ? "the AI had it already, and it went back with each later request" : `${noun(f)} left this computer in the agent's next request`}: ${to}.`);
     }
   }
   // The AI's own writing has its section above; the sends are what is left.
@@ -982,7 +1127,7 @@ export function shareText(r: ScanWire): string {
   const known = r.findings.filter((f) => f.kind === "known").length;
   const keys = r.findings.filter(shapedLeak).length;
   const head = `I checked ${plural(total, "AI agent session")} on my computer with mandu scan:`;
-  const found = known === 0 ? "none of my current secrets had reached the AI" : `${known === 1 ? "1 of my secrets" : `${known} of my secrets`} had reached the AI`;
+  const found = known === 0 ? `none of my current secrets had reached the AI${partlyRead(r) ? " in what it could read" : ""}` : `${known === 1 ? "1 of my secrets" : `${known} of my secrets`} had reached the AI`;
   const more = keys > 0 ? `, and ${plural(keys, "more value")} that ${keys === 1 ? "looks" : "look"} like ${keys === 1 ? "a key" : "keys"}` : "";
   return `${head} ${found}${more}. Check yours (it runs on your computer and sends nothing): npx @mandusec/mandu scan\n`;
 }
@@ -1068,6 +1213,11 @@ export interface ScanDeps {
   /** `--open`: open a URL in the default browser (browser-open.ts
    *  `openUrl`). Absent: none here. */
   browse?: (url: string, env: Env) => Promise<OpenOutcome>;
+  /** The agents Mandu is attached to now, for the report's advice: an
+   *  OpenClaw whose config has Mandu's plugin installed and enabled
+   *  (openclaw-install-command.ts `openclawAttachmentInstalled`, a file
+   *  read, no connection). Absent: none. */
+  attached?: (env: Env) => readonly string[];
 }
 
 /** How long the command waits for the scan: its own deadline plus a margin,
@@ -1094,6 +1244,7 @@ export const realScanDeps: ScanDeps = {
   dashboards: (env) => liveDashboards(env),
   isTTY: () => process.stdout.isTTY === true,
   browse: (url, env) => openUrl(url, env),
+  attached: (env) => (openclawAttachmentInstalled(env) ? ["openclaw"] : []),
 };
 
 /** Is `host` this machine's loopback, so an SSH tunnel reaches it? */
@@ -1171,7 +1322,10 @@ export async function runScan(
   try {
     arb = await deps.arbiter(env, layout);
     const r = await deps.call(arb.sock, {
-      home, eventsDir: manduPath("events", env, home), ...(args.since !== undefined ? { since: args.since } : {}),
+      // The resident arbiter's store too: its attachment sessions' periods
+      // (the OpenClaw plugin's), which the throwaway arbiter reads read-only.
+      home, eventsDir: manduPath("events", env, home), manduDb: manduPath("symbol-db", env, home),
+      ...(args.since !== undefined ? { since: args.since } : {}),
     }, scanCallTimeoutMs(env));
     // Kept for the dashboard and doctor (plan 17 §3 item 12), with the
     // running Mandu's suggestions for the files (item 13).
@@ -1188,6 +1342,8 @@ export async function runScan(
     const linkOf = (): string => (found === null ? "" : `${dashboardLine(env, found)}\n`);
     // Colour for the terminal only: never --json or --share, nor a pipe.
     const st = colors(!args.json && !args.share && colorOn(deps.isTTY?.() ?? false, env));
+    // The agents Mandu is attached to now (a local file read; any failure: none).
+    const attached = ((): readonly string[] => { try { return deps.attached?.(env) ?? []; } catch { return []; } })();
     if (args.show !== undefined) {
       const order = numberedFindings(r);
       const f = order[args.show - 1];
@@ -1203,13 +1359,13 @@ export async function runScan(
     if (args.json) out(`${JSON.stringify(r, null, 2)}\n`);
     else if (args.share) out(shareText(r));
     else if (args.all) {
-      out(renderScan(r, { all: true, style: st }));
+      out(renderScan(r, { all: true, style: st, attached }));
       const line = suggestionsLine(kept?.rec ?? null);
       if (line !== null) out(`${line}\n`);
       out(linkOf());
     } else {
       out(renderScan(r, {
-        all: false, style: st, suggestions: suggestionsLine(kept?.rec ?? null),
+        all: false, style: st, attached, suggestions: suggestionsLine(kept?.rec ?? null),
         ...(found !== null ? { dashboard: dashboardWhere(env, found) } : {}),
       }));
     }

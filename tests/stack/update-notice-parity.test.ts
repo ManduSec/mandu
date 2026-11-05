@@ -5,8 +5,11 @@
  * (dashboard/src/update-notice.ts) rather than importing it, as it mirrors
  * the docs base (about-mandu-parity.test.ts). This keeps the two equal over
  * a table of inputs: version order, which release to name, the security
- * flag, the channel, the install line, freshness and the cache reader's
- * verdict on each kind of file. Pure but for a temp folder: no server, no
+ * flag, the channel, the install line, freshness, the cache reader's
+ * verdict on each kind of file, and whether the launcher checks at all for
+ * a config.toml and a layout (the dashboard reads the `update-check` key;
+ * the launcher maps it to MANDU_UPDATE_CHECK and asks its gate). Pure but
+ * for a temp folder: no server, no
  * arbiter, nothing enforced, so no axis is in play. Mandu-new.
  */
 import { test, after } from "node:test";
@@ -17,6 +20,7 @@ import { join } from "node:path";
 
 import * as dash from "../../dashboard/src/update-notice.js";
 import * as launcher from "../../launcher/src/update-check.js";
+import { loadConfigEnv } from "../../launcher/src/config.js";
 
 const VERSIONS = [
   "0.1.0", "0.2.0-alpha", "0.2.0-beta", "0.2.0-beta.2", "0.2.0-beta.3", "0.2.0-beta.10", "0.2.0-beta.x", "0.2.0-rc.1",
@@ -72,6 +76,24 @@ test("freshness and the limits are the launcher's", () => {
   assert.equal(dash.MAX_CACHE_BYTES, launcher.MAX_CACHE_BYTES);
   assert.equal(dash.MAX_RELEASES, launcher.MAX_RELEASES);
   assert.equal(dash.UPDATE_CHECK_INTERVAL_MS, launcher.UPDATE_CHECK_INTERVAL_MS);
+});
+
+test("whether Mandu checks: the dashboard's word for a config.toml and a layout is the launcher's gate", () => {
+  const texts = [
+    null, "", "# update-check = false\n", "update-check = false\n", "update-check = true\n", "update-check = \"true\"\n",
+    "update-check = \"yes\"\n", "update-check = 1\n", "update-check = 0\n", "update-check = off\n", "update-check = true # on\n",
+    "update-check = true\nupdate-check = false\n", "[ui]\nupdate-check = false\n", "mode = \"secrets\"\n",
+  ];
+  for (const text of texts) {
+    for (const mode of ["installed", "dev"] as const) {
+      // The launcher's own env: only what config.toml gives (no CI, no shell export), at a terminal.
+      const env = loadConfigEnv({ MANDU_HOME: "/mandu-home" }, () => text);
+      const gate = launcher.updateCheckGate(env, { installed: mode === "installed", interactive: true });
+      const word = dash.updateCheckSetting(dash.configuredUpdateCheck(text), mode);
+      assert.equal(word === "on", gate.on, `${JSON.stringify(text)} ${mode}: dashboard ${word}, launcher ${JSON.stringify(gate)}`);
+      if (!gate.on) assert.equal(word, gate.optedOut ? "off" : "source", `${JSON.stringify(text)} ${mode}: why not`);
+    }
+  }
 });
 
 const tmp = mkdtempSync(join(tmpdir(), "mandu-update-parity-"));

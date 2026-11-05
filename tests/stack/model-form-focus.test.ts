@@ -13,11 +13,14 @@
  * serves the Settings page (its own index.html and home.js in jsdom):
  *
  *   F1  signed in, Edit on lab, then Cancel: the focus is on lab's Edit;
- *   F2  Edit on lab, a new model, Save (asked first): the focus is on lab's
+ *   F2  Edit on lab, a new model, Save (asked first, on the page above
+ *       Save, dashboard.md §4.25n; Save anyway saves): the focus is on lab's
  *       Edit, drawn again, and the arbiter's list has the new model;
- *   F3  Add a model with a bad address: the refusal gives the focus back to
+ *   F3  Add a model (its empty boxes hold "e.g. …" examples, no values,
+ *       #248) with a bad address: the refusal gives the focus back to
  *       Save, described by the validator's words; the form stays open; a
- *       fixed address then saves, the focus on Add a model, and the arbiter
+ *       fixed address then saves (asked first, Save anyway), the focus on
+ *       Add a model, and the arbiter
  *       lists the model;
  *   F4  the token field is named "Token variable name (optional)" and
  *       described by its hint;
@@ -120,7 +123,7 @@ test("Settings over the real arbiter: the Models form's Cancel and Save give the
     const ready = (doc: Doc) => doc.querySelectorAll("#settings-models .model-row").length === 2;
 
     await servedProductPage(base, "/settings", ready, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       // F1: Edit, then Cancel.
       enter(editOf(doc, "lab"));
       assert.equal(byId(doc, "model-form").hidden, false);
@@ -135,6 +138,14 @@ test("Settings over the real arbiter: the Models form's Cancel and Save give the
       enter(old);
       byId(doc, "model-model").value = "mistral-large";
       press(byId(doc, "model-save"));
+      // Asked on the page, above Save (dashboard.md §4.25n): the sentence
+      // has the focus; Save anyway, a second press, saves.
+      const asked = () => byId(doc, "model-form").querySelector(".ask-in-place");
+      await waitWhile(() => !asked());
+      assert.equal(doc.activeElement, asked().querySelector(".ask-in-place-words"));
+      const yes = asked().querySelector(".ask-in-place-yes");
+      yes.focus();
+      yes.click();
       await waitWhile(() => editOf(doc, "lab") === old);
       assert.match(byId(doc, "models-notice").textContent, /^Saved lab\./);
       assert.equal(doc.activeElement, editOf(doc, "lab"), "lab's Edit, drawn again");
@@ -142,6 +153,11 @@ test("Settings over the real arbiter: the Models form's Cancel and Save give the
 
       // F3: Add with a bad address, refused; then fixed.
       enter(byId(doc, "model-open"));
+      // #248: the empty form's boxes hold examples marked "e.g.", no values.
+      for (const id of ["model-name", "model-url", "model-model", "model-token-env"]) {
+        assert.equal(byId(doc, id).value, "", `${id} is empty`);
+        assert.match(byId(doc, id).placeholder, /^e\.g\. \S/, `${id}'s example says it is one`);
+      }
       byId(doc, "model-name").value = "zdr";
       byId(doc, "model-url").value = "ftp://zdr.example";
       const save = byId(doc, "model-save");
@@ -153,10 +169,18 @@ test("Settings over the real arbiter: the Models form's Cancel and Save give the
       assert.equal(save.getAttribute("aria-describedby"), "model-error", "described by the validator's words");
       byId(doc, "model-url").value = "https://zdr.example/v1";
       press(save);
+      await waitWhile(() => !asked());
+      const add = asked().querySelector(".ask-in-place-yes");
+      add.focus();
+      add.click();
       await waitWhile(() => modelRow(doc, "zdr") === undefined);
       assert.equal(byId(doc, "model-form").hidden, true);
       assert.equal(doc.activeElement, byId(doc, "model-open"), "Add a model, which opened the form");
       assert.equal((await endpoint("zdr"))?.url, "https://zdr.example/v1", "the arbiter lists the model added");
+      // #248: the saved row names what was typed, not the example.
+      assert.match(modelRow(doc, "zdr").textContent, /https:\/\/zdr\.example\/v1/);
+      assert.doesNotMatch(modelRow(doc, "zdr").textContent, /e\.g\./);
+      assert.equal((await data.modelEndpoints()).filter((m: { name: string }) => m.name === "ollama").length, 1, "no second ollama from the example");
 
       // F4: the token field's name and description.
       const token = byId(doc, "model-token-env");
@@ -168,7 +192,7 @@ test("Settings over the real arbiter: the Models form's Cancel and Save give the
     // F5: signed out, a refusal.
     const before = readFileSync(policyPath, "utf8");
     await servedProductPage(base, "/settings", (doc) => editOf(doc, "lab") !== undefined, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       enter(editOf(doc, "lab"));
       byId(doc, "model-model").value = "other";
       const save = byId(doc, "model-save");

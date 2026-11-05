@@ -18,6 +18,16 @@
  * words. The agent page's *Needs your OK* (one agent's questions) is
  * unchanged.
  *
+ * N1 to N5: the top bar's Approvals link is named for the badge's count,
+ * "Approvals, N waiting for your answer", in its aria-label and title, and
+ * has neither while nothing waits (§4.25 *The top bar's two marks*).
+ *
+ * Q1 to Q6: while every question counted is from a session that has ended
+ * and no rule change waits (the hero's own rule), the count is the same
+ * number in a grey pill (class `ended`) and the link is named "Approvals,
+ * 1 question from a session that has ended, no agent is waiting on it";
+ * one live question or any rule change keeps the amber and #206's name.
+ *
  * Drives the PRODUCT page script in jsdom over the shared fetch stub
  * (home-js-fixtures.ts); across the real arbiter and dashboard,
  * tests/stack/waiting-line-rule-change.test.ts. Axes: none (display only).
@@ -117,7 +127,10 @@ test("Approvals: under a rule change's card, 'Waiting for your answer' says no q
   assert.deepEqual(lines(doc, "approvals-waiting"), [NO_QUESTION]);
   button(doc.querySelector('#approvals-proposals .proposal[data-id="pp-000001"]'), "Not now").click();
   await tick(30);
-  assert.equal(doc.getElementById("approvals-proposals-block").hidden, true, "answered: the card is gone");
+  // Answered: the card is gone, its block shown for the line the answer
+  // left alone (dashboard.md §4.25 *An answer says what it did*).
+  assert.equal(doc.querySelector('#approvals-proposals .proposal'), null, "answered: the card is gone");
+  assert.match(doc.querySelector("#approvals-proposals .answer-line").textContent, /^Not now:/);
   assert.equal(badge(doc), "0");
   assert.deepEqual(lines(doc, "approvals-waiting"), [NOTHING]);
 });
@@ -213,4 +226,156 @@ test("the agent page's Needs your OK is one agent's questions: unchanged by a ru
   vm = { ...AGENT, waiting: [], blocked: 2 };
   await poll(doc);
   assert.deepEqual(lines(doc, "agent-waiting"), [NOTHING]);
+});
+
+// The Approvals link's name says what its count counts (dashboard.md §4.25
+// *The top bar's two marks*, 2026-10-26): the pill alone read "Approvals 2"
+// to a screen reader, a bare number. The Rules link's mark already said
+// "Rules, 2 changes not saved".
+const link = (doc: Doc): Doc => doc.getElementById("nav-approvals-count").parentElement;
+const named = (doc: Doc) => [link(doc).getAttribute("aria-label"), link(doc).getAttribute("title")];
+
+test("N1 the Approvals link is named 'Approvals, 1 waiting for your answer' with one waiting, and title says the same", async () => {
+  const { doc } = load({ homeVm: quiet(), routes: { [PENDING]: { proposals: [P1] } } });
+  await tick(30);
+  assert.equal(badge(doc), "1");
+  assert.deepEqual(named(doc), ["Approvals, 1 waiting for your answer", "Approvals, 1 waiting for your answer"]);
+  assert.match(link(doc).getAttribute("aria-label"), /^Approvals\b/, "the name starts with the link's words (voice control)");
+});
+
+test("N2 a question and a rule change: 'Approvals, 2 waiting for your answer'", async () => {
+  const { doc } = load({ routes: { [PENDING]: { proposals: [P1] } } });
+  await tick(30);
+  assert.equal(badge(doc), "2");
+  assert.deepEqual(named(doc), ["Approvals, 2 waiting for your answer", "Approvals, 2 waiting for your answer"]);
+});
+
+test("N3 nothing waits: no name and no title on the link, the pill hidden; a poll that empties the list takes them off", async () => {
+  const quietPage = load({ homeVm: quiet(), routes: { [PENDING]: { proposals: [] } } });
+  await tick(30);
+  assert.equal(quietPage.doc.getElementById("nav-approvals-count").hidden, true);
+  assert.equal(link(quietPage.doc).hasAttribute("aria-label"), false);
+  assert.equal(link(quietPage.doc).hasAttribute("title"), false);
+  assert.equal(link(quietPage.doc).textContent.trim().startsWith("Approvals"), true);
+  let pending: unknown[] = [P1];
+  const { doc } = load({ homeVm: quiet(), routes: { [PENDING]: () => ({ proposals: pending }) } });
+  await tick(30);
+  assert.equal(link(doc).getAttribute("aria-label"), "Approvals, 1 waiting for your answer");
+  pending = [];
+  await poll(doc);
+  assert.equal(doc.getElementById("nav-approvals-count").hidden, true);
+  assert.deepEqual(named(doc), [null, null], "both attributes removed");
+});
+
+test("N4 the home read failed (count 0): no name on the link, from the start or after a question was named", async () => {
+  const { doc } = load({ routes: { "GET home": { status: 500, body: {} }, [PENDING]: { proposals: [] } } });
+  await tick(30);
+  assert.equal(doc.getElementById("nav-approvals-count").hidden, true);
+  assert.deepEqual(named(doc), [null, null]);
+  let failing = false;
+  const later = load({ routes: { "GET home": () => (failing ? { status: 500, body: {} } : home()), [PENDING]: { proposals: [] } } });
+  await tick(30);
+  assert.equal(link(later.doc).getAttribute("aria-label"), "Approvals, 1 waiting for your answer");
+  failing = true;
+  await poll(later.doc);
+  assert.equal(later.doc.getElementById("nav-approvals-count").hidden, true);
+  assert.deepEqual(named(later.doc), [null, null], "the count is 0: the link reads 'Approvals'");
+});
+
+test("N5 a poll with the same count does not touch the link", async () => {
+  const { doc } = load({ routes: { [PENDING]: { proposals: [P1] } } });
+  await tick(30);
+  const writes: string[] = [];
+  const el = link(doc);
+  const set = el.setAttribute.bind(el);
+  const rm = el.removeAttribute.bind(el);
+  el.setAttribute = (k: string, v: string) => { writes.push(k); set(k, v); };
+  el.removeAttribute = (k: string) => { writes.push(k); rm(k); };
+  await poll(doc);
+  await poll(doc);
+  assert.deepEqual(writes.filter((k) => k === "aria-label" || k === "title"), [], "no write while the count stays 2");
+  assert.equal(el.getAttribute("aria-label"), "Approvals, 2 waiting for your answer");
+});
+
+// The count in grey while nothing is held up on what it counts (dashboard.md
+// §4.25 *The top bar's two marks*, 2026-10-28): every question counted is
+// from a session that has ended and no rule change waits, the hero's own
+// rule. The amber "1" said something waited on you while the hero right
+// under it said no agent did.
+const ENDED = { ...ASK, id: "egr-2", askerEnded: true };
+const ENDED_2 = { ...ASK, id: "egr-3", askerEnded: true };
+const LIVE = { ...ASK, id: "egr-4", askerEnded: false };
+const grey = (doc: Doc): boolean => doc.getElementById("nav-approvals-count").classList.contains("ended");
+const ENDED_NAME = "Approvals, 1 question from a session that has ended, no agent is waiting on it";
+
+test("Q1 one question from a session that has ended, no rule change: the badge reads '1' in grey, and the link names the ended session", async () => {
+  const { doc } = load({ homeVm: home({ waiting: [ENDED] }), routes: { [PENDING]: { proposals: [] } } });
+  await tick(30);
+  assert.equal(badge(doc), "1", "the same number");
+  assert.equal(doc.getElementById("nav-approvals-count").hidden, false);
+  assert.equal(grey(doc), true, "the quiet pill");
+  assert.deepEqual(named(doc), [ENDED_NAME, ENDED_NAME]);
+  assert.match(link(doc).getAttribute("aria-label"), /^Approvals\b/, "the name starts with the link's words (voice control)");
+  assert.equal(doc.getElementById("home-waiting-title").textContent, "Approvals waiting (1)", "Home's count is unchanged");
+});
+
+test("Q2 two questions, both from ended sessions: '2' in grey, the plural name", async () => {
+  const { doc } = load({ homeVm: home({ waiting: [ENDED, ENDED_2] }), routes: { [PENDING]: { proposals: [] } } });
+  await tick(30);
+  assert.equal(badge(doc), "2");
+  assert.equal(grey(doc), true);
+  const name = "Approvals, 2 questions from sessions that have ended, no agent is waiting on them";
+  assert.deepEqual(named(doc), [name, name]);
+});
+
+test("Q3 one ended and one live question: amber, #206's name, counting both", async () => {
+  const { doc } = load({ homeVm: home({ waiting: [LIVE, ENDED] }), routes: { [PENDING]: { proposals: [] } } });
+  await tick(30);
+  assert.equal(badge(doc), "2");
+  assert.equal(grey(doc), false, "a live question is held up on you");
+  assert.deepEqual(named(doc), ["Approvals, 2 waiting for your answer", "Approvals, 2 waiting for your answer"]);
+});
+
+test("Q4 one ended question and a rule change: amber, a rule change holds the rules", async () => {
+  const { doc } = load({ homeVm: home({ waiting: [ENDED] }), routes: { [PENDING]: { proposals: [P1] } } });
+  await tick(30);
+  assert.equal(badge(doc), "2");
+  assert.equal(grey(doc), false);
+  assert.deepEqual(named(doc), ["Approvals, 2 waiting for your answer", "Approvals, 2 waiting for your answer"]);
+});
+
+test("Q5 nothing waits, or the home read failed: hidden, no grey, no name", async () => {
+  const quietPage = load({ homeVm: quiet(), routes: { [PENDING]: { proposals: [] } } });
+  await tick(30);
+  assert.equal(quietPage.doc.getElementById("nav-approvals-count").hidden, true);
+  assert.equal(grey(quietPage.doc), false);
+  assert.deepEqual(named(quietPage.doc), [null, null]);
+  let failing = false;
+  const { doc } = load({ routes: { "GET home": () => (failing ? { status: 500, body: {} } : home({ waiting: [ENDED] })), [PENDING]: { proposals: [] } } });
+  await tick(30);
+  assert.equal(grey(doc), true);
+  failing = true;
+  await poll(doc);
+  assert.equal(doc.getElementById("nav-approvals-count").hidden, true);
+  assert.equal(grey(doc), false, "a failed read takes the grey off");
+  assert.deepEqual(named(doc), [null, null]);
+});
+
+test("Q6 a poll in which the live question's session ends: same count, the pill turns grey and the link is renamed; a rule change brings the amber back", async () => {
+  let waiting: unknown[] = [LIVE];
+  let pending: unknown[] = [];
+  const { doc } = load({ routes: { "GET home": () => home({ waiting }), [PENDING]: () => ({ proposals: pending }) } });
+  await tick(30);
+  assert.equal(grey(doc), false);
+  assert.equal(link(doc).getAttribute("aria-label"), "Approvals, 1 waiting for your answer");
+  waiting = [{ ...LIVE, askerEnded: true }];
+  await poll(doc);
+  assert.equal(badge(doc), "1", "the count did not change");
+  assert.equal(grey(doc), true);
+  assert.deepEqual(named(doc), [ENDED_NAME, ENDED_NAME], "renamed though the count stayed 1");
+  pending = [P1];
+  await poll(doc);
+  assert.equal(badge(doc), "2");
+  assert.equal(grey(doc), false);
+  assert.equal(link(doc).getAttribute("aria-label"), "Approvals, 2 waiting for your answer");
 });

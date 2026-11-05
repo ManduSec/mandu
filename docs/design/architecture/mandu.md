@@ -580,6 +580,31 @@ symbolization) and never masks a persistent throttle: after the attempt cap the
 real upstream status is relayed unchanged (`ProxyOptions.retry` /
 `upstreamWithRetry`).
 
+**Upstream throttles and plan limits.** A plan's usage limit is not a
+transient throttle, and the proxy does not retry it. Anthropic answers a
+request the plan's quota no longer admits with a 429 and its
+`anthropic-ratelimit-unified-*` headers: the overall status (`rejected`), the
+window that decided (`representative-claim`: `five_hour`, `seven_day`, …),
+each window's status, utilization and reset, and a `retry-after` in seconds.
+`src/rate-limit.ts` reads only those named headers, each value held to its
+shape (a number, a short lower-case word, an epoch), and never a request
+header, the auth headers among them, nor any body. A limit is **hard** when
+the quota refused with its reset at least five minutes away, or when the
+Retry-After is that long. A hard 429 is relayed to the agent at once, its
+status, headers and body unchanged, so the agent shows the limit. Live
+2026-10-28, a subscription at its weekly limit (Retry-After 45151) was
+re-knocked twelve times over about three minutes, so Claude Code sat on its
+spinner with no answer and a drill turn timed out. A short throttle (a
+Retry-After of seconds) is still absorbed as above. Every relayed 429 or 529
+records what its headers said on the turn's `tllm_call` as `upstreamLimit`
+(`dashboard/src/event-model.ts` `UpstreamLimit`: status, unified status,
+claim, the five-hour and seven-day windows, the overage status, the reset,
+Retry-After, `hard`). The drill suite reads it for its LIMITED verdict,
+and the product page words it (dashboard.md §4.21). The openai-proxy has no retry loop, so it relays
+ChatGPT's usage-limit answer at once; that answer carries its limit in its
+body (`usage_limit_reached`, `resets_in_seconds`) and in `x-codex-*` headers
+of another shape, and it is not parsed yet.
+
 **Each run is its own dashboard session.** The proxy stamps every
 observability event's `sessionId` from the request itself: `sessionIdFor()`
 honors the first present of `SESSION_ID_HEADERS` (`x-mandu-session-id`, then

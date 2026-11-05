@@ -20,7 +20,9 @@
  *       Changes to save follows;
  *   K2  Show in policy.yaml is named by its row, reads Hide with the lines
  *       shown, and keeps the focus;
- *   K3  Not a secret (named by its row): the row is gone, the focus is on
+ *   K3  Not a secret (named by its row) asks in the opened row, its
+ *       sentence focused (§4.25n *Rules asks on the page, not in a browser
+ *       dialog*); Mark as not a secret: the row is gone, the focus is on
  *       the card's heading, and the arbiter no longer lists it;
  *   K4  Scan for keys over the typed folder: while it runs the focus waits
  *       on the card's heading, never <body>; it is back on Scan for keys
@@ -157,7 +159,15 @@ test("Rules over the real arbiter: Keys Mandu found keeps the focus through ⋯,
     const headers: Record<string, string> = { Cookie: ADMIN_COOKIE };
     const ready = (doc: Doc) => !!byId(doc, "suggest-open");
     await servedProductPage(base, "/rules", ready, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      // Not a secret asks on the page (dashboard.md §4.25n *Rules asks on
+      // the page, not in a browser dialog*).
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
+      const ask = (not: Doc) => {
+        enter(not);
+        const words = detail(doc).querySelector(".ask-in-place-words");
+        assert.equal(doc.activeElement, words, "the question's sentence, never Mark as not a secret");
+        return button(detail(doc), "Mark as not a secret");
+      };
       byId(doc, "suggest-open").click();
       await waitWhile(() => rows(doc).length !== 3);
       assert.equal(rows(doc).length, 3, "Keys Mandu found lists the three");
@@ -188,7 +198,7 @@ test("Rules over the real arbiter: Keys Mandu found keeps the focus through ⋯,
       // K3: Not a secret.
       const not = button(detail(doc), "Not a secret");
       assert.equal(controlName(not), "Not a secret: staging.conf");
-      press(not);
+      press(ask(not));
       // Its own answer writes the notice and gives the focus its place. A
       // read of the suggestions the page made meanwhile (its first Home
       // poll's, late on a loaded host) can take the row away first (master
@@ -212,11 +222,12 @@ test("Rules over the real arbiter: Keys Mandu found keeps the focus through ⋯,
       // K5: signed out on the open page.
       delete headers.Cookie;
       enter(rowAt(doc, "deploy/prod.conf").querySelector(".file-more"));
-      const refused = button(detail(doc), "Not a secret");
-      press(refused);
+      press(ask(button(detail(doc), "Not a secret")));
       await waitWhile(() => !byId(doc, "suggest-error").textContent);
       assert.match(byId(doc, "suggest-error").textContent, /^Sign in first/);
-      assert.equal(doc.activeElement, refused, "the button pressed, on again");
+      const refused = button(detail(doc), "Not a secret");
+      assert.equal(detail(doc).querySelector(".ask-in-place"), null, "the question is gone");
+      assert.equal(doc.activeElement, refused, "the button pressed first, on again");
       assert.equal(refused.getAttribute("aria-describedby"), "suggest-error");
       assert.ok(rowAt(doc, "deploy/prod.conf"), "still waiting");
       byId(doc, "suggest-error").textContent = "";

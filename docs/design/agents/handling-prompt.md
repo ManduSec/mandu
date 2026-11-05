@@ -197,8 +197,13 @@ originals. `content_kind` classifies input quality and is explicitly not an
 output-correctness verdict. The full/dual-only golden fixtures were
 regenerated; capability gating is unchanged.
 
-JSON artifact guidance requests `output_format: "json"` and routes the
-returned symbol directly into Write.content. The same routing reminder is
+JSON artifact guidance requests `output_format: "json"`, and the returned
+symbol goes where the user asked for it: into the reply when they asked to
+be told or shown (they see its real text), into Write.content when they
+asked for a file, never over a file the model was asked to read (until
+2026-10-26 the tool said "pass result_symbol directly to Write.content",
+and gpt-5.6-luna on OpenClaw wrote a summary over the lab results it was
+asked to summarise, demo-local-health-summary). The same routing reminder is
 carried as an exact-match TCB `next_step` on non-failure inspection results;
 free-form model text remains untrusted. JSON validation (syntax only, not
 task correctness) stays in quarantine.
@@ -645,3 +650,64 @@ the prefix stays stable after it. Pinned by
 `arbiter/test/unit/handling-prompt.test.ts` (the bullet, the old wording
 gone) and `tests/stack/model-service-egress.test.ts` (the note a browser
 agent's call gets carries it).
+
+## 12. The agent skills: the same words, installed ahead of time (2026-10-24)
+
+**What.** The repository root carries a public `skills/` tree in the
+[Agent Skills](https://agentskills.io/specification) format, one folder per
+skill with a `SKILL.md` whose YAML frontmatter holds `name` (equal to the
+folder, at most 64 lowercase letters, digits and hyphens) and `description`
+(at most 1024 characters: what the skill does and when to load it). A user
+installs them with the `skills` CLI ([vercel-labs/skills](https://github.com/vercel-labs/skills)),
+`npx skills add mandusec/mandu`, which finds `skills/<name>/SKILL.md` in the
+public repository and copies or links each into the agents it is asked for:
+`.claude/skills/` for Claude Code, `.agents/skills/` for Codex and OpenCode,
+`.goose/skills/` for Goose, `skills/` for OpenClaw (each with a user-wide
+twin under `-g`). It is the same layout NVIDIA OpenShell ships
+(`npx skills add NVIDIA/OpenShell`). Two skills:
+
+| Skill | For | Says |
+|---|---|---|
+| `mandu` | an agent running under Mandu | what a `$MDU:…` placeholder is (README's "same file, read two ways"), the markers, routing and the quoting rules of §9 and §10, never recover a value, the `[mandu:secret]` / `[mandu:twin]` notes, a held or stopped send and the retry after the user's answer (§8), the commands to point the user to (`mandu why`, `mandu dashboard`, `mandu scan`, `mandu policy suggest`, `mandu doctor --secrets`) |
+| `mandu-setup` | an agent helping its user install Mandu | the platforms as the README states them, install, `mandu doctor`, `mandu scan`, `mandu demo`, the dashboard account, `mandu claude` / `mandu codex`, troubleshooting commands, uninstall |
+
+**Why a skill and the prompt both.** The handling prompt reaches only a
+model whose requests pass a Mandu model proxy, and only from the first
+request of a protected session. A skill reaches the agent before Mandu is
+installed (`mandu-setup`), and lets an agent recognize a placeholder or a
+Mandu refusal by its description and load the longer guidance only then
+(the spec's progressive disclosure: a description at startup, the body on
+use). The prompt stays the authority: the `mandu` skill reuses its words
+(opaque handle, routing, single-quote it, keep the command to that file
+alone, never guess or restate, tell the user and make the same call again)
+and says that where the two seem to differ the agent follows Mandu's own
+instructions. A change to the prompt's guidance on placeholders or held
+sends updates the skill in the same change.
+
+**Security.** The skills are utility text: no gate reads them, and an agent
+with or without them meets the same masks and the same egress decisions.
+They are also text an injected agent reads beside the injection, so each
+says plainly that the agent may be reading text written to manipulate it,
+and that answering Approvals, editing `~/.mandu` (policy, bindings, levels,
+"not a secret"), the protection mode, turning protection off and the
+dashboard password are the human's; and neither names a `--no-…` opt-out
+or an off switch. A host to bind is named only when the user's own request
+calls for it. The rule tools (`mandu_policy_*`, §2 `manduPolicy`) are
+described exactly as the prompt does: a tightening applies at once, a
+loosening waits for the user.
+
+**Kept true by tests.** `launcher/test/unit/agent-skills.test.ts` (in the
+docs lane, `launcher.docs`, since a skill-only change is a docs-only diff):
+the frontmatter against the spec's limits, every `mandu <verb> [--flag]` a
+skill names against the launcher's real command table
+(`RESERVED_SUBCOMMANDS`, each verb's `--help` usage, the launch parser for an
+agent), every link an absolute URL into the public repository naming a file
+and heading that exist (an installed skill has no repository around it),
+the safety words above, and the install command in the README and the
+user guide. The export's own test checks that the real
+allow-list ships `skills/` and that the real deny-list passes the real
+files. The `skills` CLI itself was run by hand against a local copy
+(`npx skills@1.7.4 add <dir> --list`, then `-a claude-code -a codex -a
+opencode --skill '*' --copy -y` into a scratch project: both skills found
+and installed) but is not a suite: it is a third-party package fetched from
+npm, and the suites run offline.

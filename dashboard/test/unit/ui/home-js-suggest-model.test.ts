@@ -6,8 +6,10 @@
  * (view-model/suggestion-model.ts), so the page is tested on what the routes
  * send.
  *
- * Pins: Off by default; not offered, only Off can be picked and the line
- * says "not offered yet"; Contents disabled with the reason when no model of
+ * Pins: not offered (or no picker in the server's answer), the row, its
+ * preview and its line are hidden and nothing in them can take the focus,
+ * and a picker that stops being offered closes an open preview; offered,
+ * the row is shown, Off by default; Contents disabled with the reason when no model of
  * your own is set up; picking a tier enables the button, which asks for the
  * preview with the typed folder and "Also look in your home folder"; the
  * preview dialog shows the headline, where it goes, the folders, the files
@@ -65,19 +67,60 @@ const pick = (doc: any, v: string) => {
   sel.dispatchEvent(new doc.defaultView.Event("change"));
 };
 
-test("not offered: only Off, and the line says not offered yet", async () => {
+/** The row, its preview and its line are not drawn, and nothing in them
+ *  can take the focus: each control is under a hidden element. */
+function assertPickerHidden(doc: any, where: string) {
+  assert.equal(doc.getElementById("files-suggested-view").hidden, false, `${where}: Keys Mandu found is open`);
+  for (const id of ["suggest-model", "suggest-model-preview", "suggest-model-status"]) assert.equal(doc.getElementById(id).hidden, true, `${where}: #${id} is hidden`);
+  const controls = [...doc.querySelectorAll("#suggest-model select, #suggest-model button, #suggest-model-preview button")];
+  assert.ok(controls.length >= 5, "the menus and the buttons are in the page");
+  for (const c of controls) assert.ok(c.closest("[hidden]"), `${where}: #${c.id} cannot take the focus`);
+  assert.doesNotMatch(doc.getElementById("files-suggested-view").textContent.replace(/\s+/g, " "), /not offered/, `${where}: no line about a feature it does not have`);
+  // The scan bar, its More fold and the list are drawn as before.
+  for (const id of ["suggest-form", "files-suggested-list"]) assert.equal(doc.getElementById(id).closest("[hidden]"), null, `${where}: #${id} is shown`);
+  assert.equal(doc.querySelector("#files-suggested-view details.more").closest("[hidden]"), null, `${where}: More is shown`);
+}
+
+test("not offered: the row is hidden and nothing in it can take the focus", async () => {
   const { doc } = await open({ "GET suggestions": listing(modelPickerVM(false, [])) });
+  assertPickerHidden(doc, "not offered");
   const sel = doc.getElementById("suggest-model-tier");
-  assert.equal(sel.value, "off", "Off by default");
-  assert.deepEqual([...sel.options].map((o: any) => [o.value, o.disabled]), [["off", false], ["names", true], ["contents", true]]);
-  assert.match(doc.getElementById("suggest-model-why").textContent, /not offered yet/);
+  assert.equal(sel.value, "off", "Off, were it shown");
   assert.equal(doc.getElementById("suggest-model-run").disabled, true);
-  assert.equal(doc.getElementById("suggest-model-preview").hidden, true);
+});
+
+test("no picker in the server's answer: the row is hidden too", async () => {
+  const { doc } = await open({ "GET suggestions": { suggestions: [], count: 0, scan: null } });
+  assertPickerHidden(doc, "no model");
+});
+
+test("offered, then not: the row hides and an open preview closes with it", async () => {
+  let model: unknown = OFFERED;
+  const names = modelPreviewVM({ ...PREVIEW, tier: "names", names: ['f1 root 1 "README.md" size=under1KB ext=md'], files: [] }, HOME);
+  const { doc } = await open({
+    "GET suggestions": () => listing(model),
+    "POST suggestions/scan": () => listing(model),
+    "POST suggestions/model/preview": { preview: names },
+  });
+  assert.equal(doc.getElementById("suggest-model").hidden, false, "offered: the row is shown");
+  pick(doc, "names");
+  doc.getElementById("suggest-model-run").click();
+  await tick();
+  assert.equal(doc.getElementById("suggest-model-preview").hidden, false, "the preview is open");
+  assert.equal(doc.getElementById("suggest-model-status").textContent, "Nothing is sent until you press Send.");
+  model = modelPickerVM(false, []);
+  doc.getElementById("suggest-scan").click();
+  await tick(20);
+  assertPickerHidden(doc, "no longer offered");
+  assert.equal(doc.getElementById("suggest-model-status").textContent, "", "its line says nothing");
 });
 
 test("offered without a model of your own: Names only can be picked, Contents says why not", async () => {
   const { doc } = await open({ "GET suggestions": listing(modelPickerVM(true, [{ name: "cloud", local: false }])) });
+  assert.equal(doc.getElementById("suggest-model").hidden, false, "offered: the row is shown");
+  assert.equal(doc.getElementById("suggest-model-status").hidden, false, "and its line");
   const sel = doc.getElementById("suggest-model-tier");
+  assert.equal(sel.value, "off", "Off by default");
   assert.deepEqual([...sel.options].map((o: any) => o.disabled), [false, false, true]);
   assert.match(sel.options[2].title, /No model of your own is set up/);
   assert.match(doc.getElementById("suggest-model-why").textContent, /Contents \(your own model\): No model of your own is set up/);
@@ -92,6 +135,7 @@ test("Contents: the preview dialog shows the files and sizes and where they go; 
     "POST suggestions/model/preview": (b: any) => (bodies.push({ path: "preview", body: b }), { preview: modelPreviewVM(PREVIEW, HOME) }),
     "POST suggestions/model/send": (b: any) => (bodies.push({ path: "send", body: b }), { run: modelRunVM(RUN, "contents"), ...listing(OFFERED, [FILED]) }),
   });
+  assert.equal(doc.getElementById("suggest-model").hidden, false, "offered: the row is shown");
   doc.getElementById("suggest-root").value = "~/proj";
   doc.getElementById("suggest-home").checked = true;
   pick(doc, "contents");

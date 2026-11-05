@@ -19,8 +19,13 @@
  *       arbiter lists no such model;
  *   X3  an open note in the form takes the first Escape alone;
  *   X4  Enter in a field sends a change, and an Escape while it is on its
- *       way closes nothing: the change lands (the arbiter lists the new
- *       model) and the focus goes to lab's Edit, drawn again;
+ *       way closes nothing. The arbiter says it changes what Mandu
+ *       protects, so the form asks on the page, above Save (dashboard.md
+ *       §4.25n), its sentence holding the focus: an Escape there closes
+ *       the question only, never the form with what was typed, and gives
+ *       the focus to Save; Save asks again and Save anyway lands the change
+ *       (the arbiter lists the new model) with the focus on lab's Edit,
+ *       drawn again. The browser's own dialog is never called;
  *   X5  the oracle: neither the rendered page nor the answers read here
  *       carry the registered key.
  *
@@ -114,7 +119,7 @@ test("Settings over the real arbiter: Escape closes the Models form as Cancel do
     const before = readFileSync(policyPath, "utf8");
 
     await servedProductPage(base, "/settings", ready, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       // X1: Edit lab, a new address, Escape in the field.
       enter(editOf(doc, "lab"));
       assert.ok(formOpen(doc));
@@ -162,6 +167,21 @@ test("Settings over the real arbiter: Escape closes the Models form as Cancel do
       assert.equal(byId(doc, "model-save").disabled, true, "the change is on its way");
       assert.equal(escape(doc).defaultPrevented, false, "not taken");
       assert.ok(formOpen(doc), "the form stays open: the change cannot be called back");
+      const asked = () => byId(doc, "model-form").querySelector(".ask-in-place");
+      await waitWhile(() => !asked());
+      assert.equal(doc.activeElement, asked().querySelector(".ask-in-place-words"), "the question's sentence, never Save anyway");
+      assert.equal(escape(doc).defaultPrevented, true, "the question takes the Escape");
+      assert.equal(asked(), null, "the question closes");
+      assert.ok(formOpen(doc), "the form stays open, as typed");
+      assert.equal(field.value, "mistral-large");
+      assert.equal(doc.activeElement, byId(doc, "model-save"), "Save, which asked");
+      assert.equal((await endpoint("lab"))?.model, "mistral", "nothing landed");
+      byId(doc, "model-save").click();
+      await waitWhile(() => !asked());
+      const yes = asked().querySelector(".ask-in-place-yes");
+      assert.equal(yes.textContent, "Save anyway");
+      yes.focus();
+      yes.click();
       await waitWhile(() => editOf(doc, "lab") === old);
       assert.equal(formOpen(doc), false, "the answer closes it");
       assert.match(byId(doc, "models-notice").textContent, /^Saved lab\./);

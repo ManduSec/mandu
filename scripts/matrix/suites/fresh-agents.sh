@@ -33,6 +33,18 @@ step() { echo; echo "──── step $1: $2"; CUR="$1"; }
 pass() { echo "  PASS  $1"; echo "PASS step=$CUR $1" >> "$STEPLOG"; }
 fail() { echo "  FAIL  $1"; echo "FAIL step=$CUR $1" >> "$STEPLOG"; FAILS=$((FAILS+1)); }
 note() { echo "  note  $1"; echo "NOTE step=$CUR $1" >> "$STEPLOG"; }
+# npm_global <out file> <spec>: npm install -g as alice, tried again (at most
+# 3 times) only when the registry connection broke (2026-11-04: an ECONNRESET
+# reading openclaw from npm failed a run); any other failure stands. Sets rc.
+npm_global() {
+  local try
+  for try in 1 2 3; do
+    as_alice "npm install -g --no-audit --no-fund '$2'" > "$1" 2>&1; rc=$?
+    [[ $rc -ne 0 ]] && grep -Eq 'npm error code (ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|EPIPE)' "$1" && (( try < 3 )) || return 0
+    note "npm install -g $2: the registry connection broke (try $try of 3): $(grep -Eo 'npm error code [A-Z_]+' "$1" | head -1)"
+    sleep 10
+  done
+}
 expect_out() {
   if grep -Eq -- "$2" "$3"; then pass "$1"; else fail "$1 (wanted /$2/)"; sed 's/^/        | /' "$3" | head -40; fi
 }
@@ -101,7 +113,7 @@ AGENTS=()
 while IFS='=' read -r a v; do
   [[ -n "$a" ]] || continue
   t0=$(date +%s)
-  as_alice "npm install -g --no-audit --no-fund '${PKG[$a]}@$v'" > "/tmp/install-$a.out" 2>&1; rc=$?
+  npm_global "/tmp/install-$a.out" "${PKG[$a]}@$v"
   as_alice "${BIN[$a]} --version" > "/tmp/version-$a.out" 2>&1
   if [[ $rc -eq 0 ]] && grep -Eq '[0-9]+\.[0-9]+\.[0-9]+' "/tmp/version-$a.out"; then
     pass "$a ${PKG[$a]}@$v installed: $(grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' "/tmp/version-$a.out" | head -1) ($(( $(date +%s) - t0 ))s)"

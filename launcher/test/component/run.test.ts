@@ -430,9 +430,11 @@ test("a guarded launch tells the guard to serve the command box's socket allow-l
     const { writeFileSync, readFileSync } = await import("node:fs");
     const seen = join(runtime, "guard-env.txt");
     const guardBin = join(runtime, "mandu-net-guard");
+    // The launch first asks the bin whether it can start here (`-- true`,
+    // packaging.md §3.1): answered, and not recorded as the wrap.
     writeFileSync(
       guardBin,
-      `#!/bin/sh\nprintf '%s|%s\\n' "\${MANDU_NET_GUARD_BOX_SOCKETS:-unset}" "\${MANDU_NET_GUARD_PROXY_PORTS-unset}" >> "${seen}"\n` +
+      `#!/bin/sh\n[ "$*" = "-- true" ] && exit 0\nprintf '%s|%s\\n' "\${MANDU_NET_GUARD_BOX_SOCKETS:-unset}" "\${MANDU_NET_GUARD_PROXY_PORTS-unset}" >> "${seen}"\n` +
         'while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done\n[ "$#" -gt 0 ] && shift\n[ "$#" -gt 0 ] && exec "$@"\nexit 0\n',
     );
     chmodSync(guardBin, 0o755);
@@ -593,7 +595,9 @@ test("plan 11 D5: a declared local model endpoint's port reaches the TCP confine
     assert.ok(ports.includes(8788), "the model proxy's port stays allowed");
     assert.ok(!ports.includes(8443) && !ports.includes(443), `strict: no external endpoint port, no workflow port: ${JSON.stringify(ports)}`);
 
-    const g = guard.argvs()[0];
+    // The first run is the launch's start probe (`-- true`, packaging.md §3.1).
+    assert.deepEqual(guard.argvs()[0], ["--", "true"], "the launch asks the guard whether it can start");
+    const g = guard.argvs()[1];
     assert.ok(g, "the connect guard ran");
     const specs = g.filter((_, i) => g[i - 1] === "--allow");
     assert.ok(specs.includes("tcp:127.0.0.0/8:11434") && specs.includes("tcp:[::1]:11434"), JSON.stringify(specs));

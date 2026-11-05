@@ -126,7 +126,9 @@ test("Rules over the real arbiter: two keys in files named app.conf are named ap
     const asked: string[] = [];
     const ready = (doc: Doc) => !!byId(doc, "suggest-open");
     await servedProductPage(base, "/rules", ready, async (doc) => {
-      doc.defaultView.confirm = (q: string) => (asked.push(q), true);
+      // Not a secret asks on the page (dashboard.md §4.25n *Rules asks on
+      // the page, not in a browser dialog*).
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       byId(doc, "suggest-open").click();
       await waitWhile(() => rows(doc).length !== 3);
       assert.equal(rows(doc).length, 3, "Keys Mandu found lists the three");
@@ -155,6 +157,10 @@ test("Rules over the real arbiter: two keys in files named app.conf are named ap
 
       // N3: Not a secret, of that file only.
       enter(not);
+      const words = detail(doc).querySelector(".ask-in-place-words");
+      assert.equal(doc.activeElement, words, "the question has the focus");
+      asked.push(words.textContent);
+      enter(button(detail(doc), "Mark as not a secret"));
       // Its own answer writes the notice. A read of the suggestions the page
       // made meanwhile (its first Home poll's, late on a loaded host) can
       // take the row away first (master pipeline 10542): the wait is on both.

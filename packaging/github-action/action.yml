@@ -82,13 +82,13 @@ inputs:
   mandu-version:
     description: The @mandusec/mandu version to install from npm.
     required: false
-    default: 0.2.0-beta.8
+    default: 0.2.0-beta.9
   agent-version:
     description: "The agent CLI version to install from npm (default: the newest Mandu was tested with); `none` uses the one already on PATH."
     required: false
     default: ""
   node-version:
-    description: The Node.js version to set up (Mandu needs 22.13 or later).
+    description: The Node.js version to set up (Mandu needs 22.15 or later).
     required: false
     default: "22"
   anthropic-api-key:

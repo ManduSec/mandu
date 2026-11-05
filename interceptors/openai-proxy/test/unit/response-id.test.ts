@@ -24,7 +24,7 @@ const chatStream = (id: unknown): string =>
   + chunk({ id: "chatcmpl-later000000000", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })
   + "data: [DONE]\n\n";
 
-function sniff(wire: "chat" | "responses", text: string, step = text.length): string | undefined {
+function sniff(wire: "chat" | "responses" | "gemini", text: string, step = text.length): string | undefined {
   const s = new ResponseIdSniffer(wire);
   for (let i = 0; i < text.length; i += step) s.feed(text.slice(i, i + step));
   return s.value();
@@ -76,4 +76,14 @@ test("responseIdOfBody: a buffered answer's id, well formed, else none", () => {
   assert.equal(responseIdOfBody({ id: CHAT_ID, choices: [] }), CHAT_ID);
   assert.equal(responseIdOfBody({ id: RESP_ID, output: [] }), RESP_ID);
   for (const b of [{ id: "bad id" }, { error: { message: "rate limited" } }, null, [CHAT_ID], CHAT_ID]) assert.equal(responseIdOfBody(b), undefined, JSON.stringify(b));
+});
+
+test("gemini: the first chunk's responseId (model-wires.md §4.3); a buffered body's, or the JSON-array stream's first chunk's", () => {
+  const g = (id: unknown, text = "hi"): string => chunk({ candidates: [{ content: { role: "model", parts: [{ text }] }, index: 0 }], responseId: id });
+  assert.equal(sniff("gemini", ": keepalive\n\n" + g("AbCd-ef_01") + g("later-id"), 7), "AbCd-ef_01");
+  assert.equal(sniff("gemini", chunk({ usageMetadata: {} }) + g("AbCd-ef_01")), "AbCd-ef_01", "a chunk without one is passed over");
+  assert.equal(sniff("gemini", g("bad id") + g("later-id")), undefined, "an ill-formed first id gives none");
+  assert.equal(responseIdOfBody({ responseId: "AbCd-ef_01", candidates: [] }, "gemini"), "AbCd-ef_01");
+  assert.equal(responseIdOfBody([{ responseId: "AbCd-ef_01" }, { responseId: "x" }], "gemini"), "AbCd-ef_01");
+  assert.equal(responseIdOfBody({ id: "AbCd-ef_01" }, "gemini"), undefined, "Gemini reads responseId, not id");
 });

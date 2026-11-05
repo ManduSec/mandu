@@ -14,6 +14,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { parse, commandStart } from "./parse.js";
 import { dashboardUrl, liveDashboards, liveLaunchersOn, RESERVED_SUBCOMMANDS, residentPidsOn, runSubcommand, stopStackAndWait } from "./subcommands.js";
+import { openclawAttachVerb, realAttachDeps, runOpenclawAttach } from "./openclaw-install-command.js";
 import { stackSupervisor, withStackFacts } from "./stack-supervisor.js";
 import { applyReplyFilter, handOffReplyFilter, prestartReplyFilter, ReplyFilterSlot, wantsPrestart, type ReplyFilterHandoff, type ReplyFilterWiring } from "./reply-filter.js";
 import { applyConfigDefaults } from "./config.js";
@@ -43,6 +44,7 @@ import { assertArbiterTenant } from "./tenant-preflight.js";
 import { assertArbiterAxes } from "./axis-preflight.js";
 import { realPolicySuggestDeps, startLaunchSuggest } from "./policy-suggest.js";
 import { applySecretTwins, socketSecretArbiter, type SecretSetupResult, applyEnvSecrets, type EnvSecretsResult, resolveAgentExe, prefetchDiscovery, launchDiscoverOptions, withPrefetchedDiscovery, type DiscoveryPrefetch, launchHomeCarveOuts, ndjsonCall } from "./secret-setup.js";
+import { writeLaunchKubeOverlay, type KubeOverlayEntries } from "./kube-overlay.js";
 import { applyLandlockNet } from "./landlock-net-setup.js";
 import { applyNetGuard, netGuardStatusFile } from "./net-guard-setup.js";
 import { uploadDenyHosts, uploadDenyProxyOnlyHosts } from "./upload-deny.js";
@@ -86,7 +88,9 @@ import { startTwinPrefetch } from "./twin-prefetch.js";
 import { openGitSession } from "./git-session.js";
 import { discardedWriteNotice, discardedWrites as twinWritesDiscarded, forgetLabelledTwinRecords, forgetTwinWatch, labelledDiscardedWrites, mergeDiscardedWrites, scopeTwinDir } from "./twin-writes.js";
 import { isConfigRouted, opencodeConfigDirOf, opencodeV2Input, opencodeWriteProtect, readAgentUserConfig, readOpencodeAuthTypes } from "./services/agent-config.js";
-import { agentModelPlan } from "./agent-model-route.js";
+import { agentModelPlan, openclawVertexVersionRefusal } from "./agent-model-route.js";
+import { openclawGatewayClientNotice } from "./openclaw-argv.js";
+import { pinArgvGatewayCredentials, pinRunConfigGatewayCredentials } from "./openclaw-gateway-credentials.js";
 import { emitLauncherEvent, launchPostureEvent, sessionExitEvent } from "./services/observe.js";
 import { humanPlaneWatch, watchesHumanPlane, WATCH_CALL_TIMEOUT_MS, type HumanPlaneWatch } from "./human-plane-watch.js";
 import { keepCopiesInUse, type CopiesInUse } from "./git-object-twins.js";
@@ -115,7 +119,7 @@ import {
 } from "./agent-versions.js";
 import { launchUpdateCheck, launcherVersion, updateChannel } from "./update-check.js";
 import { opencode1LaunchArgv, opencode2LaunchArgv } from "./opencode-argv.js";
-import { opencode2ConfidentialityMissing, opencode2ConfidentialityRefusal, opencode2ConfidentialityUnenforced, probeGuardNotify } from "./opencode2-confidentiality.js";
+import { opencode2ConfidentialityMissing, opencode2ConfidentialityRefusal, opencode2ConfidentialityUnenforced, guardStartsHere } from "./opencode2-confidentiality.js";
 import {
   findOpencodeProjectCode, opencodeProjectCodeAllowed, opencodeProjectCodeOptOutWarning, opencodeProjectCodeRefusal, opencodeStartDirs,
 } from "./opencode-project-code.js";
@@ -250,6 +254,13 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     if (sub !== undefined && RESERVED_SUBCOMMANDS.has(sub)) {
       return runSubcommand(sub, argv.slice(idx + 1), env, layout, userEnv);
     }
+    // `mandu openclaw install|uninstall`: Mandu verbs for the resident
+    // Gateway (openclaw-plugin.md §8), not OpenClaw launches (OpenClaw has
+    // no such subcommands; the launch allowlist would refuse them).
+    const attachVerb = openclawAttachVerb(argv, idx);
+    if (attachVerb !== null) {
+      return runOpenclawAttach(attachVerb, argv.slice(idx + 2), env, realAttachDeps(layout));
+    }
   }
 
   const plan = parse(argv, env, opts.cwd);
@@ -342,7 +353,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     if (modelPlan.refusal !== null) throw new Error(modelPlan.refusal);
     plan.openaiRoutes = modelPlan.routes;
   }
-  // Goose: its built-in anthropic, openai and Chat Completions providers (litellm, openrouter, ollama, xai, tetrate) are routed
+  // Goose: its built-in anthropic, openai, Chat Completions (litellm, openrouter, ollama, xai, tetrate) and google providers are routed
   // (goose-route.ts). Any other provider named by --provider, the env or the
   // config, for the session or its subagents, or an openai endpoint the
   // proxy cannot reach, would send turns around the model proxy: refuse.
@@ -405,6 +416,19 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
   // display policy is known.
   const versionCheck = opencodeVersionCheck !== undefined ? opencodeVersionCheck : launchVersionCheck(plan.target, plan.argv);
   plan.agentVersion = versionCheck?.check.version ?? null;
+  // A Vertex AI route holds only on an OpenClaw that sends Vertex calls to
+  // the provider's baseUrl (agent-model-route.ts openclawVertexVersionRefusal;
+  // model-wires.md §4.1): refuse before anything starts on one that does not.
+  if (plan.target === "openclaw") {
+    const vertexRefusal = openclawVertexVersionRefusal(plan.openaiRoutes ?? [], plan.agentVersion);
+    if (vertexRefusal !== null) throw new Error(vertexRefusal);
+    // The Gateway under Mandu: which of OpenClaw's clients it protects
+    // (openclaw-argv.ts openclawGatewayClientNotice; a client run without
+    // mandu runs a failed turn itself on the user's unrouted config).
+    const clientNote = openclawGatewayClientNotice(plan.argv);
+    // Shown in full on every display (a fact about the setup, not a posture).
+    if (clientNote !== null) lc.show(clientNote, undefined, "wait");
+  }
   // Codex's OWN command sandbox (codex-sandbox.ts): on a stock Ubuntu without
   // bubblewrap every command Codex runs fails, with or without Mandu. One
   // WARNING line with the fix; never a refusal. macOS decides after the
@@ -632,7 +656,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
       netGuardOff: plan.netGuard === false,
       guardBin: guardBin !== null,
       guardBuildHint: buildHintFor("mandu-net-guard"),
-      seccompNotify: guardBin === null ? null : probeGuardNotify(guardBin),
+      seccompNotify: guardBin === null ? null : guardStartsHere(guardBin),
       ownServerExe: !!plan.ownServerExe,
       writeProtectOff: env["MANDU_WRITE_PROTECT"] === "0",
     });
@@ -1202,6 +1226,29 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
         console.error(`mandu: ${codexGrant.path} is a placeholder in Codex's world; the model proxy puts its key back in the auth header to ${codexGrant.hosts!.join(", ")} only`);
       }
     }
+    // kube-wire-release.md: kubectl and helm reach the launch HOME's
+    // clusters through the session proxy (the KUBECONFIG overlay), which
+    // signs in there with the real token or client certificate. Only with
+    // the twin bound and TLS inspected; best-effort (utility only).
+    if (twinsBound && plan.mitmCaCert && plan.netProxy && plan.arbiterHumanSock) {
+      const humanSock = plan.arbiterHumanSock;
+      try {
+        const kube = await writeLaunchKubeOverlay({
+          home: env["HOME"] ?? homedir(),
+          twinned: secretResult.confined.map((c) => c.path),
+          caCertPath: plan.mitmCaCert,
+          netProxy: plan.netProxy,
+          userKubeconfig: env["KUBECONFIG"],
+          askOverlay: (path, home) => ndjsonCall<{ overlay: KubeOverlayEntries | null; reason: string }>(humanSock, "kubeOverlay", { path, home }, 5_000),
+        });
+        if (kube.kubeconfig !== null) {
+          mut.env["KUBECONFIG"] = kube.kubeconfig;
+          console.error(kube.note);
+        }
+      } catch (err) {
+        console.error(`mandu: ! kubectl and helm keep refusing the session proxy: the KUBECONFIG overlay failed (${(err as Error).message})`);
+      }
+    }
     // An earlier session that ended before it could check its repositories
     // for a placeholder commit (a crash, a kill; placeholder-commits.ts):
     // checked now, its WARNING printed whole before the agent starts, and
@@ -1239,6 +1286,19 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
       log: (m) => console.error(m),
       ...(envGranted.length > 0 ? { agentKeys: envGranted.map((g) => g.name) } : {}),
     });
+    // OpenClaw's Gateway token and password: the run config carries the same
+    // placeholder the environment does, so a `mandu openclaw agent` client
+    // and the `mandu openclaw gateway run` it talks to agree, and the real
+    // value is in neither (openclaw-gateway-credentials.ts).
+    if (plan.target === "openclaw" && plan.agentConfig?.path && envResult.status.startsWith("on")) {
+      await pinRunConfigGatewayCredentials(plan.agentConfig.path, { arbiter: socketSecretArbiter(plan.arbiterSock), log: (m) => console.error(m) });
+    }
+    // And on the command line (`--token`, `--password`): the same
+    // placeholder, or the launch is refused (a raw value would sit in the
+    // agent's /proc/<pid>/cmdline).
+    if (plan.target === "openclaw" && envResult.status.startsWith("on")) {
+      plan.argv = await pinArgvGatewayCredentials(plan.argv, { arbiter: socketSecretArbiter(plan.arbiterSock), log: (m) => console.error(m) });
+    }
     for (const g of envGranted) {
       if (!envResult.masked.includes(g.name)) continue;
       console.error(`mandu: ${g.name} is a placeholder in ${plan.target === "goose" ? "Goose" : plan.target === "codex" ? "Codex" : "Claude Code"}'s environment; the model proxy puts the key back in the auth header to ${g.hosts.join(", ")} only`);
@@ -1292,7 +1352,11 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
             "(runtime-instances.md §2). Launch from another folder, or point MANDU_RUNTIME_DIR somewhere else.",
         );
       }
-      applyWriteProtect([...writeProtectList(env, wpWorkspace, undefined, plan.arbiterSock, guardSettings.writeProtect, (m) => console.error(m), carveOuts, "linux", undefined, registryBases), ...ownDirs], mut.env, {
+      // --write-protect: more deny entries for this launch (openclaw-plugin.md
+      // §10: the OpenClaw config and the plugin, for the sandbox backend's box).
+      const wpSettings = (plan.writeProtectExtra ?? []).length === 0 ? guardSettings.writeProtect
+        : { ...guardSettings.writeProtect, deny: [...guardSettings.writeProtect.deny, ...plan.writeProtectExtra!] };
+      applyWriteProtect([...writeProtectList(env, wpWorkspace, undefined, plan.arbiterSock, wpSettings, (m) => console.error(m), carveOuts, "linux", undefined, registryBases), ...ownDirs], mut.env, {
         log: (m) => console.error(m),
         scopeRunDir,
         agentExe: resolveAgentExe(plan),
@@ -1816,7 +1880,7 @@ async function launch(argv: string[], env: NodeJS.ProcessEnv, replyFilterSlot: R
     // is held for the end of the banner. The default display shows its
     // marked first line as one posture line (lc.sayWhole).
     const sayWhole = (m: string): void => lc.sayWhole(m);
-    const beside = concurrentLaunchNotice(claim.posture, launchRecord.others, { requireConfinement: plan.requireConfinement === true });
+    const beside = concurrentLaunchNotice(claim.posture, launchRecord.others, { requireConfinement: plan.requireConfinement === true && plan.requireOwnConfinementOnly !== true });
     for (const l of beside.lines) sayWhole(l);
     if (beside.refuse) {
       await endLaunchRecord(plan.arbiterHumanSock, launchRecord, cacheEpochDeps);

@@ -520,7 +520,14 @@ line for line. The kernel guard decides by address: it resolves each name in
 a holder's list and admits a connect to those addresses, so a bare name
 there admits that host's addresses, not its subdomains', and a `*.x` admits
 what its literal name resolves to (usually nothing; a send through the
-proxy is judged by name).
+proxy is judged by name). A `*` binding, with or without a port, is no
+spec there either (`local_exits::host_binding_specs`), so it admits no
+destination and leaves the holder's other bindings in force. Until
+2026-10-27 the guard turned it into `*:*`, which its spec parser reads as
+any host: a holder of a file bound to `*` could connect to any address
+the session's own allow-list admitted, while every other user of the rule
+admitted nothing (finding F-A). The policy check still accepts `*`, since
+the rule gives it a meaning (none).
 
 Until 2026-10-11 the four disagreed: the gate read `*.amazonaws.com` as a
 literal name, so it released nothing, and ignored ports, so a value bound to
@@ -541,7 +548,9 @@ HTTPS, in the request's own `Authorization` header, as if a binding of the
 user's bound it there. The table below is the whole list. Everything else
 asks as before: any other host, any other place in the request, any other
 value, any copy of the value. Built in
-`arbiter/policy/issuer-bindings.ts` (the table and the match), the gate's
+`arbiter/policy/issuer-bindings.ts` (the match), the table as data in
+`arbiter/policy/issuers/` (one JSON file per issuer, checked by
+`arbiter/policy/issuer-catalog.ts`; "Where the table lives", below), the gate's
 composition in `arbiter/ipc/server.ts` (`issuerReleaseOf`, inside
 `decideDesym`) and the row rule in
 `arbiter/secret-registry/current-bindings.ts` (`issuerSourceOf`); the
@@ -561,7 +570,7 @@ not been re-run, and no live run was spent on this). The other seven ask
 about a host no format can name and keep asking (below).
 
 **The table** (each host from the issuer's own API documentation; the
-`docs` field of each row in `issuer-bindings.ts` cites it):
+`docs` field of each issuer's file in `arbiter/policy/issuers/` cites it):
 
 | Issuer (`issuers_off` id) | Key format, matched over the whole value | Hosts, exactly | Source |
 |---|---|---|---|
@@ -583,8 +592,9 @@ about a host no format can name and keep asking (below).
   ([`agent-sign-in.md`](../agents/agent-sign-in.md)).
 - **AWS** access keys: SigV4 signs the request with the secret key on this
   machine; the secret never travels, so no placeholder can be put back (a
-  program signing with the placeholder makes a wrong signature). Nothing to
-  bind.
+  program signing with the placeholder makes a wrong signature). Since
+  2026-10-24 the egress proxy re-signs instead, under a release of its own
+  (below), not a table row.
 - **Twilio**: the auth token (and an API key's secret) is 32 hex digits
   with no prefix; its format names no one.
 - **GitLab** (`glpat-…`): a token may be a self-managed instance's, whose
@@ -598,7 +608,86 @@ about a host no format can name and keep asking (below).
 
 A new row needs all four: a prefix the issuer owns, a documented API that
 takes the key in `Authorization`, a fixed set of hosts the issuer's own
-documentation names, and its rows in the unit test.
+documentation names, and a file that passes every check below
+(CONTRIBUTING.md, "Add a service", says how to write one).
+
+**Where the table lives, and what checks a file (2026-10-24).** The table
+is data, one JSON file per issuer, so a new service is a small, reviewable
+change: `arbiter/policy/issuers/<id>.json` holds the row's `id`, `name`,
+`formats` (each a regular expression, as a string), `shapes`, `hosts` and
+`docs`, plus `examples` (and optionally `non_examples`) written with their
+random part as a run (`"ghp_{x*36}"` stands for `ghp_` and 36 `x`s), so a
+file never holds a real key. `issuers/index.ts` imports the files
+statically, in table order (new ones appended: the order is what the
+`issuers_off` messages and the Rules page print); `issuer-catalog.ts`
+checks each one and compiles the table, which `issuer-bindings.ts` exports
+as `ISSUERS`, unchanged in type, so `issuerOfValue` and every caller read
+it as before. The move changed no row: the unit test
+(`issuer-catalog.test.ts`) pins the compiled table to the array it
+replaced, field for field and each format's source and flags.
+
+Every check, on every load (the arbiter's start, `npm run check:issuers`
+in `arbiter/`, the unit test):
+
+- **Fields.** Exactly the fields above, none missing, no other; each list
+  non-empty with no repeat; `id` lower case and equal to the file's name.
+- **Formats.** Each compiles with no flags, is anchored (`^…$`, and no
+  top-level `|`, which would unanchor a branch), uses `(?:…)` groups only
+  (no capture, lookaround or backreference), repeats no group that itself
+  repeats (no exponential backtracking on a 4096-character value), and
+  begins with a fixed literal prefix of three characters or more
+  (`literalPrefixes`: literal characters, a small set such as `[pous]`, a
+  choice of literals such as `(?:live|test)`, each unrepeated). The shapes
+  in words are exactly those prefixes, each followed by `…`.
+- **Hosts.** Each is a lower-case DNS name exactly as the gate's own host
+  reader returns it (`issuerDestinationHost`): no scheme, port, path,
+  wildcard, address or trailing dot; two labels or more; not a public
+  suffix (`co.uk`) and not under a shared-hosting suffix where anyone can
+  register a name (`github.io`, `vercel.app`, `amazonaws.com`, …; a small
+  built-in list, a backstop and not the guard). No host is in two files.
+- **Docs.** Each is an `https://` URL with no user name.
+- **Examples.** Each expands to a value Mandu's own stand-in test calls a
+  placeholder (`isPlaceholder`), matches one of its issuer's formats, and
+  every format has one; no non-example matches.
+- **Across files.** No two files share an id or a host; no prefix of one
+  issuer is a prefix of another's (`sk_` against Stripe's `sk_live_` is a
+  clash; `sk-proj-` against `sk_live_` is not), which PROVES no value can
+  match two issuers' formats, so a new file can never claim a value an
+  existing issuer's format already names; and no example of one issuer
+  matches another's format.
+
+**Fail-closed.** A file that fails a check is left out WHOLE: that issuer
+gives no put-back (its keys ask, as before 2026-10-19), never a looser
+match, and the arbiter prints the reason at start (`[arbiter] issuer
+bindings: …`). A clash between two files leaves out both. A file that is
+not valid JSON cannot be imported at all, so the arbiter and the package
+build refuse to build or start rather than run with a guessed table (the
+unit test and `check:issuers` name the file).
+
+**Why static imports, not a directory read at run time.** The npm package
+runs the arbiter as an esbuild bundle (`launcher/scripts/build-bundle.mjs`,
+`dist/arbiter.mjs`), with no `arbiter/policy/` directory beside it; a JSON
+`import … with { type: "json" }` is inlined by the bundle, read by `tsx`
+from source and by `tsc`, so every form of the arbiter holds the same
+table with no file read at run time. The cost is one import line per new
+file, which the directory check enforces (a file the index does not
+import, or an index line with no file, fails). Proved on the packaged
+path by `launcher/test/component/bundle-smoke.test.ts` (the bundled
+arbiter answers `whyHost` for every file's hosts as that issuer).
+
+**The guard is the review.** These checks catch a malformed or greedy
+file; they cannot know whether `api.example.com` is the issuer's. A
+maintainer checks every prefix, header and host against the issuer's own
+documentation (the file's `docs`) before a file is merged, because a
+wrong host here sends a key without asking. The end-to-end test
+`tests/stack/issuer-catalog-egress.test.ts` drives every file's first
+example (made real-shaped in memory) through the real egress proxy to
+each of its hosts and to the next issuer's host (refused), so a new file
+is covered with no test edit; the model-API host (`api.openai.com`) is not
+the egress proxy's to inspect, so that row is covered by the unit tests.
+The dashboard's Rules page keeps a display copy of each row's id, name
+and hosts (`dashboard/src/view-model/issuer-words.ts`), held equal by
+`tests/stack/issuer-table-parity.test.ts`.
 
 **Exactly what must hold** (`issuerRelease` and `issuerSourceOf`, every one
 required):
@@ -700,6 +789,21 @@ issuer_bindings:                        # or: on, except
   issuers_off: [stripe]                 #   these issuers' keys ask
   values_off: ["STRIPE_LIVE_*", PROD_KEY]   # and these values ask (a .env key or a variable; * as in values:)
 ```
+
+**The AWS signing release** (2026-10-24,
+[`aws-sigv4-resign.md`](aws-sigv4-resign.md); `arbiter/policy/aws-signing.ts`,
+rule `egress:secret-aws-signing`, composed right after the issuer release
+under the same switch, `issuers_off: [aws]`). The egress proxy finds which
+placeholder of an AWS secret access key signed a SigV4 request (it
+recomputes the signature with each) and signs the request it sends with the
+real key. The secret is released with no card only as that signing key
+(position `signature`: in no byte of the request), the access key id and
+session token only in the SigV4 credential headers, at a name under
+`amazonaws.com`, `amazonaws.com.cn` or `api.aws` over HTTPS, and only when
+the Host the agent signed is the Host the proxy sends to. A suffix, unlike
+the table's exact hosts, because AWS has no fixed host list; safe because a
+suffix host's owner receives an identifier, a token that signs nothing alone
+and an HMAC valid only at that host. Every other place for the secret asks.
 
 A malformed `issuer_bindings` compiles to OFF (fail-closed) and is refused
 at load and on every write. The agent's policy tools cannot propose the key
@@ -996,7 +1100,17 @@ re-encode it into anything it emits. Consequences of a high session:
   for a relative `cd app && …` read from the directory the call runs in
   (a `CDPATH` that moved it can only leave the row unnarrowed or drop
   lines plain files there hold; "A relative folder"), and for Codex's
-  `exec_command` with a leading `cd` alike.
+  `exec_command` with a leading `cd` alike. A glob places nothing, so the
+  same over-block came back on 2026-10-27 in another shape: Codex's `rg …
+  -g '!notes-app/.env' … --glob '!*.env'` named `.env` only in rg
+  NEGATED globs, the output was masked whole, and every notes line was a
+  piece again. Since then such a command is not masked at all
+  ([exclusion-flags.md](./exclusion-flags.md) X4-X7): its output is
+  public, mints no path row and fingerprints nothing; registered values,
+  value-only symbols and credential shapes keep their own rows. A call
+  still masked through a glob (a positive glob over a literally labelled
+  folder) still fingerprints every line: a separate follow-up
+  (exclusion-flags.md §6).
   **A twin line is no piece of an output that prints it** (2026-10-19,
   egress-hold.md "One card per file"): an output row whose value carries
   the field placeholders of registered files (a batched `cat` of a
@@ -1050,7 +1164,18 @@ gate is its whole protection, and the taint bit changes nothing for it (the
 Under `secrets`, the product's mode, nothing is marked untrusted, so the
 bit is never set and only the clean column applies: a rung-3 read of an
 `any-model` file is logged with no question, and the session is HIGH from
-then on. Every level renders as its original on the human's terminal
+then on. That includes Mandu's own masking: the prompt filter's mint of a
+harness or side-call span is trusted while the integrity axis is off
+(`mintPromptSymbol`). Untrusted, it set the bit (live 2026-10-26: an
+OpenClaw side call repeated the declassified memo, the filter masked the
+repeat, and the memo's own bound host then asked under
+`session:high-tainted-bound` on the plugin's sandbox tier, while the
+wrapper, whose session had no such mask, sent it). The model-context gate
+and the egress proxy now agree at a HIGH session's bound host, as the clean
+column says. Only a datum a caller symbolizes as untrusted on purpose sets
+the bit under `secrets` (the drill `conf-tainted-bound-blocked` arranges
+one); `arbiter/test/component/prompt-mint-session-taint.test.ts`,
+`tests/stack/openclaw-relative-read-bindings.test.ts`. Every level renders as its original on the human's terminal
 (§7, reply-filter row); the level and the flags govern only what reaches a
 model and what leaves the machine.
 
@@ -2082,6 +2207,26 @@ elsewhere keeps the whole-file mask. Tests: arbiter `agent-read-twin`
 real arbiter and proxy: per key with the launch directory; the raw file, a
 tampered twin, and no launch directory stay one handle).
 
+*A Claude Code Read of a twin is judged past the harness's budget tail
+(2026-10-26).* Claude Code appends its token-budget reminder
+(`<system-reminder><total_tokens>N tokens left</total_tokens></system-reminder>`)
+to every tool_result, and the model proxy classifies the whole result with
+it. The Claude legs of the read-twin rules (structured, whole-file and
+own-text; `policy-interface.ts` `claudeReadValue`) judged the rendering with
+the tail in it, so no twin matched live: on the Claude subscription drills
+of 2026-10-26 a Read of a human label's per-value twin (demo-tax-extension's
+return summary, demo-dog-sitter-text's house codes) reached the model as ONE
+whole-file placeholder, the model could not tell the SSN's line from the
+AGI's, and the task failed (no value leaked). The legs now strip exactly
+that shape first (`withoutHarnessBudgetTail`, the same cut the declassify
+grant's comparison makes): only digits ride in it, any other tail stays and
+fails the content test, and the body must still be a piece of the twin this
+arbiter minted. The tail stays on the wire. Tests: arbiter `agent-read-twin`
+(unit), `tests/stack/read-twin-budget-tail` (the drill's label through the
+real arbiter and the production proxy wiring: the twin per value with the
+tail; the raw file and a forged tail masked whole; each placeholder filled
+at its bound host only).
+
 *OpenClaw's history redacts placeholders (2026-10-11).* The same walk, one
 turn later: the twin went to the model per key on the turn of the read, and
 on the next turn came back masked whole, "after the fact". OpenClaw keeps
@@ -2865,16 +3010,42 @@ command stay masked, plan 10 §11.8 "A folder's names", except, since
 2026-10-18, one plain `ls` at either end of a compound whose other parts are
 allow-listed programs naming no secret path, `tools/mail list; ls mail/inbox
 bank`, released with a `listing:` line saying which lines are the names,
-[folder-listing-compound.md](./folder-listing-compound.md); a credential
+[folder-listing-compound.md](./folder-listing-compound.md); and, since
+2026-10-26 (the maintainer's "Release paths-only", after demo-scam-email's
+model searched `bank/` with `find bank -name "*sept*"` and `ls bank/ | grep
+-i sep`, got placeholders, guessed a file name and reported uploads that
+had failed), one pipeline of a `find` (only `-name`/`-iname`/`-path`
+patterns, `-type`, `-maxdepth`/`-mindepth`, `-o`/`-a`/`-not`, `-print`) or a
+names-only `ls` of one folder, through up to four filters (`grep` with
+`-i -v -E -F -w -x` and one pattern, `head`/`tail -n N`, `sort`, `uniq`)
+and at most `2>/dev/null`, whose every output line is a path `find` could
+print that exists now, or a name the folder holds: released with the same
+`listing:` line, on the same evidence (`dir-listing.ts`
+`pathsOnlyListingPaths`). `find -exec`, `-printf`, `-ls`, `-size`, `xargs`,
+`grep -f`/`-c`/`-o` or a file operand, any other program in the pipe, a
+`$` or backquote even in quotes, and
+`ls -l`/`-la` (sizes, dates, owners, modes) stay masked; a file named like a
+secret is a name, released as a plain `ls` releases it, unless the value
+backstop finds a registered value in it. Claude Code's own reminders after
+a listing (the token budget, and its fixed task-tools nudge, matched as
+exact text) no longer stop this release or the plain `ls` one; any other
+trailing text still does (the first take of the fix found the nudge after a
+`find`'s one line) (pinned by arbiter
+`test/unit/paths-only-listing.test.ts` and `tests/stack/exec-output-dir-listing.test.ts`); a credential
 file named without being printed: since 2026-10-18 a shell result whose
 command names only registered credential files, from a recorded tree that
 read no secret, is released as printed, each registered value its own
 symbol, when its content checks find none of those files' secret bytes,
 `git rm --cached .env && git status`,
 [clean-tree-release.md](./clean-tree-release.md); a search that keeps
-out of a labelled folder: since 2026-10-18 the word `--exclude-dir=NAME` of
-one plain `grep` is not read as a path, since no grep opens it, `grep -rIl
--i park . --exclude-dir=bank`, [exclusion-flags.md](./exclusion-flags.md)). Where a listed reader's rule would have released the
+out of a labelled path: since 2026-10-18 the word `--exclude-dir=NAME` of
+a `grep` is not read as a path, since no grep opens it, `grep -rIl -i park
+. --exclude-dir=bank`, and since 2026-10-27 neither are a grep's
+`--exclude=NAME` / `--exclude='GLOB'` nor an rg negated glob (`-g
+'!notes-app/.env'`, `--glob='!*.env'`), in any segment of a command split
+exactly on `&&`, `||`, `;` and `|` that holds no expansion and no
+redirection; a positive glob, `--exclude-from`, `-f` and anything after
+`--` are read as before, [exclusion-flags.md](./exclusion-flags.md)). Where a listed reader's rule would have released the
 output but the path mask still applies, the `note: … released` line is
 left out, since it would be false. Pinned by both proxies'
 `test/unit/path-derived-note.test.ts`, arbiter
@@ -3166,6 +3337,49 @@ the Bash result stay masked, no file byte in the request and no symbol in a
 Read result that resolves to the bare notice); the after-the-fact and
 early-read stack tests now see the tour's second Read as the notice.
 
+**Project notes attached to a Read (2026-10-28).** When Claude Code reads
+a file in a directory whose project notes (`CLAUDE.md`, `CLAUDE.local.md`)
+it has not loaded yet, it appends them to that Read's result as a reminder
+block of its own (`<system-reminder>\nContents of <abs path>[ (…)]:\n\n<the
+file's text>\n</system-reminder>`), then counts the notes as in context: a
+later Read of that CLAUDE.md answers "This file is already in your context"
+with no byte of it. Masked with the secret file the Read was of, the notes
+never reached the model. Live (live-claude-final-20261028-a, Haiku 4.5,
+demo-env-to-production) the Read of shop-app/.env carried shop-app's notes,
+which describe the hosting platform's API; the proxy dropped the tail it
+could not vouch for, the model never saw the API, guessed its paths, and
+the deploy never happened. The tail also kept the .env's twin from matching
+the structured read-twin rule, so the twin reached the model as one
+whole-file token instead of one per key.
+
+A notes block now counts as the runtime's (`arbiter/policy/nested-memory.ts`)
+only when it is VERIFIED: the path is absolute and names a `CLAUDE.md` or
+`CLAUDE.local.md`; the block's text is exactly that file's text on disk now
+(the arbiter reads it: a regular file, no symlink followed, at most 256 KiB,
+`memoryFileTextAt`); and that text, classified as a Read of that path in
+the same session, is no secret (and trusted with the integrity axis on).
+Then two things follow, both under the claude-code spec's own `Read`,
+whole-result only:
+
+- the tail the proxy asks about on its own (the reminder blocks after a
+  masked body), when it is ENTIRELY such blocks with the budget count, is
+  `public`, and the proxy keeps it on the wire beside the body's symbol
+  (the split path of `rewrite-request.ts`); and
+- the read-twin rules (structured, whole-file, own-text) judge the Read
+  past a verified notes tail, as they judge it past the budget count.
+
+A forged block (a tool's own output imitating the shape, or a stale copy)
+fails the disk comparison and is dropped as before; a block naming any
+other file is no notes block at all; and the text that passes is exactly
+what a Read of that notes file would pass, never more. The value backstop
+in the arbiter's classify op still runs (raise-only): notes that hold a
+registered secret's value are masked like any result holding it. Pinned
+by arbiter `test/unit/nested-memory.test.ts` (the parser, the verdicts, the
+forged and labelled cases) and `tests/stack/read-nested-memory.test.ts`
+(the real arbiter and proxy: the twin per key and the notes as written, the
+raw file masked and the notes kept, a forged block and notes holding a
+registered value dropped, the value never forwarded).
+
 **The write notice (2026-10-11).** A write tool's result was classified by
 the path its call names like any other, so the agent's answer to a Write of
 a labelled path ("File created successfully at: <path>") reached the model
@@ -3194,6 +3408,222 @@ result head, plan 10 §11.14), so it cannot mask the agent's later notices
 through the value backstop; its other lines stay registered. Detail, the
 bits the choice carries, and the tests: [plan 15 §13.10](./confidentiality-plan-15-prompt-filter.md), "A
 Write's own result".
+
+**A word in a message is not a path (2026-10-26).** The path-derived mask
+reads a shell command's tokens as paths, and a relative token is also read
+where the command runs: so a mail whose text said "my September bank
+statement" (demo-scam-email, Haiku 4.5, `tools/mail send jo@… "…" "…bank
+statement…"`) named the labelled `bank/` folder, its result came back
+masked whole as "the command names a secret file", and the model could not
+tell whether the mail went. A plain word (letters, digits, `_`, `-`) that
+occurs ONLY inside a quoted run of words (a quoted argument holding a
+space: a message's text, a commit message) is no longer read as a path
+(`secret-catalog.ts` `quotedProseWords`, in `findSecretPathsInText`). Read
+as before, fail-closed: the same word anywhere else in the command (an
+unquoted `bank`, a single quoted `"bank"`, a heredoc's body), anything
+shaped like a path inside the quotes (`-m "move bank/statement.pdf"`,
+`"$PWD/bank"`, `.env`), a quoted path with a space as one path, a token
+reaching the folder through `..`, and every quoted run of a command that
+names a program running an argument as code (a shell, `eval`, `ssh`,
+`sudo`, `xargs`, `find`, an interpreter, `awk`, `sed`, `git -c`/an alias,
+and others: `bash -c "ls bank"` stays masked). A longer token such as
+`banking.txt` or `databank/` never named the folder. One mask leaned on
+the old reading: the exec gate's block sentinel (`echo '<notice>' 1>&2;
+exit 77`) masked a result holding anything beyond its notice only because
+the notice's word "secret" read as a catalog path. Both model proxies now
+mask such a result whole on their own record of the block (nothing the
+command ran printed it), whatever the classify says. Pinned by arbiter
+`test/unit/quoted-prose-words.test.ts` (both directions), both proxies'
+`test/unit/exec-gate-notice.test.ts` (a mixed result under a public
+verdict) and
+`tests/stack/prose-word-not-path.test.ts` (the real arbiter and the
+production proxy wiring: the mail and a commit's prose reach the model as
+printed; an operand, a path in a commit message, a shell's quoted run and an
+attachment stay masked; no statement byte in any request).
+
+**A tool's error about a secret path (2026-10-26).** A call that names a
+secret path was masked at that path's level whatever came back, its own
+error included. On the Claude subscription drills of 2026-10-26 the model
+looked for a secret-shaped file one directory too high: Read's "File does
+not exist" and `cat`'s "No such file or directory" both reached it as
+placeholders, it never learned the path was wrong, and the task failed
+(demo-staging-admin-request). In another drill a Write the sandbox refused
+(EACCES) came back as a placeholder, and the model told the person it was
+done (demo-local-health-summary). The result is now `public` when the whole
+value, past Claude Code's token-budget tail, is exactly one of these
+(`arbiter/policy/tool-error-notice.ts`, applied beside the Read dedup
+notice, under the claude-code spec's own entry, never a field):
+
+- **Read:** "File does not exist. Note: your current working directory is
+  <cwd>." and nothing else, for a call whose `file_path` is absolute and
+  does not exist on this machine when the arbiter classifies it. A Read of
+  a real file is rendered behind a line-number gutter, so no file's content
+  can equal it. The "Did you mean <path>?" form keeps the mask: it names
+  another file.
+- **Bash:** optionally Claude Code's `Exit code N` line, then one to eight
+  lines, each exactly one program's ENOENT or EACCES report (`cat`, `head`,
+  `grep`, `ls`, `jq`, a shell's redirection, and a few more, in their fixed
+  wording) on a path that is a word of the call's own command. Every byte is
+  either the program's fixed text or something the model wrote, so even a
+  file whose content were such a line would tell the model nothing new.
+- **Write, Edit, MultiEdit:** Node's own refusal on the call's own
+  `file_path` (`EACCES: permission denied`, `EPERM: operation not
+  permitted` or `EROFS: read-only file system`, then `open '<path>'` or the
+  atomic write's `rename '<path>.tmp.<pid>.<hex>' -> '<path>'`). What the
+  model wrote is its own content, never the file's. When the file is a
+  registered secret's placeholder copy, in a session the file guard
+  confines, the released error also carries the `copy:` line (2026-10-27,
+  plan 10 §4.1 "The model is told at the call"): the change stays in the
+  copy and never reaches the real file, so the model is not to report it
+  done; a shell command that writes such a file (`cat > .env`, `sed -i`)
+  carries the same line beside its mask.
+
+Anything else keeps the path's mask: an error line followed by any other
+output (another program's, or a file's next line), an error naming a path
+the command does not contain, another program or errno, more than eight
+lines, the Read answer for a file that is there. The value backstop in the
+arbiter's classify op still runs on the verdict (raise-only). Pinned by
+arbiter `test/unit/tool-error-notice.test.ts` (each shape, and adversarial
+near-shapes: the error text followed by a secret, an error plus extra
+output, a foreign path) and `tests/stack/tool-error-secret-path.test.ts`
+(the real arbiter and the production proxy wiring: each error reaches the
+model as written, the file's content and every near-shape stay masked, no
+secret byte in any request).
+
+**git's report on a history rewrite (2026-10-26).** Asked to scrub a key
+from a repository's history (demo-git-history-scrub, Haiku 4.5), the model
+ran `git log -p`, which stopped at the locked `.env` version with "unable to
+read <id>" (the object twins keep a protected version's loose copy
+unreadable, §7.2a), and every `filter-branch` that named `.env` came back as
+one placeholder. It could neither tell why git failed nor check its rewrite,
+and told the person the history was clean while the hard-coded key was still
+in it. Two changes, neither releasing a byte of a file:
+
+- **git's own report passes** (`tool-error-notice.ts` `isGitNoContentReport`,
+  beside the tool errors above, under Claude Code's `Bash`): a result of a
+  command that runs git whose every line (`\r` progress split too), past the
+  budget tail and an optional `Exit code N`, is one of git's own shapes:
+  filter-branch's fixed banner and messages, `Rewrite <id> (n/m) (…)`,
+  `rm '<path>'` for a path the command names, `Ref '<ref>' was rewritten /
+  is unchanged / was deleted`, a push's or fetch's per-ref lines and its
+  `To`/`From` line with no user part in the URL, gc's object counts,
+  filter-repo's progress, a shell's path error as above, and git's report
+  that it could not read an object (`unable to open loose object <id>`,
+  `unable to mmap …`, `unable to read <id>`, `bad object <id>`, `object
+  corrupt or missing`, `missing blob <id>`, …) whose copy is unreadable here:
+  git's own `Permission denied` line for that object in the same output (the
+  object twins' mode-000 copy), or an id in the arbiter's locked set (the
+  launcher locks a catalog file's versions itself, so that set does not
+  hold every one: the first live take found the note missing for that
+  reason). filter-branch's progress before a line on the same line is read
+  past. Free spans are counts, object ids (no secret: every tree names its
+  blobs' ids, and `git log --raw` prints them), ref names and paths the model
+  wrote. Anything else fails the whole result: a diff line, a commit subject
+  (`HEAD is now at …`), a `remote:` line, a URL with a user part, an
+  unreadable object Mandu did not lock.
+- **git could not remove a protected file's copy (2026-10-27).** A
+  protected file's twin is read-only in the agent's working tree, so
+  filter-branch's checkout of the rewritten head and `git reset --hard`
+  fail on it (`warning: unable to unlink '.env': Permission denied`, `error:
+  unable to unlink old '.env': Permission denied`, then `fatal: Could not
+  reset index file to revision '<ref>'.`): live, the report of a correct
+  `--index-filter` rewrite came back masked for that one line. Both lines
+  pass now, exactly, for a path the command names (another path, text or a
+  value after it, another errno keep the mask), and the reset line's only
+  free span is a ref. On a public result naming such a path the proxy adds a
+  `[mandu:locked]` line: the file is Mandu's read-only copy, git cannot
+  overwrite or delete it, and rewriting history does not need to: `git
+  filter-branch --index-filter 'git rm -q --cached --ignore-unmatch <path>'`,
+  not `--tree-filter`, and no `reset --hard`, `checkout` or `git rm`
+  without `--cached` over that path. The twin stays read-only: making it
+  deletable would let the agent delete the person's real file.
+- **A note for a locked object.** On a result it calls public, the
+  arbiter's classify op names the objects the result says git could not
+  read whose copy is unreadable here, by the same two kinds of evidence
+  (`lockedObjects`, from `lockedObjectsIn`), and the model proxy appends one
+  `[mandu:locked]` line: Mandu keeps the stored versions of protected
+  secret files unreadable, these are such versions, and the repository is
+  not damaged, so the object is not to be chmod-ed or moved and the
+  repository not re-cloned, re-created or replaced by a new root commit
+  (that drops every commit; the first live take called the versions
+  "corrupted" and rebuilt the repository from scratch). Commands that do not
+  read a locked version still work: filter-repo in **two passes**, `--path
+  <file> --invert-paths` alone first (it reads no file content), then
+  `--replace-text` on what is left, since one pass with both reads every
+  version and fails; `filter-branch --index-filter 'git rm -q --cached
+  --ignore-unmatch <file>'`; and putting a clean version in place of a
+  locked one in an `--index-filter` with `git update-index --cacheinfo`,
+  which keeps a source file whose first version held a key, and the commits
+  after it. `git show`, `log -p`, `log --stat` and a tree filter fail on a
+  locked version, so a rewrite is checked with `git log --all
+  --name-status` or `git log --all -- <path>`. (The replacement since
+  2026-10-26: told only to remove the versions, a live OpenClaw take removed
+  `checkout.js` from every commit, and its rewrite dropped the commits that
+  only changed it. The two passes, the verification and "not damaged, not
+  to be re-created" since 2026-10-27: see below.) The note holds the ids and
+  static text only, and a masked result never gets it.
+- **Both model proxies (2026-10-27).** The note was the anthropic-proxy's
+  alone; the arbiter named the ids to every proxy, but the openai-proxy
+  dropped them. On a Codex take of demo-git-history-scrub, git's EACCES on
+  the locked `.env` version reached the model with nothing beside it: it ran
+  filter-repo with `--replace-text` and `--invert-paths` in one pass, read
+  the failure as a permissions problem, tried `chmod` and `mv` on the object
+  (both refused by the guard, as designed), and then force-pushed one new
+  root commit, which wiped every commit from origin (no key leaked: a
+  utility failure). The note's text is now one module,
+  `locked-object-note.ts`, copied byte for byte into both proxies
+  (`scripts/copies/module-copies.mjs`, whose check fails when the copies
+  drift); the openai-proxy appends it at the same seam, after a public
+  `exec_command` output, or as one more `input_text` part of a code-mode
+  script cell. OpenCode (`bash`) and Goose (`shell`) speak the Anthropic
+  wire, so the anthropic-proxy's seam already covers them. The stand-in
+  blob weighed instead is in §7.2a.
+- **What the note does not reach.** git's own report passes as public only
+  under Claude Code's `Bash` (above). On Codex, OpenCode and Goose a git
+  command that names the protected file (`--path .env`) still comes back
+  masked whole with the path-derived note, so its EACCES and the
+  `[mandu:locked]` note reach the model only for a command that does not
+  name it (`git log -p --all`, a path built at run time as on the Codex
+  take). filter-repo's failure lines (`Error: fast-export failed; see
+  above.`, `fatal: stream ends early`, `fast-import: dumping crash report
+  to …`, `NOTICE: Removing 'origin' remote …`) are not yet among git's own
+  shapes either.
+
+Pinned by arbiter `test/unit/tool-error-notice.test.ts` (each shape, and
+adversarial ones: a diff line or a secret after the progress, a commit
+subject, a `remote:` line, a URL carrying a token, an unlocked object, no
+locked set), `test/unit/locked-object-note-text.test.ts` (the note's words,
+one suite copied into both proxies), each proxy's
+`test/unit/locked-object-note.test.ts` (its wire: the Messages result, and
+OpenCode's `bash` and Goose's `shell`; Codex's `exec_command` output and
+script-cell parts), and `tests/stack/git-locked-object-report.test.ts`
+(real git with a locked, unreadable `.env` version, the real arbiter and
+the production wiring of each proxy: git's error and the note reach the
+model on the Claude and the Codex wires, filter-branch's report on `.env`
+reaches it as printed, the same report with a line of the file stays
+masked, the key in no request; the two proxies' note texts equal; and each
+claim of the note on real git: the replacement with the hard-coded version
+unreadable keeps every commit and the key in none, `log --name-status` and
+`log -- <path>` work where `log --stat` and `show` fail, filter-branch's
+index filter keeps every commit, and, where filter-repo is installed, one
+pass with `--replace-text` fails while `--invert-paths` then
+`--replace-text` keeps every commit and leaves the key in no version).
+
+**A protected file read whole** (2026-10-26). A `read` (OpenClaw's,
+OpenCode's; Claude Code's `Read` always runs behind the file twin) of a
+`no-model` file that the model proxy masks whole, with no other note on it
+and not masked after the fact, ends with one static `[mandu:secret]` line: the path the model
+named is a protected file no model may read, so the whole file is this one
+symbol; the model cannot show it or check its values, the user can open it
+themselves, and a program the model runs that reads the file itself still
+gets its real content. Where a file twin serves the read (the wrapper), the
+`twin:` line says what the model sees instead; this one is for a read only
+the proxy sees, which on the OpenClaw plugin's Route 1 is every read (its
+`read` runs in the Gateway). Live 2026-10-26 (demo-notion-token, Route 1):
+the bare symbol came with no word, and the model showed it and waited for
+the user to confirm a token neither of them could see. Static text and the
+model's own path; anthropic-proxy `test/unit/protected-read-note.test.ts`,
+`tests/stack/openclaw-plugin-reply.test.ts`.
 
 The same holds for npm, a default reader of `~/.npmrc`: when every token in
 the file is one npm sends as written to the registry its key names, npm
@@ -3397,9 +3827,53 @@ backstop, `model-endpoints.md` §1.8 item 1), but without this layer the raw byt
 the agent's own processes and Claude Code's local transcript.
 
 **Why not rewrite the objects.** An object's name is the hash of its content,
-so a blob cannot be replaced by its twin in place: git refuses a blob whose
-content does not match its name, and deltas, `.idx`, bitmaps and the
-multi-pack-index all point into the pack by position.
+so a blob cannot be replaced by its twin in place, and deltas, `.idx`,
+bitmaps and the multi-pack-index all point into the pack by position. git
+checks a blob against its name only some of the time (git 2.53, checked on a
+scratch repository with a stand-in served under a protected version's id):
+`fsck`, `index-pack`, `fast-export` (so filter-repo, which is built on it)
+and `transfer.fsckObjects` refuse it (`hash-path mismatch`, `oid mismatch in
+blob`); `cat-file`, `log -p`, checkout and diff serve it with no check.
+
+**A stand-in blob, considered and rejected (2026-10-27).** After a Codex
+take of demo-git-history-scrub failed (§7.1, "git's report on a history
+rewrite"), serving a placeholder under a locked version's id, instead of a
+deny, was weighed. The maintainer rejected it on 2026-10-27, for integrity
+and for data loss, and chose a better note instead (option (a): the
+`[mandu:locked]` note on both model proxies, §7.1). On real git:
+
+- **It does not unblock the tool that failed.** filter-repo's
+  `--replace-text` runs `fast-export` with data, which dies on `oid mismatch
+  in blob`. What fails today with EACCES fails with the stand-in too.
+- **It corrupts history without an error.** A tool that rehashes content
+  bakes the placeholder into new history: a `filter-branch --tree-filter`
+  that edits an unrelated file rehashed `.env` to the placeholder blob, and
+  after `push -f` origin's `main:.env` was the placeholder, with origin's
+  `fsck` clean. Mandu cannot tell a scrub from a reformat.
+- **It loses the person's data.** `gc --prune=now` packed the stand-in under
+  the real id and pruned the real loose copy (the guard allows removal of a
+  deny entry, so `gc` works), leaving a pack that `fsck` calls corrupt and no
+  real copy of the version.
+- **It weakens the pack check.** A stand-in inside a pack needs a
+  hand-written `.idx`, which gives up step 2's rebuild of the index from the
+  content: the defence against a crafted pack.
+
+Today's deny fails loudly and leaves the repository intact; that is the
+property kept. What works under it (the same scratch repository, the
+version unreadable): `fast-export --no-data`, `filter-repo --path <file>
+--invert-paths` alone (it runs `fast-export --no-data`), then a second
+`filter-repo --replace-text` pass once the locked versions are gone,
+`filter-branch --index-filter`, `log --all --name-status`, `log --all --
+<path>`, and a force-push of the scrubbed history. What fails: `fast-export`
+with data, one filter-repo pass that combines `--replace-text` with
+`--invert-paths`, `log --stat` and `log -p` over the version, `rebase` over
+the commit that adds it, `clone --no-local`, a push to an empty remote, and
+`gc` while `refs/original` still holds the version. The note says which
+(§7.1); `tests/stack/git-locked-object-report.test.ts` pins each claim it
+makes. A human-run scrub (Mandu redacting a registered value inside a
+locked file whose history must be kept, outside the agent's confinement,
+after the person approves) is the later plan for the one case the note
+cannot reach, built only if a live take shows that case.
 
 **The mechanism** (`launcher/src/git-object-twins.ts`, called by
 `secret-setup.ts` after the file twins are planned, both postures):
@@ -5342,7 +5816,7 @@ reason (pty-relay.md §3.2).
 | 5 | Unix sockets | `deny network-outbound (remote unix-socket)` then allow the list (exec-routing.md §4.3); refused over it (`darwinUnixRefuse`): docker and kin, a host tmux, and the control sockets of WezTerm, iTerm2, kitty (`KITTY_LISTEN_ON`) and an Emacs server; the human's extras over that | confidentiality ON; `MANDU_UNIX_POLICY=0` |
 | 6 | host services | `deny process-exec` of `open`, `osascript`, `launchctl`, `crontab`, `at`, `batch`; `deny appleevent-send` | with 5 |
 | — | the arbiter's human plane | `deny file-read* file-write*` (subpath) and `deny network-outbound (remote unix-socket (subpath …))` on each human-plane directory: the launch's own (the reported human socket's directory, `<runtime base>/human`) and `<base>/human` under every registry base (the account's default base and rendezvous, where the resident stack lives when the launch has a `MANDU_RUNTIME_DIR` of its own; since 2026-09-30), after every file and socket allow and before the TCP rules; the folders above each (its runtime base included) unrenameable (arbiter-human-plane.md §6) | every mode but `off` (the guard's `unixDeny` on Linux) |
-| — | Mandu's runtime registries | `deny file-write*` on `instances/`, `dashboards/`, `vm-guests/`, `logs/`, `release-check/` and `test/` (subpath), `current`, the legacy `arbiter.sock` and `dashboard.log` (literal, the entry itself: `current` is a link), and the promotion's temp link `.current.tmp-` and `mandu dashboard`'s `dashboard-` port files (prefix), under the launch's runtime base and the account's default base and rendezvous, after every file allow; the folders above them unrenameable (`runtime-registry.ts`, applied by `seatbelt-setup.ts`; runtime-instances.md §2, "planted paths"). One that holds the workspace, the runtime base or the scope dir REFUSES the launch (parse.ts already refuses a scope id that names one) | every mode but `off`, no opt-out (nothing the agent does writes them); on Linux the same entries ride the guard's write-protect list (write-protection.md §2, "Mandu's runtime registries") |
+| — | Mandu's runtime registries | `deny file-write*` on `instances/`, `dashboards/`, `vm-guests/`, `logs/`, `release-check/`, `attachments/` (`mandu serve`'s port files and pool records) and `test/` (subpath), `current`, the legacy `arbiter.sock` and `dashboard.log` (literal, the entry itself: `current` is a link), and the promotion's temp link `.current.tmp-` and `mandu dashboard`'s `dashboard-` port files (prefix), under the launch's runtime base and the account's default base and rendezvous, after every file allow; the folders above them unrenameable (`runtime-registry.ts`, applied by `seatbelt-setup.ts`; runtime-instances.md §2, "planted paths"). One that holds the workspace, the runtime base or the scope dir REFUSES the launch (parse.ts already refuses a scope id that names one) | every mode but `off`, no opt-out (nothing the agent does writes them); on Linux the same entries ride the guard's write-protect list (write-protection.md §2, "Mandu's runtime registries") |
 
 Each rule was chosen by probe (`launcher/test/darwin/seatbelt-live.test.ts`
 runs the rendered profile under `sandbox-exec`): `file-write*` on the file
@@ -5801,6 +6275,18 @@ Linux (`launcher/src/confinement-posture.ts`):
   unless `--best-effort`; `--require-confinement` refuses in every case and
   wins over `--best-effort`. Held by an e2e
   (`launcher-gated-posture.test.ts` G3).
+- **Under `gated` the egress gate is the claim's other half, so its opt-out
+  is said there** (2026-10-25). The gated sentence ("a secret is sent out
+  only where a rule or your OK allows") rests on the egress proxy: with a
+  raw credential file in reach of the agent's programs, it is the only
+  check on where a value goes. Turned off by the user (`--no-net-proxy`,
+  `MANDU_NET_PROXY=0`, `net-proxy = false`), the GATED notice adds a line
+  saying so (`EGRESS_GATE_OFF_LINE`), and `mandu doctor` names the opt-out
+  under the posture on every host. Under `confined` / `read-blocked` the
+  launch stays quiet, as the release checklist's a1 decided for the
+  deliberate opt-out: no raw value is in reach there (placeholders cannot
+  become values without the proxy, and a reader of the real file is
+  confined by the guard), so only the put-back for a bound host is lost.
 - **A bwrap that follows symlinks in mount destinations** (CVE-2026-87766;
   Ubuntu 24.04's `0.9.0-1ubuntu0.3` dropped the backported fix) is probed at
   `mandu doctor` and at every launch whose bind is in use, and only WARNS:

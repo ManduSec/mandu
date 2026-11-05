@@ -10,6 +10,8 @@
  * (`makeApprovalsArbiter`) serving the Settings page (its own index.html and
  * home.js in jsdom, every request through pageFetch):
  *
+ *   S0  the served row opens with Save greyed at the level saved (dashboard.md
+ *       §4.25s *Save waits for a change*): a press sends nothing;
  *   S1  the page reads the list; on Highly Confidential the person picks
  *       Your own AI only; meanwhile ANOTHER mapping (General) changes:
  *       Save still applies (asked first) — another mapping's change does
@@ -58,6 +60,20 @@ const GEN = "0e4c2b8a-3b1d-4f5e-9a6b-7c8d9e0f1a2b";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Doc = any;
 const labelRow = (doc: Doc, id: string) => [...doc.querySelectorAll("#settings-labels .label-row")].find((r: Doc) => r.dataset.id === id);
+/** A level picked as a person does: the value, then its `change`. */
+function pickLevel(row: Doc, level: string): void {
+  const sel = row.querySelector("select.label-level");
+  sel.value = level;
+  sel.dispatchEvent(new sel.ownerDocument.defaultView.Event("change", { bubbles: true }));
+}
+/** The question a change asks on the page (dashboard.md §4.25n), drawn
+ *  under `root`: its "… anyway" pressed once it is there. */
+async function anyway(root: () => Doc): Promise<void> {
+  await waitWhile(() => !root()?.querySelector(".ask-in-place-yes"));
+  const yes = root().querySelector(".ask-in-place-yes");
+  yes.focus();
+  yes.click();
+}
 
 test("Settings › Sensitivity labels over the real arbiter: a change read before another change to the same mapping is refused, nothing overwritten; another mapping's change does not refuse it", { timeout: 180_000 }, async () => {
   const tmp = mkdtempSync(join(tmpdir(), "mandu-label-mapping-stale-"));
@@ -113,14 +129,26 @@ test("Settings › Sensitivity labels over the real arbiter: a change read befor
     const ready = (doc: Doc) => !!labelRow(doc, HC) && !!labelRow(doc, GEN);
 
     await servedProductPage(base, "/settings", ready, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       const save = () => labelRow(doc, HC).querySelector(".label-save-btn").click();
+
+      // S0: Save waits for a change: greyed at the level saved, a press sends nothing.
+      const bytes0 = readFileSync(policyPath, "utf8");
+      assert.equal(labelRow(doc, HC).querySelector(".label-save-btn").getAttribute("aria-disabled"), "true", "the served row opens with Save greyed");
+      assert.equal(labelRow(doc, HC).querySelector(".label-unsaved"), null, "and no 'Not saved' line");
+      save();
+      await new Promise((r) => setTimeout(r, 100));
+      assert.equal(doc.getElementById("labels-notice").hidden, true, "nothing reads as saved");
+      assert.equal(labelRow(doc, HC).querySelector(".ask-error"), null, "nor refused");
+      assert.equal(readFileSync(policyPath, "utf8"), bytes0, "nothing was written");
 
       // S1: General changes meanwhile; the save on Highly Confidential applies.
       const first = labelRow(doc, HC);
-      first.querySelector("select.label-level").value = "local-model";
+      pickLevel(first, "local-model");
+      assert.equal(first.querySelector(".label-unsaved").textContent, "Not saved: press Save to use Your own AI only.", "a level picked says it is not saved");
       await elsewhere([{ op: "map-sensitivity-label", id: GEN, name: "General", level: "public" }]);
       save();
+      await anyway(() => doc.getElementById("settings-labels"));
       await waitWhile(() => !/^Saved Highly Confidential\./.test(doc.getElementById("labels-notice").textContent ?? ""));
       assert.equal(await levelOf(HC), "local-model", "another mapping's change does not refuse the save");
       assert.equal(await levelOf(GEN), "public", "and that change is kept");
@@ -128,7 +156,7 @@ test("Settings › Sensitivity labels over the real arbiter: a change read befor
       // S2: the same mapping changes meanwhile; Save is refused. (The list
       // is read again after the save: the row is drawn anew.)
       await waitWhile(() => labelRow(doc, HC) === first || labelRow(doc, HC)?.querySelector("select.label-level")?.value !== "local-model");
-      labelRow(doc, HC).querySelector("select.label-level").value = "public";
+      pickLevel(labelRow(doc, HC), "public");
       await elsewhere([{ op: "map-sensitivity-label", id: HC, name: "Highly Confidential", level: "no-model" }]);
       const bytes = readFileSync(policyPath, "utf8");
       save();
@@ -136,6 +164,7 @@ test("Settings › Sensitivity labels over the real arbiter: a change read befor
       const row = labelRow(doc, HC);
       assert.equal(row.querySelector(".ask-error").textContent, labelStaleWords("Highly Confidential", "map"), "said on the row, in the page's words");
       assert.equal(row.querySelector("select.label-level").value, "public", "the level picked is kept");
+      assert.equal(row.querySelector(".label-save-btn").hasAttribute("aria-disabled"), false, "Save stays lit: the pick differs from the level read");
 
       // S3: the invariant — nothing was written; the stricter, newer level stands.
       assert.equal(readFileSync(policyPath, "utf8"), bytes, "policy.yaml is unchanged");
@@ -148,6 +177,7 @@ test("Settings › Sensitivity labels over the real arbiter: a change read befor
 
       // S4: saved again, against the mapping as it is now.
       save();
+      await anyway(() => doc.getElementById("settings-labels"));
       await waitWhile(() => !/^Saved Highly Confidential\./.test(doc.getElementById("labels-notice").textContent ?? "") || labelRow(doc, HC)?.querySelector(".ask-error") != null);
       assert.equal(await levelOf(HC), "public");
       pages.push(doc.body.textContent ?? "");

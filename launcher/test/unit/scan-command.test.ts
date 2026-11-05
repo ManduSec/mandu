@@ -11,7 +11,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dashboardLine, dashboardWhere, manduCommand, numberedFindings, parseScanArgs, ranThroughNpx, renderScan, renderShow, runScan, scanCallTimeoutMs, shareText, shortCommand, type ExampleWire, type FindingWire, type ScanWire, type SendWire } from "../../src/scan-command.js";
+import { dashboardLine, dashboardWhere, manduCommand, maskedMatchLine, numberedFindings, parseScanArgs, protectPlan, ranThroughNpx, renderScan, renderShow, runScan, scanCallTimeoutMs, shareText, shortCommand, type ExampleWire, type FindingWire, type ScanWire, type SendWire } from "../../src/scan-command.js";
 import { ANSI, colorOn, colors, PLAIN, stripAnsi } from "../../src/term-style.js";
 import type { Layout } from "../../src/services/layout.js";
 import { stateAxes } from "../axes.js";
@@ -229,6 +229,115 @@ test("renderScan: sessions under Mandu are a footnote; a finding seen only there
   assert.match(exact, /\n1 session ran under Mandu: there Mandu masked the secrets it holds before the AI saw them, though the record on disk shows the values\.\n2 sessions ran while Mandu ran \(by time\): there the AI may have seen a placeholder where the record on disk shows the value\. 1 of the findings above was seen only in such sessions\.\n/);
 });
 
+// The OpenClaw plugin video's second scan (2026-10-27): one session before
+// Mandu's plugin, one under it. The session under Mandu sent a placeholder:
+// it is said apart, never counted as a leak (plan 17 §2).
+const PASS_SRC = { path: "~/projects/orders-app/.env", name: "ORDERHUB_PASSPHRASE" };
+const RUN = "DEBUG=1 sh orders-app/bin/sync-orders.sh";
+function videoFinding(over: Partial<FindingWire> = {}): FindingWire {
+  return finding({
+    preview: "ORDERHUB_PASSPHRASE in ~/projects/orders-app/.env", source: PASS_SRC, agents: ["openclaw"], projects: ["~/projects"],
+    sessions: 2, first: "2026-10-24T10:00:00Z", last: "2026-10-26T10:00:00Z", how: { "command-output": 2, "read-file": 1 },
+    duringMandu: 1, sessionsUnderMandu: 1, sessionsByTime: 0,
+    outsideMandu: { first: "2026-10-24T10:00:00Z", last: "2026-10-24T10:00:00Z", how: { "command-output": 1 } },
+    examples: [
+      ex({ at: "2026-10-26T10:00:00Z", agent: "openclaw", command: RUN, project: "~/projects", mandu: "under", provider: "anthropic" }),
+      ex({ at: "2026-10-24T10:00:00Z", agent: "openclaw", command: RUN, project: "~/projects", mandu: "without", provider: "anthropic" }),
+    ],
+    ...over,
+  });
+}
+
+test("renderScan: a session under Mandu is not counted in a leaked finding's line: the leaked sessions, their date and ways; the one under Mandu apart", () => {
+  const r = wire({ sessions: { openclaw: 2 }, duringMandu: 1, sessionsUnderMandu: 1, sessionsByTime: 0, findings: [videoFinding()] });
+  const out = renderScan(r, { all: false });
+  assert.match(out, new RegExp(`\\n {2}1 {2}ORDERHUB_PASSPHRASE {3}~/projects/orders-app/\\.env\\n {5}1 session, 24 Oct · a command printed it: ${RUN.replace(/\./g, "\\.")}\\n {5}1 more session ran under Mandu: there the AI saw only a placeholder\\n\\n {2}→ Rotate it now, where it was issued\\.\\n`));
+  assert.ok(!out.includes("2 sessions, "), "the session under Mandu is no leak");
+  assert.ok(!out.includes("the agent read the file"), "a way seen only under Mandu is not a way it leaked");
+  // --all: the story of the session without Mandu, the one under Mandu after it.
+  const long = renderScan(r, { all: true });
+  assert.match(long, /\n {2}1\. ORDERHUB_PASSPHRASE in ~\/projects\/orders-app\/\.env\n {5}24 Oct · ~\/projects · OpenClaw\n {7}The agent ran: {2}DEBUG=1 [^\n]*\n {7}The output, with the secret in it, went to the AI: it left this computer in OpenClaw's next request to Anthropic\.\n {5}1 more session ran under Mandu: there the AI saw only a placeholder\.\n {5}With Mandu, /);
+  // More than one leaked session: their count, dates and ways.
+  const three = videoFinding({ sessions: 4, sessionsUnderMandu: 1, duringMandu: 1, outsideMandu: { first: "2026-10-20T10:00:00Z", last: "2026-10-24T10:00:00Z", how: { "command-output": 3 } } });
+  assert.match(renderScan(wire({ sessions: { openclaw: 4 }, findings: [three] }), { all: false }), /\n {5}3 sessions, last 24 Oct · a command printed it: DEBUG[^\n]*\n {5}1 more session ran under Mandu: there the AI saw only a placeholder\n/);
+  assert.match(renderScan(wire({ sessions: { openclaw: 4 }, findings: [three] }), { all: true }), /\n {5}3 sessions, 20 Oct to 24 Oct \(a command printed it in 3\)\. The newest:\n/);
+  // An older arbiter (no outsideMandu): the count still leaves the session under Mandu out.
+  const older = videoFinding({ outsideMandu: undefined });
+  assert.match(renderScan(wire({ findings: [older] }), { all: false }), /\n {5}1 session, 26 Oct · a command printed it, the agent read the file\n {5}1 more session ran under Mandu: there the AI saw only a placeholder\n/);
+  // --show: the split, and "each time" is the sessions not under Mandu.
+  const shown = renderShow(r, 1)!;
+  assert.match(shown, /\n {3}2 sessions, 24 Oct to 26 Oct, 1 project: ~\/projects · OpenClaw\n {3}1 without Mandu, 1 under Mandu \(the AI saw a placeholder\)\n/);
+  assert.match(shown, /\n {5}Each time not under Mandu, the secret left this computer in the agent's next request: OpenClaw's to Anthropic\.\n/);
+  // A session marked by time only is counted (the mark is not a verdict), with its note.
+  const byTime = videoFinding({ sessionsUnderMandu: 0, sessionsByTime: 1, duringMandu: 1, outsideMandu: undefined, how: { "command-output": 2 } });
+  assert.match(renderScan(wire({ findings: [byTime] }), { all: false }), /\n {5}2 sessions, last 26 Oct · a command printed it: DEBUG[^\n]*\n\n/);
+  // Every session under Mandu: not leaked at all (kept from the AI).
+  const kept = videoFinding({ sessions: 1, outsideMandu: undefined });
+  const keptOut = renderScan(wire({ sessions: { openclaw: 1 }, sessionsUnderMandu: 1, sessionsByTime: 0, duringMandu: 1, findings: [kept] }), { all: false });
+  assert.match(keptOut, /\n✓ None of your secrets leaked to the AI /);
+  assert.match(keptOut, /\nMandu kept 1 more value from the AI \(only in sessions under Mandu, where the AI saw a placeholder\): mandu scan --all\n/);
+});
+
+test("renderScan: the closing advice names the agents the scan read, and says an agent with Mandu's plugin is protected", () => {
+  const f = videoFinding({ sessions: 1, sessionsUnderMandu: 0, duringMandu: 0, outsideMandu: undefined });
+  const close = (out: string): string => out.slice(out.indexOf("\n✓ "));
+  // The video's first scan: OpenClaw alone, before the plugin.
+  const one = wire({ sessions: { openclaw: 1 }, findings: [f] });
+  assert.equal(close(renderScan(one, { all: false })), [
+    "",
+    "✓ With Mandu, this secret stays safe: the AI sees only a $MDU:… placeholder, and your agent still does its work.",
+    "  Protect OpenClaw:     mandu openclaw install  (or mandu openclaw)",
+    "  One in full:          mandu scan --show 1   Everything: mandu scan --all",
+    "",
+  ].join("\n"));
+  assert.match(renderScan(one, { all: true }), /\nTo keep your secrets from the AI from now on: mandu openclaw install \(or mandu openclaw\)\.\n/);
+  // The second: the plugin installed. Protected: not told to protect it again.
+  const two = wire({ sessions: { openclaw: 2 }, sessionsUnderMandu: 1, sessionsByTime: 0, duringMandu: 1, findings: [videoFinding()] });
+  const after = renderScan(two, { all: false, attached: ["openclaw"] });
+  assert.match(after, /\n {2}→ Rotate it now, where it was issued\.\n/, "it did leak before: rotate it all the same");
+  assert.equal(close(after), [
+    "",
+    "✓ OpenClaw has Mandu's plugin: the AI now sees this secret only as a $MDU:… placeholder, and your agent still does its work.",
+    "  Check it:             mandu doctor",
+    "  One in full:          mandu scan --show 1   Everything: mandu scan --all",
+    "",
+  ].join("\n"));
+  assert.ok(!after.includes("Protect") && !after.includes("mandu claude"), after);
+  const afterLong = renderScan(two, { all: true, attached: ["openclaw"] });
+  assert.match(afterLong, /\nOpenClaw has Mandu's plugin: there the AI now sees your secrets only as placeholders \(mandu doctor checks it\)\.\n/);
+  assert.ok(!afterLong.includes("To keep your secrets from the AI from now on"), afterLong);
+  // Claude Code too: protect it; OpenClaw is said to be protected.
+  const mixed = wire({ sessions: { openclaw: 2, "claude-code": 5 }, findings: [f] });
+  const m = renderScan(mixed, { all: false, attached: ["openclaw"] });
+  assert.match(m, /\n✓ With Mandu, this secret stays safe[^\n]*\n {2}Protect Claude Code: {2}mandu claude\n {2}OpenClaw: {13}has Mandu's plugin {2}\(mandu doctor checks it\)\n/);
+  const ml = renderScan(mixed, { all: true, attached: ["openclaw"] });
+  assert.match(ml, /\nTo keep your secrets from the AI from now on: mandu claude\.\nOpenClaw has Mandu's plugin: there the AI now sees your secrets only as placeholders \(mandu doctor checks it\)\.\n/);
+  // Several agents, none attached: the two with the most sessions, as the dashboard names them.
+  assert.match(renderScan(wire({ sessions: { goose: 9, openclaw: 4, codex: 1 }, findings: [f] }), { all: false }), /\n {2}Protect your agents: {2}mandu goose {2}\(or mandu openclaw install\)\n/);
+  // An attachment Mandu has for an agent the scan did not read says nothing.
+  assert.match(renderScan(wire({ findings: [f] }), { all: false, attached: ["openclaw"] }), /\n {2}Protect your agents: {2}mandu claude {2}\(or mandu codex\)\n/);
+  // No session read at all: the two agents most use, as before.
+  assert.match(renderScan(wire({ sessions: {} }), { all: false }), /\n {2}Protect your agents: {2}mandu claude {2}\(or mandu codex\)\n/);
+  assert.deepEqual(protectPlan({ sessions: { openclaw: 2, gemini: 3 } }, ["openclaw"]), { protect: [], has: ["openclaw"] });
+  assert.equal(protectPlan({ sessions: { gemini: 3 } }), null, "only agents Mandu does not run");
+});
+
+test("runScan: the advice reads whether Mandu is attached (deps.attached); a failing read is none", async () => {
+  const r = wire({ sessions: { openclaw: 1 }, findings: [videoFinding({ sessions: 1, sessionsUnderMandu: 0, duringMandu: 0, outsideMandu: undefined })] });
+  const run = async (attached?: () => readonly string[]): Promise<string> => {
+    let out = "";
+    const deps = {
+      arbiter: async () => ({ sock: "/tmp/x.sock", kind: "throwaway" as const, axisOn: true, stop: async () => {} }),
+      call: async () => r, now: () => NOW, ...(attached ? { attached } : {}),
+    };
+    assert.equal(await runScan([], { HOME: "/home/u" }, {} as Layout, deps, { out: (s) => { out += s; }, err: () => {} }), 0);
+    return out;
+  };
+  assert.match(await run(() => ["openclaw"]), /\n✓ OpenClaw has Mandu's plugin: /);
+  assert.match(await run(), /\n {2}Protect OpenClaw: {5}mandu openclaw install/);
+  assert.match(await run(() => { throw new Error("EACCES"); }), /\n {2}Protect OpenClaw: {5}mandu openclaw install/);
+});
+
 test("renderShow: one finding in full: sessions, dates, projects, with and without Mandu, every way with up to ten examples", () => {
   const many = Array.from({ length: 12 }, (_, i) => ex({ at: `2026-10-${String(19 - i).padStart(2, "0")}T00:00:00Z`, command: `cat f${i}`, ...(i === 1 ? { mandu: "by-time" as const } : {}) }));
   const f = finding({
@@ -314,6 +423,24 @@ test("renderScan: what the caps left unread and the sessions under Mandu are sai
   assert.match(out, /2 sessions ran while Mandu ran the same agent: there the AI may have seen a placeholder/);
 });
 
+test("renderScan: OpenClaw sessions read without their compressed records (a Node before 22.15) are said, and a report with no leak says none in what it could read, never a clean ✓", () => {
+  const partly = wire({ capped: { overTime: 0, overBytes: 0, tooBig: 0, overFiles: 0, readFailed: 0, compressed: 1 } });
+  const out = renderScan(partly, { all: false });
+  assert.match(out, /note: 1 OpenClaw session not read in full: OpenClaw keeps its longer messages compressed, and Mandu reads those on Node 22\.15 or later/);
+  assert.match(out, /! None of your secrets leaked to the AI in what Mandu could read \(see the note above\)/);
+  assert.doesNotMatch(out, /✓ None of your secrets leaked/);
+  const all = renderScan(partly, { all: true });
+  assert.match(all, /note: 1 OpenClaw session not read in full/);
+  assert.match(all, /leaked to the AI in what it could read of these sessions \(see the note above\)\./);
+  assert.match(shareText(partly), /none of my current secrets had reached the AI in what it could read\. Check yours/);
+  // a found leak is said as found, the note still there
+  const leak = renderScan(wire({ capped: partly.capped, findings: [finding({})] }), { all: false });
+  assert.match(leak, /✗ 1 of your secrets leaked to the AI/);
+  assert.match(leak, /note: 1 OpenClaw session not read in full/);
+  // an older arbiter's wire (no `compressed`): as before
+  assert.match(renderScan(wire({}), { all: false }), /✓ None of your secrets leaked to the AI/);
+});
+
 test("shareText: counts only, never a path, a mask, a name or a project", () => {
   const r = wire({ findings: [finding({ projects: ["~/secret-project"] }), finding({ kind: "github-token", preview: "ghp_…" }), finding({ kind: "credential-assignment", preview: "DB_PASSWORD=…" })] });
   const s = shareText(r);
@@ -333,7 +460,7 @@ test("runScan: exit 0 with the report, 1 when the scan cannot run, 2 on a bad op
   const io = { out: () => {}, err: () => {} };
   const env = { HOME: "/home/u", MANDU_HOME: "/home/u/.mandu" };
   assert.equal(await runScan(["--since", "7d"], env, {} as Layout, deps, io), 0);
-  assert.deepEqual(asked, { home: "/home/u", eventsDir: "/home/u/.mandu/events", since: NOW - 7 * 86_400_000 });
+  assert.deepEqual(asked, { home: "/home/u", eventsDir: "/home/u/.mandu/events", manduDb: "/home/u/.mandu/state/mandu.db", since: NOW - 7 * 86_400_000 }, "the resident store too, for its attachment sessions' periods");
   assert.equal(await runScan([], env, {} as Layout, { ...deps, call: async () => { throw new Error("socket closed"); } }, io), 1);
   assert.equal(stopped, 2);
   assert.equal(await runScan(["--bogus"], env, {} as Layout, deps, io), 2);
@@ -490,7 +617,7 @@ test("renderScan: an agent Mandu does not run (plan 17 §4 phase 3): its story s
   assert.match(short, /^mandu scan · 3 sessions · Gemini CLI, Copilot CLI · [^\n]*\nNothing was sent anywhere; no secret value is shown\.\n {2}note: 4 Cursor chats not read: /);
   assert.match(short, /\nMandu does not run Gemini CLI and Copilot CLI yet; the agents it runs: mandu claude, mandu codex, [^\n]*mandu goose\.\n/);
   assert.ok(!short.includes("With Mandu") && !short.includes("Protect your agents"), "only agents Mandu does not run were read: no promise for them");
-  assert.match(renderScan(wire({ sessions: { "claude-code": 3, copilot: 1 } }), { all: false }), /Mandu does not run Copilot CLI yet[^\n]*\n\n✓ With Mandu, your secrets stay safe[^\n]*\n {2}Protect your agents:/);
+  assert.match(renderScan(wire({ sessions: { "claude-code": 3, copilot: 1 } }), { all: false }), /Mandu does not run Copilot CLI yet[^\n]*\n\n✓ With Mandu, your secrets stay safe[^\n]*\n {2}Protect Claude Code: {2}mandu claude\n/, "the agent Mandu runs that the scan read, by name");
   const out = renderScan(wire({ sessions: { gemini: 2, copilot: 1 }, findings: [gem], notRead: { cursor: 4 } }), { all: true });
   assert.match(out, /^mandu scan: read 2 Gemini CLI and 1 Copilot CLI sessions on this computer/);
   assert.match(out, /\n {2}note: 4 Cursor chats not read: Mandu cannot read its chat store reliably yet/);
@@ -500,7 +627,7 @@ test("renderScan: an agent Mandu does not run (plan 17 §4 phase 3): its story s
   assert.ok(!out.includes("To keep your secrets from the AI from now on: mandu claude"), "only agents Mandu does not run were read: no promise for them");
   const both = renderScan(wire({ sessions: { "claude-code": 3, copilot: 1 } }), { all: true });
   assert.match(both, /Mandu does not run Copilot CLI yet; the agents it runs: mandu claude/);
-  assert.match(both, /To keep your secrets from the AI from now on: mandu claude \(or mandu codex\)\./);
+  assert.match(both, /To keep your secrets from the AI from now on: mandu claude\.\n/, "only the agent the scan read");
   for (const all of [false, true]) assert.ok(!renderScan(wire({}), { all }).includes("does not run"), "nothing said when only agents Mandu runs were read");
   const shown = renderShow(wire({ sessions: { gemini: 1 }, findings: [gem] }), 1)!;
   assert.match(shown, /Mandu does not run Gemini CLI yet: there it could not have kept the secret from the AI \(the agents it runs: mandu claude/);
@@ -741,4 +868,15 @@ test("a key-shaped value that looks like a test value is listed apart and not co
   // A send of one says so.
   const sent = renderScan(wire({ sends: [{ kind: "openai-key", preview: "sk-…", to: "own-service", host: "api.openai.com", sessions: 1, ran: 1, stoppedByMandu: 0, via: ["curl"], by: ["value"], agents: ["claude-code"], duringMandu: 0, looksLikeTest: true }] }), { all: true });
   assert.match(sent, / {4}sk-… → api\.openai\.com \(looks like a test value\)\n/);
+});
+
+test("maskedMatchLine: a finding found by OpenClaw's saved mask says so (the sessions it was, the 2026.7 behaviour); none otherwise", () => {
+  assert.equal(maskedMatchLine({ sessions: 2 }), null);
+  assert.equal(maskedMatchLine({ sessions: 2, matchedMasked: 0 }), null);
+  assert.match(maskedMatchLine({ sessions: 1, matchedMasked: 1 })!, /^That session: found by the masked copy OpenClaw saved \(the value's first 6 and last 4 characters\); OpenClaw 2026\.7 and earlier sent the value itself to the AI/);
+  assert.match(maskedMatchLine({ sessions: 3, matchedMasked: 3 })!, /^Those sessions: /);
+  assert.match(maskedMatchLine({ sessions: 3, matchedMasked: 1 })!, /^1 session of them: /);
+  const r = wire({ findings: [finding({ kind: "known", preview: "PASS in ~/o/.env", source: { path: "~/o/.env", name: "PASS" }, agents: ["openclaw"], matchedMasked: 1 })] });
+  assert.match(renderScan(r, { all: false }), /\n {5}That session: found by the masked copy OpenClaw saved/);
+  assert.match(renderScan(r, { all: true }), /found by the masked copy OpenClaw saved/);
 });

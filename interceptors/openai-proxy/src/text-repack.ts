@@ -1,8 +1,11 @@
 /**
  * text-repack — a `$MDU:` symbol token is never split across two streamed
- * text deltas on an OpenAI-family model→agent wire (Chat Completions
- * `choices[0].delta.content`, Responses `response.output_text.delta`), and
- * the token grammar (`danglingTokenStart`) every repacker cuts by.
+ * text deltas on an OpenAI-family, Gemini or Ollama model→agent wire (Chat
+ * Completions `choices[0].delta.content`, Responses
+ * `response.output_text.delta`, Gemini `candidates[0].content.parts[0].text`;
+ * model-wires.md §4.3; Ollama's NDJSON `message.content`, model-wires.md
+ * "The Ollama wire"), and the token grammar (`danglingTokenStart`) every
+ * repacker cuts by.
  *
  * ONE MODULE, TWO COPIES. Both model proxies read an OpenAI wire and ship
  * standalone (no workspace, no cross-package import), so this file is copied
@@ -15,7 +18,8 @@
  * and so is its unit suite (test/unit/text-repack.test.ts in each package).
  * tests/stack/text-repack-parity.test.ts fails unless both
  * pairs are byte-identical, and runs one table of split-token cases through
- * both packages' exports. Change the anthropic-proxy copy and copy it out
+ * both packages' exports. Change the anthropic-proxy copy, then run
+ * `node scripts/copies/module-copies.mjs generate`
  * (architecture-map.md §9 ①, "The text-delta repacker").
  *
  * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code (2026-09-29, MRs !42,
@@ -156,6 +160,44 @@ function serialize(raw: string, obj: Json): string {
   return `${lines.join("\n")}\n\n`;
 }
 
+/** How a stream is cut into events and an event's payload read and
+ *  rewritten: SSE (the OpenAI and Gemini wires) or NDJSON (one JSON object
+ *  per line, the Ollama wire). */
+interface Framing {
+  framer(): { push(chunk: string): string[]; rest(): string };
+  data(raw: string): string | null;
+  serialize(raw: string, obj: Json): string;
+}
+
+const SSE_FRAMING: Framing = { framer: () => new SseFramer(), data: eventData, serialize };
+
+/** Split a buffer into complete lines (terminator kept). */
+class LineFramer {
+  private buf = "";
+  push(chunk: string): string[] {
+    this.buf += chunk;
+    const out: string[] = [];
+    for (;;) {
+      const nl = this.buf.indexOf("\n");
+      if (nl < 0) break;
+      out.push(this.buf.slice(0, nl + 1));
+      this.buf = this.buf.slice(nl + 1);
+    }
+    return out;
+  }
+  rest(): string {
+    const r = this.buf;
+    this.buf = "";
+    return r;
+  }
+}
+
+const NDJSON_FRAMING: Framing = {
+  framer: () => new LineFramer(),
+  data: (raw) => (raw.trim() === "" ? null : raw.trim()),
+  serialize: (_raw, obj) => `${JSON.stringify(obj)}\n`,
+};
+
 // ── the repacker ─────────────────────────────────────────────────────────────
 
 /** One text event as the repacker reads it. */
@@ -181,9 +223,13 @@ interface Held {
 }
 
 abstract class TextRepacker {
-  private readonly framer = new SseFramer();
+  private readonly framer: { push(chunk: string): string[]; rest(): string };
   private held: Held | null = null;
   private out: string[] = [];
+
+  constructor(private readonly framing: Framing = SSE_FRAMING) {
+    this.framer = framing.framer();
+  }
 
   /** The text this event carries, or null when it is not a re-cuttable text event. */
   protected abstract textOf(obj: Json): TextEvent | null;
@@ -204,7 +250,7 @@ abstract class TextRepacker {
   }
 
   private handle(raw: string): void {
-    const data = eventData(raw);
+    const data = this.framing.data(raw);
     if (data === null) {
       this.out.push(raw); // a comment / keepalive: nothing to render, the hold stays
       return;
@@ -223,7 +269,7 @@ abstract class TextRepacker {
       this.held = { raw, ev, full, cut, carried: carry !== "" };
       return;
     }
-    this.out.push(carry === "" ? raw : serialize(raw, ev.withText(full)));
+    this.out.push(carry === "" ? raw : this.framing.serialize(raw, ev.withText(full)));
   }
 
   /** Release the held event before `next`: cut when `next` continues its run
@@ -233,10 +279,10 @@ abstract class TextRepacker {
     if (h === null) return "";
     this.held = null;
     if (next !== null && next.key === h.ev.key) {
-      this.out.push(serialize(h.raw, h.ev.withText(h.full.slice(0, h.cut))));
+      this.out.push(this.framing.serialize(h.raw, h.ev.withText(h.full.slice(0, h.cut))));
       return h.full.slice(h.cut);
     }
-    this.out.push(h.carried ? serialize(h.raw, h.ev.withText(h.full)) : h.raw);
+    this.out.push(h.carried ? this.framing.serialize(h.raw, h.ev.withText(h.full)) : h.raw);
     return "";
   }
 
@@ -279,6 +325,60 @@ export class ResponsesTextRepacker extends TextRepacker {
       text: obj["delta"] as string,
       final: false,
       withText: (text) => ({ ...obj, delta: text }),
+    };
+  }
+}
+
+/**
+ * Gemini (`:streamGenerateContent?alt=sse`): a chunk whose one candidate
+ * carries one plain `text` part (no `thought`, no `thoughtSignature`: a
+ * signature is tied to its part's text; no citation or logprobs metadata,
+ * which index the text). The run is the candidate; a `finishReason` ends it.
+ */
+export class GeminiTextRepacker extends TextRepacker {
+  protected textOf(obj: Json): TextEvent | null {
+    const cands = obj["candidates"];
+    if (!Array.isArray(cands) || cands.length !== 1) return null;
+    const c = cands[0];
+    if (!isObj(c) || c["citationMetadata"] != null || c["logprobsResult"] != null) return null;
+    const content = c["content"];
+    if (!isObj(content)) return null;
+    const parts = content["parts"];
+    if (!Array.isArray(parts) || parts.length !== 1) return null;
+    const p = parts[0];
+    if (!isObj(p) || typeof p["text"] !== "string" || Object.keys(p).some((k) => k !== "text")) return null;
+    return {
+      key: `cand:${typeof c["index"] === "number" ? c["index"] : 0}`,
+      text: p["text"] as string,
+      final: c["finishReason"] !== null && c["finishReason"] !== undefined && c["finishReason"] !== "",
+      withText: (text) => ({ ...obj, candidates: [{ ...c, content: { ...content, parts: [{ ...p, text }] } }] }),
+    };
+  }
+}
+
+/**
+ * Ollama (`/api/chat`, NDJSON: one JSON object per line): a line whose
+ * `message.content` is text and that carries no tool call, no thinking text
+ * and no logprobs (which index the text). One run per answer; the `done`
+ * line ends it.
+ */
+export class OllamaTextRepacker extends TextRepacker {
+  constructor() {
+    super(NDJSON_FRAMING);
+  }
+
+  protected textOf(obj: Json): TextEvent | null {
+    const msg = obj["message"];
+    if (!isObj(msg) || typeof msg["content"] !== "string") return null;
+    const calls = msg["tool_calls"];
+    if (Array.isArray(calls) ? calls.length > 0 : calls != null) return null;
+    if (typeof msg["thinking"] === "string" ? msg["thinking"] !== "" : msg["thinking"] != null) return null;
+    if (msg["images"] != null || obj["logprobs"] != null) return null;
+    return {
+      key: "message",
+      text: msg["content"] as string,
+      final: obj["done"] === true,
+      withText: (text) => ({ ...obj, message: { ...msg, content: text } }),
     };
   }
 }

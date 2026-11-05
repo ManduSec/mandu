@@ -39,6 +39,9 @@ const AGENT_URL = "http://127.0.0.1:4500/mandu/agents/s1";
 function pieces(node: any): string[] {
   return ([...node.childNodes] as { nodeType: number; className?: string; textContent: string; childNodes: unknown[] }[]).map((x) => {
     if (x.nodeType === 3) return x.textContent;
+    // A row's waiting questions are a link (§4.25 *Agents, not sessions*),
+    // whose words keep their number with its word too.
+    if (x.className === "agent-waiting-link") return `<${pieces(x).join("")}>`;
     assert.equal(x.className, "count-word", `only count spans are added: ${x.className}`);
     assert.equal(x.childNodes.length, 1, "a count span holds one text node");
     return `[${x.textContent}]`;
@@ -93,16 +96,19 @@ test("K2: the row counts on Home and History keep each number with its word (§4
   assert.equal(earlier.textContent, WORDS + ", 1 question waiting for you");
   assert.deepEqual(counts(earlier), [...SPANS, "1 question"]);
   assert.deepEqual(pieces(earlier).slice(0, 4), ["[1 secret]", " masked, ", "[1 secret]", " read before it was marked, "]);
+  assert.equal(pieces(earlier).at(-1), "<[1 question] waiting for you>");
 
   const hist = load({ extensions: "", url: HISTORY_URL, homeVm: home(), routes: { "GET home/history": { total: 2, rows: [row("r1", "running"), row("e1", "idle")], next: null } } });
   await tick();
-  for (const id of ["r1", "e1"]) {
+  // Its question waiting too, in its Home row's words and order (§4.25ae
+  // *History says what waits for you*): the running r1 as Running now draws
+  // it, the ended e1 as Earlier does.
+  for (const [id, home] of [["r1", running], ["e1", earlier]] as const) {
     const line = hist.doc.querySelector(`#history-list .row.agent[data-session="${id}"] .agent-counts`);
     assert.ok(line, `History drew ${id}'s counts`);
-    // Its question waiting too, in Earlier's words (§4.25ae *History says
-    // what waits for you*).
-    assert.equal(line.textContent, WORDS + ", 1 question waiting for you");
-    assert.deepEqual(counts(line), [...SPANS, "1 question"]);
+    assert.equal(line.textContent, home.textContent, `${id} reads as on Home`);
+    assert.deepEqual(counts(line), counts(home));
+    assert.deepEqual(pieces(line), pieces(home));
   }
   // A row with nothing to count draws no line, as before.
   const quiet = load({ homeVm: home({ waiting: [], agents: [{ ...row("q1", "running"), secrets: { masked: 0, early: 0 }, untrusted: 0, blocked: 0, sent: 0, waiting: 0 }] }) });
@@ -116,7 +122,7 @@ test("K3: the session page's own sentences keep each number with its word (§4.2
     ...AGENT, waiting: [], earlier: 0,
     secrets: { mode: "secrets", flagged: false, more: 0, counts: { masked: 1, early: 0 }, secrets: [
       { what: [T("The file "), { kind: "code", text: "~/ws/deploy/staging.conf" }], level: "No AI", lines: [
-        { tone: "good", parts: [T("The AI got only a placeholder, never the real value. It went to the AI that way in 11 requests.")] },
+        { tone: "good", parts: [T("The AI got only its masked version, never the real value. It went to the AI that way in 11 requests.")] },
       ] },
     ] },
     story: [
@@ -129,7 +135,7 @@ test("K3: the session page's own sentences keep each number with its word (§4.2
   await tick();
   const line = doc.querySelector("#agent-secrets .secret-line");
   assert.ok(line, "the Your secrets card is drawn");
-  assert.equal(line.textContent, "The AI got only a placeholder, never the real value. It went to the AI that way in 11 requests.");
+  assert.equal(line.textContent, "The AI got only its masked version, never the real value. It went to the AI that way in 11 requests.");
   assert.deepEqual(counts(line), ["11 requests"]);
   const [first, second] = [...doc.querySelectorAll("#agent-story .turn")] as any[];
   const summary = first.querySelector(".turn-summary");

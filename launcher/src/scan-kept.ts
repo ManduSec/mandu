@@ -10,7 +10,9 @@
  * the path kept, credentials and query values masked), dates, the scan's
  * range, the riskier sessions' counts and, per finding, its examples (a command with
  * every secret in it already replaced by its mask, a file read, a URL a
- * web fetch fetched, masked the same way, a project).
+ * web fetch fetched, masked the same way, a project), and, for one of your
+ * secrets, the chat-history files it sits in now (masked the same way)
+ * with the ids of the Mandu sessions they ran under (lineage ★2).
  * `keepScan` copies only the fields named below, each checked for its type
  * and cut to a length, so nothing the answer might carry beyond them (a
  * newer arbiter's field) is written. The file is written whole (a temporary
@@ -39,6 +41,24 @@ export const KEPT_COMMAND_MAX = 240;
 /** URLs kept per send (the scan keeps 5, each cut to 160 characters). */
 export const KEPT_SEND_URLS_MAX = 5;
 export const KEPT_SEND_URL_MAX = 160;
+/** Places kept per finding (the scan gives at most 10). */
+export const KEPT_PLACES_MAX = 10;
+/** Mandu sessions kept per place (the scan gives at most 3). */
+export const KEPT_PLACE_SESSIONS_MAX = 3;
+
+/** Where a known value sits now (lineage ★2, plan 17 §3 item 15): a
+ *  chat-history file or an agent's database, home as `~`, masked like an
+ *  example's file. */
+export interface KeptPlace {
+  agent: string;
+  file: string;
+  mandu: "under" | "by-time" | "without";
+  first?: string;
+  last?: string;
+  sessions: number;
+  /** The Mandu sessions it ran under, by id. */
+  manduSessions?: string[];
+}
 
 /** One example of how a finding got there (plan 17 §3 item 12): already
  *  masked by the arbiter. */
@@ -80,6 +100,13 @@ export interface KeptFinding {
   sentToHosts?: string[];
   /** A key-shaped value that looks like a test value (item 14). */
   looksLikeTest?: true;
+  /** When some sessions ran under Mandu and some did not: the dates and
+   *  ways of those that did not, which reached the AI (transcript-scan.ts
+   *  `outsideMandu`). Absent: none ran under Mandu, or every one did. */
+  outsideMandu?: { first?: string; last?: string; how: Record<string, number> };
+  /** A known value's places, and how many more the scan counted. */
+  places?: KeptPlace[];
+  placesMore?: number;
 }
 
 export interface KeptSend {
@@ -135,7 +162,7 @@ export interface LastScan {
   known: number;
   findings: KeptFinding[];
   dropped: number;
-  capped: { overTime: number; overBytes: number; tooBig: number; overFiles: number; readFailed: number };
+  capped: { overTime: number; overBytes: number; tooBig: number; overFiles: number; readFailed: number; compressed?: number };
   risk?: { skippedPrompts: number; skippedWithSecret: number; envDumps: number };
   sends?: KeptSend[];
   sendsDropped?: number;
@@ -217,6 +244,27 @@ function examples(v: unknown): KeptExample[] | undefined {
   return v.map(example).filter((e): e is KeptExample => e !== null).slice(0, KEPT_EXAMPLES_MAX);
 }
 
+/** A Mandu session's id as the session page takes it: printable, no
+ *  slash, no space. */
+const MANDU_SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/;
+
+function place(v: unknown): KeptPlace | null {
+  const o = obj(v);
+  if (o === null) return null;
+  const agent = str(o["agent"], 64);
+  const file = str(o["file"], 1024);
+  const m = o["mandu"];
+  if (agent === undefined || file === undefined || typeof m !== "string" || !MANDU_MARKS.has(m)) return null;
+  const out: KeptPlace = { agent, file, mandu: m as KeptPlace["mandu"], sessions: count(o["sessions"]) };
+  put(out, "first", iso(o["first"]));
+  put(out, "last", iso(o["last"]));
+  if (Array.isArray(o["manduSessions"])) {
+    const ids = (o["manduSessions"] as unknown[]).filter((s): s is string => typeof s === "string" && MANDU_SESSION_RE.test(s)).slice(0, KEPT_PLACE_SESSIONS_MAX);
+    if (ids.length > 0) out.manduSessions = ids;
+  }
+  return out;
+}
+
 function finding(v: unknown): KeptFinding | null {
   const o = obj(v);
   if (o === null) return null;
@@ -251,6 +299,24 @@ function finding(v: unknown): KeptFinding | null {
   }
   if (Array.isArray(o["sentToHosts"])) out.sentToHosts = strs(o["sentToHosts"], 20, 256);
   if (o["looksLikeTest"] === true && kind !== "known") out.looksLikeTest = true;
+  const outside = obj(o["outsideMandu"]);
+  if (outside !== null) {
+    const oHow: Record<string, number> = {};
+    for (const [k, n] of Object.entries(obj(outside["how"]) ?? {}).slice(0, 16)) {
+      const key = str(k, 64);
+      if (key !== undefined) oHow[key] = count(n);
+    }
+    const kept: NonNullable<KeptFinding["outsideMandu"]> = { how: oHow };
+    put(kept, "first", iso(outside["first"]));
+    put(kept, "last", iso(outside["last"]));
+    out.outsideMandu = kept;
+  }
+  if (kind === "known" && Array.isArray(o["places"])) {
+    const places = (o["places"] as unknown[]).map(place).filter((p): p is KeptPlace => p !== null).slice(0, KEPT_PLACES_MAX);
+    if (places.length > 0) out.places = places;
+    const more = count(o["placesMore"]) + Math.max(0, (o["places"] as unknown[]).length - KEPT_PLACES_MAX);
+    if (more > 0) out.placesMore = more;
+  }
   return out;
 }
 
@@ -306,7 +372,7 @@ export function keepScan(answer: unknown, meta: { ranAt: number | string; since?
       // The examples by way are kept for the first 500, as the scan gives them.
       .map((f, i) => { if (i >= 500) delete f.examplesByHow; return f; }),
     dropped: count(r["dropped"]) + Math.max(0, (r["findings"] as unknown[]).length - KEPT_FINDINGS_MAX),
-    capped: { overTime: count(capped["overTime"]), overBytes: count(capped["overBytes"]), tooBig: count(capped["tooBig"]), overFiles: count(capped["overFiles"]), readFailed: count(capped["readFailed"]) },
+    capped: { overTime: count(capped["overTime"]), overBytes: count(capped["overBytes"]), tooBig: count(capped["tooBig"]), overFiles: count(capped["overFiles"]), readFailed: count(capped["readFailed"]), ...(count(capped["compressed"]) > 0 ? { compressed: count(capped["compressed"]) } : {}) },
     suggestions: null,
   };
   put(out, "since", meta.since === undefined ? undefined : iso(typeof meta.since === "number" ? new Date(meta.since).toISOString() : meta.since));

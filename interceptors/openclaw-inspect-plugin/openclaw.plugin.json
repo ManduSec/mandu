@@ -1,10 +1,20 @@
 {
   "id": "mandu-inspect",
-  "name": "Mandu inspect_symbol (U-LLM quarantine channel)",
-  "description": "Registers the Mandu inspect_symbol tool: process the untrusted data behind an opaque $MDU:* symbol in a quarantined model call (U-LLM) and return the result RE-SYMBOLIZED — raw untrusted text never enters the privileged model's context. Also registers declassify_symbol (rung 3, the in-context read): the arbiter decides every release, asks the human when the session has ingested untrusted data, and raises the session watermark before the value is returned. OpenClaw port of interceptors/inspect-mcp (OpenClaw has no MCP client).",
+  "name": "Mandu",
+  "description": "Mandu for OpenClaw. Registers the inspect_symbol tool (process the untrusted data behind an opaque $MDU:* symbol in a quarantined model call and return the result RE-SYMBOLIZED) and declassify_symbol (the arbiter decides every release). In a resident Gateway attached to `mandu serve` (config `attachment: true`, written by `mandu openclaw install`) it also registers two hooks: before_tool_call refuses tool calls that name Mandu's state, the OpenClaw config or stopping the Mandu service (a policy against obvious attempts, not a boundary), and message_sending keeps placeholders in chat replies unless a rule binds that chat and cancels a reply that carries a protected value. It never rewrites tool results or reads the conversation: the model context is protected by Mandu's model proxy.",
   "version": "0.0.0-m4",
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": [
+      "tool",
+      "hook"
+    ]
+  },
   "contracts": {
-    "tools": ["inspect_symbol", "declassify_symbol"]
+    "tools": [
+      "inspect_symbol",
+      "declassify_symbol"
+    ]
   },
   "configSchema": {
     "type": "object",
@@ -20,12 +30,20 @@
       },
       "ullmMode": {
         "type": "string",
-        "enum": ["auto", "api", "cli"],
+        "enum": [
+          "auto",
+          "api",
+          "cli"
+        ],
         "description": "Quarantined U-LLM transport: 'api' = direct Anthropic Messages call (needs ullmApiKey), 'cli' = fresh `claude -p`/`codex exec` subprocess reusing the logged-in auth, 'auto' (default) = key present ? api : cli. Falls back to env MANDU_ULLM_MODE."
       },
       "ullmBinary": {
         "type": "string",
-        "enum": ["claude", "codex", "auto"],
+        "enum": [
+          "claude",
+          "codex",
+          "auto"
+        ],
         "description": "cli-mode binary hint (falls back to env MANDU_ULLM_BINARY)."
       },
       "ullmModel": {
@@ -43,6 +61,42 @@
       "ullmApiKey": {
         "type": "string",
         "description": "API key for api-mode U-LLM calls (falls back to env MANDU_ULLM_API_KEY — deliberately NOT the host process's ANTHROPIC_API_KEY, which in a Mandu-wrapped run authenticates the instrumented T-LLM path, not the quarantine)."
+      },
+      "attachment": {
+        "type": "boolean",
+        "description": "True in a resident Gateway attached to `mandu serve` (written by `mandu openclaw install`): registers the before_tool_call tamper policy and the message_sending reply check, and an unavailable U-LLM drops inspect_symbol instead of failing the load. Absent: the per-run config of `mandu openclaw` (tools only)."
+      },
+      "agentId": {
+        "type": "string",
+        "description": "The OpenClaw agent the attachment was installed for; its session is openclaw:<agentId>. Default main."
+      },
+      "manduPaths": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Mandu's own paths (absolute) the tamper policy refuses, written by the installer: the Mandu home and runtime dir."
+      },
+      "sandbox": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "The confined-commands tier, written by `mandu openclaw install --sandbox` (attachment only): the plugin registers OpenClaw's `mandu` sandbox backend, and with agents.defaults.sandbox {mode: all, backend: mandu} every command and file tool runs in a Mandu-confined box (labelled files read as placeholders, the network only through Mandu's egress proxy, Mandu's own state out of reach). Linux only; fails closed.",
+        "properties": {
+          "launcher": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The absolute argv that runs the Mandu launcher (the box is a `mandu --target shell` launch)."
+          },
+          "writeProtect": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Absolute paths the box may not change: the OpenClaw config and the plugin."
+          },
+          "statusFile": {
+            "type": "string",
+            "description": "Where the plugin records whether OpenClaw's `mandu` backend is its own (read by the service's route check and mandu doctor)."
+          }
+        }
       }
     }
   }

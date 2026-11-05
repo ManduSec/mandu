@@ -802,3 +802,35 @@ test("devtools-relay.md §3.4 over the REAL clients: the relay's production wiri
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("aws-sigv4-resign.md over the REAL clients: the egress proxy's production wiring lists the signing keys (signingKeys), names only (secrets axes, explicit)", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "mandu-parity-signing-keys-"));
+  const socketPath = join(tmp, "arbiter.sock");
+  const humanSocketPath = join(tmp, "h", "h.sock");
+  const server = new ArbiterServer({ socketPath, humanSocketPath, dbPath: join(tmp, "symbols.sqlite"), eventDir: join(tmp, "events"), log: () => {}, confidentiality: true, integrity: false });
+  await server.listen();
+  const data = new ArbiterClient(socketPath);
+  const human = new ArbiterClient(humanSocketPath);
+  await data.connect();
+  await human.connect();
+  try {
+    const proxyReal: NetProxyRealArbiterClient = data;
+    const proxy = new NetProxyArbiterAdapter(proxyReal, human); // net-proxy server-main.ts
+    const home = join(tmp, "home");
+    mkdirSync(join(home, ".aws"), { recursive: true });
+    const creds = join(home, ".aws", "credentials");
+    const secret = "pArItYsIgNiNgKeY/0123456789abcdefghijKLMN";
+    writeFileSync(creds, `[default]\naws_access_key_id = AKIAPARITYSIGNING01\naws_secret_access_key = ${secret}\n`);
+    const reg = await human.registerSecret({ path: creds, home, sessionKey: "parity-sigv4" });
+    const key = /^aws_secret_access_key = (\$MDU:\S+)$/m.exec(reg.twin ?? "")?.[1];
+    assert.ok(key, reg.twin);
+    const r = await proxy.signingKeys({ sessionKey: "parity-sigv4" });
+    assert.deepEqual(r.symbols, [key]);
+    assert.ok(!JSON.stringify(r).includes(secret), "names only");
+  } finally {
+    data.close();
+    human.close();
+    await server.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

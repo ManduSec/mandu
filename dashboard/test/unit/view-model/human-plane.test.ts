@@ -33,7 +33,7 @@ test("toHumanPlaneVM: unknown without an answer, walled, exposed with each launc
   assert.deepEqual(x.launches, [{ pid: 4242, mode: "off", posture: "off", session: "claude-20261003-x1", begunAt: 1_699_999_999_000 }]);
   const drawer = JSON.stringify(x.detail);
   assert.match(drawer, /pid 4242, session claude-20261003-x1: mode off, posture off, no wall/);
-  assert.match(drawer, /placeholder/);
+  assert.match(drawer, /each secret open gets the masked copy/);
   assert.match(drawer, /Fix: stop the launch below/);
   // a store that could not answer (pid 0) or launches without `exposed`: still exposed
   assert.equal(toHumanPlaneVM({ exposed: false, since: null, launches: [{ pid: 0, mode: "unknown", posture: "unknown" }] }).state, "exposed");
@@ -46,7 +46,7 @@ test("homeExposure: a notice only while exposed, naming the process and session,
   assert.equal(homeExposure(toHumanPlaneVM({ exposed: false, since: null, launches: [] })), null);
   const n = homeExposure(toHumanPlaneVM(EXPOSED))!;
   assert.equal(n.headline, "Another agent can reach Mandu's own controls.");
-  assert.match(n.sentence, /placeholders instead of secret files/);
+  assert.match(n.sentence, /get masked copies of secret files/);
   assert.match(n.sentence, /changes to protected files are blocked/);
   assert.match(n.sentence, /command output is masked/);
   assert.match(n.sentence, /Your secrets stay protected/);
@@ -152,4 +152,40 @@ test("buildHomeViewModel: the notice names the cause's agent as its Home row doe
   // Outside Home's window: no row, so the session id as code, as before.
   const old = buildHomeViewModel({ sessions: [session], facts, panel, configuredMode: "secrets", nowMs: now + 48 * 3_600_000, windowHours: 24, historyTotal: 1 } as never);
   assert.equal(old.exposure!.causes[0]!.words, "process 4242, session claude-20261003-x1, protection off, no file guard");
+});
+
+test("an attachment (openclaw-plugin.md §3.3) holding the plane exposed is named as Mandu's plugin in an OpenClaw Gateway, not as an unreadable record", () => {
+  const status = { exposed: true, since: 1, launches: [{ pid: 0, mode: "secrets", posture: "gated", session: "openclaw:main", attachment: "openclaw-plugin" }] };
+  const vm = toHumanPlaneVM(status);
+  assert.equal(vm.state, "exposed");
+  assert.equal(vm.launches[0]!.attachment, "openclaw-plugin");
+  assert.match(JSON.stringify(vm.detail), /Mandu's plugin in an OpenClaw Gateway, session openclaw:main: mode secrets, posture gated, no wall/);
+  assert.doesNotMatch(JSON.stringify(vm.detail), /unreadable launch record/);
+  const n = homeExposure(vm)!;
+  assert.equal(n.causes[0]!.words, "Mandu's plugin in an OpenClaw Gateway, no file guard");
+  const linked = homeExposure(vm, [{ id: "openclaw:main", agent: "OpenClaw" }])!;
+  assert.deepEqual(linked.causes[0]!.parts[0], { kind: "link", text: "OpenClaw", to: "agent", session: "openclaw:main" });
+  for (const c of [...n.causes, ...linked.causes]) assert.doesNotMatch(c.words, FORBIDDEN, c.words);
+  // weaken + warn (2026-10-25): the notice says the plugin session causes it,
+  // and how to avoid it; the launch flags do not apply to it
+  assert.equal(n.headline, "Your OpenClaw Gateway can reach Mandu's own controls.");
+  assert.match(n.sentence, /Mandu's plugin runs in your OpenClaw Gateway/);
+  assert.match(n.fix, /mandu openclaw gateway/);
+  assert.match(n.fix, /mandu serve stop/);
+  assert.doesNotMatch(n.fix, /--mode off/);
+  assert.equal(n.fixParts.map((p) => p.text).join(""), n.fix);
+  assert.deepEqual(n.fixParts.filter((p) => p.kind === "code").map((p) => p.text), ["mandu openclaw gateway", "mandu serve stop", "mandu openclaw uninstall"]);
+  // Each is a command to run: the page gives it a Copy (dashboard.md §4.25b); no text part is marked.
+  assert.deepEqual(n.fixParts.filter((p) => p.kind === "code" && p.run === true).map((p) => p.text), ["mandu openclaw gateway", "mandu serve stop", "mandu openclaw uninstall"]);
+  assert.ok(n.fixParts.every((p) => p.kind === "code" || !("run" in p)), "only a code part carries the mark");
+  for (const t of [n.headline, n.sentence, n.fix]) assert.doesNotMatch(t, FORBIDDEN, t);
+  // beside an unwalled launch: both fixes
+  const mixed = homeExposure(toHumanPlaneVM({ ...status, launches: [{ pid: 4242, mode: "off", posture: "off" }, ...status.launches] }))!;
+  assert.equal(mixed.headline, "Another agent can reach Mandu's own controls.");
+  assert.match(mixed.fix, /--mode off.*mandu openclaw gateway/s);
+  // The launch's flags are no command: plain code, no Copy.
+  assert.deepEqual(mixed.fixParts.filter((p) => p.kind === "code" && p.run === true).map((p) => p.text), ["mandu openclaw gateway", "mandu serve stop", "mandu openclaw uninstall"]);
+  assert.deepEqual(mixed.fixParts.filter((p) => p.kind === "code" && !p.run).map((p) => p.text), ["--mode off", "--no-net-guard"]);
+  // a malformed kind is dropped (the row is then the unreadable one)
+  assert.equal(toHumanPlaneVM({ ...status, launches: [{ ...status.launches[0]!, attachment: "Not A Kind" }] }).launches[0]!.attachment, undefined);
 });

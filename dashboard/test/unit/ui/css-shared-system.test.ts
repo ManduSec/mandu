@@ -94,7 +94,7 @@ test("contrastRatio is WCAG 2's ratio, over hex and the rgb() jsdom computes", (
   assert.equal(contrastRatio("#000000", "rgb(255, 255, 255)"), 21, "the same either way round");
   assert.equal(contrastRatio("#777", "#777"), 1);
   assert.equal(contrastRatio("#ffffff", "#e0a24a").toFixed(2), "2.23", "white on the dark theme's amber");
-  assert.equal(contrastRatio("#ffffff", "#a35d00").toFixed(2), "5.09", "white on the light theme's");
+  assert.equal(contrastRatio("#ffffff", "#985700").toFixed(2), "5.68", "white on the light theme's");
   assert.equal(contrastRatio("rgb(31, 33, 38)", "rgba(224, 162, 74, 1)").toFixed(2), "7.24", "the panel's ink on the dark amber");
   assert.equal(contrastRatio("color(srgb 1 1 1)", "#000").toFixed(2), "21.00", "an opaque color-mix() as jsdom computes it");
   assert.throws(() => contrastRatio("color(srgb 0 0 0 / 0.5)", "#fff"), /cannot read/, "a see-through mix is never guessed");
@@ -163,10 +163,9 @@ test("the faintest ink and the light tinted chips read 4.5:1 at the least, in bo
     }
     assert.ok(at("--ok", "--ok-bg") >= 4.5, `${theme}: --ok on --ok-bg reads ${at("--ok", "--ok-bg").toFixed(2)}:1`);
     assert.ok(at("--bad", "--bad-bg") >= 4.5, `${theme}: --bad on --bad-bg reads ${at("--bad", "--bad-bg").toFixed(2)}:1`);
-    if (theme === "dark") assert.ok(at("--warn", "--warn-bg") >= 4.5, `dark: --warn on --warn-bg reads ${at("--warn", "--warn-bg").toFixed(2)}:1`);
-    // The one gap the doc names (*Not covered*): the light amber stays as the
-    // top bar's count pins it. A palette change that fixes it updates this line.
-    else assert.equal(at("--warn", "--warn-bg").toFixed(2), "4.45", "light: --warn on --warn-bg, the named open gap");
+    // The secret chips, the "Masked only later" / "No AI since" tags and the
+    // "read as it was" turn summaries (light 4.45:1 until 2026-10-25).
+    assert.ok(at("--warn", "--warn-bg") >= 4.5, `${theme}: --warn on --warn-bg reads ${at("--warn", "--warn-bg").toFixed(2)}:1`);
     // The two steps stay apart: --ink-4 is the fainter one in each theme.
     const step3 = at("--ink-3", "--panel");
     const step4 = at("--ink-4", "--panel");
@@ -174,6 +173,53 @@ test("the faintest ink and the light tinted chips read 4.5:1 at the least, in bo
     const lighter = contrastRatio(t.get("--ink-3")!, "#000000") > contrastRatio(t.get("--ink-4")!, "#000000");
     assert.equal(lighter, theme === "dark", `${theme}: --ink-3 is ${theme === "dark" ? "lighter" : "darker"} than --ink-4`);
   }
+});
+
+// The amber is also a warning's words on the plain grounds (a "Waiting for
+// you" line, a held send's note, a code chip's secret): until 2026-10-25 the
+// light --warn read 4.42:1 on --code-bg.
+test("the amber reads 4.5:1 at the least on its tint and on every plain ground, in both themes (§4.25k)", () => {
+  for (const [theme, t] of themes()) {
+    for (const g of ["--warn-bg", ...GROUNDS]) {
+      const ratio = contrastRatio(t.get("--warn")!, t.get(g)!);
+      assert.ok(ratio >= 4.5, `${theme}: --warn on ${g} reads ${ratio.toFixed(2)}:1, under 4.5:1`);
+    }
+  }
+  assert.equal(themes()[0]![1].get("--warn"), "#985700", "the light amber (#a35d00 until 2026-10-25)");
+});
+
+// A field's edge is the only thing that shows where to type (WCAG 1.4.11,
+// non-text contrast, 3:1). Until 2026-10-27 every field was drawn in the
+// divider's --line: 1.24 to 1.47:1. A label menu also sits on a Rules row
+// that is open or ticked, the panel tinted with the accent.
+test("every field's edge reads 3:1 at the least on every ground a field is drawn on, in both themes; the dividers keep --line (§4.25r)", () => {
+  const rgb = (hex: string): number[] => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  /** `color-mix(in srgb, a p%, b)`, as app.css tints a row. */
+  const mix = (a: string, p: number, b: string): string => {
+    const [x, y] = [rgb(a), rgb(b)];
+    return `rgb(${x.map((v, i) => Math.round(v * p + y[i]! * (1 - p))).join(", ")})`;
+  };
+  for (const [theme, t] of themes()) {
+    const grounds: Array<[string, string]> = [
+      ...["--panel", "--bg", "--panel-2"].map((g): [string, string] => [g, t.get(g)!]),
+      ["an open row (accent 7%)", mix(t.get("--accent")!, 0.07, t.get("--panel")!)],
+      ["a ticked row (accent 10%)", mix(t.get("--accent")!, 0.10, t.get("--panel")!)],
+    ];
+    for (const [name, ground] of grounds) {
+      const ratio = contrastRatio(t.get("--field-line")!, ground);
+      assert.ok(ratio >= 3, `${theme}: --field-line on ${name} reads ${ratio.toFixed(2)}:1, under 3:1`);
+    }
+  }
+  const [[, light], [, dark]] = themes();
+  assert.deepEqual([light!.get("--line"), dark!.get("--line")], ["#dedcd3", "#34363d"], "the dividers, cards and buttons keep their edge");
+  assert.deepEqual([...[":root {", ':root:not([data-theme="light"])', ':root[data-theme="dark"]'].map((b) => blockAfter(SHARED, b).get("--field-line"))], ["#8a8880", "#787a82", "#787a82"]);
+  // No field rule draws its edge in the divider's color.
+  const field = /\b(input|textarea|select)\b|\.rules-find\b|\.proposal-confirm\b/;
+  const onLine = flattenCss(stripComments(APP_CSS))
+    .filter((r) => r.selectors.some((s) => field.test(s) && !/:focus|:hover|\[type="checkbox"\]/.test(s)))
+    .filter((r) => /border(-color)?\s*:[^;]*var\(--line\)/.test(r.block))
+    .map((r) => r.selectors.join(", "));
+  assert.deepEqual(onLine, [], "these field rules still draw their border in --line");
 });
 
 test("every app.css rule drawn in --ink-4 reads 4.5:1 on its own fill, or on every plain ground (§4.25k)", () => {
@@ -210,7 +256,7 @@ test("the session page's day line reads 4.5:1 on every plain ground, in both the
   }
 });
 
-test("the Approvals count, drawn with each page's served styles: unchanged in the light theme, readable in the dark (§4.25k)", () => {
+test("the Approvals count, drawn with each page's served styles: white on the light amber, readable in the dark (§4.25k)", () => {
   const pages = [
     { name: "product", html: PUB_HTML, css: `${SHARED}\n${APP_CSS}`, id: "nav-approvals-count" },
     ...(DEV ? [{ name: "inspector", html: DEV_HTML, css: `${SHARED}\n${DEV_CSS}`, id: "area-approvals-count" }] : []),
@@ -227,7 +273,7 @@ test("the Approvals count, drawn with each page's served styles: unchanged in th
       badge.textContent = "3";
       const cs = dom.window.getComputedStyle(badge);
       if (theme === "light") {
-        assert.deepEqual([cs.color, cs.backgroundColor], ["rgb(255, 255, 255)", "rgb(163, 93, 0)"], `${p.name}: white on the amber, as before`);
+        assert.deepEqual([cs.color, cs.backgroundColor], ["rgb(255, 255, 255)", "rgb(152, 87, 0)"], `${p.name}: white on the amber #985700 (#a35d00 until 2026-10-25)`);
       } else {
         assert.equal(cs.backgroundColor, "rgb(224, 162, 74)", `${p.name}: the dark theme's amber (resolveCssVars read the dark set)`);
       }

@@ -89,8 +89,8 @@ const call = (s: ArbiterServer, req: Record<string, unknown>, channel: IpcChanne
 
 test("channelRefusal: every human-plane op is refused on data, accepted on human and admin", () => {
   assert.deepEqual([...HUMAN_PLANE_OPS].sort(), [
-    "beginLaunch", "cacheSeals", "clearSessionPathLabels", "desymbolize", "endLaunch", "events", "forwardedClear", "forwardedPlaceholders", "humanPlaneStatus", "noteReserveBlock", "placeholderKnown", "promptExceptions", "promptFilterPacks", "promptHolds", "recordForwardedClear", "recordForwardedPlaceholders", "registerAuthGrant", "registerMcpServers", "registerWireRelease", "reserveBlock", "resolve", "sealCacheEntries",
-    "sessionRelay", "sessions", "setSessionRelay", "subscribe", "symbolShape", "verifyEvents", "whySymbol",
+    "beginAttachment", "beginLaunch", "cacheSeals", "clearSessionPathLabels", "desymbolize", "endAttachment", "endLaunch", "events", "forwardedClear", "forwardedPlaceholders", "humanPlaneStatus", "kubeOverlay", "kubeUpstream", "noteReserveBlock", "placeholderKnown", "promptExceptions", "promptFilterPacks", "promptHolds", "recordForwardedClear", "recordForwardedPlaceholders", "registerAuthGrant", "registerMcpServers", "registerWireRelease", "renewAttachment", "reserveBlock", "resolve", "sealCacheEntries",
+    "sessionRelay", "sessions", "setSessionRelay", "subscribe", "symbolShape", "updateAttachment", "verifyEvents", "whySymbol",
   ]);
   for (const op of HUMAN_PLANE_OPS) {
     assert.equal(isHumanPlaneRequest({ op }), true, op);
@@ -124,10 +124,10 @@ test("channelRefusal: filterPrompt is a data-plane proxy op, its dry run is huma
 });
 
 test("humanPlaneOnlyError: says 'returns originals' only for the ops that do", () => {
-  for (const op of ["desymbolize", "resolve", "events", "subscribe", "sessions", "verifyEvents"]) {
+  for (const op of ["desymbolize", "resolve", "events", "subscribe", "sessions", "verifyEvents", "kubeUpstream"]) {
     assert.match(humanPlaneOnlyError(op), new RegExp(`^human-plane: '${op}' returns originals and is accepted only on the human socket`));
   }
-  for (const op of ["symbolShape", "setSessionRelay", "sessionRelay", "noteReserveBlock", "reserveBlock", "cacheSeals", "sealCacheEntries", "beginLaunch", "endLaunch", "humanPlaneStatus", "registerMcpServers", "registerWireRelease", "registerAuthGrant", "recordForwardedClear", "forwardedClear", "recordForwardedPlaceholders", "forwardedPlaceholders"]) {
+  for (const op of ["symbolShape", "setSessionRelay", "sessionRelay", "noteReserveBlock", "reserveBlock", "cacheSeals", "sealCacheEntries", "beginLaunch", "endLaunch", "beginAttachment", "renewAttachment", "endAttachment", "updateAttachment", "humanPlaneStatus", "registerMcpServers", "registerWireRelease", "kubeOverlay", "registerAuthGrant", "recordForwardedClear", "forwardedClear", "recordForwardedPlaceholders", "forwardedPlaceholders"]) {
     const e = humanPlaneOnlyError(op);
     assert.match(e, new RegExp(`^human-plane: '${op}' .* is accepted only on the human socket`));
     assert.doesNotMatch(e, /returns originals/, op);

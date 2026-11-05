@@ -63,7 +63,10 @@ function scratch(): Scratch {
   const root = realpathSync(mkdtempSync(join(existsSync("/tmp") ? "/tmp" : tmpdir(), "mdu-rf-")));
   const longTmp = join(root, "T".repeat(70)); // over the budget on every platform
   mkdirSync(longTmp);
-  return { root, base: join(root, `mandu-${UID}`), longTmp, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  // A daemon the test stopped can still be writing its tsx cache under
+  // `$TMPDIR/tsx-<uid>` (TMPDIR is this root) while the root is removed: on a
+  // loaded host the removal then meets ENOTEMPTY, which rmSync retries.
+  return { root, base: join(root, `mandu-${UID}`), longTmp, cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }) };
 }
 
 /** Run `fn` with process.env patched (the autostarted daemons inherit it). */
@@ -106,6 +109,48 @@ function pidsIn(dir: string): number[] {
   return out;
 }
 
+/** Every process of this account (but this one) whose TMPDIR lies under
+ *  `root`: the stack's children too (proxies, tsx workers), which no
+ *  manifest names and which write their tsx cache there. Linux only (an
+ *  empty list elsewhere, where the manifests alone stop the stack). */
+function pidsWithTmpdirUnder(root: string): number[] {
+  if (process.platform !== "linux") return [];
+  const out: number[] = [];
+  let names: string[] = [];
+  try { names = readdirSync("/proc"); } catch { return out; }
+  for (const n of names) {
+    const pid = Number(n);
+    if (!Number.isInteger(pid) || pid === process.pid) continue;
+    try {
+      const env = readFileSync(`/proc/${n}/environ`, "utf8").split("\0");
+      const tmp = env.find((e) => e.startsWith("TMPDIR="))?.slice("TMPDIR=".length);
+      if (tmp !== undefined && (tmp === root || tmp.startsWith(`${root}/`))) out.push(pid);
+    } catch { /* gone, or another account's */ }
+  }
+  return out;
+}
+
+/** Stop the stack an autostart left under `base`: the dashboard and the
+ *  arbiter it supervises. On a loaded host the dashboard can write its pid
+ *  after a first look, and a missed one lives on writing under `$TMPDIR`
+ *  (its tsx cache) while the scratch root is removed: so look again, until
+ *  no pid is alive and none has appeared for a second (at most 15 s). */
+async function stopStack(base: string, root: string): Promise<void> {
+  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const seen = new Set<number>();
+  let quietSince = Date.now();
+  for (const deadline = Date.now() + 15_000; Date.now() < deadline;) {
+    const pids = [...pidsIn(join(base, "dashboards")), ...pidsIn(join(base, "instances")), ...pidsWithTmpdirUnder(root)];
+    for (const pid of pids) {
+      if (!seen.has(pid)) { seen.add(pid); quietSince = Date.now(); }
+      try { process.kill(pid, "SIGTERM"); } catch { /* gone */ }
+    }
+    if ([...seen].every((p) => !alive(p)) && Date.now() - quietSince >= 1_000) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  for (const pid of seen) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
+}
+
 test("long TMPDIR, no runtime dir: the stack autostarts under the PRIVATE /tmp-style fallback (0700), the agent gets its current spelling", { timeout: 120_000 }, async () => {
   chmodSync(FAKE, 0o755);
   const s = scratch();
@@ -136,12 +181,7 @@ test("long TMPDIR, no runtime dir: the stack autostarts under the PRIVATE /tmp-s
         assert.equal(existsSync(join(s.longTmp, "mandu")), false, "no runtime registry or kept kernel probe under the long TMPDIR");
       } finally {
         // Stop the supervisor dashboard (it stops its arbiter), then the arbiter.
-        for (let i = 0; i < 50 && pidsIn(join(s.base, "dashboards")).length === 0 && existsSync(join(s.base, "instances")); i++) {
-          await new Promise((r) => setTimeout(r, 100));
-        }
-        for (const pid of pidsIn(join(s.base, "dashboards"))) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
-        for (const pid of pidsIn(join(s.base, "instances"))) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
-        await new Promise((r) => setTimeout(r, 500));
+        await stopStack(s.base, s.root);
       }
     });
   } finally {
@@ -213,12 +253,7 @@ test("an explicit 46-byte MANDU_RUNTIME_DIR (over the worst case, under the real
         assert.ok(Buffer.byteLength(m.sockPath) < limit, `${m.sockPath} fits`);
         assert.ok(46 + 63 >= limit, "the worst case alone would have refused this base");
       } finally {
-        for (let i = 0; i < 50 && pidsIn(join(base, "dashboards")).length === 0 && existsSync(join(base, "instances")); i++) {
-          await new Promise((r) => setTimeout(r, 100));
-        }
-        for (const pid of pidsIn(join(base, "dashboards"))) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
-        for (const pid of pidsIn(join(base, "instances"))) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
-        await new Promise((r) => setTimeout(r, 500));
+        await stopStack(base, s.root);
       }
     });
   } finally {
@@ -286,12 +321,7 @@ test("a squatted shared $TMPDIR/mandu (others can write it; a planted current li
         assert.equal(impostorHits, 0, "nothing connected to the impostor");
         assert.deepEqual(readdirSync(squat).sort(), before, "nothing created in the squatted dir");
       } finally {
-        for (let i = 0; i < 50 && pidsIn(join(own, "dashboards")).length === 0 && existsSync(join(own, "instances")); i++) {
-          await new Promise((r) => setTimeout(r, 100));
-        }
-        for (const pid of pidsIn(join(own, "dashboards"))) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
-        for (const pid of pidsIn(join(own, "instances"))) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
-        await new Promise((r) => setTimeout(r, 500));
+        await stopStack(own, s.root);
       }
     });
   } finally {

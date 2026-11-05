@@ -168,8 +168,8 @@ test("a request the stopped protection service never answered is said in the pag
       const scanButton = doc.getElementById("suggest-scan");
       doc.getElementById("suggest-open").click();
       // The view's read settles first: a read on its way would be cut too.
-      await waitWhile(() => !/^No suggestions\./.test(text(doc, "files-suggested-list")));
-      assert.match(text(doc, "files-suggested-list"), /^No suggestions\./, "the list was read");
+      await waitWhile(() => !/^No keys waiting\./.test(text(doc, "files-suggested-list")));
+      assert.match(text(doc, "files-suggested-list"), /^No keys waiting\./, "the list was read");
       assert.equal(text(doc, "suggest-error"), "");
       const scan = () => {
         doc.getElementById("suggest-root").value = join(home, "proj");

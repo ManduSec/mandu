@@ -137,6 +137,11 @@ These flags sit beside the kind, because they cut across it:
   the reason. For batches that need chosen arguments and a review after, not
   a pass/fail signal: `eval.utility`, `eval.paired` (`continuous-integration.md`
   §9.7).
+- **`weekly: "<agent>"`** (2026-10-26): a live-drill entry with a credential
+  that runs on its agent's night of the weekly rotation, not every night: a
+  kind run leaves it out with the reason, `suites.mjs list --weekly` (what
+  `nightly.sh --weekly` reads) or a name takes it. Today OpenClaw's drill
+  entries, on the ChatGPT sign-in (`continuous-integration.md` §9.8).
 - **`credential: "subscription" | "api-key"`**: the nightly job that runs the
   entry, by the credential it authenticates with (`continuous-integration.md`
   §9.8). `subscription` holds only agent sign-ins (a scoped agent
@@ -244,7 +249,12 @@ agent on 2026-10-15, carry them.
 <agent> -- <command>` installs an agent's newest release into a temporary
 prefix of its own (npm; Goose's GitHub release binary), puts it first on
 PATH, says its version beside the pin in `scripts/ci/pins.env` (`DRIFT`
-when they differ) and runs the command; the prefix goes when it ends. The
+when they differ) and runs the command; the prefix goes when it ends.
+OpenClaw, whose engine floor is above Mandu's node, is installed with the
+agent node's npm and run through a wrapper on that node (`AGENT_NODE_VERSION`,
+`/opt/agent-node`, `MANDU_AGENT_NODE_DIR`), as the guest's pinned one is.
+`integration.openclaw-plugin-gateway-latest` runs the OpenClaw plugin lane
+through it in the nightly (openclaw-plugin.md §9). The
 maintainers' `drill.core-latest.<agent>` entries run the core drills through
 it, nightly for Claude Code and Codex and in each other agent's weekly
 night, reported like every nightly kind: a red is a release Mandu does not

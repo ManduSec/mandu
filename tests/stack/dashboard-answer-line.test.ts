@@ -22,6 +22,19 @@
  *       (`/approvals/<id>`), which offers Block instead;
  *   W4  the oracle: neither the line, its link, `/api/home`, nor any page
  *       drawn carries the key's value or a token; nothing was forwarded.
+ *
+ * And an answer its row on Approvals cannot change (2026-10-28): the REAL
+ * anthropic-proxy holds a message under a prompt filter set to ask (as
+ * approval-held-message-answers.test.ts holds one), on a real arbiter at
+ * the `secrets` axes, and the served Home answers it:
+ *
+ *   W5  Send masked on Home's card: the line reads "Sent masked: … It
+ *       applied to that message only. See your answer";
+ *   W6  its link opens Approvals at that row, which offers no change;
+ *   W7  the oracle: the line names nothing past what the card named (not
+ *       the found text) and no token; the model got the message masked.
+ *
+ * Axes: secrets (stated; both arbiters' confidentiality pinned ON).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -42,6 +55,11 @@ import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
 import { stateAxes } from "../lib/axes.js";
 import { humanSockIn } from "../lib/human-plane.js";
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
+import { AnthropicProxy } from "../../interceptors/anthropic-proxy/src/proxy.js";
+import { ArbiterClientAdapter as ProxyArbiterAdapter } from "../../interceptors/anthropic-proxy/src/arbiter-client.js";
+import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
+import { ADMIN_COOKIE, ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { startScriptedAnthropic } from "../lib/fake-anthropic.js";
 
 stateAxes("secrets");
 
@@ -210,5 +228,105 @@ test("Allow once on Home leaves a line that says what was allowed and to tell Cl
     gate.close(); admin.close(); human.close();
     await arbiter.close();
     rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+const CODENAME = "heronvaleanswerline";
+
+test("Send masked on a held message leaves a line that ends See your answer; its link opens a row with no change (real arbiter, anthropic-proxy, dashboard, served page)", { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-answer-line-held-"));
+  const dataSock = join(dir, "arbiter.sock");
+  const adminSock = join(dir, "admin.sock");
+  const humanSock = humanSockIn(dir);
+  const packs = join(dir, "prompt-filters");
+  mkdirSync(packs);
+  writeFileSync(join(packs, "acme.yaml"), `pack: acme-dlp\nversion: 1\nkeywords:\n  - category: acme.codename\n    words: [${CODENAME}]\n    level: local-model\n`);
+  const policyPath = join(dir, "policy.yaml");
+  writeFileSync(policyPath, "version: 1\nprompt_filters:\n  filters:\n    acme-dlp: on\n");
+  const arbiter = new ArbiterServer({
+    socketPath: dataSock, adminSocketPath: adminSock, humanSocketPath: humanSock, dbPath: join(dir, "mandu.db"), eventDir: join(dir, "events"),
+    policyPath, policyPollMs: 0, integrity: false, confidentiality: true, log: () => {}, // the `secrets` axes, stated
+    promptPackDir: packs, adminPromptPackDir: null, adminPolicyDir: null, packDir: null, packKeysDir: join(dir, "keys"), promptHoldMs: 20_000,
+  });
+  await arbiter.listen();
+  const data = new ArbiterClient(dataSock); await data.connect();
+  const human = new ArbiterClient(humanSock); await human.connect();
+  const session = `answer-line-held-${process.pid}`;
+  await data.setSessionSpec({ sessionKey: session, spec: "claude-code" });
+  const fake = await startScriptedAnthropic({ script: [], fallbackText: "ok" });
+  const proxy = new AnthropicProxy({ arbiter: new ProxyArbiterAdapter(data, human), upstreamOrigin: fake.origin, sessionKey: session, log: () => {} });
+  const proxyPort = await proxy.listen(0);
+  const wired = await makeApprovalsArbiter(dataSock, () => ({ socketPath: adminSock }));
+  assert.ok(wired?.policyDoc);
+  const dashboard = new DashboardServer({ source: new ArbiterEventSource({ socketPath: dataSock, humanSocketPath: humanSock }), policyDocArbiter: wired.policyDoc, approvalsArbiter: wired.arbiter, log: () => {}, ...ADMIN_OPTS });
+  const base = `http://127.0.0.1:${await dashboard.listen(0)}`;
+  const call = async (method: "GET" | "POST", path: string, body?: unknown) => {
+    const r = await pageFetch(`${base}/api/${path}`, { method, headers: { ...CSRF_ADMIN, "Content-Type": "application/json" }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    return { status: r.status, body: (await r.json().catch(() => ({}))) as Record<string, unknown> };
+  };
+  const sent = () => fake.requests.filter((q) => q.url.includes("/v1/messages") && q.body.includes('"tools"')).map((q) => q.body);
+  const unhandled: string[] = [];
+  const onUnhandled = (e: unknown) => unhandled.push(String((e as Error)?.message ?? e));
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const up = await call("POST", "policy/prompt-filters/change", { edit: { op: "set-prompt-action", category: "acme.codename", action: "ask" } });
+    assert.equal(up.status, 200, JSON.stringify(up.body));
+    // The agent sends the person's message; the arbiter holds it.
+    const body = Buffer.from(JSON.stringify({
+      model: "claude-sonnet-4-5", stream: true, max_tokens: 64, tools: [{ name: "Read", input_schema: { type: "object" } }],
+      messages: [{ role: "user", content: [{ type: "text", text: `plan for ${CODENAME} next week` }] }],
+    }));
+    const pending = new Promise<number>((resolve, reject) => {
+      const req = httpRequest({ host: "127.0.0.1", port: proxyPort, method: "POST", path: "/v1/messages", headers: { "content-type": "application/json", "content-length": String(body.length), "x-mandu-session-id": session } },
+        (res) => { res.resume(); res.on("end", () => resolve(res.statusCode ?? 0)); });
+      req.on("error", reject);
+      req.end(body);
+    });
+    let id = "";
+    for (const end = Date.now() + 10_000; !id && Date.now() < end;) {
+      const holds = (await call("GET", "prompt-filters/holds")).body["holds"] as Array<{ approvalId: string }> | undefined;
+      id = holds?.[0]?.approvalId ?? "";
+      if (!id) await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(id, "the message is held");
+
+    // ── W5: Send masked on Home; the line where the card was ────────────────
+    // ── W6: its link opens Approvals at that row, which offers no change ────
+    const cardIn = (doc: any) => doc.querySelector(`#home-waiting > .ask[data-id="${id}"]`); // eslint-disable-line @typescript-eslint/no-explicit-any
+    let lineSaid = "";
+    await servedProductPage(base, "/", (doc) => cardIn(doc) !== null, async (doc) => {
+      const mask = [...cardIn(doc).querySelectorAll("button")].find((b: any) => b.textContent === "Send masked"); // eslint-disable-line @typescript-eslint/no-explicit-any
+      press(mask);
+      const line = () => doc.querySelector("#home-waiting > .answer-line");
+      await waitWhile(() => line() === null, 20_000);
+      assert.equal(cardIn(doc), null, "the card went");
+      lineSaid = words(line());
+      assert.equal(lineSaid, "Sent masked: the AI reads your message with that part masked. It applied to that message only. See your answer");
+      const link = line().querySelector("a");
+      assert.equal(link.textContent, "See your answer");
+      assert.equal(link.getAttribute("href"), `/approvals/${encodeURIComponent(id)}`);
+      link.click();
+      const row = () => doc.querySelector(`#approvals-answered > [data-id="${id}"]`);
+      await waitWhile(() => row() === null, 20_000);
+      assert.equal(doc.defaultView.location.pathname, `/approvals/${encodeURIComponent(id)}`);
+      assert.match(words(row()), /Sent masked, or cancelled/);
+      assert.deepEqual([...row().querySelectorAll("button")].map((b: any) => b.textContent).filter((t: string) => /instead$/.test(t)), [], "the row offers no change"); // eslint-disable-line @typescript-eslint/no-explicit-any
+    }, { headers: { Cookie: ADMIN_COOKIE } });
+
+    // ── W7: the oracle ───────────────────────────────────────────────────────
+    assert.deepEqual(unhandled, [], "no unhandled rejection in the page");
+    assert.ok(!lineSaid.includes(CODENAME), "the line names nothing past what the card named");
+    assert.doesNotMatch(lineSaid, /\$MDU/, "the line carries no token");
+    assert.equal(await pending, 200, "the held request went on");
+    assert.ok(sent().length > 0 && !sent().at(-1)!.includes(CODENAME), "the model got the message masked");
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    await dashboard.close();
+    wired.close();
+    await proxy.close();
+    await fake.close();
+    data.close(); human.close();
+    await arbiter.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

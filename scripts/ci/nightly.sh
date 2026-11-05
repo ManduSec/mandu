@@ -43,13 +43,17 @@
 #
 #   scripts/ci/nightly.sh --lane subscription --canary-credential --worktree --only integration.ollama-doctor
 #
-# --weekly   api-key lane only: tonight's agent of the weekly rotation
-#     (continuous-integration.md §9.8; the agents whose live runs ride the
-#     key): Monday OpenCode (1 and 2), Wednesday
-#     OpenClaw, Friday Goose, by the UTC weekday (MANDU_CI_WEEKDAY, 1-7,
-#     overrides it). Only that agent's live-drill entries of the lane run
-#     (`--only`, from `suites.mjs list --agents`); another night runs nothing
-#     and exits 0.
+# --weekly   tonight's agent of the weekly rotation (continuous-integration.md
+#     §9.8): Monday OpenCode (1 and 2) and Friday Goose, whose live runs ride
+#     the Anthropic key (the api-key lane), and Wednesday OpenClaw, whose
+#     live runs ride the ChatGPT sign-in since 2026-10-26 (the wrapper and the
+#     plugin's two tiers): that night runs the subscription lane with the
+#     Codex sign-in alone (`--credential codex`; OpenClaw takes only its
+#     access token), whichever --lane was given. By the UTC weekday
+#     (MANDU_CI_WEEKDAY, 1-7, overrides it). Only that agent's live-drill
+#     entries of the night's lane run (`--only`, from `suites.mjs list
+#     --agents --weekly`: its `weekly` entries too); another night runs
+#     nothing and exits 0.
 #
 # --canary-credential   a local rehearsal without any real login: the guest
 #     gets synthetic credentials of the lane's kinds (sk-ant-oat01-CANARY… and
@@ -82,21 +86,32 @@ case "$LANE" in
   api-key) CRED=api; OLLAMA=(); export MANDU_CI_TIMEOUT="${MANDU_CI_TIMEOUT:-10800}" ;;
   *) echo "nightly: --lane subscription|api-key is required (continuous-integration.md §9.8)" >&2; exit 2 ;;
 esac
-# The weekly rotation (--weekly): one API-key agent a night, so a night spends
-# one agent's runs of the key.
+# The weekly rotation (--weekly): one agent a night, so a night spends one
+# agent's runs of its credential. OpenClaw's night is the subscription lane's
+# (its ChatGPT sign-in), the other two the api-key lane's.
+WEEKLY_CODEX_ONLY=0
 if [[ $WEEKLY -eq 1 ]]; then
-  [[ $LANE == api-key ]] || { echo "nightly: --weekly is the api-key lane's rotation" >&2; exit 2; }
   day="${MANDU_CI_WEEKDAY:-$(date -u +%u)}"
   case "$day" in
-    1) agent=opencode ;;
-    3) agent=openclaw ;;
-    5) agent=goose ;;
-    [2467]) echo "nightly: the weekly API-key rotation runs no agent tonight (weekday $day; Monday OpenCode, Wednesday OpenClaw, Friday Goose)"; exit 0 ;;
+    1) agent=opencode wlane=api-key ;;
+    3) agent=openclaw wlane=subscription ;;
+    5) agent=goose wlane=api-key ;;
+    [2467]) echo "nightly: the weekly rotation runs no agent tonight (weekday $day; Monday OpenCode, Wednesday OpenClaw, Friday Goose)"; exit 0 ;;
     *) echo "nightly: MANDU_CI_WEEKDAY must be 1-7 (got '$day')" >&2; exit 2 ;;
   esac
-  ids="$(node "$CI/../suites.mjs" list --kind live-drill --lane api-key --agents "$agent" --include-internet --ids)" || exit 2
-  if [[ -z "$ids" ]]; then echo "nightly: the weekly rotation's $agent has no live-drill entry in the api-key lane"; exit 0; fi
-  echo "nightly: weekly API-key rotation, weekday $day: $agent ($(tr ',' '\n' <<<"$ids" | grep -c .) entries)"
+  if [[ $wlane != "$LANE" ]]; then
+    echo "nightly: weekly rotation, weekday $day: $agent runs in the $wlane lane (its credential), not --lane $LANE"
+    LANE=$wlane
+    case "$LANE" in
+      subscription) CRED=codex; OLLAMA=(); export MANDU_CI_TIMEOUT="${MANDU_CI_TIMEOUT_WEEKLY:-28800}" ;;
+      api-key) CRED=api; OLLAMA=() ;;
+    esac
+  fi
+  # the subscription lane's weekly night holds the Codex sign-in alone
+  [[ $LANE == subscription ]] && WEEKLY_CODEX_ONLY=1 && OLLAMA=()
+  ids="$(node "$CI/../suites.mjs" list --kind live-drill --lane "$LANE" --agents "$agent" --include-internet --weekly --ids)" || exit 2
+  if [[ -z "$ids" ]]; then echo "nightly: the weekly rotation's $agent has no live-drill entry in the $LANE lane"; exit 0; fi
+  echo "nightly: weekly rotation, weekday $day: $agent, the $LANE lane ($(tr ',' '\n' <<<"$ids" | grep -c .) entries)"
   args+=(--only "$ids")
 fi
 
@@ -118,7 +133,7 @@ synthetic_codex() {
 if [[ $CANARY -eq 1 ]]; then
   d="$(mktemp -d "${TMPDIR:-/tmp}/mandu-ci-canary.XXXXXX")" || exit 2
   trap 'rm -rf "$d"' EXIT
-  if [[ $CRED == claude ]]; then
+  if [[ $LANE == subscription ]]; then
     synthetic sk-ant-oat01-CANARY | node "$CI/credential.mjs" install claude --dest "$d/claude-credential.json" --valid-days 2 --subscription max || exit 2
     export MANDU_CI_CLAUDE_CREDENTIAL="$d/claude-credential.json"
     synthetic_codex > "$d/codex-src.json" && chmod 600 "$d/codex-src.json" \
@@ -139,13 +154,18 @@ fi
 if [[ $LANE == subscription ]]; then
   need=$((MANDU_CI_TIMEOUT + 300))
   cf="$(node "$CI/credential.mjs" path codex)" || exit 2
-  if [[ ! -e "$cf" ]]; then
+  if [[ ! -e "$cf" && $WEEKLY_CODEX_ONLY -eq 1 ]]; then
+    echo "nightly: no Codex sign-in on this host ($cf): the weekly OpenClaw night rides it, nothing runs (setup: continuous-integration.md §9.8)" >&2; exit 2
+  elif [[ ! -e "$cf" ]]; then
     echo "nightly: no Codex sign-in on this host ($cf): the ChatGPT-sign-in suites will skip (setup: continuous-integration.md §9.8)" >&2
   else
     if [[ $CANARY -eq 0 ]] && ! node "$CI/credential.mjs" refresh codex --min-seconds $((need + 2 * 86400)); then
       echo "nightly: WARNING: the Codex sign-in was not refreshed (above)" >&2
     fi
-    if cmsg="$(node "$CI/credential.mjs" check codex --min-seconds "$need" 2>&1)"; then CRED=claude,codex
+    if cmsg="$(node "$CI/credential.mjs" check codex --min-seconds "$need" 2>&1)"; then
+      if [[ $WEEKLY_CODEX_ONLY -eq 1 ]]; then CRED=codex; else CRED=claude,codex; fi
+    elif [[ $WEEKLY_CODEX_ONLY -eq 1 ]]; then
+      echo "nightly: the Codex sign-in is not usable for the weekly OpenClaw night ($(head -1 <<<"$cmsg" | sed 's/^credential: //')): nothing runs" >&2; exit 2
     else echo "nightly: WARNING: the Codex sign-in is not usable for this run ($(head -1 <<<"$cmsg" | sed 's/^credential: //')); the lane runs without it and the ChatGPT-sign-in suites will skip" >&2; fi
   fi
 fi

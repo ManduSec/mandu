@@ -132,3 +132,20 @@ test("Home's facts of a session that has not moved count a label made after it e
   // Without a request's label reads (the policy panel's lookup): as cached.
   assert.equal(await facts.of(listed), after);
 });
+
+test("the registry's files (secret-path.ts, *Where it is kept*): one confidentialityState read serves them and the page labels; no answer is none", async () => {
+  let reads = 0;
+  const arb: LabelTimesArbiter = {
+    pathLevels: async (paths) => ({ axis: true, levels: paths.map((p) => ({ path: p, level: "no-model", bindings: [], rule: `label:${p}`, store: "page" as const })) }),
+    confidentialityState: async () => {
+      reads++;
+      return { labels: [{ path: FILE, source: "dashboard", updatedAt: T0 }], secrets: [{ path: "/home/dev/w/.env", symbol: "$MDU:nomodel_Read[0404]" }, { path: "rel/.env", symbol: "$MDU:nomodel_Read[0aaa]" }] };
+    },
+  };
+  const times = new LabelTimes(arb, "/home/dev");
+  assert.deepEqual([...await times.registeredFiles()], [["$MDU:nomodel_Read[0404]", "/home/dev/w/.env"]], "an absolute path only");
+  assert.deepEqual(await times.of([FILE]), [{ path: FILE, level: "no-model", at: iso(T0) }]);
+  assert.equal(reads, 1, "one read for both");
+  assert.equal((await new LabelTimes({ confidentialityState: async () => { throw new Error("down"); } }, "").registeredFiles()).size, 0);
+  assert.equal((await new LabelTimes(undefined, "").registeredFiles()).size, 0);
+});

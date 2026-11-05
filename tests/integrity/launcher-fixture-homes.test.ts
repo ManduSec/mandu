@@ -304,7 +304,9 @@ for (const f of shardOf(F, process.env["MANDU_FIXTURE_SHARD"])) {
       assert.ok(!/Can't mkdir parents/.test(r.out), "the bwrap symlinked-parent failure must not recur");
       // L2
       for (const raw of f.rawAbsent) assert.ok(!r.out.includes(raw), `raw secret ${raw} leaked into the agent's world:\n${r.out.slice(-1500)}`);
-      const twins = r.out.match(/\$MDU:nomodel_Read\[[0-9a-f]+\]/g) ?? [];
+      // A `.pgpass` twin writes its token with the colon escaped
+      // (db-login-release.md §3.3): a twin read too.
+      const twins = r.out.match(/\$MDU\\?:nomodel_Read\[[0-9a-f]+\]/g) ?? [];
       assert.ok(twins.length >= f.twins, `expected ≥${f.twins} twin reads, saw ${twins.length}:\n${r.out.slice(-1500)}`);
       // L3
       for (const raw of f.rawPresent ?? []) assert.ok(r.out.includes(raw), `expected ${raw} to read back raw:\n${r.out.slice(-1500)}`);

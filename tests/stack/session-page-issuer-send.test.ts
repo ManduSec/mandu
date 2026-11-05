@@ -20,7 +20,12 @@
  *   G3  with `issuer_bindings: false` the same send is refused and asks (a
  *       card), and no step carries the sentence;
  *   G4  the oracle: no answer of the dashboard carries the token's value or
- *       a placeholder, and only api.github.com saw the token.
+ *       a placeholder, and only api.github.com saw the token;
+ *   G5  the served page (its own index.html and home.js in jsdom) draws the
+ *       card's *Where it went*: "Sent with its real value to" is captioned
+ *       *off your computer* (the served path node's side is `off`), the
+ *       later stop *on your computer*; the drawn card shows no value and no
+ *       placeholder (§4.25b *Where it went*).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -46,6 +51,7 @@ import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import type { AgentPageVM, StoryStep } from "../../dashboard/src/view-model/agent-page.js";
 import { ADMIN_COOKIE, ADMIN_OPTS } from "../../dashboard/test/unit/admin-session.js";
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
+import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { stateAxes } from "../lib/axes.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the axis under test
@@ -54,7 +60,7 @@ const OPENSSL = opensslAvailable();
 const SESSION = "s-issuer-send";
 const HOST = "api.github.com";
 const TOKEN = ["ghp", `ISSUERSEND${process.pid}`.padEnd(40, "q7")].join("_");
-const NOTE = "The real value left this machine, to a destination allowed to receive it.";
+const NOTE = "The real value left this computer, to a destination allowed to receive it.";
 const SENTENCE = `${NOTE} ${HOST} is GitHub's own API: a key GitHub issued may go there without asking you. Built-in protections in Rules lists these, and says how to have them ask.`;
 
 type Got = Array<{ authorization: string | undefined; raw: string }>;
@@ -212,6 +218,23 @@ test(
         assert.ok(!(s.noteParts ?? []).some((p) => p.rules), "no Built-in protections link");
       }
       assert.equal(after.find((s) => s.outcome === "sent")?.note, NOTE, "the earlier send keeps its note alone");
+
+      // ── G5: Where it went: the send is off this computer, the stop on it ──
+      const card = (JSON.parse(bodies.at(-1)!) as AgentPageVM).secrets.secrets.find((c) => words(c.what).startsWith("GITHUB_TOKEN"));
+      assert.ok(card?.path, `the card has its path: ${JSON.stringify(card)}`);
+      assert.deepEqual(card.path.filter((n) => n.label === "Sent with its real value to" || n.label === "Stopped on its way to").map((n) => [n.side, n.label, words(n.parts)]), [
+        ["off", "Sent with its real value to", HOST],
+        ["computer", "Stopped on its way to", HOST],
+      ]);
+      const rowsOf = (doc: any) => [...doc.querySelectorAll("#agent-secrets .secret-path .path-node")] as any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+      await servedProductPage(base, `/agents/${SESSION}`, (doc) => rowsOf(doc).some((r) => /^Stopped/.test(r.querySelector(".path-label")?.textContent ?? "")), (doc) => {
+        const drawn = rowsOf(doc).map((r) => [r.querySelector(".path-label").textContent, r.querySelector(".path-side").textContent, r.querySelector(".path-what")?.textContent ?? ""]);
+        const sentRow = drawn.find(([label]) => label === "Sent with its real value to");
+        assert.deepEqual(sentRow, ["Sent with its real value to", "off your computer", HOST], JSON.stringify(drawn));
+        assert.deepEqual(drawn.find(([label]) => label === "Stopped on its way to"), ["Stopped on its way to", "on your computer", HOST]);
+        const text = doc.getElementById("agent-secrets").textContent as string;
+        assert.ok(!text.includes(TOKEN) && !text.includes("$MDU:"), "the drawn card shows no value and no placeholder");
+      }, { headers: { Cookie: ADMIN_COOKIE } });
 
       // ── G4: the oracle ──
       for (const body of bodies) {

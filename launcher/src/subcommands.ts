@@ -34,6 +34,7 @@ import { runRevert } from "./revert-command.js";
 import { runDemo } from "./demo/demo.js";
 import { runPaths } from "./paths-command.js";
 import { runVersion } from "./version-report.js";
+import { runServeCommand } from "./serve-command.js";
 import { runLog } from "./launch-log.js";
 import { runPolicy } from "./policy-suggest.js";
 import { subcommandUsage, wantsHelp } from "./subcommand-help.js";
@@ -44,7 +45,7 @@ import type { Layout } from "./services/layout.js";
 // re-exported for the modules and tests that import them from here.
 export { dashboardUrl, liveDashboards, registeredDashboards, type LiveDashboard };
 
-export const RESERVED_SUBCOMMANDS = new Set(["status", "stop", "dashboard", "doctor", "init", "reap", "setup", "mode", "why", "revert", "demo", "paths", "policy", "log", "version", "scan"]);
+export const RESERVED_SUBCOMMANDS = new Set(["status", "stop", "dashboard", "doctor", "init", "reap", "setup", "mode", "why", "revert", "demo", "paths", "policy", "log", "version", "scan", "serve"]);
 
 type Env = Record<string, string | undefined>;
 
@@ -958,6 +959,7 @@ export async function runSubcommand(
     case "log": return runLog(rest, env);
     case "policy": return runPolicy(rest, env, layout);
     case "version": return runVersion(rest, env, layout);
+    case "serve": return runServeCommand(rest, env, layout);
     default:
       process.stderr.write(`mandu: unknown subcommand '${sub}'\n`);
       return 2;

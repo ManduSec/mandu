@@ -99,7 +99,12 @@ test("Y2: turns at 23:50, 23:58 and 00:10 draw a line before the first and the t
   assert.deepEqual(order(doc), [`day Friday, Oct 16${YEAR}`, "t:1", "t:2", `day Saturday, Oct 17${YEAR}`, "unsent", "t:3"]);
   const [d1, d2] = days(doc);
   assert.equal(d1.tagName, "DIV", "a separator line, not a heading");
-  assert.equal(story(doc).querySelectorAll("h1, h2, h3, h4, [role=heading]").length, 0, "no heading in the story");
+  // The story's only headings are its cards' own (§4.25 *Each turn and
+  // each secret card is a heading*), never a day line.
+  const heads = [...story(doc).querySelectorAll("h1, h2, h3, h4, [role=heading]")] as El[];
+  assert.equal(heads.length, 4, "one a card");
+  assert.ok(heads.every((h) => h.matches("article.turn h3.turn-title")), "no heading in the story but a card's");
+  assert.ok(days(doc).every((d) => !d.querySelector("h1, h2, h3, h4, [role=heading]")), "a day line holds none");
   const dt = d1.querySelector("time");
   assert.equal(dt.getAttribute("datetime"), "2026-10-16", "the local day, as a <time>");
   assert.equal(d2.querySelector("time").getAttribute("datetime"), "2026-10-17");

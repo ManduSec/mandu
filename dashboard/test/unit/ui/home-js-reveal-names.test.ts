@@ -53,7 +53,7 @@ const secretStep = (id: string, file: string, secrets: Array<{ ref: string; name
   split: { ai: [T("Got "), M("secret"), T(" in place of the result.")], real: [T("The result held your secret "), code(file), T(".")],
     hidden: { text: null, secret: true, truncated: false, secrets } },
 });
-const card = (what: unknown[], ref: string) => ({ what, level: "No AI", saw: "masked", lines: [{ tone: "good", parts: [T("The AI got only a placeholder, never the real value.")] }], ref });
+const card = (what: unknown[], ref: string) => ({ what, level: "No AI", saw: "masked", lines: [{ tone: "good", parts: [T("The AI got only its masked version, never the real value.")] }], ref });
 const ENV_CARD = card([T("The file "), code("~/ws/.env")], "bbbbbbbbbbbbbbbbbbbbbbb1");
 const CREDS_CARD = card([T("The file "), code("~/ws/creds.json")], "bbbbbbbbbbbbbbbbbbbbbbb2");
 const TWO_FILES = [

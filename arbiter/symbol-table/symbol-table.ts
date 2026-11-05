@@ -505,6 +505,23 @@ export function recordWireGrant(symbolMap: SymbolMap, symName: string, host: str
 export function wireGrantOf(symbolMap: SymbolMap, symName: string): string | undefined {
   return symbolMap.wireGrants?.get(symName);
 }
+
+/**
+ * Drop row `symName`'s recorded wire grant, if any (2026-10-25): a later
+ * registration of the same value that names no wire host (a `PGPASSWORD`
+ * launched again without `PGHOST`, db-login-release.md §3.3) must not keep
+ * the host an earlier launch named. Persisted when `dbPath` is given;
+ * idempotent.
+ */
+export function dropWireGrant(symbolMap: SymbolMap, symName: string, dbPath?: string): void {
+  if (!symbolMap.wireGrants?.delete(symName) || dbPath === undefined) return;
+  const db = openSymbolDb(dbPath);
+  try {
+    db.prepare("DELETE FROM wire_grants WHERE sym_name = ?").run(symName);
+  } finally {
+    db.close();
+  }
+}
 /**
  * Save the symbol table to the SQLite database (upsert all entries).
  */

@@ -4,7 +4,7 @@
  * a link planted there.
  *
  *   - The copies of safe-file.ts (launcher, anthropic-proxy, openai-proxy,
- *     net-proxy) are byte-identical: one helper, each package standalone.
+ *     net-proxy, dashboard) are byte-identical: one helper, each package standalone.
  *   - The REAL proxy entrypoints (anthropic-proxy, openai-proxy, net-proxy
  *     `server-main.ts`, over a real ArbiterServer) publish their bound port
  *     through MANDU_PORT_FILE into a scope dir where another session's agent
@@ -31,7 +31,7 @@ import { stateAxes } from "../lib/axes.js";
 stateAxes("secrets");
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const COPIES = ["interceptors/anthropic-proxy/src/safe-file.ts", "interceptors/openai-proxy/src/safe-file.ts", "interceptors/net-proxy/src/safe-file.ts"];
+const COPIES = ["interceptors/anthropic-proxy/src/safe-file.ts", "interceptors/openai-proxy/src/safe-file.ts", "interceptors/net-proxy/src/safe-file.ts", "dashboard/src/safe-file.ts"];
 
 test("the copies of safe-file.ts are byte-identical to the launcher's", () => {
   const want = readFileSync(join(ROOT, "launcher/src/safe-file.ts"), "utf8");

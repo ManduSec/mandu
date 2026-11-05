@@ -199,7 +199,7 @@ test("Rules over the real arbiter: a rule reaching everything inside a file read
     await servedProductPage(base, "/rules", ready, async (doc) => {
       tree(doc);
       // W4: a tighter level on the hand-written file rule, saved.
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       choose(menuIn(treeRow(doc, token)), "no-model");
       const line = [...doc.querySelectorAll("#files-pending-list li")].map((li: Doc) => li.textContent as string).find((l) => l.includes("deploy.token"));
       assert.match(line ?? "", /^~\/proj\/deploy\.token Any AI, when it asks → No AI/);

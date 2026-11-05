@@ -131,6 +131,7 @@ codex` does on that host, and the screen says why in plain words, under
 | not Linux (the guard is seccomp user notification) | `the keys show only under Mandu's guard, which is Linux only` |
 | no `mandu-net-guard` bin resolves (a checkout that never ran `scripts/build-native.sh`, a package without its native bins) | `…, not built on this machine` |
 | `MANDU_NET_GUARD=0`, the launch's own opt-out | `…, turned off (MANDU_NET_GUARD=0)` |
+| the bin is there but cannot set up here: its probe (the bin around `true`) failed, as in a Docker container with the default seccomp profile, which refuses the guard `pidfd_getfd` (packaging.md §3.1), or on a kernel without seccomp user notification | `…, which cannot start on this machine` |
 | the bin ran but could not attach (`--skip-unsupported` ran the command unguarded: no status file) | `…, which this kernel cannot run` |
 
 Codex is then printed in full rather than folded into "the same three
@@ -194,7 +195,13 @@ launch's own code:
   (`resolveNativeBin`: the installed package's prebuilt bin, a checkout's
   `interceptors/target/`, the `MANDU_NET_GUARD_BIN` override) and the
   launch's opt-out (`MANDU_NET_GUARD=0`); a stale bin's warning is shown
-  under `--verbose`;
+  under `--verbose`. Then, unlike a launch, the demo asks the bin whether
+  it can set up here at all (`probeGuardNotify`: the bin around `true`
+  without `--skip-unsupported`, exit 0 only when it supervised) and runs
+  without it when it cannot (`cannot-start`, §2). Added 2026-10-24 for the
+  devcontainer (packaging.md §3.1): under Docker's default seccomp profile
+  the guard fails closed at setup, and the demo then stopped with "the demo
+  could not run" instead of showing what it can;
 - the wrap: `computeNetGuardSpecs` (the agent's model proxy port and the
   egress proxy port on loopback, DNS, the agent's API host, the default
   `:443`/`:22` fallback) and `planNetGuard` (`--skip-unsupported`), the

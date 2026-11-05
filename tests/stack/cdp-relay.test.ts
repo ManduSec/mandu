@@ -12,7 +12,12 @@
  * the arbiter gone, the answer is withheld. A placeholder the real arbiter
  * never minted (a near-miss of the page's, a field the secret lacks) is
  * refused, never reaches Chrome, the agent is told with the page's own
- * placeholder named, and the stored trace says `unknown placeholder`.
+ * placeholder named, and the stored trace says `unknown placeholder`. A
+ * refused key's cause reads back on the session page's story (dashboard
+ * browser-story.ts `refusalCause`) from the relay's real words: an unbound
+ * page asks the person (needs your OK, with its host), their Block makes the
+ * next one not allowed, their Send without it declined, and a gone arbiter's
+ * refusal could not check.
  *
  * Against a real headless Chromium (self-SKIP without one; set
  * MANDU_TEST_CHROMIUM to its binary, or have Playwright's headless shell in
@@ -62,6 +67,8 @@ interface Stack {
   adapter: ArbiterClientAdapter;
   data: ArbiterClient;
   human: ArbiterClient;
+  /** The dashboard's admin channel (where a person's answer goes). */
+  adminSock: string;
   close(): Promise<void>;
 }
 
@@ -94,6 +101,7 @@ async function stack(): Promise<Stack> {
     adapter: new ArbiterClientAdapter(data, human),
     data: data as unknown as ArbiterClient,
     human: human as unknown as ArbiterClient,
+    adminSock: join(tmp, "admin.sock"),
     close: async () => {
       data.close();
       human.close();
@@ -162,7 +170,10 @@ test("the production wiring over a real arbiter: the agent reads the placeholder
     const story = browserStory(stored as unknown as ManduEvent[]);
     assert.ok(story, "the session page has an On web pages story");
     assert.deepEqual(story!.secrets, ["STRIPE_KEY"]);
-    assert.deepEqual(story!.typed.map((t) => [t.outcome, t.site, t.secret]), [["filled", "vercel.com", "STRIPE_KEY"], ["refused", null, "STRIPE_KEY"]]);
+    // The unbound page's refusal names its cause and host from the relay's
+    // own words (the real gate asks the person for an unbound host).
+    assert.deepEqual(story!.typed.map((t) => [t.outcome, t.site, t.secret, t.why]), [["filled", "vercel.com", "STRIPE_KEY", null], ["refused", "evil.example", "STRIPE_KEY", "needs-approval"]]);
+    assert.ok(!JSON.stringify(story).includes("$MDU:"), "no placeholder in the story");
 
     await s.server.close();
     const gone = await a1.send("Runtime.evaluate", { expression: "document.body.innerText", returnByValue: true });
@@ -218,6 +229,71 @@ test("the production wiring over a real arbiter: a placeholder it does not know 
     a.close();
     await relay.close();
     await chrome.close();
+    await s.close();
+  }
+});
+
+test("the production wiring over a real arbiter: a refused key's cause reads back from the relay's real words: needs your OK, then the person's Block is not allowed, their Send without it is declined, and a gone arbiter could not check (dashboard.md §4.25af)", async () => {
+  const s = await stack();
+  const evil = new FakeChrome({ url: "https://evil.example/collect", pageText: "nothing" });
+  const forms = new FakeChrome({ url: "https://forms.example/apply", pageText: "nothing" });
+  await evil.listen();
+  await forms.listen();
+  const r1 = new CdpRelay({ upstream: evil.url, arbiter: s.adapter, session: SESSION });
+  const r2 = new CdpRelay({ upstream: forms.url, arbiter: s.adapter, session: SESSION });
+  const a1 = await agent(`ws://${new URL((await r1.listen()).url).host}/devtools/page/PAGE1`);
+  const a2 = await agent(`ws://${new URL((await r2.listen()).url).host}/devtools/page/PAGE1`);
+  const admin = new ArbiterClient(s.adminSock);
+  try {
+    for (const a of [a1, a2]) {
+      const t = await a.send("Input.insertText", { text: s.field });
+      assert.match(String(t.error?.message), /without the person's approval in Mandu/, JSON.stringify(t));
+    }
+    // The person answers both questions on the admin channel, as Approvals does.
+    await admin.connect();
+    const pending = await admin.egressApprovals("pending");
+    const ask = (host: string) => {
+      const row = pending.find((p) => (p as unknown as Record<string, unknown>)["destination"] === host);
+      assert.ok(row, `a question about ${host}: ${JSON.stringify(pending)}`);
+      return row!.id;
+    };
+    await admin.resolveEgressApproval(ask("evil.example"), false);
+    await admin.resolveEgressApproval(ask("forms.example"), false, undefined, { strip: true });
+    const denied = await a1.send("Input.insertText", { text: s.field });
+    assert.match(String(denied.error?.message), /may not go to evil\.example \(/, JSON.stringify(denied));
+    const declined = await a2.send("Input.insertText", { text: s.field });
+    assert.match(String(declined.error?.message), /you chose to go on without/, JSON.stringify(declined));
+    assert.deepEqual([evil.typed, forms.typed], [[], []], "nothing was typed");
+
+    await new Promise((r) => setTimeout(r, 200));
+    const stored = await s.human.events(SESSION);
+    const story = browserStory(stored as unknown as ManduEvent[]);
+    assert.deepEqual(story!.typed.map((t) => [t.why, t.site, t.secret, t.count]), [
+      ["needs-approval", "evil.example", "STRIPE_KEY", 1],
+      ["needs-approval", "forms.example", "STRIPE_KEY", 1],
+      ["not-allowed", "evil.example", "STRIPE_KEY", 1],
+      ["declined", null, "STRIPE_KEY", 1],
+    ]);
+    assert.ok(!JSON.stringify(story).includes("$MDU:"), "no placeholder in the story");
+    assert.ok(!JSON.stringify(story).includes("Mandu: the placeholder"), "no reason text in the story");
+
+    // A gone arbiter: the relay refuses (fail-closed) and stores nothing, so
+    // its words, the same as its reason, are read as an event would hold them.
+    await s.server.close();
+    const gone = await a1.send("Input.insertText", { text: s.field });
+    const reason = String(gone.error?.message);
+    assert.match(reason, /^Mandu: the placeholder was not typed: /, JSON.stringify(gone));
+    const offline = browserStory([{ kind: "browser_action", sessionId: SESSION, id: "x", ts: "2026-10-26T00:00:00Z", action: "refused", method: "Input.insertText", symbols: [s.field], reason } as unknown as ManduEvent]);
+    assert.deepEqual(offline!.typed.map((t) => [t.why, t.site]), [["failed", null]], reason);
+    assert.deepEqual(evil.typed, []);
+  } finally {
+    admin.close();
+    a1.close();
+    a2.close();
+    await r1.close();
+    await r2.close();
+    await evil.close();
+    await forms.close();
     await s.close();
   }
 });

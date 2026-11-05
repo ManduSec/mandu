@@ -1502,6 +1502,14 @@ default-DENY.
   wrap, it reaches an allowed destination *even under
   `--landlock-net-strict`*. After the connect the supervisor is out of the
   data path: bytes flow on the tracee's own socket.
+- **REDIRECT** (`--redirect tcp:<host>:<port>=<loopback>:<port>`, since
+  2026-10-24, [`db-login-release.md`](../confidentiality/db-login-release.md))
+  → a TCP connect to a database the egress proxy relays logins for is
+  performed on that relay's loopback port instead, and decided there (the
+  relay's allow rule; its port is a session-proxy port for the taint legs).
+  Never for an always-denied or `--deny` destination; with no copy of the
+  socket it is refused, never `CONTINUE`d (the kernel would connect the
+  tracee's own address). The database's address itself stays denied.
 - **non-INET family** → a pathname or abstract Unix connect is SUPERVISED in
   every posture under a secret policy (the guard connects its copy of the
   socket to the address it checked, never `CONTINUE`; gap (e) below); the
@@ -1710,6 +1718,14 @@ only `no_new_privs` (settable by any process: no CAP_SYS_ADMIN, no userns, no
 root); `pidfd_getfd` works parent→child unprivileged. The floor is kernel
 version: ≥ 5.0 (USER_NOTIF), ≥ 5.5 (CONTINUE), ≥ 5.6 (the supervisor-connect
 enact), versus Landlock-net's ≥ 6.7. It mutates **no global host state**.
+A seccomp policy above Mandu can still refuse it: Docker's default profile
+denies `pidfd_getfd` without `CAP_SYS_PTRACE`, so in a default container the
+guard cannot copy its child's listener and fails closed at setup (exit 71,
+with or without `--skip-unsupported`: the trap is already installed, so this
+is no missing kernel feature). Until 2026-10-24 that path deadlocked (the
+guard reaped the child while holding the socket the child waited on for its
+ack); `net-supervisor/tests/listener_handoff_integration.rs` pins the fix
+(packaging.md §3.1).
 `net-supervisor`'s TPROXY-rewrite half (symbolization of non-model traffic)
 needs root + host-global nftables and is decided won't-implement
 (privilege-model.md §0).
@@ -2625,7 +2641,7 @@ to the guard (`trustLookups`) and names the visible ones at launch
 - **Utility, fail-closed by design**: a reader that connects BEFORE it reads
   its key (`ssh` loads `~/.ssh/id_*` after it connects) needs a binding for
   that host; a holder resolves names only through `/etc/hosts` or a resolver
-  its bindings name; bindings are TCP (`binding_to_spec`), so UDP to a bound
+  its bindings name; bindings are TCP (`local_exits::host_binding_specs`), so UDP to a bound
   host (QUIC) is refused.
 
 Tests of the taint legs: `send_guard.rs`, `guard_filter.rs`,

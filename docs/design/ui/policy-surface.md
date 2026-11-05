@@ -132,7 +132,9 @@ from", 2026-10-18).
 **Failure semantics.** A *missing* file means the built-ins are the whole
 law, and the law source says which path was looked for. An *invalid* file on
 reload keeps the law in force (`policyFile.valid: false` plus the problems
-on the snapshot, and a banner). An invalid file at **boot** makes the arbiter
+on the snapshot, and a banner: the product's Rules page draws it above Your
+rules with the problems, dashboard.md §4.25 *Rules says where your rules file
+is*). An invalid file at **boot** makes the arbiter
 refuse to start, listing every problem — never "warn and run the built-ins",
 because a user file may tighten the law and an unparseable "lock `~/.ssh`"
 must not silently unlock it. (A `policy.compiled.json` last-known-good cache
@@ -959,14 +961,19 @@ edits that tighten **under every possible catalog and DB-label state**: a
 with no release attached; where it loses nothing changes. DB labels carry
 only a level and bindings, so a plain strict label dominates any it shadows.
 
-One hazard remains inside the law: a label that newly wins brings its own
-`readers`/`others`/`extract`/`bindings`, which can be looser than the loser's
-(a plain strict label on `~/.aws/credentials` shadowing `readers: [aws],
-others: deny` on `~/.aws` turns "everyone else denied" into "everyone else
-gets the twin"). The **overlap-hazard** check is conservative: a new or raised
-label is tightening only if no other compiled label whose literal prefix is a
-segment-prefix of its own, or the reverse, carries any of those fields (or
-`values:`). A pattern starting with `**` overlaps everything.
+One hazard remains inside the law: a label that newly wins ends the loser's
+`readers`/`others`/`extract` there, and those can be stricter than a plain
+strict label (a plain strict label on `~/.aws/credentials` shadowing
+`readers: [aws], others: deny` on `~/.aws` turns "everyone else denied" into
+"everyone else gets the twin"). The **overlap-hazard** check is conservative:
+a new or raised label is tightening only if no other compiled label whose
+literal prefix is a segment-prefix of its own, or the reverse, carries any of
+those fields. A pattern starting with `**` overlaps everything. A loser's
+`bindings` and `values:` are no hazard (since 2026-10-28): they only release,
+and a plain strict winner releases nothing, so it dominates a compiled label
+that carries only a level and bindings exactly as it dominates a DB label.
+Counting them had made a lone strict lock a relaxation beside any `**`
+pattern with a binding (live, policy-setup-repo on Codex).
 
 **Per-value bindings** (`values:`, confidentiality plan 13 §5.2,
 2026-10-11) classify as `bindings` do, entry by entry: under the same keys,

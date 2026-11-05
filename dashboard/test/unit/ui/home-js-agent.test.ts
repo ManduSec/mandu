@@ -91,7 +91,7 @@ test("Details opens the agent page in place: one card per turn, split halves, re
 
   assert.match(doc.getElementById("agent-story").textContent, /2 earlier turns are not shown here\. The detailed trace has them\. Show them/);
   assert.equal(doc.getElementById("agent-waiting-block").hidden, false);
-  assert.match(window.document.title, /Claude Code/);
+  assert.match(window.document.title, new RegExp(`^\\(1\\) Mandu · Claude Code in ws · ${CLOCK}$`));
 });
 
 test("the question draws a masked item as a chip; a shell escape reads 'You ran' with its output", async () => {
@@ -298,7 +298,7 @@ test("a blocked or held step says why under its note, the label then the sentenc
   const step = (id: string, outcome: string, note: string | null, why?: unknown[]) =>
     ({ kind: "action", id, ts: "2026-09-25T10:00:01.000Z", icon: "web", sentence: [T("Mandu blocked a request to "), C("api.stripe.com")], outcome, note, split: null, ...(why ? { why } : {}) });
   const agent = { ...AGENT, waiting: [], earlier: 0, story: [{ ...AGENT.story[1], id: "turn:why", steps: [
-    step("send", "blocked", "The request never left this machine.",
+    step("send", "blocked", "The request never left this computer.",
       [T("No rule lets this secret go to "), C("<img src=x onerror=alert(1)>"), T(". Mandu sends a secret only where a rule lets it go, or with your OK.")]),
     step("held", "waiting", "Waiting for your OK.", [T("The file is outside the folders this agent works in, so Mandu asks first.")]),
     step("bare", "blocked", "Mandu stopped it."),
@@ -310,7 +310,7 @@ test("a blocked or held step says why under its note, the label then the sentenc
   const send = what("send");
   const lines = [...send.querySelectorAll(":scope > .note")] as any[];
   assert.deepEqual(lines.map((l) => l.textContent), [
-    "The request never left this machine.",
+    "The request never left this computer.",
     "Why: No rule lets this secret go to <img src=x onerror=alert(1)>. Mandu sends a secret only where a rule lets it go, or with your OK.",
   ], "the note, then the why");
   assert.ok(lines[1].classList.contains("why"));
@@ -327,7 +327,7 @@ test("a stop that filed an Approvals row says Mandu asked you, linking to that r
   const step = (id: string, note: string | null, why: unknown[] | null, askId?: string) =>
     ({ kind: "action", id, ts: "2026-09-25T10:00:01.000Z", icon: "web", sentence: [T("Mandu blocked a request to "), C("api.stripe.com")], outcome: "blocked", note, split: null, ...(why ? { why } : {}), ...(askId ? { askId } : {}) });
   const agent = { ...AGENT, waiting: [], earlier: 0, story: [{ ...AGENT.story[1], id: "turn:asked", steps: [
-    step("send", "The request never left this machine.", [T("No rule lets this secret go to "), C("api.stripe.com"), T(". Mandu sends a secret only where a rule lets it go, or with your OK.")], "egr-1"),
+    step("send", "The request never left this computer.", [T("No rule lets this secret go to "), C("api.stripe.com"), T(". Mandu sends a secret only where a rule lets it go, or with your OK.")], "egr-1"),
     step("odd", "Mandu stopped it.", null, 'egr-"9<b>x</b>'),
     step("bare", "Mandu stopped it.", null),
   ] }] };
@@ -337,7 +337,7 @@ test("a stop that filed an Approvals row says Mandu asked you, linking to that r
 
   const send = what("send");
   assert.deepEqual([...send.querySelectorAll(":scope > .note")].map((l: any) => l.textContent), [
-    "The request never left this machine.",
+    "The request never left this computer.",
     "Why: No rule lets this secret go to api.stripe.com. Mandu sends a secret only where a rule lets it go, or with your OK.",
     "Mandu asked for your OK in Approvals.",
   ], "the note, the why, then that Mandu asked");
@@ -371,8 +371,8 @@ test("a stop whose question was answered says the answer in the words of Answere
   await tick();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const asked = (id: string) => doc.querySelector(`#agent-story .step[data-step-id="${id}"] .note.asked`) as any;
-  assert.equal(asked("1").textContent, "Mandu asked for your OK in Approvals. Your answer: Blocked.");
-  assert.equal(asked("2").textContent, "Mandu asked for your OK in Approvals. Your answer: Always allowed.");
+  assert.equal(asked("1").textContent, "Mandu asked for your OK in Approvals. Your answer: Blocked. Kept in Rules");
+  assert.equal(asked("2").textContent, "Mandu asked for your OK in Approvals. Your answer: Always allowed. Kept in Rules");
   assert.equal(asked("3").textContent, "Mandu asked for your OK in Approvals. Your answer: Allowed once, unused.");
   assert.equal(asked("4").textContent, "Mandu asked for your OK in Approvals. Your answer: Allowed once.");
   assert.equal(asked("5").textContent, "Mandu asked for your OK in Approvals.", "still waiting: as before");
@@ -404,15 +404,15 @@ test("the header says how long the session ran and when it ended, on the clock a
     return doc.querySelector("#agent-sub .agent-when");
   };
   // Ended: how long it ran, then when it ended, once, not the same "ago" twice.
-  const endMs = NOW - 11 * 3_600_000;
+  const endMs = NOW - 5 * 3_600_000;
   const ended = await when({ running: false, startedAt: iso(endMs - 36_000), lastAt: iso(endMs) });
-  assert.match(ended.textContent, new RegExp(`^ran 36 seconds, ended ${CLOCK} · 11 hours ago, in ~/ws$`));
+  assert.match(ended.textContent, new RegExp(`^ran 36 seconds, ended ${CLOCK} · 5 hours ago, in ~/ws$`));
   assert.equal(ended.querySelector("time").getAttribute("datetime"), iso(endMs));
   assert.match(ended.querySelector(".agent-ran").title, new RegExp(`^From its first recorded step \\(${CLOCK}\\) to its last\\.$`));
   assert.doesNotMatch(ended.textContent, /started/);
   // Running: since when.
   const running = await when({ running: true, startedAt: iso(NOW - 3 * 60_000), lastAt: iso(NOW) });
-  assert.match(running.textContent, new RegExp(`^running now, started ${CLOCK} · 3 minutes ago, in ~/ws$`));
+  assert.match(running.textContent, new RegExp(`^running now, started ${CLOCK} · 3 minutes ago, last step just now, in ~/ws$`));
   assert.equal(running.querySelector(".agent-ran"), null);
   // The inspector's buckets ("36s", "3m 12s", "2h 5m"), spelled out.
   const spans: [number, string][] = [[1_000, "1 second"], [61_000, "1 minute 1 second"], [180_000, "3 minutes"], [192_000, "3 minutes 12 seconds"], [3_600_000, "1 hour"], [7_500_000, "2 hours 5 minutes"]];
@@ -432,6 +432,128 @@ test("the header says how long the session ran and when it ended, on the clock a
   assert.equal(none.querySelector("time"), null);
   assert.equal((await when({ running: false, startedAt: null, lastAt: null, cwd: null })).textContent, "");
   assert.equal((await when({ running: true, startedAt: null })).textContent, "running now, in ~/ws");
+});
+
+test("the tab names the session as its header does: the agent, its folder's last name and when it started; never the prompt (§4.25)", async () => {
+  const NOW = Date.now();
+  const iso = (ms: number) => new Date(ms).toISOString();
+  // clockWords' words, built here as the page builds them: the local clock,
+  // the year only when it is not this one.
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const clock = (ms: number) => {
+    const d = new Date(ms);
+    const pad = (k: number) => String(k).padStart(2, "0");
+    return `${MON[d.getMonth()]} ${d.getDate()}${d.getFullYear() === new Date().getFullYear() ? "" : ", " + d.getFullYear()}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const start = NOW - 3 * 3_600_000;
+  const PROMPT = "Zanzibarquill the deploy notes";
+  const story = AGENT.story.map((t, i) => (i === 0 ? { ...t, prompt: PROMPT } : t));
+  const title = async (over: Record<string, unknown>): Promise<string> => {
+    const { window } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, story, ...over } } });
+    await tick();
+    return window.document.title;
+  };
+  // The folder's last name and the start, after the count.
+  const shop = await title({ cwd: "/home/u/projects/shop", running: false, startedAt: iso(start), lastAt: iso(NOW - 60_000) });
+  assert.equal(shop, `(1) Mandu · Claude Code in shop · ${clock(start)}`);
+  assert.ok(!shop.includes("Zanzibarquill"), "the prompt never reaches the title");
+  assert.ok(!shop.includes("Fix the test"), "nor the session's own title line");
+  // The home folder itself is "~"; a folder outside it, its last name; none, no "in".
+  assert.equal(await title({ cwd: "/home/u", startedAt: iso(start) }), `(1) Mandu · Claude Code in ~ · ${clock(start)}`);
+  assert.equal(await title({ cwd: "/srv/build/", startedAt: iso(start) }), `(1) Mandu · Claude Code in build · ${clock(start)}`);
+  assert.equal(await title({ cwd: null, startedAt: iso(start) }), `(1) Mandu · Claude Code · ${clock(start)}`);
+  // No start: the last step's moment; neither: no moment.
+  const last = NOW - 2 * 3_600_000;
+  assert.equal(await title({ startedAt: null, lastAt: iso(last) }), `(1) Mandu · Claude Code in ws · ${clock(last)}`);
+  assert.equal(await title({ startedAt: null, lastAt: null }), "(1) Mandu · Claude Code in ws");
+  // A year not this one is named, as everywhere clockWords writes.
+  const old = new Date(new Date().getFullYear() - 1, 2, 4, 9, 5).getTime();
+  assert.equal(await title({ startedAt: iso(old) }), `(1) Mandu · Claude Code in ws · Mar 4, ${new Date(old).getFullYear()}, 09:05`);
+
+  // A running session: a poll a minute later, with a newer step, leaves it as it was.
+  let vm: Record<string, unknown> = { ...AGENT, story, running: true, startedAt: iso(start), lastAt: iso(NOW) };
+  const { doc, window } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": () => vm } });
+  await tick();
+  const before = window.document.title;
+  assert.equal(before, `(1) Mandu · Claude Code in ws · ${clock(start)}`);
+  vm = { ...vm, lastAt: iso(NOW + 60_000), story: [...story, { ...AGENT.story[1], id: "turn:i3", ts: iso(NOW + 60_000), prompt: "Zanzibarquill once more" }] };
+  doc.dispatchEvent(new window.Event("visibilitychange"));
+  await tick();
+  assert.equal(doc.querySelectorAll("#agent-story .turn").length, 3, "the poll drew the new turn");
+  assert.equal(window.document.title, before);
+  // Another page names its page again.
+  (doc.querySelector('#nav [data-page-link="rules"]') as any).click();
+  await tick();
+  assert.equal(window.document.title, "(1) Mandu · Rules");
+});
+
+test("a session Mandu has no record of keeps the page's name in the tab, as does the page while it loads (§4.25)", async () => {
+  let answer: (v: unknown) => void = () => {};
+  const { window } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": () => new Promise((r) => { answer = r; }) } });
+  await tick();
+  assert.equal(window.document.title, "(1) Mandu · Agent", "while it loads");
+  answer({ found: false });
+  await tick();
+  assert.equal(window.document.title, "(1) Mandu · Agent", "not found");
+});
+
+test("a running header names its last step as Home's row does, a button to the newest turn when Latest turn shows (§4.25)", async () => {
+  const NOW = Date.now();
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const started = NOW - 5 * 3_600_000;
+  const third = { ...AGENT.story[1], id: "turn:i3", ts: "2026-09-25T10:30:00.000Z", prompt: "Third question" };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const open = async (over: Record<string, unknown>): Promise<any> => {
+    const { doc } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, running: true, startedAt: iso(started), ...over } } });
+    await tick();
+    return doc;
+  };
+  const whenOf = (doc: { querySelector(s: string): { textContent: string } }) => doc.querySelector("#agent-sub .agent-when");
+  // Two turns: plain words, the newest turn already in sight.
+  const two = await open({ lastAt: iso(NOW - 2 * 60_000) });
+  assert.match(whenOf(two).textContent, new RegExp(`^running now, started ${CLOCK} · 5 hours ago, last step 2 minutes ago, in ~/ws$`));
+  const last = two.querySelector("#agent-sub .agent-last time.ago");
+  assert.equal(last.getAttribute("datetime"), iso(NOW - 2 * 60_000));
+  assert.match(last.title, new RegExp(`^${CLOCK}$`), "its clock time on hover");
+  assert.equal(two.getElementById("agent-latest").hidden, true);
+  assert.equal(two.querySelector("#agent-sub button"), null, "no button with two turns");
+  // No last step, or one within a minute of the start: "started …" alone.
+  for (const lastAt of [null, iso(started + 40_000)]) {
+    const doc = await open({ lastAt });
+    assert.match(whenOf(doc).textContent, new RegExp(`^running now, started ${CLOCK} · 5 hours ago, in ~/ws$`), String(lastAt));
+    assert.equal(doc.querySelector("#agent-sub .agent-last"), null);
+  }
+  // Ended: unchanged.
+  const ended = await open({ running: false, lastAt: iso(NOW - 2 * 60_000) });
+  assert.match(whenOf(ended).textContent, new RegExp(`^ran 4 hours 58 minutes, ended ${CLOCK} · 2 minutes ago, in ~/ws$`));
+  assert.equal(ended.querySelector("#agent-sub .agent-last"), null);
+
+  // Three turns: Latest turn shows, and "last step" goes there too.
+  const doc = await open({ lastAt: iso(NOW - 2 * 60_000), story: [...AGENT.story, third] });
+  assert.equal(doc.getElementById("agent-latest").hidden, false);
+  const b = doc.querySelector("#agent-sub .agent-when button.agent-last-go");
+  assert.ok(b, "a button");
+  assert.equal(b.type, "button");
+  assert.ok(b.classList.contains("step-link"), "link-style, and printed as its words");
+  assert.equal(b.textContent, "last step 2 minutes ago");
+  assert.equal(b.getAttribute("aria-label"), "Last step 2 minutes ago: go to the latest turn");
+  assert.match(whenOf(doc).textContent, new RegExp(`^running now, started ${CLOCK} · 5 hours ago, last step 2 minutes ago, in ~/ws$`));
+  b.click();
+  const turns = [...doc.querySelectorAll("#agent-story article.turn[data-turn-id]")];
+  assert.equal(turns.length, 3);
+  assert.equal(doc.activeElement, turns.at(-1), "the newest turn has the focus");
+  assert.equal(turns.at(-1).getAttribute("tabindex"), "-1", "not a Tab stop");
+
+  // The clock moves: refreshWhen writes the words and the name again.
+  const t = b.querySelector("time.ago");
+  t.textContent = "stale";
+  b.setAttribute("aria-label", "stale");
+  Object.defineProperty(doc, "visibilityState", { value: "visible", configurable: true });
+  doc.dispatchEvent(new doc.defaultView.Event("visibilitychange"));
+  await tick(40);
+  assert.equal(doc.querySelector("#agent-sub button.agent-last-go"), b, "the same vm: the header is not drawn again");
+  assert.equal(t.textContent, "2 minutes ago");
+  assert.equal(b.getAttribute("aria-label"), "Last step 2 minutes ago: go to the latest turn");
 });
 
 // ── §4.25h: an answer links to the moment it was asked ────────────────────────
@@ -514,9 +636,9 @@ const SECRETS = {
   mode: "secrets", flagged: false, more: 1,
   secrets: [
     { what: [T("The environment variable "), { kind: "code", text: "GITHUB_TOKEN" }], level: "No AI", lines: [
-      { tone: "good", parts: [T("The AI got only a placeholder, never the real value.")] },
+      { tone: "good", parts: [T("The AI got only its masked version, never the real value.")] },
       { tone: "plain", parts: [T("Mandu sent its real value only to "), { kind: "code", text: "api.github.com" }, T(" (1 request), where it was allowed to go.")] },
-      { tone: "good", parts: [T("Mandu blocked 1 attempt to send it to "), { kind: "code", text: "<img src=x>" }, T(". The request never left this machine.")] },
+      { tone: "good", parts: [T("Mandu blocked 1 attempt to send it to "), { kind: "code", text: "<img src=x>" }, T(". The request never left this computer.")] },
     ] },
     { what: [T("The file "), { kind: "code", text: "/w/.env" }], level: "No AI", lines: [
       { tone: "bad", parts: [T("Mandu's leak check flagged this session, so this page cannot say what the AI saw. Open the detailed trace.")] },
@@ -553,7 +675,7 @@ test("Your secrets: a line's moment draws as the viewer's clock in a <time>, nev
   const at = "2026-10-05T01:38:07.123Z";
   const secrets = { mode: "secrets", flagged: false, more: 0, secrets: [
     { what: [T("STRIPE_KEY"), T(" in a file")], level: "No AI", lines: [
-      { tone: "good", parts: [T("Mandu blocked 1 attempt to send it to "), { kind: "code", text: "api.stripe.com" }, T(", at "), { kind: "time", text: at }, T(". The request never left this machine.")] },
+      { tone: "good", parts: [T("Mandu blocked 1 attempt to send it to "), { kind: "code", text: "api.stripe.com" }, T(", at "), { kind: "time", text: at }, T(". The request never left this computer.")] },
     ] },
   ] };
   const { doc } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, secrets } } });
@@ -561,7 +683,7 @@ test("Your secrets: a line's moment draws as the viewer's clock in a <time>, nev
   const line = doc.querySelector("#agent-secrets .secret-line");
   const d = new Date(at);
   const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  assert.equal(line.textContent, `Mandu blocked 1 attempt to send it to api.stripe.com, at ${hhmm}. The request never left this machine.`);
+  assert.equal(line.textContent, `Mandu blocked 1 attempt to send it to api.stripe.com, at ${hhmm}. The request never left this computer.`);
   assert.equal(line.querySelector("time").getAttribute("datetime"), at);
   assert.equal(line.querySelector("time").textContent, hhmm);
 });
@@ -623,7 +745,7 @@ test("Your secrets: a block that asked links the Approvals row it filed, as data
   const ask = (id: string) => ({ kind: "text", text: "Approvals", ask: id });
   const secrets = { mode: "secrets", flagged: false, more: 0, secrets: [
     { what: [T("STRIPE_KEY"), T(" in a file")], level: "No AI", lines: [
-      { tone: "good", parts: [T("Mandu blocked 1 attempt to send it to "), { kind: "code", text: "api.stripe.com" }, T(", and asked for your OK in "), ask("egr-1"), T(". The request never left this machine.")] },
+      { tone: "good", parts: [T("Mandu blocked 1 attempt to send it to "), { kind: "code", text: "api.stripe.com" }, T(", and asked for your OK in "), ask("egr-1"), T(". The request never left this computer.")] },
       { tone: "good", parts: [T("Mandu stopped 2 actions that used it, and asked for your OK in "), ask('egr-"9<b>x</b>'), T(" for 1 of them.")] },
       { tone: "plain", parts: [T("Mandu sent its real value only to "), { kind: "code", text: "api.stripe.com" }, T(" (1 request), where it was allowed to go.")] },
     ] },
@@ -631,7 +753,7 @@ test("Your secrets: a block that asked links the Approvals row it filed, as data
   const { doc, window } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, secrets } } });
   await tick();
   const lines = [...doc.querySelectorAll("#agent-secrets .secret-line")] as any[];
-  assert.equal(lines[0].textContent, "Mandu blocked 1 attempt to send it to api.stripe.com, and asked for your OK in Approvals. The request never left this machine.");
+  assert.equal(lines[0].textContent, "Mandu blocked 1 attempt to send it to api.stripe.com, and asked for your OK in Approvals. The request never left this computer.");
   assert.equal(lines[1].textContent, "Mandu stopped 2 actions that used it, and asked for your OK in Approvals for 1 of them.");
   const a = lines[0].querySelector("a");
   assert.equal(a.textContent, "Approvals");
@@ -658,14 +780,14 @@ test("Your secrets: a time with a step is a link that opens that step under What
   // Six steps in sight, a fold (p6, p7), the step before the block, the
   // block, then a fold (p9, p10).
   const steps = [...Array.from({ length: 9 }, (_, i) => plain(i)),
-    { kind: "action", id: "blk1", ts: "", icon: "web", sentence: [T("Mandu blocked a request to "), { kind: "code", text: "api.stripe.com" }], outcome: "blocked", note: "The request never left this machine.", split: null },
+    { kind: "action", id: "blk1", ts: "", icon: "web", sentence: [T("Mandu blocked a request to "), { kind: "code", text: "api.stripe.com" }], outcome: "blocked", note: "The request never left this computer.", split: null },
     plain(9), plain(10)];
   const at = "2026-10-05T01:38:07.123Z";
   const odd = 'os:"]<b>x</b>';
   const secrets = { mode: "secrets", flagged: false, more: 0, secrets: [
     { what: [T("STRIPE_KEY"), T(" in a file")], level: "No AI", lines: [
-      { tone: "good", parts: [T("Mandu blocked 1 attempt to send it to "), { kind: "code", text: "api.stripe.com" }, T(", at "), { kind: "time", text: at, step: "blk1" }, T(". The request never left this machine.")] },
-      { tone: "warn", parts: [T("The AI read its real value at "), { kind: "time", text: at, step: "p10" }, T(", before it was marked a secret. From "), { kind: "time", text: at }, T(" on it got a placeholder in its place.")] },
+      { tone: "good", parts: [T("Mandu blocked 1 attempt to send it to "), { kind: "code", text: "api.stripe.com" }, T(", at "), { kind: "time", text: at, step: "blk1" }, T(". The request never left this computer.")] },
+      { tone: "warn", parts: [T("The AI read its real value at "), { kind: "time", text: at, step: "p10" }, T(", before it was marked a secret. From "), { kind: "time", text: at }, T(" on the AI got it masked.")] },
       { tone: "plain", parts: [T("Mandu sent its real value only to "), { kind: "code", text: "x.example" }, T(" (1 request, at "), { kind: "time", text: at, step: odd }, T("), where it was allowed to go.")] },
     ] },
   ] };
@@ -676,7 +798,7 @@ test("Your secrets: a time with a step is a link that opens that step under What
   const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   const lines = [...doc.querySelectorAll("#agent-secrets .secret-line")] as any[];
   // The words are as before: the link is the time itself.
-  assert.equal(lines[0].textContent, `Mandu blocked 1 attempt to send it to api.stripe.com, at ${hhmm}. The request never left this machine.`);
+  assert.equal(lines[0].textContent, `Mandu blocked 1 attempt to send it to api.stripe.com, at ${hhmm}. The request never left this computer.`);
   const links = [...doc.querySelectorAll("#agent-secrets .step-link")] as any[];
   assert.deepEqual(links.map((b) => [b.tagName, b.getAttribute("type"), b.dataset.opens, b.textContent]), [
     ["BUTTON", "button", "blk1", hhmm], ["BUTTON", "button", "p10", hhmm], ["BUTTON", "button", odd, hhmm],
@@ -801,9 +923,9 @@ test("the tiles: plural words, a zero row, frozen-mode untrusted items, a fired 
 test("a long turn never folds away a block, a wait or a send: each stays in place between folds", async () => {
   const plain = (i: number) => ({ kind: "action", id: `p${i}`, ts: "", icon: "run", sentence: [T(`Ran step ${i}`)], outcome: "plain", note: null, split: null });
   const steps = [...Array.from({ length: 9 }, (_, i) => plain(i)),
-    { kind: "action", id: "sent1", ts: "", icon: "web", sentence: [T("Sent a request to "), { kind: "code", text: "api.github.com" }, T(" with your secret "), { kind: "code", text: "GITHUB_TOKEN" }, T(" filled in")], outcome: "sent", note: "The real value left this machine, to a destination allowed to receive it.", split: null },
+    { kind: "action", id: "sent1", ts: "", icon: "web", sentence: [T("Sent a request to "), { kind: "code", text: "api.github.com" }, T(" with your secret "), { kind: "code", text: "GITHUB_TOKEN" }, T(" filled in")], outcome: "sent", note: "The real value left this computer, to a destination allowed to receive it.", split: null },
     plain(9), plain(10), plain(11),
-    { kind: "action", id: "blk1", ts: "", icon: "web", sentence: [T("Mandu blocked a request to "), { kind: "code", text: "collector.evil.example" }], outcome: "blocked", note: "The request never left this machine.", split: null },
+    { kind: "action", id: "blk1", ts: "", icon: "web", sentence: [T("Mandu blocked a request to "), { kind: "code", text: "collector.evil.example" }], outcome: "blocked", note: "The request never left this computer.", split: null },
   ];
   const agent = { ...AGENT, story: [{ ...AGENT.story[1], steps }] };
   const { doc } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": agent } });
@@ -1094,7 +1216,8 @@ test("a preview agent's page shows the Preview tag by its name, opening what tha
   assert.ok(tag, "the tag sits by the name");
   assert.equal(tag.textContent, "Preview");
   assert.equal(name.firstChild.textContent, "Goose");
-  assert.match(doc.title, /Mandu · Goose$/, "the tab title names the agent only");
+  assert.match(doc.title, new RegExp(`Mandu · Goose in ws · ${CLOCK}$`), "the tab title names the agent, its folder and its start, never the tag or the mark");
+  assert.doesNotMatch(doc.title, /Preview|Warning|tested/);
   const pop = doc.getElementById(tag.getAttribute("aria-controls"));
   tag.click();
   assert.equal(pop.hidden, false);
@@ -1119,7 +1242,8 @@ test("an agent outside the tested versions shows its Home row's warning mark by 
   assert.equal(mark.getAttribute("aria-label"), "Warning about this agent");
   assert.ok(name.querySelector(".preview-btn").compareDocumentPosition(mark) & 4, "the tag comes first, as on its Home row");
   assert.equal(name.firstChild.textContent, "Goose");
-  assert.match(doc.title, /Mandu · Goose$/, "the tab title names the agent only");
+  assert.match(doc.title, new RegExp(`Mandu · Goose in ws · ${CLOCK}$`), "the tab title names the agent, its folder and its start, never the tag or the mark");
+  assert.doesNotMatch(doc.title, /Preview|Warning|tested/);
   const pop = doc.getElementById(mark.getAttribute("aria-controls"));
   assert.equal(pop.hidden, true, "closed until clicked");
   const head = name.cloneNode(true);
@@ -1300,6 +1424,224 @@ test("Change it in Rules opens Rules with the file's row opened in Add a rule, t
   assert.equal(calls.filter((c) => c.url.includes("files/list")).length, reads, "Forward does not open the file again");
 });
 
+// ── Files the AI read as they were (§4.25b) ──────────────────────────────────
+
+const READ_AS_IS = { files: [
+  { path: "~/ws/README.md", at: "2026-09-25T10:00:01.000Z", step: "t1" },
+  { path: "/etc/hosts", at: "2026-09-25T10:00:02.000Z" },
+], more: 12 };
+const READ_ROUTES = { "GET home/agent?session=s1": { ...AGENT, readAsIs: READ_AS_IS }, "GET policy/panel": RULES_PANEL, [list("~/ws")]: WS_LIST };
+
+test("Files the AI read as they were: a closed fold under the limits line, each file with its first read's time and Protect it, then the files past the server's cap (§4.25b)", async () => {
+  const { doc, calls } = load({ url: AGENT_URL, routes: READ_ROUTES });
+  await tick();
+  const fold = doc.getElementById("agent-read-as-is") as any;
+  assert.equal(fold.hidden, false);
+  assert.equal(fold.open, false, "never open on load");
+  assert.equal(fold.tagName, "DETAILS");
+  assert.ok(doc.getElementById("agent-secrets-limits").compareDocumentPosition(fold) & 4, "under the limits line");
+  assert.equal(fold.querySelector("summary").textContent, "Files the AI read as they were (14)");
+  assert.equal(fold.querySelector("p").textContent, "Files your agent opened with its read tool. A file a command printed is not listed.");
+  const rows = [...fold.querySelectorAll("li")] as any[];
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0].querySelector("code").textContent, "~/ws/README.md");
+  const links = [...fold.querySelectorAll("a.read-as-is-link")] as any[];
+  assert.deepEqual(links.map((a) => [a.textContent, a.getAttribute("href"), a.getAttribute("aria-label"), a.dataset.pageLink]), [
+    ["Protect it", "/mandu/rules?file=~/ws/README.md", "Protect ~/ws/README.md in Rules", "rules"],
+    ["Protect it", "/mandu/rules?file=/etc/hosts", "Protect /etc/hosts in Rules", "rules"],
+  ]);
+  // The time of a read the story draws opens its step; one it does not is a time.
+  const d = new Date(READ_AS_IS.files[0]!.at);
+  const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const opens = rows[0].querySelector("button.step-link") as any;
+  assert.equal(opens.dataset.opens, "t1");
+  assert.equal(opens.textContent, hhmm);
+  assert.equal(rows[0].textContent, `~/ws/README.mdread at ${hhmm}Protect it`);
+  assert.equal(rows[1].querySelector("button.step-link"), null, "a read the page does not draw is no link");
+  assert.equal(rows[1].querySelector("time").getAttribute("datetime"), READ_AS_IS.files[1]!.at);
+  assert.equal(rows[2].textContent, "and 12 more files. Search the steps below for the rest.", "past what the server sends, a count");
+  assert.equal(rows[2].querySelector("a, button"), null, "with nothing to show");
+  fold.open = true;
+  opens.click();
+  assert.equal(doc.activeElement, doc.querySelector('#agent-story [data-step-id="t1"]'), "the time brings its step into view");
+  assert.equal(calls.filter((c) => c.method !== "GET").length, 0, "nothing is changed");
+});
+
+test("Files the AI read as they were: Protect it opens Rules with the file's row opened in Add a rule, the focus on its ⋯; nothing is changed (§4.25b)", async () => {
+  const { doc, window, calls } = load({ url: AGENT_URL, routes: READ_ROUTES });
+  await tick();
+  const fold = doc.getElementById("agent-read-as-is") as any;
+  fold.open = true;
+  const link = fold.querySelector("a.read-as-is-link") as any;
+  link.focus();
+  link.click();
+  await tick(30);
+  assert.equal(doc.getElementById("page-rules").hidden, false);
+  assert.equal(window.location.pathname + window.location.search, "/mandu/rules");
+  assert.equal(doc.getElementById("lock-form").hidden, false, "Add a rule's browser is open");
+  const row = rowFor(doc, /^README/);
+  assert.equal(row.classList.contains("open"), true, "with the file's row opened");
+  assert.equal(doc.activeElement, row.querySelector(".file-more"));
+  assert.equal(calls.filter((c) => c.method !== "GET").length, 0, "the link changes nothing by itself");
+});
+
+test("Files the AI read as they were: no fold without such a read; opened, it stays open while the page redraws, and a new visit closes it (§4.25b)", async () => {
+  let readAsIs: typeof READ_AS_IS | null = READ_AS_IS;
+  const { doc, window } = load({ url: AGENT_URL, routes: { "GET home/agent?session=s1": () => ({ ...AGENT, readAsIs }) } });
+  await tick();
+  const fold = doc.getElementById("agent-read-as-is") as any;
+  const poll = async () => { doc.dispatchEvent(new window.Event("visibilitychange")); await tick(); };
+  fold.open = true;
+  await poll();
+  assert.equal(fold.hidden, false);
+  assert.equal(fold.open, true, "a redraw keeps it as you left it");
+  assert.equal(fold.querySelectorAll("li").length, 3, "its rows drawn once, not twice");
+  readAsIs = null;
+  await poll();
+  assert.equal(fold.hidden, true, "no fold with an empty list");
+  assert.equal(fold.querySelectorAll("li").length, 0);
+  readAsIs = READ_AS_IS;
+  await poll();
+  assert.equal(fold.open, false, "it comes back closed");
+  fold.open = true;
+  (doc.querySelector('a[data-page-link="home"]') as any).click();
+  await tick();
+  window.history.back();
+  await waitWhile(() => window.location.pathname !== "/mandu/agents/s1");
+  await tick(30);
+  assert.equal(fold.hidden, false);
+  assert.equal(fold.open, false, "a new visit opens the page with it closed");
+  // The agent page without the field (an older server): no fold.
+  const old = load({ url: AGENT_URL });
+  await tick();
+  assert.equal(old.doc.getElementById("agent-read-as-is").hidden, true);
+});
+
+const DISCARDED = { files: ["~/app/.env", "~/mandu-try/deploy/staging/very-long-folder-name/credentials.json"], more: 3 };
+
+test("Changes Mandu did not apply to your files: a block after Your secrets, its intro and each file as code breaking at its slashes, then the count; none without the field, nor on a page not found (§4.25b)", async () => {
+  let answer: Record<string, unknown> = { ...AGENT, discardedWrites: DISCARDED };
+  const { doc, window, calls } = load({ url: AGENT_URL, routes: { "GET home/agent?session=s1": () => answer } });
+  await tick();
+  const block = doc.getElementById("agent-discarded-block") as any;
+  assert.equal(block.hidden, false);
+  assert.ok(doc.getElementById("agent-secrets-block").compareDocumentPosition(block) & 4, "after Your secrets");
+  assert.equal(block.querySelector("h2").textContent, "Changes Mandu did not apply to your files");
+  assert.equal(block.querySelector("p").textContent, "The agent works on masked copies of your secret files. What it wrote to these went to the copy, and Mandu did not apply it to the real file. If you want the change, check the file and make it yourself.");
+  assert.doesNotMatch(block.textContent, /placeholder|twin|unchanged/i, "says masked copy, and never that the real file is unchanged");
+  const rows = [...block.querySelectorAll("li")] as any[];
+  assert.deepEqual(rows.map((li) => li.textContent), [...DISCARDED.files, "and 3 more files."]);
+  assert.equal(rows[0].querySelector("code").textContent, "~/app/.env");
+  assert.equal(rows[1].querySelectorAll("code .name-part").length > 1, true, "a long path breaks at its slashes");
+  assert.equal(rows[2].querySelector("code, a, button"), null, "the count is words only");
+  const poll = async () => { doc.dispatchEvent(new window.Event("visibilitychange")); await tick(); };
+  await poll();
+  assert.equal(block.querySelectorAll("li").length, 3, "a redraw draws its rows once");
+  answer = { ...AGENT, discardedWrites: null };
+  await poll();
+  assert.equal(block.hidden, true, "no files, no block");
+  assert.equal(block.querySelectorAll("li").length, 0);
+  answer = { ...AGENT, discardedWrites: { files: ["~/app/.env"], more: 0 } };
+  await poll();
+  assert.equal(block.hidden, false);
+  assert.deepEqual([...block.querySelectorAll("li")].map((li: any) => li.textContent), ["~/app/.env"], "no count line without more");
+  answer = { found: false };
+  await poll();
+  assert.equal(doc.getElementById("agent-name").textContent, "Session not found");
+  assert.equal(block.hidden, true, "a page not found shows none");
+  assert.equal(block.querySelectorAll("li").length, 0);
+  assert.equal(calls.filter((c) => c.method !== "GET").length, 0, "nothing is changed");
+  // The agent page without the field (an older server): no block.
+  const old = load({ url: AGENT_URL });
+  await tick();
+  assert.equal(old.doc.getElementById("agent-discarded-block").hidden, true);
+});
+
+test("?go=not-applied focuses Changes Mandu did not apply to your files once drawn, then drops `go`; with the block hidden the page opens as a plain link opens it; Earlier's link, pressed, lands there (§4.25b *Home and History say so*)", async () => {
+  const page = { ...AGENT, discardedWrites: { files: ["~/app/.env"], more: 0 } };
+  const { doc } = load({ url: `${AGENT_URL}?go=not-applied`, routes: { "GET home/agent?session=s1": page } });
+  await tick();
+  const block = doc.getElementById("agent-discarded-block") as any;
+  assert.equal(block.hidden, false);
+  assert.equal(doc.activeElement, block.querySelector("h2"), "the block's heading has the focus");
+  assert.equal(doc.defaultView.location.search, "", "used once: the page's own address");
+  // Hidden (still running, or an exit naming none): nothing moves.
+  for (const discardedWrites of [null, undefined]) {
+    const plain = load({ url: `${AGENT_URL}?go=not-applied`, routes: { "GET home/agent?session=s1": { ...AGENT, discardedWrites } } });
+    await tick();
+    const hidden = plain.doc.getElementById("agent-discarded-block") as any;
+    assert.equal(hidden.hidden, true);
+    assert.notEqual(plain.doc.activeElement, hidden.querySelector("h2"), `${discardedWrites}: not the hidden heading`);
+    assert.notEqual(plain.doc.activeElement, plain.doc.querySelector("#agent-secrets-block h2"), `${discardedWrites}: nor Your secrets`);
+    assert.equal(plain.doc.defaultView.location.search, "");
+  }
+  // From Home: the Earlier row's words, pressed.
+  const at = new Date(Date.now() - 3_600_000).toISOString();
+  const row = { id: "s1", agent: "Claude Code", title: "Add the key", cwd: null, startedAt: at, lastAt: at, state: "idle",
+    stats: { flows: 0, secret: 0, complete: 0, egressAllowed: 0, egressBlocked: 0, egressPending: 0 }, secrets: { masked: 0, early: 0 }, untrusted: 0, blocked: 0, sent: 0, holds: true, waiting: 0, notApplied: 1 };
+  const fromHome = load({ url: "http://127.0.0.1:4500/mandu/", routes: { "GET home": home({ waiting: [], agents: [row] }), "GET home/agent?session=s1": page } });
+  await tick();
+  (fromHome.doc.querySelector('#home-earlier a.agent-not-applied-link') as any).click();
+  await tick(40);
+  assert.equal(fromHome.doc.defaultView.location.pathname + fromHome.doc.defaultView.location.search, "/mandu/agents/s1");
+  assert.equal(fromHome.doc.activeElement, fromHome.doc.querySelector("#agent-discarded-block h2"));
+});
+
+test("Files the AI read as they were: past 30 files, Show them draws the rest in place with the focus on the first it brought; they stay through a poll, and a new visit shows 30 again (§4.25b)", async () => {
+  const many = (count: number, more = 0) => ({ files: Array.from({ length: count }, (_, i) => ({ path: `~/ws/f${i + 1}.ts`, at: "2026-09-25T10:00:01.000Z" })), more });
+  let readAsIs = many(42);
+  let polled = 0;
+  const { doc, window, calls } = load({ url: AGENT_URL, routes: { "GET home/agent?session=s1": () => ({ ...AGENT, secrets: { mode: "secrets", flagged: false, more: 0, secrets: [] }, readAsIs, polled }) } });
+  await tick();
+  const fold = doc.getElementById("agent-read-as-is") as any;
+  assert.equal(doc.getElementById("agent-secrets-block").hidden, false, "under Your secrets, as a live session draws it");
+  const rows = () => [...fold.querySelectorAll("li")] as any[];
+  const files = () => rows().filter((li) => li.querySelector("a.read-as-is-link"));
+  const poll = async () => { polled++; doc.dispatchEvent(new window.Event("visibilitychange")); await tick(); };
+  assert.equal(fold.querySelector("summary").textContent, "Files the AI read as they were (42)");
+  fold.open = true;
+  assert.equal(files().length, 30, "the first 30");
+  assert.equal(files()[29].querySelector("code").textContent, "~/ws/f30.ts");
+  const last = rows().at(-1);
+  assert.equal(last.querySelector("span").textContent, "12 more files.");
+  const btn = last.querySelector("button.show-rest");
+  assert.equal(btn.textContent, "Show them");
+  assert.equal(btn.getAttribute("aria-describedby"), last.querySelector("span").id, "described by its sentence");
+  btn.focus();
+  btn.click();
+  assert.equal(files().length, 42, "every file, in place");
+  assert.equal(rows().length, 42, "and no line after them");
+  assert.deepEqual(files().map((li) => li.querySelector("a.read-as-is-link").getAttribute("href")), readAsIs.files.map((f) => `/mandu/rules?file=${f.path}`), "each with Protect it");
+  assert.equal(doc.activeElement, files()[30], "the focus on the first file it brought");
+  assert.equal(fold.open, true);
+  // A running session's poll draws the page again: the rest stay.
+  await poll();
+  assert.equal(files().length, 42, "a poll keeps the rest shown");
+  assert.equal(fold.open, true);
+  assert.equal(doc.activeElement, files()[30], "and the focus where it was");
+  // Past what the server sends, the count stays a plain line once all are shown.
+  readAsIs = many(300, 50);
+  await poll();
+  assert.equal(files().length, 300);
+  assert.equal(rows().at(-1).textContent, "and 50 more files. Search the steps below for the rest.");
+  assert.equal(rows().at(-1).querySelector("a, button"), null);
+  // A new visit starts at 30 again.
+  readAsIs = many(42);
+  (doc.querySelector('a[data-page-link="home"]') as any).click();
+  await tick();
+  window.history.back();
+  await waitWhile(() => window.location.pathname !== "/mandu/agents/s1");
+  await tick(30);
+  assert.equal(files().length, 30, "a new visit shows 30");
+  assert.equal(rows().at(-1).querySelector("span").textContent, "12 more files.");
+  // One past 30: Show it.
+  readAsIs = many(31);
+  await poll();
+  assert.equal(rows().at(-1).querySelector("span").textContent, "1 more file.");
+  assert.equal(rows().at(-1).querySelector("button").textContent, "Show it");
+  assert.equal(calls.filter((c) => c.method !== "GET").length, 0, "nothing is changed");
+});
+
 test("an address /rules?file= (a new tab, a bookmark) opens the same, and replaces itself with /rules; a file not listed gets the path box (§4.25b)", async () => {
   const { doc, window } = load({ url: "http://127.0.0.1:4500/mandu/rules?file=~/ws/README.md", routes: FILE_ROUTES });
   await tick(30);
@@ -1340,12 +1682,13 @@ test("a broken session's page writes its notice out under the header, the comman
     { kind: "code", text: "mandu doctor" },
     { kind: "text", text: ". <b>x</b>" },
   ];
-  const { doc, err } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, notice, noticeParts, noticeShown: true } } });
+  const { doc, err } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, notice, noticeParts, noticeShown: true, noticeTitle: "Title from the server <i>y</i>" } } });
   assert.equal(err, null);
   await tick();
   const line = doc.getElementById("agent-notice");
   assert.equal(line.hidden, false);
-  assert.deepEqual([...line.querySelectorAll("p")].map((p: any) => p.textContent), ["This session did not work as it should.", notice]);
+  assert.deepEqual([...line.querySelectorAll("p")].map((p: any) => p.textContent), ["Title from the server <i>y</i>", notice], "the title is the view model's");
+  assert.equal(line.querySelector("i"), null, "the title stays text");
   assert.deepEqual([...line.querySelectorAll("code")].map((c: any) => c.textContent), ["mandu doctor"]);
   assert.equal(line.querySelector("b"), null, "server words stay text");
   assert.ok(doc.querySelector("#page-agent .page-head").compareDocumentPosition(line) & 4, "under the header");
@@ -1353,6 +1696,10 @@ test("a broken session's page writes its notice out under the header, the comman
   const mark = doc.querySelector("#agent-name .notice-btn");
   assert.ok(mark, "the mark by the name stays");
   assert.equal(doc.getElementById(mark.getAttribute("aria-controls")).textContent, notice);
+  // An older server's page (no noticeTitle): the broken session's title.
+  const { doc: older } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, notice, noticeParts, noticeShown: true } } });
+  await tick();
+  assert.equal(older.querySelector("#agent-notice .posture-title").textContent, "This session did not work as it should.");
   // A degraded session's notice (noticeShown false), none, or an older
   // server's page (no flag): behind the mark only.
   for (const vm of [{ ...AGENT, notice: "2 of the commands the agent ran could not start.", noticeShown: false }, { ...AGENT, notice: null, noticeShown: false }, { ...AGENT, notice: "x" }]) {
@@ -1363,11 +1710,34 @@ test("a broken session's page writes its notice out under the header, the comman
   }
 });
 
+test("a session where a protection did not start writes the count out under its header, titled 'ran with less protection than usual', its log and mandu doctor as code (dashboard.md §4.21 On the product page)", async () => {
+  const notice = "2 of Mandu's protections did not start in this session, so it ran with less protection than usual. Run mandu log s1 to see which, and mandu doctor to check this computer.";
+  const noticeParts = [
+    { kind: "text", text: "2 of Mandu's protections did not start in this session, so it ran with less protection than usual. Run " },
+    { kind: "code", text: "mandu log s1", run: true },
+    { kind: "text", text: " to see which, and " },
+    { kind: "code", text: "mandu doctor" },
+    { kind: "text", text: " to check this computer." },
+  ];
+  const { doc, err } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, notice, noticeParts, noticeShown: true, noticeTitle: "This session ran with less protection than usual." } } });
+  assert.equal(err, null);
+  await tick();
+  const line = doc.getElementById("agent-notice");
+  assert.equal(line.hidden, false);
+  assert.equal(line.querySelector(".posture-title").textContent, "This session ran with less protection than usual.");
+  assert.ok(!line.textContent.includes("did not work as it should"), line.textContent);
+  assert.equal(line.querySelectorAll("p")[1].textContent.startsWith(notice), true, line.textContent);
+  assert.deepEqual([...line.querySelectorAll("code")].map((c: any) => c.textContent), ["mandu log s1", "mandu doctor"]);
+  const mark = doc.querySelector("#agent-name .notice-btn");
+  assert.ok(mark, "the mark by the name stays");
+  assert.match(doc.getElementById(mark.getAttribute("aria-controls")).textContent, /protections did not start/);
+});
+
 test("a gated session's page says under its header that its programs could read your credential files, the sentence and the fix as code; a confined one says nothing (§4.23)", async () => {
   const secretsPosture = {
     gap: "apparmor-userns",
     headline: "Programs this agent ran could read your credential files.",
-    sentence: "The AI sees placeholders and a secret is sent out only where a rule or your OK allows, but programs the AI runs can still read your credential files. <b>x</b>",
+    sentence: "The AI sees your secrets masked and a secret is sent out only where a rule or your OK allows, but programs the AI runs can still read your credential files. <b>x</b>",
     note: null,
     fix: "mandu setup",
     fixParts: [{ kind: "text", text: "Run " }, { kind: "code", text: "mandu setup" }, { kind: "text", text: " in a terminal once, then start your agent again." }],
@@ -1394,7 +1764,7 @@ test("a gated session's page says under its header that its programs could read 
 // ── A send to its company's own API says why it did not ask (§4.25b) ──────────
 
 const ISSUER_NOTE = [
-  T("The real value left this machine, to a destination allowed to receive it. "), { kind: "code", text: "api.github.com" },
+  T("The real value left this computer, to a destination allowed to receive it. "), { kind: "code", text: "api.github.com" },
   T(" is GitHub's own API: a key GitHub issued may go there without asking you. "), { kind: "text", text: "Built-in protections", rules: "built-in" },
   T(" in Rules lists these, and says how to have them ask."),
 ];
@@ -1438,4 +1808,40 @@ test("a part named for any other card, or none, is plain text: the page draws on
   const note = doc.querySelector('#agent-story .step[data-step-id="os-x"] .note') as any;
   assert.equal(note.textContent, "See Your rules.");
   assert.equal(note.querySelector("a"), null);
+});
+
+test("On web pages: a key Mandu did not type says why in the cause's words, with its site; only needs-your-OK links to Approvals (dashboard.md §4.25af)", async () => {
+  const typed = (why: string | null, site: string | null, count = 1) => ({ secret: "STRIPE_SECRET_KEY", site, outcome: "refused", why, count });
+  const browser = {
+    maskedReads: 0, secrets: [], stopped: [], withheld: 0, services: [],
+    typed: [
+      typed("not-allowed", "evil.example", 2),
+      typed("needs-approval", "forms.example"),
+      typed("declined", null),
+      typed("failed", null),
+      typed(null, null),
+    ],
+  };
+  const routes = { "GET home/agent?session=s1": { ...AGENT, browser } };
+  const { doc, window } = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes });
+  await tick();
+  assert.equal(doc.getElementById("agent-browser-block").hidden, false);
+  const lines = [...doc.querySelectorAll("#agent-browser li.secret-line")].slice(1) as any[];
+  assert.deepEqual(lines.map((li) => [li.className, li.textContent]), [
+    ["secret-line bad", "The agent tried to type STRIPE_SECRET_KEY into evil.example (2 times): Mandu typed nothing, because that site may not receive it."],
+    ["secret-line warn", "The agent tried to type STRIPE_SECRET_KEY into forms.example: Mandu typed nothing, because that site may get it only with your OK. Answer in Approvals."],
+    ["secret-line plain", "The agent tried to type STRIPE_SECRET_KEY into a page: Mandu typed nothing, because you chose Send without it."],
+    ["secret-line warn", "The agent tried to type STRIPE_SECRET_KEY into a page: Mandu typed nothing, because it could not check where the value would go."],
+    ["secret-line bad", "The agent tried to type STRIPE_SECRET_KEY into a page: Mandu typed nothing, because that site may not receive it."],
+  ], "an unknown cause reads exactly as before");
+  const links = lines.map((li) => [...li.querySelectorAll("a")]);
+  assert.deepEqual(links.map((a) => a.length), [0, 1, 0, 0, 0], "Approvals is a link only where a question is open");
+  const approvals = links[1]![0] as any;
+  assert.equal(approvals.textContent, "Approvals");
+  assert.equal(approvals.getAttribute("data-page-link"), "approvals");
+  assert.equal(approvals.getAttribute("href"), "/mandu/approvals");
+  approvals.click();
+  await tick(30);
+  assert.equal(doc.getElementById("page-approvals").hidden, false, "Approvals opens in place");
+  assert.equal(window.location.pathname, "/mandu/approvals");
 });

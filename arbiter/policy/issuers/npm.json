@@ -1,0 +1,10 @@
+{
+  "id": "npm",
+  "name": "npm",
+  "formats": ["^npm_[0-9A-Za-z]{36}$"],
+  "shapes": ["npm_…"],
+  "hosts": ["registry.npmjs.org"],
+  "docs": ["https://docs.npmjs.com/cli/using-npm/registry"],
+  "examples": ["npm_{x*36}"],
+  "non_examples": ["npm_{x*35}", "npm_{x*37}"]
+}

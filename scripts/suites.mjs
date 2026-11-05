@@ -139,9 +139,12 @@ export const NEEDS = {
   chromium: "a headless Chromium (MANDU_TEST_CHROMIUM, or Playwright's headless shell in ~/.cache/ms-playwright)",
   kvm: "/dev/kvm",
   qemu: "qemu-system-x86_64, qemu-img",
+  docker: "a Docker engine this user can reach (`docker info` answers)",
   network: "network access (the install kind's image downloads)",
   "cli-latest": "the newest released agent CLI, installed over the pinned one",
   "timing-baseline": "a host as fast as the one the suite's recorded timings came from (the CI guest; runtime-instances.md §14.11)",
+  "db-servers": "a PostgreSQL server and client (/usr/lib/postgresql/<major>/bin, or MANDU_LIVE_PG_BIN) and a MySQL 8 server and client: the CI image installs them (live-clients.md §2)",
+  k3s: "a real Kubernetes cluster off this machine, kubectl and helm: the CI guest's k3s fixture (scripts/ci/vm-run.sh --fixture k3s) or MANDU_LIVE_KUBECONFIG (live-clients.md §3)",
 };
 
 /** The needs that make an env suite's result the host's (test-reorganization.md §3): an env
@@ -249,6 +252,9 @@ export function expandShards(entries) {
  * runs the nightly kinds plus every flaky entry (continuous-integration.md §9).
  * A `manual` entry (its value the reason) never runs with its kind, only when
  * named, and is reported as excluded with that reason.
+ * A `weekly` entry (its value the agent of its night, 2026-10-26) runs with
+ * its kind only under `weekly` (the weekly rotation's list, nightly.sh
+ * --weekly), or when named.
  * `lane` (the nightly's `subscription` or `api-key`, continuous-integration.md §9.8)
  * keeps only the entries whose `credential` is that; an entry with none (it
  * needs no login) is in the subscription lane (inLane).
@@ -266,7 +272,7 @@ export function expandShards(entries) {
  * An entry's `aliases` (its ids before a rename) select it as its id does.
  * A platform mismatch always excludes. Returns { selected, excluded, unknown, unknownDrills }.
  */
-export function selectEntries(entries, { kinds = [], frozen = false, need = null, only = [], platform = process.platform, includeFlaky = false, includeInternet = false, unsharded = false, flakyKinds = [], lane = null, agents = null, drills = null } = {}) {
+export function selectEntries(entries, { kinds = [], frozen = false, need = null, only = [], platform = process.platform, includeFlaky = false, includeInternet = false, unsharded = false, flakyKinds = [], lane = null, agents = null, drills = null, weekly = false } = {}) {
   const selected = [];
   const excluded = [];
   const knownDrills = new Set(entries.filter(isDrill).flatMap((x) => x.select?.values ?? []));
@@ -288,6 +294,10 @@ export function selectEntries(entries, { kinds = [], frozen = false, need = null
       const extraFlaky = !x.frozen && (Boolean(x.flaky) || x.nightly != null) && flakyKinds.includes(x.kind);
       if ((!inRun && !extraFlaky) || x.idOnly === true) continue;
       if (x.manual) { excluded.push({ id: x.id, reason: `manual: ${x.manual}` }); continue; }
+      // A `weekly` entry runs on its agent's night of the weekly rotation
+      // (nightly.sh --weekly, continuous-integration.md §9.8), never in a
+      // nightly kind run; named (--only, --drills) it runs.
+      if (x.weekly != null && !weekly && !drillsAlone) { excluded.push({ id: x.id, reason: `weekly: the weekly rotation's ${x.weekly} night (nightly.sh --weekly)` }); continue; }
       if (x.nightly != null && !extraFlaky) { excluded.push({ id: x.id, reason: `nightly: ${x.nightly}` }); continue; }
       if (x.flaky && !includeFlaky && !extraFlaky) { excluded.push({ id: x.id, reason: `flaky: ${x.flaky.reason}` }); continue; }
       if (x.internet && !includeInternet) { excluded.push({ id: x.id, reason: "internet (--include-internet)" }); continue; }
@@ -986,6 +996,10 @@ export function checkManifest(entries, aggregates = [], root = REPO_ROOT) {
     }
     if (typeof x.internet !== "boolean") err(id, "internet must be a boolean");
     if (x.manual != null && (typeof x.manual !== "string" || !x.manual.trim())) err(id, "manual is the reason the entry runs only when named (a non-empty string)");
+    // `weekly`: the agent whose night of the weekly rotation runs the entry (nightly.sh --weekly)
+    if (x.weekly != null && (!LIVE_AGENTS.includes(x.weekly) || x.kind !== "live-drill" || x.manual != null || x.credential == null)) {
+      err(id, "weekly names the agent whose night of the weekly rotation runs it: an agent line, on a live-drill entry with a credential that is not manual");
+    }
     // `reported` and `nightly` (test-reorganization.md §6.9): a per-push kind's
     // entry that does not block, with the reason; `nightly` also moves it out
     // of the per-push run into the nightly.
@@ -1289,7 +1303,7 @@ export const COMMAND_FLAGS = {
     kind: STR, frozen: BOOL, platform: STR, only: STR, json: BOOL, ids: BOOL,
     "include-flaky": BOOL, "include-internet": BOOL, "needs-within": STR,
     unsharded: BOOL, public: BOOL, "native-bins": BOOL,
-    lane: STR, need: STR, agents: STR, drills: STR,
+    lane: STR, need: STR, agents: STR, drills: STR, weekly: BOOL,
   },
   packages: { kind: STR, public: BOOL, bundle: BOOL },
   check: { json: BOOL, public: BOOL },
@@ -1316,7 +1330,7 @@ export function parseFlags(cmd, argv) {
 const USAGE = `usage: node scripts/suites.mjs list [--kind a,b] [--frozen] [--platform linux|darwin] [--only ids] [--json | --ids]
                                     [--include-flaky] [--include-internet] [--needs-within offline|n,n]
                                     [--unsharded] [--public] [--native-bins]
-                                    [--lane ${CREDENTIALS.join("|")}] [--need n] [--agents a,b] [--drills id,id]
+                                    [--lane ${CREDENTIALS.join("|")}] [--need n] [--agents a,b] [--drills id,id] [--weekly]
        node scripts/suites.mjs packages [--kind a,b] [--public]
        node scripts/suites.mjs packages --bundle      (the package dirs the launcher's bundle build reads)
        node scripts/suites.mjs check [--json] [--public]
@@ -1432,6 +1446,7 @@ export async function main(argv = process.argv.slice(2), { root = REPO_ROOT, std
       includeFlaky: f["include-flaky"] || all, includeInternet: f["include-internet"] || all,
       unsharded: Boolean(f.unsharded), lane: f.lane ?? null, need: f.need ?? null,
       agents: f.agents ? splitList(f.agents) : null, drills: f.drills ? splitList(f.drills) : null,
+      weekly: all || Boolean(f.weekly),
     });
     if (unknown.length) { process.stderr.write(`suites: no entry matches ${unknown.join(", ")}\n`); return 2; }
     let out = selected;

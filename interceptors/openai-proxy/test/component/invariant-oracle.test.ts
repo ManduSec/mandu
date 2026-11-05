@@ -258,6 +258,43 @@ test("plan 10 e2e (Codex): a reader's taint masks the exec_command result as a s
   for (const e of results) assert.ok(!JSON.stringify(e.output.symbolized).includes(DB_PASSWORD), `${e.callId}: the model-side repr leaks the value`);
 });
 
+test("plan 10 e2e (Codex), F-C (2026-10-27): an output rule the proxy does not recognise masks the exec_command result whole, though the backstop is clean; clear releases", async () => {
+  // The secret is one the backstop does not know (a row psql printed), so
+  // only the rule stands between it and the model.
+  const ROW = "alice,4111-1111-1111-1111";
+  let rule: unknown = "release";
+  const arbiter = new MockArbiter({
+    classifyFn: () => ({ trust: "TRUSTED", category: null, reason: "mock: integrity off" }),
+    callTaintFn: () => ({ level: "no-model", rule: rule as "clear", files: [PGPASS], apps: ["psql"], mask: [], root: "sh-1", denied: [] }),
+    scanSecretValuesFn: () => ({ hits: [] }),
+  });
+  const upstream = new MockUpstream({ sse: "event: response.completed\ndata: {}\n\n" });
+  const proxy = new OpenAiProxy({ arbiter, upstream: upstream.fetcher, sessionKey: "codex-fc", log: () => {} });
+  const port = await proxy.listen(0);
+  const cmd = "psql -c 'select * from cards'";
+  try {
+    for (const [i, bad] of (["release", undefined] as unknown[]).entries()) {
+      rule = bad;
+      assert.equal((await call(port, execRequest(cmd, `${ROW}\n`, `call_fc${i}`))).status, 200);
+      assert.ok(!upstream.requests[i]!.bodyText.includes(ROW), `INVARIANT (rule ${JSON.stringify(bad)}): the row never reaches the model request`);
+      assert.match(forwardedOutput(upstream.requests[i]!.bodyText, `call_fc${i}`), /^\$MDU:exec_command\[[0-9a-f]{4}\]\n\n\[mandu:secret\] masked: psql read \/h\/\.pgpass/);
+    }
+    rule = "clear";
+    assert.equal((await call(port, execRequest(cmd, `${ROW}\n`, "call_fc_clear"))).status, 200);
+    assert.ok(forwardedOutput(upstream.requests[2]!.bodyText, "call_fc_clear").startsWith(`${ROW}\n`), "control: rule clear releases");
+  } finally {
+    await proxy.close();
+  }
+  const byCall = Object.fromEntries((arbiter.eventsOfKind("tool_result") as Array<Record<string, any>>).map((e) => [e.callId, e]));
+  for (const id of ["call_fc0", "call_fc1"]) {
+    assert.equal(byCall[id].secretTaint.maskWhole, true, id);
+    assert.equal(byCall[id].secretTaint.rule, "secret", id);
+    assert.equal(byCall[id].policy.confidentiality, "no-model", id);
+    assert.ok(!JSON.stringify(byCall[id].output.symbolized).includes(ROW), `${id}: the model-side repr leaks the row`);
+  }
+  assert.equal(byCall["call_fc_clear"].secretTaint.maskWhole, false);
+});
+
 // ── §9 oracle scope (2026-09-26) ─────────────────────────────────────────────
 // A short command output ("9") may coincide with the trusted exec header that
 // rides beside its symbol ("Wall time: 0.9 seconds") or with the user's own

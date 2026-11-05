@@ -44,12 +44,13 @@ if (!existsSync(bundle)) {
   process.exit(2);
 }
 
-// Node >= 22.13.0 floor (the arbiter bundle uses node:sqlite, unflagged since
-// 22.13). Fail early with an actionable message rather than a cryptic runtime
+// Node >= 22.15.0 floor (the arbiter bundle uses node:sqlite, unflagged since
+// 22.13; the model proxy reads zstd request bodies, node:zlib has zstd from
+// 22.15). Fail early with an actionable message rather than a cryptic runtime
 // error. This runs BEFORE the bundle loads, so it cannot import
 // src/node-floor.ts; the constant is duplicated and test/unit/node-floor.test.ts
 // pins it to NODE_FLOOR.
-const NODE_FLOOR = "22.13.0";
+const NODE_FLOOR = "22.15.0";
 const nodeMeetsFloor = (version, floor) => {
   const v = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version);
   const f = /^v?(\d+)\.(\d+)\.(\d+)/.exec(floor);
@@ -63,7 +64,7 @@ const nodeMeetsFloor = (version, floor) => {
 if (!nodeMeetsFloor(process.versions.node, NODE_FLOOR)) {
   console.error(
     `mandu: Node ${process.versions.node} is too old — Mandu needs Node >= ${NODE_FLOOR} ` +
-    `(node:sqlite is unflagged from 22.13; try: nvm install 22).`,
+    `(try: nvm install 22).`,
   );
   process.exit(2);
 }

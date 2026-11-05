@@ -48,7 +48,7 @@ function host(over: Partial<VersionDeps> & { files?: Record<string, string>; lin
     npmRoot: () => null,
     ownBuild: () => ({ bundle: "0123456789abcdef", rev: null }),
     sameArbiterTree: () => null,
-    node: { version: "22.13.0", path: "/usr/bin/node" },
+    node: { version: "22.15.0", path: "/usr/bin/node" },
     ...over,
   };
 }
@@ -189,7 +189,7 @@ test("problems: a global npm package that is not the running mandu; an old Node"
       invoked: `${REPO}/launcher/bin/mandu.mjs`, realPath: `${REPO}/launcher/bin/mandu.mjs`, kind: "checkout-build", root: REPO,
       version: "0.2.0-beta.5", commitsFrom: "git", sourceCommit: S, publicCommit: null, publicAhead: 0, dirty: false,
     },
-    node: { version: "22.12.0", path: "/usr/bin/node", meetsFloor: false, floor: "22.13.0" },
+    node: { version: "22.12.0", path: "/usr/bin/node", meetsFloor: false, floor: "22.15.0" },
     path: [],
     services: null,
     env: {},

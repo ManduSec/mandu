@@ -39,6 +39,7 @@ import { netHost, osSubject, stepIdOfEvent, type DualOsStep, type DualResponseSt
 import { isSecretFlow, type SessionFlowStats } from "./lineage.js";
 import { sessionExited } from "./session-exit.js";
 import { launchTimeOf } from "./launch-time.js";
+import { discardedWritesOf } from "./discarded-writes.js";
 import type { BackgroundCategory, BackgroundGroup, PairedToolRow, ProtectionMode } from "./paired-rows.js";
 import { agentName, agentNotice, agentNoticeParts, agentPreview, oneLine, secretsPostureNote, promptLabel, type HomeAnswered, type HomeAsk } from "./home.js";
 import { manduPolicyTool, policyToolAnswerParts, policyToolSentence } from "./mandu-tool-words.js";
@@ -47,8 +48,11 @@ import { inspectAnswer } from "./inspect-answer.js";
 import { promptNotes, type PromptLocks } from "./prompt-notes.js";
 import { causeFiles, causePrograms, earlyReads, FINDING_POINTER, SECRET_ALL_CAP, secretsStory, secretShortName, traceLink, type LaterLabelInput, type SecretsStory, type StoryOptions } from "./secret-story.js";
 import { laterByStep, laterLabels, plainReads, type LabelTime, type LaterLabel } from "./later-labels.js";
+import { tildePath } from "./rule-words.js";
+import { registeredFileOf } from "./secret-path.js";
+import type { LastScanWire } from "./last-scan.js";
 import { secretRef } from "./secret-ref.js";
-import { ISSUES_URL } from "../agent-versions.js";
+import { SECURITY_REPORT_URL } from "../agent-versions.js";
 // The kept-or-echoed rule both views share (held-tokens.ts).
 import { heldTokens, SYM_RE, tokensIn, trailingDots } from "./held-tokens.js";
 import { blockWhy } from "./block-why.js";
@@ -77,10 +81,12 @@ export type {
   StoryRoutine,
   LeakFinding,
   LeakFindingItem,
+  ReadAsIs,
+  ReadAsIsFile,
 } from "./agent-page-types.js";
 import type {
   StoryOutcome, StoryPart, StoryHidden, StorySplit, StoryStep, StoryReply, StoryTurn, AgentPageVM, StoryFocus, AskRef,
-  BackgroundItem, LeakFinding, LeakFindingItem,
+  BackgroundItem, LeakFinding, LeakFindingItem, ReadAsIs, ReadAsIsFile,
 } from "./agent-page-types.js";
 
 /** The session's main model in the product's words, or null when it is not
@@ -112,6 +118,9 @@ export const BACKGROUND_ALL_CAP = 1000;
 export const FINDING_CAP = 20;
 /** The secrets its *What to do now* names, one line each; the rest counted. */
 export const TODO_NAMES_CAP = 5;
+/** The files "Files the AI read as they were" sends; the rest counted. The
+ *  page draws its first 30 and the rest after "Show them" (§4.25b). */
+export const READ_AS_IS_CAP = 300;
 
 /** `$MDU:tool[hash]` without its field path: symbol rows and tokens spell
  *  the same item with and without a field. */
@@ -396,7 +405,7 @@ export function actionOutcome(step: DualToolStep, dev = true): { outcome: StoryO
 /** How a masked item is named in a sentence: "your secret `GITHUB_TOKEN`".
  *  `early`: a secret the AI read as it was before its label, when (its
  *  card's moment, `ValueScope.early`); absent: no such read. */
-export type ItemLabel = (name: string) => { secret: boolean; name: string | null; early?: string };
+export type ItemLabel = (name: string) => { secret: boolean; name: string | null; early?: string; file?: string };
 
 /** "your secret `A`", "your secrets `A`, `B` and `C`". */
 function namedParts(named: readonly string[]): StoryPart[] {
@@ -485,7 +494,7 @@ function fileGuardWords(g: FileGuard): { icon: Icon; sentence: StoryPart[]; outc
       return { icon: "file", sentence: [t("Mandu blocked a change to a protected file: "), c(baseName(g.path))], outcome: "blocked", note: null };
     case "raw-withheld":
       return {
-        icon: "file", sentence: [t("A program got the placeholder copy of "), c(baseName(g.path)), t(", not the real file")], outcome: "secret",
+        icon: "file", sentence: [t("A program got the masked copy of "), c(baseName(g.path)), t(", not the real file")], outcome: "secret",
         note: "A network or file-system mount could have seen the read, so Mandu kept the real file back.",
       };
     case "local-socket":
@@ -507,7 +516,7 @@ function fileGuardWords(g: FileGuard): { icon: Icon; sentence: StoryPart[]; outc
  *  server, docker or the desktop bus can start a program outside Mandu). */
 const LOCAL_SOCKET_NOTE = "A program that runs outside Mandu listens there, so a command sent through it would run outside Mandu's protection.";
 
-const SENT_NOTE = "The real value left this machine, to a destination allowed to receive it.";
+const SENT_NOTE = "The real value left this computer, to a destination allowed to receive it.";
 
 /** A send's note, and when `host` is a company's own API while its keys go
  *  there without asking, why nobody asked (dashboard.md §4.25b, *A send to
@@ -548,11 +557,11 @@ function osWords(
     const carried = s.carried ?? [];
     if (carried.length) {
       const items = itemsParts(carried, label);
-      if (blocked) return { icon: "web", sentence: [t("Mandu blocked a request to "), c(host), t(" that carried "), ...items], outcome: "blocked", note: "The request never left this machine." };
+      if (blocked) return { icon: "web", sentence: [t("Mandu blocked a request to "), c(host), t(" that carried "), ...items], outcome: "blocked", note: "The request never left this computer." };
       if (waiting) return { icon: "web", sentence: [t("Wants to send "), ...items, t(" to "), c(host)], outcome: "waiting", note: "Waiting for your OK." };
       return { icon: "web", sentence: [t("Sent a request to "), c(host), t(" with "), ...items, t(" filled in")], outcome: "sent", ...sentNote(host, issuers) };
     }
-    if (blocked) return { icon: "web", sentence: [t("Mandu blocked a connection to "), c(host)], outcome: "blocked", note: "The request never left this machine." };
+    if (blocked) return { icon: "web", sentence: [t("Mandu blocked a connection to "), c(host)], outcome: "blocked", note: "The request never left this computer." };
     if (waiting) return { icon: "web", sentence: [t("Wants to connect to "), c(host)], outcome: "waiting", note: "Waiting for your OK." };
     return { icon: "web", sentence: [t("Connected to "), c(host)], outcome: "plain", note: null };
   }
@@ -789,16 +798,30 @@ function resultSymbolOf(text: string | null): string | null {
  *  the AI read a secret it held as it was before its label, when. `note`:
  *  the proxy's `[mandu:secret]` note, which it appends after the result; it
  *  is Mandu's, not part of the result (a command's output masked whole reads
- *  whole). */
-function maskedResultParts(text: string | null, secret: boolean, held: readonly string[], early?: string, note?: string | null): StoryPart[] {
+ *  whole). `name`: the one secret it held, by the name the right half and
+ *  the send steps give it (`ORDERHUB_PASSPHRASE`): the chip carries it, as
+ *  a command's chip does (dashboard.md §4.25b *A masked result's chip names
+ *  its secret*); null when it held none, several, or one with no name. */
+function maskedResultParts(text: string | null, secret: boolean, held: readonly string[], early?: string, note?: string | null, name?: string | null): StoryPart[] {
   let body = (text ?? "").replace(REMINDER_RE, "\n").trim();
   if (note && body.endsWith(note)) body = body.slice(0, -note.length).trim();
   const toks = tokensIn(body);
+  const mask = secret && name ? { ...chip(true, early), name } : chip(secret, early);
   if (toks.length === 0 || (toks.length === 1 && toks[0]!.index === 0 && toks[0]!.end === body.length)) {
-    return [t("Got "), chip(secret, early), t(" in place of the result.")];
+    return [t("Got "), mask, t(" in place of the result.")];
   }
   const n = new Set(held).size;
-  return [t("Got the result with "), chip(secret, early), t(n === 1 ? " in place of the real value." : ` in place of ${n} real values.`)];
+  return [t("Got the result with "), mask, t(n === 1 ? " in place of the real value." : ` in place of ${n} real values.`)];
+}
+
+/** The name of the one secret `held` names (several tokens of one named
+ *  secret count once, as `distinctItems` reads them); null when it holds
+ *  anything else, or a secret with no name. */
+function onlySecretName(held: readonly string[], label: ItemLabel): string | null {
+  const items = distinctItems(held, label);
+  if (items.length !== 1) return null;
+  const l = label(items[0]!);
+  return l.secret && l.name ? l.name : null;
 }
 
 /** Each item once: a named secret by its name (two `.env` files' `PASTE_KEY`
@@ -821,7 +844,11 @@ function heldParts(names: readonly string[], label: ItemLabel): StoryPart[] {
   const items = distinctItems(names, label);
   // The proxy's secret note alone: a secret, not which.
   if (!items.some((n) => label(n).secret)) return [t("The result held a secret.")];
-  return [t("The result held "), ...itemsParts(items, label), t(".")];
+  // Where it is kept, when every secret it held is kept in the same one
+  // file the registry names ("… from `~/app/.env`", §4.25b *Where it went*).
+  const secrets = items.map(label).filter((l) => l.secret);
+  const file = secrets.every((l) => l.file && l.file === secrets[0]!.file) ? secrets[0]!.file : undefined;
+  return [t("The result held "), ...itemsParts(items, label), ...(file ? [t(" from "), c(file)] : []), t(".")];
 }
 
 /** Why a result was masked whole, from the proxy's note (secret-note.ts
@@ -904,7 +931,7 @@ function toolStep(step: DualToolStep, row: PairedToolRow, scope: ValueScope, lab
       if (held.length) hidden.secrets = held.slice(0, 8).map((n) => ({ ref: secretRef(scope.sessionId ?? "", n), name: label(n).name }));
     }
     split = {
-      ai: maskedResultParts(step.resultAgent, secret, resultToks, firstEarly(resultToks, scope), step.secretNote),
+      ai: maskedResultParts(step.resultAgent, secret, resultToks, firstEarly(resultToks, scope), step.secretNote, onlySecretName(resultToks, label)),
       real: secret ? causeParts(step.secretNote, resultToks, label, home) ?? heldParts(resultToks, label) : [t("The real result:")],
       hidden,
     };
@@ -1114,7 +1141,7 @@ export function turnSummary(
     const carried = carriedBy("sent");
     // "each" only of more than one: one request went to one destination.
     out.push([
-      t(`${plural(n.sent, "request", "requests")} left this machine with `),
+      t(`${plural(n.sent, "request", "requests")} left this computer with `),
       ...(carried ? itemsParts(carried, label) : [t("a real value")]),
       t(` filled in, ${n.sent === 1 ? "to" : "each to"} a destination allowed to receive it.`),
     ]);
@@ -1275,7 +1302,9 @@ export function leakFinding(vm: SessionViewModel, turns: readonly StoryTurn[], s
  * TODO_NAMES_CAP, the rest counted), since the AI's provider received it and
  * nothing Mandu does now takes it back; when a line names none (`unnamed`),
  * the same for whatever it was; and always, that this is a fault in Mandu
- * to report, linked to the issue tracker. Names only, never a value. Pure.
+ * to report privately, linked to the private vulnerability report form
+ * (SECURITY.md: a leak is never a public issue). Names only, never a
+ * value. Pure.
  */
 export function findingTodo(names: readonly string[], unnamed: boolean): StoryPart[][] {
   const out: StoryPart[][] = names.slice(0, TODO_NAMES_CAP).map((n) => [
@@ -1290,8 +1319,8 @@ export function findingTodo(names: readonly string[], unnamed: boolean): StoryPa
   }
   out.push([
     t("This is a fault in Mandu, not in your rules. "),
-    { kind: "text", text: "Report a problem", href: ISSUES_URL },
-    t(", with this session's time. Never paste the key itself."),
+    { kind: "text", text: "Report it privately", href: SECURITY_REPORT_URL },
+    t(" to Mandu's maintainers, with this session's time. Do not open a public issue, and never paste the key itself."),
   ]);
   return out;
 }
@@ -1336,6 +1365,13 @@ export interface AgentPageInput {
    *  `full`): the agent's warning is worded as its Home row's
    *  (home.ts `agentNotice`). Absent = not masked, the secrets wording. */
   masking?: boolean;
+  /** The registered secrets' files by base symbol (secret-path.ts
+   *  `registeredFiles`, the arbiter's registry): a card and a step name the
+   *  file a placeholder stands for. Absent: none known. */
+  secretFiles?: ReadonlyMap<string, string>;
+  /** The last scan the launcher kept: a card says when its secret reached
+   *  an AI without Mandu (§4.25b *Where it went*). Absent: none. */
+  scan?: LastScanWire | null;
   /** The labels in force now on the files this session read, each with when
    *  it was made, from the rule-change log (the route's, later-labels.ts):
    *  a Read before its file's label says so, and *Your secrets* tells the
@@ -1542,14 +1578,33 @@ export function storyReply(ts: string, raw: string, scope: ValueScope, label: It
  *  (absent: HIDDEN_CAP); `opts.issuers`: policy.yaml's `issuer_bindings`
  *  as the route read it, for a send to a company's own API (`osSentence`;
  *  absent: no such sentence). */
-export function buildStory(vm: SessionViewModel, values?: Map<string, string>, early?: ReadonlyMap<string, string>, home = "", after?: ReadonlyMap<string, LaterLabel>, opts: { stepCap?: number; dev?: boolean; background?: ReadonlySet<string>; hiddenCap?: number; issuers?: IssuerReading } = {}): StoryTurn[] {
+/** How the story names a masked item (`ItemLabel`): a secret or not, its
+ *  short name, an early read, and the file the registry says a registered
+ *  secret's placeholder stands for (secret-path.ts), `~/…` under `home`. */
+function storyLabel(vm: SessionViewModel, scope: ValueScope, home: string, files: ReadonlyMap<string, string> | undefined): ItemLabel {
+  const origins = new Map(vm.symbols.map((r) => [r.name, r.origin ?? null]));
+  return (name) => {
+    const e = earlyOf(name, scope);
+    const kept = registeredFileOf(name, files);
+    return { secret: isSecretName(name, scope), name: secretShortName(name, origins.get(name) ?? origins.get(baseOf(name)) ?? null), ...(e ? { early: e } : {}), ...(kept ? { file: tildePath(kept, home) } : {}) };
+  };
+}
+
+/** Each tool step's sentence by id, as the story's step says it
+ *  (`actionSentence` with the story's label): a card's "How it came in". */
+function stepSentences(vm: SessionViewModel, home: string, files: ReadonlyMap<string, string> | undefined): (id: string) => StoryPart[] | null {
+  const label = storyLabel(vm, valueScope(vm), home, files);
+  const byId = new Map(vm.dualLanes.steps.map((s) => [s.id, s]));
+  return (id) => {
+    const s = byId.get(id);
+    return s && s.step === "tool" ? actionSentence(s, label, home).sentence : null;
+  };
+}
+
+export function buildStory(vm: SessionViewModel, values?: Map<string, string>, early?: ReadonlyMap<string, string>, home = "", after?: ReadonlyMap<string, LaterLabel>, opts: { stepCap?: number; dev?: boolean; background?: ReadonlySet<string>; hiddenCap?: number; issuers?: IssuerReading; files?: ReadonlyMap<string, string> } = {}): StoryTurn[] {
   const dev = opts.dev !== false;
   const scope: ValueScope = { ...valueScope(vm, values), ...(early ? { early } : {}), ...(opts.hiddenCap !== undefined ? { hiddenCap: opts.hiddenCap } : {}) };
-  const origins = new Map(vm.symbols.map((r) => [r.name, r.origin ?? null]));
-  const label: ItemLabel = (name) => {
-    const e = earlyOf(name, scope);
-    return { secret: isSecretName(name, scope), name: secretShortName(name, origins.get(name) ?? origins.get(baseOf(name)) ?? null), ...(e ? { early: e } : {}) };
-  };
+  const label = storyLabel(vm, scope, home, opts.files);
   const byId = new Map<string, DualStep>(vm.dualLanes.steps.map((s) => [s.id, s]));
   const turns: StoryTurn[] = [];
   for (const pt of vm.paired.turns) {
@@ -1645,7 +1700,10 @@ export function storyCounts(turns: readonly StoryTurn[]): { blocked: number; sen
  *  file under `home` reads `~/…`. `steps`: the ids of the steps the page
  *  shows, so a card's time opens its step (absent: Home, no links). Pure. */
 export function pageSecrets(vm: SessionViewModel | null, believed: readonly ManduEvent[], believedVm?: SessionViewModel | null, home = "", steps?: ReadonlySet<string>, later?: LaterLabelInput, opts?: StoryOptions): SecretsStory {
-  return secretsStory(believedVm !== undefined ? believedVm : vm, believed, vm ? !vm.invariant.holds : false, vm?.paired.mode ?? null, home, steps, later, opts);
+  // A card's "How it came in" says the step as the story does, for Home's
+  // call and the page's alike.
+  const stepWords = opts?.stepWords ?? (vm ? stepSentences(vm, home, opts?.files) : undefined);
+  return secretsStory(believedVm !== undefined ? believedVm : vm, believed, vm ? !vm.invariant.holds : false, vm?.paired.mode ?? null, home, steps, later, { ...opts, ...(stepWords ? { stepWords } : {}) });
 }
 
 /** The secrets "Your secrets" says the AI read as they were before their
@@ -1663,6 +1721,31 @@ export function pageEarlyReads(vm: SessionViewModel | null, believedVm?: Session
 export function pageLaterLabels(vm: SessionViewModel | null, believedVm: SessionViewModel | null | undefined, home: string, later: LaterLabelInput | undefined): LaterLabel[] {
   const v = believedVm !== undefined ? believedVm : vm;
   return v && later?.labels.length ? laterLabels(plainReads(v, later.cwd, home), later.labels) : [];
+}
+
+/**
+ * "Files the AI read as they were" (dashboard.md §4.25b): each file the
+ * agent's read tool opened (any agent's, tool-family.ts) whose result
+ * reached the AI with nothing masked (later-labels.ts `plainReads`) and whose
+ * step the story tells as `plain`, so a read masked, marked a secret after
+ * it (`raw`), stopped, held or sandboxed is never one. Over every turn
+ * (`all`, uncapped); one entry a file, by its first such read, in that
+ * order, `~/…` under `home`; its `step` only where the page draws it
+ * (`shown`). A file a command printed is no read Mandu can name. null with
+ * none, and in a session with protection off (the limits line says Mandu
+ * masked nothing). Paths and times only, never a byte. Pure.
+ */
+export function readAsIs(vm: SessionViewModel | null, all: readonly StoryTurn[], shown: ReadonlySet<string>, cwd: string | null, home = ""): ReadAsIs | null {
+  if (!vm || vm.paired.mode === "off") return null;
+  const plain = new Set(all.flatMap((x) => x.steps).filter((s) => s.kind === "action" && s.outcome === "plain").map((s) => s.id));
+  const seen = new Set<string>();
+  const files: ReadAsIsFile[] = [];
+  for (const r of plainReads(vm, cwd, home)) {
+    if (!plain.has(r.stepId) || seen.has(r.path)) continue;
+    seen.add(r.path);
+    files.push({ path: tildePath(r.path, home), at: r.ts, ...(shown.has(r.stepId) ? { step: r.stepId } : {}) });
+  }
+  return files.length ? { files: files.slice(0, READ_AS_IS_CAP), more: Math.max(0, files.length - READ_AS_IS_CAP) } : null;
 }
 
 /** The non-secret items masked before the AI saw them, the page's
@@ -1697,8 +1780,10 @@ export function buildAgentPage(input: AgentPageInput): AgentPageVM {
       ...(show.background ? { background: show.background } : {}),
       ...(show.original !== undefined ? { hiddenCap: ORIGINAL_ALL_CAP } : {}),
       ...(input.issuerBindings ? { issuers: input.issuerBindings } : {}),
+      ...(input.secretFiles ? { files: input.secretFiles } : {}),
     })
     : [];
+
   // A step that asked says how its question was answered, as Approvals does
   // (§4.25b *A stop says Mandu asked you*); a waiting one only that it asked.
   if (input.answers?.size) {
@@ -1749,6 +1834,9 @@ export function buildAgentPage(input: AgentPageInput): AgentPageVM {
     original = hidden && hidden.text !== null && !hidden.secret ? hidden : null;
   }
   const notice = agentNotice(session?.health, input.masking === true, input.id);
+  const broken = session?.health?.verdict === "broken";
+  const noticeShown = notice !== null && (broken || (session?.health?.droppedProtections ?? 0) > 0);
+  const running = session?.status === "running" && !sessionExited(input.events ?? []);
   return {
     found: !!(session || vm),
     id: input.id,
@@ -1756,14 +1844,16 @@ export function buildAgentPage(input: AgentPageInput): AgentPageVM {
     preview: agentPreview(session?.health),
     notice,
     noticeParts: agentNoticeParts(session?.health, input.masking === true, input.id),
-    noticeShown: notice !== null && session?.health?.verdict === "broken",
+    noticeShown,
+    noticeTitle: !noticeShown ? null : broken ? "This session did not work as it should." : "This session ran with less protection than usual.",
     secretsPosture: secretsPostureNote(session?.health?.secrets, "session"),
     title: titleOf(promptLabel(session), all),
     cwd: input.cwd,
     startedAt: session?.firstTs ?? null,
     lastAt: session?.lastTs ?? null,
-    running: session?.status === "running" && !sessionExited(input.events ?? []),
+    running,
     holds: vm ? vm.invariant.holds : !(session?.violated ?? false),
+    protectionOff: vm?.paired.mode === "off",
     violations: vm?.invariant.violationCount ?? 0,
     stats,
     blocked,
@@ -1778,12 +1868,26 @@ export function buildAgentPage(input: AgentPageInput): AgentPageVM {
     // A claim of safety reads only believed events; the full record's leak
     // check may still take it away. A card's time opens a step only when
     // the story below draws it (an action step, home.js `data-step-id`).
-    secrets: pageSecrets(vm, input.events ?? [], input.believedVm, input.home, shown, later,
-      { dev, ...(show.secrets ? { cap: SECRET_ALL_CAP } : {}), ...(input.unchecked ? { unchecked: true } : {}) }),
+    secrets: pageSecrets(vm, input.events ?? [], input.believedVm, input.home, shown, later, {
+      dev, ...(show.secrets ? { cap: SECRET_ALL_CAP } : {}),
+      // Each card's steps, over every turn, drawn or not (§4.25b *A card
+      // shows its steps*): its Show its steps keeps the drawn turns that
+      // hold one and counts the others.
+      turnOf: new Map(all.flatMap((x) => x.steps.filter((s) => s.kind === "action").map((s): [string, string] => [s.id, x.id]))),
+      drawn: new Set(story.map((x) => x.id)),
+      // An unchecked record: its own path for each secret no card tells.
+      ...(input.unchecked ? { unchecked: true, recordVm: vm } : {}),
+      ...(input.secretFiles ? { files: input.secretFiles } : {}),
+      ...(input.scan !== undefined ? { scan: input.scan } : {}),
+    }),
     ...(show.secrets ? { allSecrets: true as const } : {}),
+    readAsIs: readAsIs(vm, all, shown, input.cwd, input.home ?? ""),
     finding: vm ? leakFinding(vm, all, shown) : null,
     browser: browserStory(input.events ?? []),
     launchTime: launchTimeOf(input.events ?? []),
+    // The secret files whose change stayed in the masked copy (§4.25b), once
+    // the session ended, from a believed exit only.
+    discardedWrites: running ? null : discardedWritesOf(input.events ?? [], input.home ?? ""),
     ...(original !== undefined ? { original } : {}),
     valuesShown: input.valuesShown !== false,
   };

@@ -50,12 +50,13 @@ import { isDevPagePath, redirectTo, serveDevAbsent, serveIndex, serveStatic } fr
 import { type DashboardExtension, type ExtensionHost, type SessionRuns, extensionFor } from "./server/extension.js";
 import { legacyRedirect, pageFor } from "./server/page-routes.js";
 import { apiHome, apiHomeAgent, apiHomeAnswered, apiHomeHistory, apiHomeOriginal, HomeFacts, readFirstLookup, recentWorkspaces } from "./server/home-routes.js";
-import { labelTimesArbiter, type LabelTimesArbiter } from "./server/label-times.js";
+import { LabelTimes, labelTimesArbiter, type LabelTimesArbiter } from "./server/label-times.js";
+import { type LineageFacts } from "./view-model/secret-path.js";
 import { getSuggestions, postApply as postSuggestionApply, postDismiss as postSuggestionDismiss, postModelPreview, postModelSend, postScan as postSuggestionScan, type SuggestionRouteDeps } from "./server/suggestion-routes.js";
-import { buildDataLocations, homeOf } from "./data-locations.js";
+import { buildDataLocations, homeOf, openPlacesOf } from "./data-locations.js";
 import type { LastScanWire } from "./view-model/last-scan.js";
-import { apiScan, apiScanItem, apiScanSection, LastScanCache, scanRouteOf } from "./server/scan-routes.js";
-import { dashboardChannel, UpdateCacheReader, type UpdateChannel } from "./update-notice.js";
+import { apiScan, apiScanItem, apiScanSection, LastScanCache, presenceIn, scanRouteOf } from "./server/scan-routes.js";
+import { dashboardChannel, dashboardLayout, UpdateCacheReader, type LayoutMode, type UpdateChannel } from "./update-notice.js";
 import { manduPath } from "./generated/mandu-paths.js";
 import { apiSessions, apiPolicyPanel, apiEvents, apiStream } from "./server/api-routes.js";
 
@@ -81,20 +82,21 @@ import { type PostureArbiter } from "./server/arbiter-surfaces.js";
 import { postExportLabels, type PolicyDocArbiter } from "./server/policy-doc-routes.js";
 export type { PolicyDocArbiter, PolicyDocumentView, PolicyFileStatusRow, MintRuleInput, TestFlowInput } from "./server/policy-doc-routes.js";
 import { getChanges, getProposals, getRuleOrigins, postProposalVerdict, postUndoChange } from "./server/policy-proposal-routes.js";
-import { postApply, postSuggest, postTry } from "./server/policy-assistant-routes.js";
+import { getChannel, postApply, postSuggest, postTry } from "./server/policy-assistant-routes.js";
 import { getRuleSource, postRuleChange } from "./server/rule-action-routes.js";
 import { postModelChange, postModelTest } from "./server/model-routes.js";
-import { getPromptHolds, getPromptSettings, postPromptHoldAnswer, postPromptLetThrough, postPromptReveal, postPromptSettingsChange } from "./server/prompt-filter-routes.js";
+import { getPromptHolds, getPromptSettings, postPromptBench, postPromptHoldAnswer, postPromptLetThrough, postPromptReveal, postPromptSettingsChange } from "./server/prompt-filter-routes.js";
 import { postSecretReveal } from "./server/secret-reveal-routes.js";
 import { getSensitivityLabels, postSensitivityLabelChange } from "./server/sensitivity-label-routes.js";
 import { realProbeDeps, type ProbeDeps } from "./model-probe.js";
-import { productionAssistantModel, type AssistantModel } from "./policy-assistant.js";
+import { productionAssistantChannel, productionAssistantModel, type AssistantChannel, type AssistantModel } from "./policy-assistant.js";
 export type { PolicyProposalArbiter } from "./server/policy-proposal-routes.js";
 export type { PostureArbiter, PostureChangeResult } from "./server/arbiter-surfaces.js";
 import { getConfigAxes, postConfigAxes, type ConfigAuditArbiter } from "./server/config-axes-routes.js";
 export type { ConfigAuditArbiter, AxesStateWithAudit, AxisChangeAudit } from "./server/config-axes-routes.js";
 import { getSecrets, setSecretLabel, type SecretsArbiter } from "./server/secrets-routes.js";
 import { apiPolicyByWho } from "./server/by-who-routes.js";
+import { getHostCheck } from "./server/host-check-routes.js";
 export type {
   RegisteredSecret,
   ConfidentialityState,
@@ -117,6 +119,9 @@ import {
 import { keptLine, type SessionKept } from "./view-model/session-kept.js";
 import { requestedTenant, isArbiterUnreachable, unreachableBody } from "./server/tenant.js";
 import { hostAllowed, interfaceAddresses, readAccessOf, sameOriginRead, READ_ROUTES, type ReadRoute } from "./server/read-gate.js";
+import { apiPlugins } from "./server/plugin-routes.js";
+import { resolveRuntimeBase } from "./runtime-base.js";
+import type { PoolEntry } from "./supervisor/attachment-pool.js";
 
 /** The 403 body every mutating route answers without an admin session. */
 export const ADMIN_SESSION_REQUIRED = `admin session required — ${SIGN_IN_REMEDY}`;
@@ -206,21 +211,38 @@ export class DashboardServer {
   private auditArbiter?: ConfigAuditArbiter;
   private policyDocArbiter?: PolicyDocArbiter;
   private readonly assistantModel: () => Promise<AssistantModel>;
+  private readonly assistantChannel: () => Promise<AssistantChannel>;
   private readonly modelProbeDeps: ProbeDeps;
   private readonly configEnv: Record<string, string | undefined>;
   /** Is Mandu running at all (options.ts `manduNotRunning`); the live tenant's. */
   private readonly manduNotRunning?: () => { everRan: boolean } | null;
+  /** The `mandu` launches alive now (options.ts `liveLaunches`); the live tenant's. */
+  private readonly liveLaunches?: () => ReadonlySet<string>;
+  /** The places in Mandu's folder open to others, for Home's warning card
+   *  (dashboard.md §4.25q *Home warns about open places*): the same
+   *  `buildDataLocations` as /api/data-locations, read on each Home read
+   *  (about 45 `stat`s, metadata only; no cache, so a fixed mode clears the
+   *  card on the next poll). The same for every tenant: it describes this
+   *  machine. */
+  private readonly openPlaces = () => openPlacesOf(buildDataLocations(this.configEnv, homeOf(this.configEnv)));
   /** The last `mandu scan` the launcher kept (§4.25ai), read per request. */
   private readonly scanCache = new LastScanCache(() => manduPath("last-scan", this.configEnv, homeOf(this.configEnv)));
   private readonly lastScan = (): LastScanWire | null => this.scanCache.record();
-  /** The launcher's update-check cache and this package's update channel
-   *  (About Mandu's *A newer release*, §4.25): a stat per Home poll, never
-   *  a network request. Made on first use (configEnv is set by then). */
+  private readonly lastScanRev = (): string | null => this.scanCache.keptRev();
+  /** The Plugins page's sources (§4.25aj): from the options, else from
+   *  configEnv on each read. */
+  private readonly pluginsOpts: { runtimeBase?: string; declaredFile?: string; pool?: () => PoolEntry[] };
+  /** The launcher's update-check cache, this package's update channel and
+   *  its layout (About Mandu's *A newer release*, §4.25): a stat per Home
+   *  poll, never a network request. Made on first use (configEnv is set by
+   *  then). */
   private updateReader?: UpdateCacheReader;
   private updateChannel?: UpdateChannel;
+  private updateLayout?: LayoutMode;
   private readonly updateCheck = {
     cache: () => (this.updateReader ??= new UpdateCacheReader(manduPath("update-check", this.configEnv, homeOf(this.configEnv)))).get(),
     channel: () => (this.updateChannel ??= dashboardChannel(this.configEnv)),
+    layout: () => (this.updateLayout ??= dashboardLayout(this.configEnv)),
   };
   private readonly allowedClientIps: ReadonlySet<string>;
   /** Host names besides loopback at the bound port (read-gate.ts hostAllowed). */
@@ -296,9 +318,12 @@ export class DashboardServer {
     this.auditArbiter = opts.auditArbiter;
     this.policyDocArbiter = opts.policyDocArbiter;
     this.assistantModel = opts.assistantModel ?? productionAssistantModel();
+    this.assistantChannel = opts.assistantChannel ?? productionAssistantChannel();
     this.modelProbeDeps = opts.modelProbeDeps ?? realProbeDeps();
     this.configEnv = opts.configEnv ?? process.env;
+    this.pluginsOpts = { ...(opts.plugins ?? {}) };
     this.manduNotRunning = opts.manduNotRunning;
+    this.liveLaunches = opts.liveLaunches;
     this.allowedClientIps = new Set((opts.allowedClientIps ?? []).map(normalizeClientIp));
     this.allowedHosts = opts.allowedHosts ?? [];
     this.testTenant = opts.testTenant
@@ -312,6 +337,7 @@ export class DashboardServer {
       configEnv: this.configEnv,
       requireAdminRead: (req, res, urlPath) => this.requireAdminRead(req, res, urlPath),
       hasAdminSession: (req) => this.hasAdminSession(req),
+      lineageFacts: (t) => this.lineageFacts(t),
     };
     for (const x of this.extensions) x.attach?.(host);
     this.http = createServer((req, res) => {
@@ -397,6 +423,17 @@ export class DashboardServer {
       this.homeFacts.set(source, facts);
     }
     return facts;
+  }
+
+  /** What a session's *Where each went* adds to its record (secret-path.ts
+   *  `LineageFacts`): the tenant's registered secrets' files, the kept
+   *  scan (the product page's own, home-routes.ts `lastScan`) and the
+   *  folder `~` stands for. Never throws: an arbiter that cannot answer
+   *  gives no file. */
+  private async lineageFacts(t: TenantState): Promise<LineageFacts> {
+    const home = this.fileBrowserHome ?? homedir();
+    const files = await new LabelTimes(labelTimesArbiter(t.secretsArbiter, t.policyDocArbiter), home).registeredFiles();
+    return { files, scan: this.lastScan(), home };
   }
 
   private liveState(): TenantState {
@@ -953,14 +990,14 @@ export class DashboardServer {
     // read-gate.ts) read the same deps.
     if ((urlPath === "/api/home" || urlPath === "/api/home/agent" || urlPath === "/api/home/history" || urlPath === "/api/home/answered" || urlPath === "/api/home/original") && req.method === "GET") {
       const facts = this.homeFactsFor(t.source);
-      const deps = { source: t.source, facts, approvals: t.approvalsArbiter, prompt: t.policyDocArbiter, proposals: t.policyDocArbiter, policy: t.policyDocArbiter, ...this.sessionRuns(), env: this.configEnv, home: this.fileBrowserHome, dev: this.hasDev, lastScan: this.lastScan, updateCheck: this.updateCheck, ...(tenant !== "test" && this.manduNotRunning ? { notRunning: this.manduNotRunning } : {}) };
+      const deps = { source: t.source, facts, approvals: t.approvalsArbiter, prompt: t.policyDocArbiter, proposals: t.policyDocArbiter, policy: t.policyDocArbiter, ...this.sessionRuns(), env: this.configEnv, home: this.fileBrowserHome, dev: this.hasDev, lastScan: this.lastScan, lastScanRev: this.lastScanRev, updateCheck: this.updateCheck, openPlaces: this.openPlaces, ...(tenant !== "test" && this.manduNotRunning ? { notRunning: this.manduNotRunning } : {}), ...(tenant !== "test" && this.liveLaunches ? { live: this.liveLaunches } : {}) };
       if (urlPath === "/api/home") {
         // The account's sign-in (dashboard.md §6.z): Settings' Sign out for a
         // browser that holds a sign-in session, and a change of the account
         // file this dashboard saw.
         const changed = this.account?.changedAt() ?? null;
         const signIn = { signOut: this.gateSession.has(req), accountChangedAt: changed ? changed.toISOString() : null };
-        return apiHome({ ...deps, signIn }, res);
+        return apiHome({ ...deps, signIn }, res, url);
       }
       if (urlPath === "/api/home/history") return apiHomeHistory(deps, url, res);
       if (urlPath === "/api/home/answered") return apiHomeAnswered(deps, url, res);
@@ -987,18 +1024,34 @@ export class DashboardServer {
     const scanRoute = req.method === "GET" ? scanRouteOf(urlPath) : null;
     if (scanRoute !== null) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
-      return scanRoute[0] === "section" ? apiScanSection(this.scanCache, scanRoute[1], params, res) : apiScanItem(this.scanCache, scanRoute[1], params, res);
+      return scanRoute[0] === "section" ? apiScanSection(this.scanCache, scanRoute[1], params, res) : apiScanItem(this.scanCache, scanRoute[1], params, res, presenceIn(homeOf(this.configEnv)));
+    }
+    // The Plugins page (§4.25aj): where Mandu is attached as a plugin, from
+    // the service's pool records and the arbiter's attachments (this
+    // machine's, like the Scan page; the live store's), never a port, a
+    // path or a value.
+    if (urlPath === "/api/plugins" && req.method === "GET") {
+      const env = this.configEnv;
+      return apiPlugins({
+        source: this.source,
+        runtimeBase: this.pluginsOpts.runtimeBase ?? resolveRuntimeBase(env).base,
+        declaredFile: this.pluginsOpts.declaredFile ?? manduPath("serve-attachments", env, homeOf(env)),
+        ...(this.pluginsOpts.pool ? { pool: this.pluginsOpts.pool } : {}),
+        ...(typeof process.getuid === "function" ? { uid: process.getuid() } : {}),
+      }, res);
     }
     if (urlPath === "/api/data-locations" && req.method === "GET") {
       json(res, 200, buildDataLocations(this.configEnv, homeOf(this.configEnv)));
       return;
     }
-    if (urlPath === "/api/events") return apiEvents(t.source, this.log, url, res, values);
+    if (urlPath === "/api/events") return apiEvents(t.source, this.log, url, res, values, undefined, () => this.lineageFacts(t));
     // The waiting cards' words read the asking sessions' records (§4.34
     // "Read before it was marked"), through the facts Home caches.
     if (urlPath === "/api/policy/panel") return apiPolicyPanel(t.source, t.approvalsArbiter, res, readFirstLookup(this.homeFactsFor(t.source), () => t.source.listSessions()), this.fileBrowserHome ?? homedir());
     // The Rules page's per-principal view (§4.25aa; read-only, no CSRF).
     if (urlPath === "/api/policy/by-who" && req.method === "GET") return apiPolicyByWho(t.source, t.secretsArbiter, res, this.fileBrowserHome ?? homedir());
+    // Its Check a host box (§4.25aa *Check a host*; read-only, a probe).
+    if (urlPath === "/api/policy/host-check" && req.method === "GET") return getHostCheck(t.secretsArbiter, url, res, this.fileBrowserHome ?? homedir());
     if (urlPath === "/api/stream") return apiStream(t.source, url, req, res, values);
 
     // Static UI — the PRODUCT at `/` (publicDir, dashboard.md §4.25) and
@@ -1212,6 +1265,14 @@ export class DashboardServer {
       await postPromptSettingsChange(t.policyDocArbiter, req, res);
       return true;
     }
+    // *Try a message* (§4.25y): the inspector's bench, a DRY RUN on the
+    // human plane (nothing minted, stored or logged), as the person's own
+    // text. A POST, so the global gate holds it (CSRF + admin session), as
+    // it does the card's change: the answer is about their typed text.
+    if (urlPath === "/api/policy/prompt-filters/try" && req.method === "POST") {
+      await postPromptBench(t.policyDocArbiter, req, res, "try");
+      return true;
+    }
     if (urlPath === "/api/policy/sensitivity-labels/change" && req.method === "POST") {
       if (!t.policyDocArbiter) return arbiterDisabled(res), true;
       await postSensitivityLabelChange(t.policyDocArbiter, req, res);
@@ -1278,6 +1339,14 @@ export class DashboardServer {
       if (!t.policyDocArbiter) return arbiterDisabled(res), true;
       if (!requireCsrf(req, res)) return true;
       await postSuggest(t.policyDocArbiter, this.assistantModel, req, res, this.fileBrowserHome ?? homedir());
+      return true;
+    }
+    // Which AI Suggest rules would use (dashboard.md, *Describe says which
+    // AI reads your words*): read-only, an enum, behind the admin read gate.
+    if (urlPath === "/api/policy/assistant/channel" && req.method === "GET") {
+      if (!t.policyDocArbiter) return arbiterDisabled(res), true;
+      if (!this.requireAdminRead(req, res, urlPath)) return true;
+      await getChannel(t.policyDocArbiter, this.assistantChannel, res);
       return true;
     }
     if (urlPath === "/api/policy/assistant/try" && req.method === "POST") {

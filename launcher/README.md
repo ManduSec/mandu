@@ -11,7 +11,7 @@ see the real values in your terminal.
 ## Install
 
 ```sh
-npm install -g @mandusec/mandu      # needs Node 22.13 or newer
+npm install -g @mandusec/mandu      # needs Node 22.15 or newer
 ```
 
 No Node, or an older one? The installer fetches a pinned Node for Mandu alone
@@ -69,7 +69,7 @@ entry point refuses them otherwise.
 
 `mandu doctor` checks all of these and says what to fix.
 
-- **Node.js 22.13 or newer** and **git**. Node programs the AI runs need
+- **Node.js 22.15 or newer** and **git**. Node programs the AI runs need
   22.21 or newer (or 24.5 or newer) on your PATH to get your secrets on their
   web requests.
 - **Your agent:** Claude Code (`npm install -g @anthropic-ai/claude-code`) or

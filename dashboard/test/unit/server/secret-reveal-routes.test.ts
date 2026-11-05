@@ -12,14 +12,17 @@
  *   - never a general desymbolize: an ordinary item's ref, another
  *     session's ref, a claimed event's token, an unknown or malformed ref
  *     resolve nothing, and the source is asked for no other token;
- *   - no source to ask → 501; the source not holding it → 404.
+ *   - no source to ask → 501; the source not holding it → 404;
+ *   - an attachment session (§4.25aj): its own proxy's claimed record of a
+ *     masked read is revealable once the arbiter's believed registration
+ *     says it is one; a forged registration widens nothing.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { DashboardServer, ADMIN_SESSION_REQUIRED } from "../../../src/server.js";
 import type { EventSource, SessionRef } from "../../../src/event-source.js";
-import type { ManduEvent } from "../../../src/event-model.js";
+import { isAttachmentSession, revealScopeEvents, type ManduEvent } from "../../../src/event-model.js";
 import { secretRef } from "../../../src/view-model/secret-ref.js";
 import { revealableSecrets } from "../../../src/view-model/agent-page.js";
 import { toSessionViewModel } from "../../../src/view-model.js";
@@ -127,5 +130,64 @@ test("no source to ask → 501", async () => {
     assert.equal((await h.post({ session: SESSION, ref: secretRef(SESSION, TWIN) })).status, 501);
   } finally {
     await h.close();
+  }
+});
+
+// ── An attachment session (dashboard.md §4.25aj, event-model.ts revealScopeEvents) ──
+
+const PLUGIN = "openclaw:main";
+/** The arbiter's own record of the registration (openclaw-plugin.md §3.3). */
+const registration = (over: Record<string, unknown> = {}): ManduEvent => ({
+  id: "ev-att", sessionId: PLUGIN, turn: 0, ts: "2026-10-25T09:00:00.000Z", seq: 0, callId: null, parentId: null,
+  kind: "launch_posture", view: "HumanView", boundary: "shell", emitter: "arbiter", input: null, output: null,
+  invariant: { violatedInvariant: false }, target: "openclaw", secrets: { posture: "gated", gap: "openclaw-plugin" }, humanPlaneWalled: false,
+  attachment: { kind: "openclaw-plugin", coverage: {} }, ...over,
+} as unknown as ManduEvent);
+/** Its proxy's record of a masked read: a claim, as every one is while the attachment holds the plane exposed. */
+const pluginRead = ev("p1", 1, [TWIN], { sessionId: PLUGIN, claimed: true });
+
+async function startWith(events: ManduEvent[]) {
+  const asked: string[] = [];
+  const source: EventSource = {
+    async listSessions(): Promise<SessionRef[]> { return []; },
+    async readEvents(id: string): Promise<ManduEvent[]> { return id === PLUGIN ? events : []; },
+    subscribe(): () => void { return () => {}; },
+    close(): void {},
+    async desymbolize(text: string): Promise<string> { asked.push(text); return VALUES[text] ?? text; },
+  };
+  const server = new DashboardServer({ source, log: () => {}, ...ADMIN_OPTS });
+  const port = await server.listen(0);
+  const post = (body: unknown) => fetch(`http://127.0.0.1:${port}/api/home/reveal`, { method: "POST", headers: { ...CSRF_ADMIN, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return { asked, post, close: () => server.close() };
+}
+
+test("an attachment session: its own proxy's claimed record of a masked read is revealable, signed in (the arbiter's believed registration says what the session is)", async () => {
+  assert.equal(isAttachmentSession([registration(), pluginRead]), true);
+  assert.deepEqual(revealScopeEvents([registration(), pluginRead]).map((e) => e.id), ["ev-att", "p1"]);
+  const h = await startWith([registration(), pluginRead]);
+  try {
+    const res = await h.post({ session: PLUGIN, ref: secretRef(PLUGIN, TWIN) });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { value: "pk-live-123" });
+    assert.deepEqual(h.asked, [TWIN], "that one token only");
+    // Still never a general desymbolize: an ordinary item, another session's ref.
+    assert.equal((await h.post({ session: PLUGIN, ref: secretRef(PLUGIN, PLAIN) })).status, 404);
+    assert.equal((await h.post({ session: PLUGIN, ref: secretRef(SESSION, TWIN) })).status, 404);
+  } finally {
+    await h.close();
+  }
+});
+
+test("not an attachment session: a registration record that is a claim, or not the arbiter's, or names no attachment, widens nothing", async () => {
+  for (const forged of [registration({ claimed: true }), registration({ emitter: "launcher" }), registration({ attachment: undefined })]) {
+    assert.equal(isAttachmentSession([forged, pluginRead]), false);
+    assert.deepEqual(revealScopeEvents([forged, pluginRead]).map((e) => e.id), forged.claimed ? [] : ["ev-att"]);
+    const h = await startWith([forged, pluginRead]);
+    try {
+      assert.equal((await h.post({ session: PLUGIN, ref: secretRef(PLUGIN, TWIN) })).status, 404, JSON.stringify({ emitter: forged.emitter, claimed: forged.claimed }));
+      assert.deepEqual(h.asked, []);
+    } finally {
+      await h.close();
+    }
   }
 });

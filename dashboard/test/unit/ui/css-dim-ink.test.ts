@@ -15,7 +15,9 @@
  * opens, §4.25 *A wide change says what is open*), Your rules' Patterns and Places captions and its empty line, an
  * opened rule's "Your rule, this file only" and where it came from, Add a
  * rule's "This folder:", Keys Mandu found's not-offered line and empty
- * list, Describe's status. A folder's count of its rules ("5 rules") and
+ * list, Describe's status. Since 2026-10-31 the page draws no not-offered
+ * line (it hides the picker, dashboard.md §4.25t), so the line under the
+ * picker is measured offered. A folder's count of its rules ("5 rules") and
  * the ticked bar's note took `--ink-2` from their parents.
  *
  *   D1  every `.dim` with words on Rules (Your rules with a pattern, a
@@ -87,7 +89,9 @@ const drawn = (doc: El): El[] => ([...doc.querySelectorAll(".dim")] as El[]).fil
 const inRow = (e: El): boolean => !!e.parentElement.closest(".row");
 const words = (e: El): string => e.textContent.trim().replace(/\s+/g, " ");
 
-const SUGGESTIONS = { suggestions: [], count: 0, scan: null, model: modelPickerVM(false, []) };
+/** The picker drawn: offered, with one model of your own. */
+const PICKER = modelPickerVM(true, [{ name: "ollama", local: true }]);
+const SUGGESTIONS = { suggestions: [], count: 0, scan: null, model: PICKER };
 /** A file rule row as policy-panel.ts serves it (home-js-explorer.test.ts). */
 const lockRow = (path: string, covers: "subtree" | "exact" | "pattern") => ({
   id: `lock:${path}`, kind: "lock", subject: path, effect: "x", reach: null, hits: null, covers, bindings: [], level: "no-model",
@@ -148,8 +152,8 @@ const FOUND: Array<[string, RegExp]> = [
   ["Rules", /^\d+ rules$/],
   ["Rules", /^Your rule, this file only$/],
   ["Rules", /^This folder:$/],
-  ["Rules", /^Asking a model to suggest rules is not offered yet: it is still being tested\.$/],
-  ["Rules", /^No suggestions\. Press Scan for keys/],
+  ["Rules", new RegExp(`^${PICKER.hint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`)],
+  ["Rules", /^No keys waiting\.$/],
   ["Approvals", /^This lets your agent's programs connect to any address\. Type ALLOW if you mean it\.$/],
 ];
 

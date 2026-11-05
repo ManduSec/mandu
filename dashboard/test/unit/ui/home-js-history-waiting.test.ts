@@ -6,12 +6,19 @@
  * session whose question still waited said nothing of it, where Earlier said
  * "1 question waiting for you".
  *
- *   W1  a row with questions waiting says how many, in Earlier's words (the
- *       row keeps its prompt, as Earlier's does); a running one that waits
- *       has Running now's amber dot; a row with none says nothing of them;
+ *   W1  a row with questions waiting says how many, in Home's words (the
+ *       row keeps its prompt, as Home's rows do) and in its Home row's
+ *       order: a running one leads with them, as Running now does, and has
+ *       Running now's amber dot; an ended one says them last, as Earlier
+ *       does; a row with none says nothing of them;
  *   W2  the poll follows an answer: the next read without the question draws
  *       the row without its count, and the green dot back;
- *   W3  protection failed outranks the amber dot, and the count stays.
+ *   W3  protection failed outranks the amber dot, and the count stays,
+ *       after the mark, as on Home.
+ *   W4  an ended row whose session left changes unapplied says so after its
+ *       counts and before its questions, as Earlier does, with the amber
+ *       dot and a link to its page at the block (dashboard.md §4.25b *Home
+ *       and History say so*); the poll draws it when the count arrives.
  */
 
 import { test } from "node:test";
@@ -47,13 +54,13 @@ test("W1: a History row says the questions it raised that still wait, and a runn
   ];
   const { doc } = load({ extensions: "", url: URL, homeVm: home(), routes: { "GET home/history": { total: 4, rows, next: null } } });
   await tick();
-  assert.equal(counts(doc, "s-wait"), "1 secret masked, 1 question waiting for you");
+  assert.equal(counts(doc, "s-wait"), "1 question waiting for you, 1 secret masked", "Running now's order: the question first");
   assert.equal(dot(doc, "s-wait"), "dot warn", "Running now's dot for an agent waiting for your OK");
   assert.match(rowOf(doc, "s-wait").textContent, /Task s-wait/, "the row keeps its prompt");
   assert.match(rowOf(doc, "s-wait").textContent, /running now, started/);
   assert.equal(counts(doc, "s-run"), "1 secret masked");
   assert.equal(dot(doc, "s-run"), "dot ok");
-  assert.equal(counts(doc, "s-ended"), "1 secret masked, 2 questions waiting for you", "Earlier's words for an ended session's questions");
+  assert.equal(counts(doc, "s-ended"), "1 secret masked, 2 questions waiting for you", "Earlier's words and order for an ended session's questions");
   assert.equal(dot(doc, "s-ended"), "dot", "an ended session's dot, waiting or not");
   assert.match(rowOf(doc, "s-ended").textContent, /ended/);
   assert.equal(counts(doc, "s-plain"), "1 secret masked");
@@ -67,7 +74,7 @@ test("W2: the poll follows an answer: the row loses its count and gets the green
   const after = { total: 1, rows: [row("s-wait", { state: "running" })], next: null };
   const { doc } = load({ extensions: "", url: URL, homeVm: home(), routes: { "GET home/history": answers(before, after) } });
   await tick();
-  assert.equal(counts(doc, "s-wait"), "1 secret masked, 1 question waiting for you");
+  assert.equal(counts(doc, "s-wait"), "1 question waiting for you, 1 secret masked");
   assert.equal(dot(doc, "s-wait"), "dot warn");
   await poll(doc);
   assert.equal(counts(doc, "s-wait"), "1 secret masked");
@@ -79,5 +86,23 @@ test("W3: protection failed outranks the amber dot; the question is still counte
   const { doc } = load({ extensions: "", url: URL, homeVm: home(), routes: { "GET home/history": { total: 1, rows, next: null } } });
   await tick();
   assert.equal(dot(doc, "s-bad"), "dot bad");
-  assert.equal(counts(doc, "s-bad"), "protection failed, 1 secret masked, 1 question waiting for you");
+  assert.equal(counts(doc, "s-bad"), "protection failed, 1 question waiting for you, 1 secret masked", "the mark first, then the question, as on Home");
+});
+
+test("W4: an ended History row says 'changes to 1 file not applied' after its counts, with the amber dot, linking its page at the block", async () => {
+  const before = { total: 2, rows: [row("s-lost", { waiting: 1, notApplied: 3 }), row("s-old")], next: null };
+  const after = { total: 2, rows: [row("s-lost", { waiting: 1, notApplied: 3 }), row("s-old", { notApplied: 1 })], next: null };
+  const { doc } = load({ extensions: "", url: URL, homeVm: home(), routes: { "GET home/history": answers(before, after) } });
+  await tick();
+  assert.equal(counts(doc, "s-lost"), "1 secret masked, changes to 3 files not applied, 1 question waiting for you", "Earlier's order");
+  assert.equal(dot(doc, "s-lost"), "dot warn");
+  const link = rowOf(doc, "s-lost").querySelector("a.agent-not-applied-link");
+  assert.match(link.getAttribute("href"), /\/agents\/s-lost\?go=not-applied$/);
+  assert.equal(link.dataset.land, "not-applied");
+  // A row from an older server, or one with none: unchanged.
+  assert.equal(counts(doc, "s-old"), "1 secret masked");
+  assert.equal(dot(doc, "s-old"), "dot");
+  await poll(doc);
+  assert.equal(counts(doc, "s-old"), "1 secret masked, changes to 1 file not applied", "the poll draws the new count");
+  assert.equal(dot(doc, "s-old"), "dot warn");
 });

@@ -4,7 +4,8 @@
  * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code, duplicated verbatim in
  * each service package (arbiter/ipc, interceptors/{anthropic,openai,net}-proxy/src,
  * fs-sync/src) — the repo's narrow-module convention (no cross-package src
- * imports). Keep the copies in sync.
+ * imports). The source is arbiter/ipc/lifeline.ts: change it, then run
+ * `node scripts/copies/module-copies.mjs generate`.
  *
  * The spawner (launcher services/primitives.startDetachedCmd, or a test
  * harness) passes MANDU_LIFELINE=stdin and holds the ONLY write end of this

@@ -11,7 +11,10 @@
  * page's heading. Where the page scrolls by itself once a visit, the marked
  * card or step takes the focus from that heading, and takes it back when a
  * poll draws it again. The first load leaves the focus alone, and so does
- * a person who moved it first.
+ * a person who moved it first. There, the first Tab stop is Skip to the
+ * page (since 2026-10-28), which gives the focus to the same heading
+ * without a jump to #main: the address, the history and the page drawn
+ * stay.
  *
  * Drives home.js in jsdom over the shared fetch stub (home-js-fixtures.ts).
  * Each link is focused before its click, as a keyboard's Enter does. Axes:
@@ -76,8 +79,8 @@ test("each page the nav opens has the focus on its heading, which a screen reade
 test("a link inside a page: the focus goes to the new page's heading, never left on the link the change hid", async () => {
   const { doc, window } = load();
   await tick();
-  // Home › Running now: an agent's row opens its page.
-  const link = doc.querySelector('#home-agents a[data-page-link="agent"][data-session="s1"]');
+  // Home › Running now: the Details of an agent row opens its page.
+  const link = doc.querySelector('#home-agents a.right[data-page-link="agent"][data-session="s1"]');
   await press(link);
   assert.equal(doc.getElementById("page-agent").hidden, false, "the agent page is shown");
   assert.equal(link.closest("section[data-page]").hidden, true, "the link's page is hidden");
@@ -209,4 +212,55 @@ test("a link that opens at a card: the card's heading takes the focus once the c
   await tick();
   assert.equal(doc.activeElement, doc.getElementById("suggested-title"), "Keys Mandu found's heading");
   assert.equal(doc.activeElement.closest("section[data-page]").id, "page-rules");
+});
+
+/** The controls a Tab reaches, in document order (jsdom has no tab order
+ *  of its own): no tabindex -1, nothing off or hidden. */
+function tabStops(doc: any): any[] {
+  return [...doc.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")].filter((x: any) =>
+    x.getAttribute("tabindex") !== "-1" && !x.disabled && !x.closest("[hidden]") && x.type !== "hidden");
+}
+
+test("Skip to the page is the first Tab stop of the document, ahead of the top bar", async () => {
+  const { doc } = load();
+  await tick();
+  const skip = doc.getElementById("skip-link");
+  assert.ok(skip, "the link is there");
+  assert.equal(skip.textContent, "Skip to the page");
+  assert.equal(doc.body.firstElementChild, skip, "first in <body>");
+  assert.equal(tabStops(doc)[0], skip, "the first control a Tab reaches");
+  assert.equal(skip.hasAttribute("data-page-link"), false, "no page link: the router never sees it");
+  assert.equal(doc.getElementById("top").contains(skip), false, "outside the top bar");
+});
+
+test("Enter on Skip to the page gives the focus to the heading of the page shown; the address, the history and the page drawn stay", async () => {
+  for (const [url, words] of [
+    [BASE + "/", "One question is waiting for you."],
+    [BASE + "/approvals", "Approvals"],
+    [BASE + "/rules#your-rules", "Rules"],
+    [BASE + "/settings", "Settings"],
+    [BASE + "/agents/s1", AGENT.agent],
+  ]) {
+    const { doc, window, calls } = load({ url });
+    await tick();
+    await tick();
+    if (url.endsWith("#your-rules")) {
+      // Opened at a card: its heading has the focus once drawn (landAtSection).
+      assert.equal(doc.activeElement, doc.querySelector("#rules-block h2"), "the card the address names");
+    } else {
+      assert.equal(doc.activeElement, doc.body, `${url}: the first load leaves the focus alone`);
+    }
+    const href = window.location.href;
+    const entries = window.history.length;
+    const heading = shownHeading(doc);
+    const reads = calls.length;
+    await press(doc.getElementById("skip-link"));
+    assert.equal(doc.activeElement, heading, `${url}: the focus is on the page's heading`);
+    assert.equal(heading.textContent, words);
+    assert.equal(heading.getAttribute("tabindex"), "-1", "focusable by the page, not a Tab stop");
+    assert.equal(window.location.href, href, `${url}: the address stays`);
+    assert.equal(window.history.length, entries, `${url}: no history entry`);
+    assert.equal(calls.length, reads, `${url}: nothing read again, so nothing drawn again`);
+    assert.equal(shownHeading(doc), heading, `${url}: the same page, not drawn again`);
+  }
 });

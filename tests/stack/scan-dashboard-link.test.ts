@@ -167,7 +167,9 @@ test("mandu scan points at the dashboard; mandu dashboard opens with Mandu never
   const vm = JSON.parse(homeRes.body) as { verdict: string; headline: string; sentence: string; protection: Record<string, unknown>; scan?: { headline: string; sentence: string }; firstRun: unknown };
   assert.equal(vm.verdict, "off");
   assert.equal(vm.headline, "Protection is off: no agent runs with Mandu.");
-  assert.equal(vm.sentence, "Your agents send what they read to the AI as it is, secrets included. To protect one, start it with mandu claude (or mandu codex).");
+  // The scan read a Claude Code record only: the command is that agent's
+  // (dashboard.md §4.25, the commands name the agents you use).
+  assert.equal(vm.sentence, "Your agents send what they read to the AI as it is, secrets included. To protect one, start it with mandu claude.");
   assert.equal(vm.protection["notRunning"], true);
   assert.equal(vm.protection["connected"], false);
   assert.doesNotMatch(homeRes.body, /Not connected|You are protected|Your secrets are guarded/);

@@ -13,8 +13,10 @@
  * tree the guard tied to the command, else from every raw secret read of the
  * session; the caller only ever RAISES the result's level on that answer.
  *
- * A MIRROR of interceptors/openai-proxy/src/unmapped-exec.ts (no cross-package
- * import); each package's unit test pins the same key list.
+ * ONE MODULE, TWO COPIES (both model proxies, no cross-package import): the
+ * source is interceptors/anthropic-proxy/src/unmapped-exec.ts; change it,
+ * then run `node scripts/copies/module-copies.mjs generate`. Each
+ * package's unit test pins the same key list.
  *
  * Pure and total: never throws.
  */

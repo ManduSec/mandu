@@ -146,7 +146,13 @@ test("the question's fenced block has one too; no button sits in What was hidden
     assert.equal(p.closest(".code-wrap"), null);
   }
   for (const b of doc.querySelectorAll("button.code-copy")) {
-    assert.ok(b.parentElement.querySelector(":scope > pre.code-block"), "every Copy is a code block's");
+    // Else a command the page itself asks you to run (index.html's
+    // `mandu dashboard --set-password`, `mandu paths` and `mandu doctor`,
+    // and About's `mandu --version` with no version known;
+    // home-js-command-copy.test.ts).
+    const run = b.parentElement.classList.contains("run-code") ? b.parentElement.querySelector(":scope > code").textContent : null;
+    assert.ok(b.parentElement.querySelector(":scope > pre.code-block") || ["mandu dashboard --set-password", "mandu paths", "mandu doctor", "mandu --version"].includes(run as string), `every Copy is a code block's or a Mandu command's: ${run}`);
+
     assert.equal(b.closest("#agent-secrets"), null, "none in Your secrets");
     b.click();
   }

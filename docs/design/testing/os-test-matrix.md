@@ -156,7 +156,8 @@ unrestricted twin is a one-line `SYSCTLS` conf.
 | `kernel` | `scripts/kernel-tests.sh` | rust, node | self-SKIPs per missing facility (existing semantics) — on a restricted target the SKIP is the assertion; `node` because net-supervisor's runtime test runs node and python3 under the guard, as on every kernel lane (§10.19) |
 | `all` | `scripts/test-all.sh` | node, rust | full TS + Rust suite; provisioning (toolchain install via cloud-init) adds minutes; in a guest as the user `matrix` (§4.2), half the CPUs at a time (at most 8), as CI's pipeline |
 | `fresh-install` | the PACKED `@mandusec/mandu` tarball installed by an empty-HOME user, then doctor / launch / `mandu setup` with a real guest `sudo`; over two boots (§2.1): a reboot of the set-up host, then the Node 18 negative, the NodeSource (system-wide, `sudo npm install -g`) variant and the uninstall hygiene | none (installs Node as the user, via nvm) | §10; uses the host-prep hook below; the checkout is unmounted before the product runs |
-| `fresh-agents` | the PACKED tarball installed as the README says, then Claude Code, Codex, OpenCode and OpenClaw from npm, each run through the installed `mandu` against a scripted loopback model (default mode: a credential file; `full`: a poisoned file) and, with `FRESH_AGENTS_LIVE=1`, live Claude Code and Codex | none (nvm, as the user) | §10.14; `FRESH_AGENTS_VERSIONS=tested` (default, the launcher's tested maxima) or `latest` |
+| `fresh-agents` | the PACKED tarball installed as the README says, then Claude Code, Codex, OpenCode and OpenClaw from npm, each run through the installed `mandu` against a scripted loopback model (default mode: a credential file; `full`: a poisoned file) and, with `FRESH_AGENTS_LIVE=1`, live Claude Code and Codex | none (nvm, as the user) | §10.14; `FRESH_AGENTS_VERSIONS=tested` (default, the launcher's tested maxima) or `latest`. An agent's `npm install -g` is tried again, at most 3 times, only when the registry connection broke (`npm error code ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `ECONNREFUSED`, `EPIPE`; one failed the 0.2.0-beta.9 tag run); any other failure stands. `fresh-openclaw-plugin` installs OpenClaw the same way |
+| `fresh-openclaw-plugin` | a fresh OpenClaw (nvm Node, `npm install -g openclaw`, its non-interactive onboarding, its Gateway as a systemd user service), then Mandu from a copy of the CHECKOUT (`scripts/bootstrap.sh`, never a tarball) attached as `docs/usage.md` says: `mandu serve install` under the user's real systemd user manager, `mandu openclaw install`, `mandu doctor`, one Gateway turn against a scripted model behind the service proxy, `mandu scan`, then uninstall and no Mandu process left | none (nvm, as the user) | §10.20; `FRESH_OPENCLAW_VERSION=tested` (default) \| `latest` \| a version; until `mandu serve` runs the proxy pool it asserts the install's refusal and marks the turn PENDING |
 | `release-upgrade` | on `ubuntu-2404` only and by hand (not in its `SUITES`: about 30 minutes), over three boots (§2.1): bring 24.04 up to date; install the PACKED tarball as fresh-install does, run `mandu setup` (or plant the old grants, `RELEASE_UPGRADE_FROM=legacy`) and prove it confined; run a real `do-release-upgrade` to 26.04; then check doctor, a confined launch and Ubuntu's own rules before and after `mandu setup` | none (nvm, as the user) | §10.15; `RELEASE_UPGRADE_PATH=auto` (default: the regular LTS path when Ubuntu offers it, else `-d`) \| `regular` \| `development` \| `proposed` |
 | `npm-release` | the release gate for the npm package, by hand (not in any `SUITES`): `@mandusec/mandu` from the npm REGISTRY (or the candidate tarball before publish) installed as a new user does; the basic checks; Claude Code and Codex bare, then through `mandu` in a fresh `git init` repository and, timed against bare, in a dirty, complex one; an upgrade from the previous published version; uninstall | none (nvm, as the user) | §10.18; `NPM_RELEASE_PACKAGE`, `NPM_RELEASE_LIVE=1` for the real models |
 | `wrapper` | launcher package `npm test` — fake-agent parity e2e + fail-closed arbiter-refuse | node | live on `host` + `ubuntu-2604` (`portable-wrapper.md` §6); first installs every package the launcher's bundle build reads (`node scripts/install-deps.mjs --bundle`, below), which its bundle and golden-path e2e reach into |
@@ -387,7 +388,9 @@ does the same run and reads it back over `/api/matrix`.
 Status: BUILT. The `fresh-install` suite (steps 0 to 12, the reboot, Node 18
 and NodeSource legs, the live leg), the `fresh-agents` suite (§10.14), the
 `ubuntu-2510` target and the `release-upgrade` suite (§10.15), the snapshot
-layer, `--interactive` and the guest registry (§10.17).
+layer, `--interactive` and the guest registry (§10.17), the
+`fresh-openclaw-plugin` suite (§10.20; its Gateway turn waits for the
+service's proxy pool).
 
 Related: `rootless-confinement-ubuntu-2404.md` (`mandu setup`, the posture
 names), `packaging.md` (the npm bundle, first-run UX), `protection-modes.md`
@@ -432,7 +435,8 @@ executor additions (§10.5); no Vagrant, libvirt or multipass (§7).
 
 `scripts/matrix/targets/ubuntu-2404.conf`: the Ubuntu 24.04 ("noble") amd64
 cloud image, `LABELS="os=linux kernel=6.8 userns=apparmor-restricted"` plus
-the first-day labels of §10.12, `SUITES="smoke fresh-install fresh-agents"`.
+the first-day labels of §10.12, `SUITES="smoke fresh-install fresh-agents
+fresh-openclaw-plugin"`.
 This is the release's primary platform and the one where the restriction
 bites. `ubuntu-2604` carries the same suites as the second leg. Those two are
 the whole supported set (§10.9); Ubuntu 22.04 gets no leg.
@@ -465,7 +469,7 @@ coverage.
 
 #### 10.3.4 Node: install it the way users do
 
-`engines.node >= 22.13`, and noble's apt Node is 18. The suite installs Node
+`engines.node >= 22.15`, and noble's apt Node is 18. The suite installs Node
 two ways, as separate scenarios: **nvm** (what the audience mostly has, and
 the reason the fix text says `mandu setup` and not `sudo mandu setup`, since
 root's PATH has no nvm `mandu`) and **NodeSource apt** (a system-wide Node,
@@ -1136,8 +1140,7 @@ User `dave` installs Node 18 with nvm and then the tarball. npm only warns on
 `engines` (`EBADENGINE`, and the suite asserts the warning names the floor),
 so the install succeeds; the refusal is the first run's. `mandu --version` and
 `mandu claude` both exit 2 with one sentence, `mandu: Node 18.20.8 is too old
-— Mandu needs Node >= 22.13.0 (node:sqlite is unflagged from 22.13; try: nvm
-install 22).`, no stack trace, the stub never runs, and no Mandu directory is
+— Mandu needs Node >= 22.15.0 (try: nvm install 22).`, no stack trace, the stub never runs, and no Mandu directory is
 created. Where the distro's own `nodejs` is below the floor (24.04 ships
 18.19), the suite also runs alice's installed `mandu` with `/usr/bin/node`:
 the same refusal. 26.04's distro Node is 22.22, so that leg is a `NOTE`
@@ -1200,11 +1203,23 @@ so the key covers exactly what the layer holds.
   warns and sits on the base image, provisioning itself as before.
 - **"Fresh" still means no mandu state, not a stale apt cache:** the layer
   has no Mandu file, and every run's cloud-init still runs `apt update`.
+- **Ubuntu's background apt is stopped on every boot.** On a layer up to a
+  week old, `apt-daily` and `apt-daily-upgrade` have missed their runs and
+  start right after boot. The guest runner stops both timers, asks a running
+  `unattended-upgrade` to stop after the package in hand (SIGTERM) and waits
+  for every apt process to end, at most 15 minutes, before the provisioning
+  gate and the suite. Without it, on ubuntu-2604 (0.2.0-beta.9's tag run),
+  unattended-upgrades held the dpkg lock past `fresh-agents`' 10-minute wait
+  (its `apt install bubblewrap` failed, and every Codex sandbox check after
+  it) and, upgrading systemd, an inhibitor that refused the guest's poweroff
+  until the 90-minute hard timeout. A refused poweroff is now forced, except
+  on the provisioning boot, whose disk becomes the layer.
 - `MANDU_VM_SNAPSHOT=0` turns the layer off.
 
 Unit test: `scripts/test/matrix-provision.test.sh` (the key, the rendered
 provisioning branch, and the executor on a stub qemu: build then reuse,
-expiry, the out-share-only provisioning boot, the fall-back, the off switch).
+expiry, the out-share-only provisioning boot, the fall-back, the off switch, the background-apt wait
+and the refused poweroff).
 Measured: building a layer takes about three minutes per target; with the
 layers cached, a two-boot `fresh-install` takes about 230 to 310 s against
 310 to 440 s before. The suite's own nvm, npm, bubblewrap and NodeSource
@@ -1483,7 +1498,7 @@ every cell but the `smoke` ones. Six causes, none of them in the product (each f
    `matrix` with a `.git`, entries of the full run failed where CI's
    guest never looks: a host whose AppArmor restricts unprivileged user
    namespaces (CI's guest lifts the restriction), the newest Node 22 (CI pins
-   22.13.0), and a git identity in the environment.
+   22.15.0), and a git identity in the environment.
    - `all.sh` exported `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, which override the
      author of every commit, a cherry-pick's included: the test of a release
      tool kept in the source repository got `mandu-matrix` for a
@@ -1524,3 +1539,148 @@ clean `HOME`, its `PATH`, `TMPDIR` unset) passed every cell: `host` smoke,
 kernel and wrapper; smoke, fresh-install and fresh-agents on 24.04 and
 25.10; smoke, kernel, all, wrapper, fresh-install and fresh-agents on
 26.04: 15 of 15 in 49 minutes, on a loaded runner host.
+
+### 10.20 OpenClaw's Gateway as a service, attached: the `fresh-openclaw-plugin` suite
+
+`fresh-agents` runs OpenClaw under the wrapper (`mandu openclaw agent
+--local`). Most people run OpenClaw's Gateway as a resident service, and for
+them Mandu attaches the other way round: `mandu serve` beside it and Mandu's
+plugin inside it ([`openclaw-plugin.md`](../agents/openclaw-plugin.md)).
+This suite runs that path on a clean guest the way a user would, as the
+empty-HOME user `alice`, every product step through `runuser`:
+
+1. nvm Node (the major OpenClaw's `engines` asks for, chosen by the host prep
+   as in §10.14), `npm install -g openclaw@<version>`, and OpenClaw's own
+   scripted setup (`openclaw onboard --non-interactive --accept-risk --mode
+   local --auth-choice apiKey …`, a dummy key, the daemon left for step 4).
+   The suite checks onboarding chose an Anthropic model and wrote no
+   Anthropic endpoint, and keeps a copy of the file.
+2. A planted `~/.aws/credentials` holding a canary.
+3. Mandu from a copy of the guest's checkout, the way
+   [`development.md`](../../development.md) §1 says (`scripts/bootstrap.sh`;
+   no `build-native.sh`, the attachment uses none of the native helpers).
+   **Not a packed tarball**: the plugin ships only in a checkout today, so
+   this is the one install suite whose artifact is the checkout (§10.3.2
+   says why the others are not). Then `loginctl enable-linger alice`, so
+   her real systemd user manager runs, and `mandu serve install` and `mandu
+   serve status` under it.
+4. `mandu openclaw install`, then OpenClaw's Gateway as its own user service
+   (`openclaw gateway install`, `start`, and `restart` once it serves),
+   then `mandu doctor`: the plugin and the route ✓, and, with the pool, the
+   `gated` posture with the `openclaw-plugin` gap and the warning that
+   confined launches lose their guard's attestation while the attachment is
+   live (openclaw-plugin.md §3.3).
+5. One turn through the running Gateway (`openclaw agent --agent main
+   --json`, the Gateway's own client, offline) against the scripted model:
+   `fresh-agents/fake-model.mjs --script attach`, which sits where
+   api.anthropic.com would for Mandu's service proxy (a drop-in on
+   `mandu.service` sets the proxy's `MANDU_UPSTREAM`; OpenClaw's own
+   provider stays as onboarding wrote it, since `mandu openclaw install`
+   refuses a config that already sends Anthropic calls elsewhere). The
+   script is three rounds: a `read` of the credential file; on its result,
+   a `read` of `~/.mandu/config.toml`; on that result, a reply quoting the
+   first result's placeholder. The oracles: the canary is in no request the
+   model got; the read's result is a `$MDU:` placeholder; the read really
+   happened (OpenClaw's own local record holds the raw file, as
+   `agent-leg.sh` reads Codex's rollout log); the second call came back as
+   the plugin's refusal ("Mandu refused this read call …") and left its
+   `openclaw:tamper:mandu-state` event; the reply the client got keeps the
+   placeholder and holds no canary. A CLI turn without `--deliver` goes to
+   no channel, so `message_sending` (the reply check) does not run: a NOTE.
+6. `mandu scan`: it must run; what it says about the Gateway's session is
+   printed, not checked, until scan knows plugin sessions.
+7. `mandu openclaw uninstall`: the file, keys sorted, equals the copy from
+   step 1, and the Gateway restarts on it; `mandu serve uninstall` removes
+   the unit; no process runs from the checkout.
+
+**Until the pool lands.** `mandu serve` does not run the per-session proxy
+pool yet (openclaw-plugin.md §3.2). The suite tells by `mandu serve status`:
+no `attached:` line, no pool. Then step 4 asserts the refusal instead (exit
+1, the reason names the missing service proxy and `mandu serve start`,
+"Nothing was written", `openclaw.json` byte for byte unchanged, no backup),
+step 5 is a PENDING note, and steps 6 and 7 run on the untouched config. A
+status with an `attached:` line runs the whole leg, so the pool's MR turns
+it on with no edit here.
+
+**Scheduling.** As `fresh-agents`: in the `SUITES` of `ubuntu-2404`,
+`ubuntu-2510` and `ubuntu-2604`, so the `v*` tag job's `run-matrix.sh` runs
+it, and by hand:
+
+    scripts/matrix/run.sh ubuntu-2404 fresh-openclaw-plugin
+    FRESH_OPENCLAW_VERSION=latest scripts/matrix/run.sh ubuntu-2604 fresh-openclaw-plugin
+
+The host prep is unit-tested (`scripts.fresh-openclaw-plugin-host`), the
+script mode of the model with the others (`scripts.fresh-agents-fake-model`).
+
+#### 10.20.1 First runs (2026-10-25)
+
+With the pool not built (master), the suite passed on `ubuntu-2404` and
+`ubuntu-2604` with OpenClaw 2026.9.9 and Node 24 (37 checks each): onboarding chose
+`anthropic/claude-opus-5-5` and wrote no `models` key; bootstrap took about
+75 s; `mandu serve install` ran the stack under alice's user manager; the
+install refused with nothing written; the Gateway ran as
+`openclaw-gateway.service` beside `mandu.service`; uninstall and the
+service's removal left nothing running.
+
+A second 24.04 guest, driven by hand (`run.sh --interactive`), started a
+stand-in for the pool before step 4 (the anthropic-proxy for `openclaw:main`
+with the attachment's environment, its port file at the contract's path,
+openclaw-plugin.md §8) and ran the rest of the leg against it. Everything
+held but what only the pool provides (the `attached:` status line, the
+posture's gap and attestation lines in `mandu doctor`). It found:
+
+1. **OpenClaw 2026.9.9 refuses a restart before the started Gateway
+   serves** (`GATEWAY_RESTART_PREPARATION_REFUSED: Cannot verify a live
+   serving Gateway owner`). The suite waits for `openclaw gateway health`
+   between `start` and `restart`, as a user would see it come up.
+2. **The read's result is one placeholder, not the file's keys.** Without
+   the wrapper's file guard there is no structured twin: the proxy masks the
+   whole credential file (`$MDU:nomodel_read[…]`). The check asks for a
+   placeholder, and the read's evidence comes from OpenClaw's own record
+   (its session store, `~/.openclaw/agents/main/agent/openclaw-agent.sqlite`
+   in 2026.9.9), which holds the raw file.
+3. **Without a registered attachment, `mandu scan` reports the Gateway's
+   session as a leak** ("2 of your secrets leaked to the AI ... the agent
+   read the file"): it reads OpenClaw's record, which holds the tool's raw
+   output from before the proxy masked it. With the pool's registration
+   (below) the same session reads "1 session ran under Mandu: there the AI
+   saw placeholders".
+4. **Uninstall did not give the file back.** Onboarding writes no `models`
+   key; install creates `models.providers.anthropic`, and uninstall left
+   `{api: "anthropic-messages", models: []}` behind (OpenClaw accepts it).
+   Fixed: uninstall removes a provider it leaves holding only that, and the
+   blocks that held only it (unit `openclaw-attach`, component
+   `openclaw-install`); with the fix the restored file equals onboarding's.
+5. **Doctor's caveat lost its verb** ("the agent's programs run as you and
+   can (a policy, not a boundary)"). Fixed: "… and can still change it".
+6. **A worktree's guest copy had a broken `.git`.** A git worktree's `.git`
+   is a file naming the host's repository, which the copy's directory
+   excludes let through, so `cp` could not put the one-commit repository in
+   its place. The guest runner now removes it first (unit
+   `matrix-provision`).
+
+Then against the pool's branch (`feat/serve-attachment-pool`, merged
+locally over this suite's commit), on both targets. Everything up to the
+turn held: the install waited for the pool's proxy and declared the
+session; `mandu serve status` showed `openclaw:main: proxy on
+127.0.0.1:<port>, answering, registered, 4 secret files registered,
+posture gated (gap openclaw-plugin)` with the posture line and both
+attestation warnings; `mandu doctor`'s "Mandu service attachments" section
+showed the proxy, the four registered secret files, the posture and the ✗
+attestation warning; uninstall detached the session and the restored file
+equalled onboarding's. The turn failed:
+
+7. **The pool's proxy ignores the service's `MANDU_UPSTREAM`.** Its
+   environment is `poolProxyEnv({base: {...service env, ...spawn form env},
+   …})`, and the supervisor's spawn form for the anthropic-proxy always sets
+   `MANDU_UPSTREAM` (`upstreamAnthropic`, default `https://api.anthropic.com`),
+   so the form's value wins over the unit's `Environment=` and no option is
+   passed. The proxy went to api.anthropic.com, and OpenClaw failed the turn
+   with HTTP 401 (the dummy key). Reported to the pool's change, which owns
+   the files; with a local one-line patch that gives the pool's proxy the
+   service's `MANDU_UPSTREAM`, the whole leg passed on both targets (54
+   checks each): the canary in no request, the read a `$MDU:` placeholder,
+   OpenClaw's own record holding the raw file, the `~/.mandu` call refused
+   with the plugin's event, the reply `MANDU_FAKE_DONE: the key in that file
+   is $MDU:nomodel_read[…]`. Until the pool honours it, step 5 fails on a
+   build with the pool: the suite's signal, not a flake.

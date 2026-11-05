@@ -99,6 +99,13 @@ const rowBy = (doc: Doc, sel: string, key: string, value: string) => [...doc.que
 const labelRow = (doc: Doc, id: string) => rowBy(doc, "#settings-labels .label-row", "id", id);
 const modelRow = (doc: Doc, name: string) => rowBy(doc, "#settings-models .model-row:not(.model-removed)", "name", name);
 const kindRow = (doc: Doc, cat: string) => rowBy(doc, "#settings-prompt-kinds .prompt-kind", "category", cat);
+/** A level picked on a label's row, as a person does: Save waits for a
+ *  change (dashboard.md §4.25s *Save waits for a change*). */
+function pickLevel(row: Doc, level: string): void {
+  const pick = row.querySelector("select.label-level");
+  pick.value = level;
+  pick.dispatchEvent(new pick.ownerDocument.defaultView.Event("change", { bubbles: true }));
+}
 const exceptionRow = (doc: Doc, match: string) => [...doc.querySelectorAll("#settings-prompt-exceptions .prompt-exception")].find((r: Doc) => r.querySelector("code:last-of-type")?.textContent === match);
 
 function settings(routes: Record<string, unknown> = {}) {
@@ -149,6 +156,7 @@ test("Settings › Sensitivity labels: Save gives the focus back to Save on the 
     "POST policy/sensitivity-labels/change": (b: { id: string }) => ((mapped ||= b.id === OTHER), { applied: true, changeId: "pc-1", note: "Mandu's next scan suggests with this." }),
   });
   await tick();
+  pickLevel(labelRow(doc, CONF), "no-model");
   const old = labelRow(doc, CONF).querySelector(".label-save-btn");
   press(old);
   await tick(30);
@@ -156,6 +164,7 @@ test("Settings › Sensitivity labels: Save gives the focus back to Save on the 
   assert.notEqual(now, old, "the list was drawn again");
   assert.equal(focused(doc), now, "Save on the same label, never another label's");
   assert.equal(controlName(focused(doc)), "Save the level for Confidential");
+  assert.equal(now.getAttribute("aria-disabled"), "true", "greyed at the level saved, and still given the focus");
 
   const open = labelRow(doc, OTHER);
   open.querySelector("input.label-name").value = "Customer Data";
@@ -246,12 +255,29 @@ test("Settings: a refused change gives the focus back to the button pressed, des
   assert.match(words.textContent, /^Sign in first/);
   assert.equal(b.getAttribute("aria-describedby"), words.id, "the refusal's words are read with the button");
 
-  page.window.confirm = () => false;
+  // A change the server asks about asks under the row (dashboard.md
+  // §4.25n): its sentence holds the focus, never Remove anyway; Escape and
+  // Cancel close it and give the focus back to Remove.
   const r = modelRow(doc, "lab").querySelector(".model-remove-btn");
   press(r);
   await tick(30);
-  assert.equal(focused(doc), r, "a change not made leaves the focus where it was pressed");
+  const box = modelRow(doc, "lab").nextElementSibling;
+  assert.ok(box.classList.contains("ask-in-place"));
+  assert.equal(focused(doc), box.querySelector(".ask-in-place-words"), "the sentence, never Remove anyway");
+  assert.equal(r.disabled, false, "the row's buttons are on again while it asks");
+  focused(doc).dispatchEvent(new page.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  await tick();
+  assert.equal(doc.querySelector("#settings-models .ask-in-place"), null, "Escape is Cancel");
+  assert.equal(focused(doc), r, "a change not made gives the focus back to the button pressed");
   assert.equal(r.getAttribute("aria-describedby"), null, "nothing was refused");
+  press(r);
+  await tick(30);
+  const cancel = [...doc.querySelectorAll("#settings-models .ask-in-place button")].find((x: Doc) => x.textContent === "Cancel");
+  cancel.focus();
+  cancel.click();
+  await tick();
+  assert.equal(doc.querySelector("#settings-models .ask-in-place"), null);
+  assert.equal(focused(doc), modelRow(doc, "lab").querySelector(".model-remove-btn"), "Cancel too");
 });
 
 test("Settings: Undo under a card gives the focus to its heading; a focus moved elsewhere meanwhile, and a press made without the focus, move nothing", async () => {
@@ -260,6 +286,7 @@ test("Settings: Undo under a card gives the focus to its heading; a focus moved 
     "POST policy/changes/pc-4/undo": { ok: true },
   });
   await tick();
+  pickLevel(labelRow(doc, CONF), "no-model");
   press(labelRow(doc, CONF).querySelector(".label-save-btn"));
   await tick(30);
   const undo = [...doc.querySelectorAll("#labels-notice button")].find((x: Doc) => x.textContent === "Undo");
@@ -269,6 +296,7 @@ test("Settings: Undo under a card gives the focus to its heading; a focus moved 
   assert.equal(focused(doc), doc.getElementById("settings-labels-title"));
 
   // Moved elsewhere while the change is on its way: it stays there.
+  pickLevel(labelRow(doc, CONF), "no-model");
   press(labelRow(doc, CONF).querySelector(".label-save-btn"));
   const elsewhere = doc.getElementById("model-open");
   elsewhere.focus();
@@ -278,6 +306,7 @@ test("Settings: Undo under a card gives the focus to its heading; a focus moved 
   // A click with the focus outside the card (a browser that does not focus
   // a clicked button): nothing is given the focus.
   doc.activeElement.blur();
+  pickLevel(labelRow(doc, CONF), "no-model");
   labelRow(doc, CONF).querySelector(".label-save-btn").click();
   await tick(30);
   assert.equal(focused(doc), doc.body);

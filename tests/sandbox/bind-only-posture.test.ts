@@ -11,6 +11,11 @@
  *   B2 `--require-confinement` REFUSES that launch; the child never runs.
  *   B3 the default launch: with the guard binary built it is `confined`
  *      (both layers); without it, `gated` with gap `no-guard`.
+ *   B4 a guard bin that is there but cannot start (Docker's default seccomp
+ *      profile refuses its pidfd_getfd, packaging.md §3.1): the launch runs
+ *      WITHOUT it, `gated` with gap `no-guard`, the bind still up; never a
+ *      launch that dies at the guard, never the confined claim; and
+ *      `--require-confinement` refuses.
  *   P1 the CVE-2026-87766 probe on this host answers `vulnerable` or `fixed`
  *      (never `unknown` where bwrap runs), agrees with an independent look
  *      through the link, and a launch with the bind in use prints the one
@@ -131,6 +136,39 @@ test("B3: the default launch is confined with the guard built, gated (no-guard) 
   } else {
     assert.deepEqual(r.events[0]!["secrets"], { posture: "gated", gap: "no-guard" }, log);
     assert.match(log, /file guard \(mandu-net-guard\) is not available/);
+  }
+});
+
+test("B4: a guard bin that cannot start (a container's seccomp profile) ⇒ GATED (no-guard), the agent runs, the bind still up; --require-confinement refuses", { skip, timeout: 120_000 }, async () => {
+  // A stand-in for the guard under Docker's default seccomp profile: it is
+  // there, but every run fails closed at setup (exit 71, the target never
+  // run), as mandu-net-guard does when pidfd_getfd is refused
+  // (packaging.md §3.1). The probe must keep it out of the launch.
+  const dir = mkdtempSync(join(tmpdir(), "mandu-guard-blocked-"));
+  const bin = join(dir, "mandu-net-guard");
+  writeFileSync(bin, "#!/bin/sh\necho 'mandu-net-guard: could not take over the seccomp listener (fail-closed; target NOT exec'\"'\"'d)' >&2\nexit 71\n", { mode: 0o755 });
+  const saved = process.env["MANDU_NET_GUARD_BIN"];
+  process.env["MANDU_NET_GUARD_BIN"] = bin;
+  try {
+    const r = await launch([], { MANDU_NET_GUARD_BIN: bin });
+    const log = r.lines.join("\n");
+    assert.equal(r.err, null, `${r.err?.message}\n${log}`);
+    assert.equal(r.code, 0, `the agent must run without the guard, not die at it:\n${log}`);
+    assert.match(log, /whole-agent connect-guard cannot start on this machine: .*pidfd_getfd.*proceeding WITHOUT it/);
+    assert.match(log, /mandu: secrets are GATED, not confined, on this host\./);
+    assert.doesNotMatch(log, /net-guard LIVE/, "a guard that cannot start is never announced");
+    assert.match(r.out, /CHILD_RAN/);
+    assert.ok(!r.out.includes(RAW), `the bind must still cover the file found at launch:\n${r.out}`);
+    assert.equal(r.events.length, 1, log);
+    assert.deepEqual(r.events[0]!["secrets"], { posture: "gated", gap: "no-guard" }, "gated never borrows the confined claim");
+
+    const s = await launch(["--require-confinement"], { MANDU_NET_GUARD_BIN: bin });
+    assert.ok(s.err !== null || (s.code ?? 0) !== 0, "--require-confinement must refuse when the guard cannot start");
+    assert.match(s.err?.message ?? s.lines.join("\n"), /--require-confinement is set, but the whole-agent guard \(mandu-net-guard\) is not available/);
+    assert.doesNotMatch(s.out, /CHILD_RAN/, "a refused launch never runs the agent");
+  } finally {
+    if (saved === undefined) delete process.env["MANDU_NET_GUARD_BIN"]; else process.env["MANDU_NET_GUARD_BIN"] = saved;
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

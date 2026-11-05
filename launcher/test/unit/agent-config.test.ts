@@ -15,6 +15,7 @@ import {
   fenceOpenclawCodeMode,
   fenceOpenclawExecHost,
   fenceOpenclawMemorySearch,
+  fenceOpenclawModelAllowlist,
   fenceOpenclawWebEgress,
   openclawHasCodeModeKey,
   fenceOpenclawWorkspace,
@@ -574,8 +575,50 @@ const ROUTES = [
   { id: "deepseek", api: "openai-completions" as const, upstream: "https://api.deepseek.com/v1" },
 ];
 
-test("openaiRouteBaseUrl: the proxy's per-provider prefix", () => {
+test("openaiRouteBaseUrl: the proxy's per-provider prefix (a Gemini route under /_mandu/google/)", () => {
   assert.equal(openaiRouteBaseUrl("http://127.0.0.1:8788", "openai"), "http://127.0.0.1:8788/_mandu/openai/openai");
+  assert.equal(openaiRouteBaseUrl("http://127.0.0.1:8788", "openai", "openai-completions"), "http://127.0.0.1:8788/_mandu/openai/openai");
+  assert.equal(openaiRouteBaseUrl("http://127.0.0.1:8788", "google", "google-generative-ai"), "http://127.0.0.1:8788/_mandu/google/google");
+  assert.equal(openaiRouteBaseUrl("http://127.0.0.1:8788", "ollama", "ollama"), "http://127.0.0.1:8788/_mandu/ollama/ollama");
+});
+
+test("an Ollama route (model-wires.md, \"The Ollama wire\"): OpenClaw's provider at /_mandu/ollama/<id> with api ollama and the session headers", () => {
+  const routes = [{ id: "ollama", api: "ollama" as const, upstream: "http://127.0.0.1:11434" }];
+  const oc = buildOpenclawWrapDoc(input({ openaiRoutes: routes }), PLAN_SLICE, undefined, [], {}) as {
+    models: { providers: Record<string, { baseUrl: string; api: string; headers: Record<string, string>; models: unknown[] }> };
+  };
+  assert.equal(oc.models.providers["ollama"]!.baseUrl, "http://127.0.0.1:8788/_mandu/ollama/ollama");
+  assert.equal(oc.models.providers["ollama"]!.api, "ollama");
+  assert.equal(oc.models.providers["ollama"]!.headers["x-mandu-session-id"], "sid-1");
+  assert.deepEqual(oc.models.providers["ollama"]!.models, []);
+});
+
+test("a Gemini route (model-wires.md §5): OpenClaw's provider at /_mandu/google/<id> with api google-generative-ai; OpenCode's options.baseURL there too", () => {
+  const routes = [{ id: "google", api: "google-generative-ai" as const, upstream: "https://generativelanguage.googleapis.com/v1beta" }];
+  const oc = buildOpenclawWrapDoc(input({ openaiRoutes: routes }), PLAN_SLICE, undefined, [], {}) as {
+    models: { providers: Record<string, { baseUrl: string; api: string; headers: Record<string, string> }> };
+  };
+  assert.equal(oc.models.providers["google"]!.baseUrl, "http://127.0.0.1:8788/_mandu/google/google");
+  assert.equal(oc.models.providers["google"]!.api, "google-generative-ai");
+  assert.equal(oc.models.providers["google"]!.headers["x-mandu-session-id"], "sid-1");
+  const doc = buildOpencodeWrapDoc(input({ target: "opencode", openaiRoutes: routes }), PLAN_SLICE, Layout.dev("/repo")) as {
+    enabled_providers: string[]; provider: Record<string, { options: { baseURL: string } }>;
+  };
+  assert.deepEqual(doc.enabled_providers, ["anthropic", "google"]);
+  assert.equal(doc.provider["google"]!.options.baseURL, "http://127.0.0.1:8788/_mandu/google/google");
+});
+
+test("a Vertex route (model-wires.md §4.1): OpenClaw's google-vertex at the proxy's ORIGIN (its transport keeps only the origin), api google-vertex pinned, the session headers carried, the allowlist fence naming it", () => {
+  assert.equal(openaiRouteBaseUrl("http://127.0.0.1:8788/", "google-vertex", "google-vertex"), "http://127.0.0.1:8788");
+  const routes = [{ id: "google-vertex", api: "google-vertex" as const, upstream: "https://{location}-aiplatform.googleapis.com" }];
+  const oc = buildOpenclawWrapDoc(input({ openaiRoutes: routes }), PLAN_SLICE, undefined, [], {}) as {
+    models: { providers: Record<string, { baseUrl: string; api: string; headers: Record<string, string> }> };
+  };
+  assert.equal(oc.models.providers["google-vertex"]!.baseUrl, "http://127.0.0.1:8788");
+  assert.equal(oc.models.providers["google-vertex"]!.api, "google-vertex");
+  assert.equal(oc.models.providers["google-vertex"]!.headers["x-mandu-session-id"], "sid-1");
+  const fenced = fenceOpenclawModelAllowlist(oc as Record<string, unknown>, ["google-vertex"]) as { agents: { defaults: { models: Record<string, unknown> } } };
+  assert.ok("google-vertex/*" in fenced.agents.defaults.models);
 });
 
 test("openclaw doc: each routed provider points at its prefix, api pinned, headers carried, models cleaned", () => {
@@ -855,6 +898,26 @@ test("writeAgentConfig: the OpenClaw config the launcher writes routes web egres
     const off = JSON.parse(readFileSync(writeAgentConfig(fullPlan({ agentVersion: "2026.9.9" }), Layout.dev("/repo"), dir, () => {}, {}).path, "utf8"));
     assert.equal(off.proxy, undefined);
     assert.equal(off.tools?.web, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeAgentConfig: an Azure OpenAI route pins AZURE_OPENAI_BASE_URL at the route in the agent's env (model-wires.md §9.1); none without one", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mdu-agent-config-"));
+  try {
+    const userCfg = join(dir, "user-openclaw.json");
+    writeFileSync(userCfg, JSON.stringify({ models: { providers: { azure: { api: "azure-openai-responses", baseUrl: "https://r.openai.azure.com", apiKey: "k" } } } }));
+    const routes = [{ id: "azure", api: "azure-openai-responses" as const, upstream: "https://r.openai.azure.com/openai/v1" }];
+    const r = writeAgentConfig(fullPlan({ openaiRoutes: routes }), Layout.dev("/repo"), dir, () => {}, { OPENCLAW_CONFIG_PATH: userCfg });
+    assert.deepEqual(r.env, { AZURE_OPENAI_BASE_URL: "http://127.0.0.1:8788/_mandu/openai/azure" });
+    const prov = JSON.parse(readFileSync(r.path, "utf8")).models.providers.azure;
+    assert.equal(prov.baseUrl, "http://127.0.0.1:8788/_mandu/openai/azure");
+    assert.equal(prov.api, "azure-openai-responses");
+    assert.equal(prov.apiKey, "k");
+    const none = writeAgentConfig(fullPlan({ openaiRoutes: [{ id: "openai", api: "openai-chatgpt-responses", upstream: "https://chatgpt.com/backend-api/codex" }] }), Layout.dev("/repo"), dir, () => {}, { OPENCLAW_CONFIG_PATH: userCfg });
+    assert.equal(none.env, undefined);
+    assert.equal(JSON.parse(readFileSync(none.path, "utf8")).models.providers.openai.baseUrl, "http://127.0.0.1:8788/_mandu/openai/openai");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

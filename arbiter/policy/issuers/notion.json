@@ -1,0 +1,10 @@
+{
+  "id": "notion",
+  "name": "Notion",
+  "formats": ["^ntn_[0-9A-Za-z]{40,64}$"],
+  "shapes": ["ntn_…"],
+  "hosts": ["api.notion.com"],
+  "docs": ["https://developers.notion.com/reference/authentication"],
+  "examples": ["ntn_{x*46}"],
+  "non_examples": ["secret_{x*43}", "ntn_{x*39}"]
+}

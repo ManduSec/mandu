@@ -1,6 +1,7 @@
 /**
  * response-id — the provider's id of the response an agent received on an
- * OpenAI-family wire (Chat Completions `chatcmpl-…`, Responses `resp_…`),
+ * OpenAI-family or Gemini wire (Chat Completions `chatcmpl-…`, Responses
+ * `resp_…`, Gemini `responseId`),
  * read off the bytes the proxy writes to the agent, for the `tllm_call`
  * event's `model.responseId`: the agents keep the same id in their own
  * records, and `mandu scan` joins a past session to Mandu on it
@@ -12,7 +13,8 @@
  *   interceptors/openai-proxy/src/response-id.ts     (its Chat Completions
  *        route; its Responses route reads the id in transcript.ts)
  * tests/stack/transcript-scan.test.ts fails unless both are byte-identical.
- * Change the anthropic-proxy copy and copy it out.
+ * Change the anthropic-proxy copy, then run
+ * `node scripts/copies/module-copies.mjs generate`.
  *
  * Which id: the one the agent keeps. OpenClaw's Chat reader keeps the first
  * chunk's `id` (`responseId ||= chunk.id`), the AI SDK OpenCode uses takes
@@ -22,6 +24,10 @@
  * has an `id`; Responses, the first `response.*` event carrying
  * `response.id`; a buffered body, its `id`. The first such id decides: an
  * ill-formed one (`responseIdOf`'s charset) gives none, never a later one.
+ * Gemini (model-wires.md §4.3): every chunk carries the answer's
+ * `responseId`, which OpenClaw keeps (`responseId ||= chunk.responseId`);
+ * the first chunk's decides, a buffered body's (or the JSON-array stream's
+ * first chunk's) likewise.
  * The sniffer reads what the agent is sent AFTER the proxy's gates, so a
  * chunk the gate dropped or a synthetic chunk it released is counted as the
  * agent saw it.
@@ -34,8 +40,8 @@
  */
 import { responseIdOf } from "./events.js";
 
-/** The OpenAI-family wires whose answer carries a response id. */
-export type ResponseIdWire = "chat" | "responses";
+/** The wires whose answer carries a response id. */
+export type ResponseIdWire = "chat" | "responses" | "gemini";
 
 /** Bytes of one undecided partial event kept; past it the id is given up. */
 const MAX_PENDING = 1024 * 1024;
@@ -43,14 +49,23 @@ const MAX_PENDING = 1024 * 1024;
 type Json = Record<string, unknown>;
 const isObj = (v: unknown): v is Json => v !== null && typeof v === "object" && !Array.isArray(v);
 
-/** A buffered (non-streamed) answer's id: the body's `id`, well formed. */
-export function responseIdOfBody(body: unknown): string | undefined {
+/** A buffered (non-streamed) answer's id: the body's `id` (Gemini: its
+ *  `responseId`, or the first chunk's of a JSON-array stream), well formed. */
+export function responseIdOfBody(body: unknown, wire: ResponseIdWire = "chat"): string | undefined {
+  if (wire === "gemini") {
+    const first: unknown = Array.isArray(body) ? body[0] : body;
+    return isObj(first) ? responseIdOf(first["responseId"]) : undefined;
+  }
   return isObj(body) ? responseIdOf(body["id"]) : undefined;
 }
 
 /** The id one parsed SSE event carries for `wire`; `null` when the event
  *  carries none (look further). */
 function eventId(wire: ResponseIdWire, ev: Json): unknown {
+  if (wire === "gemini") {
+    const id = ev["responseId"];
+    return id === undefined || id === null || id === "" ? null : id;
+  }
   if (wire === "chat") {
     const id = ev["id"];
     return id === undefined || id === null || id === "" ? null : id;

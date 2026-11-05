@@ -86,6 +86,7 @@ followed by EOF, so its client sees the refusal instead of an idle stream.
 | `recordForwardedClear`, `forwardedClear` | human | the tool-call ids whose result a model proxy forwarded in clear, kept so a resumed conversation gets the after-the-fact note (confidentiality.md §7.1, *Across a resume*). No original, but from the data socket the agent world could name a call whose result the model never read, and Mandu's system note would then vouch, in Mandu's voice, that it did. Both proxies dial them on their human client |
 | `recordForwardedPlaceholders`, `forwardedPlaceholders` | human | where Mandu's placeholders sat in an OpenClaw result a model proxy forwarded in clear, and a digest of it, kept so a relaunch can undo OpenClaw's history redaction (confidentiality.md §6, *Across a relaunch*). Tokens, offsets and a digest only, but from the data socket the agent world could plant a record (with its own digest) that a proxy would put back as Mandu's own text. The anthropic-proxy dials them on its human client |
 | `cacheSeals`, `sealCacheEntries`, `beginLaunch`, `endLaunch` | human | the enforcement caches' seals and epochs (confidentiality-plan-14 §11.2). No original, but from the data socket a confined agent could re-seal a cache file planted during an earlier unconfined period (it knows the hash: it wrote the file), or hold every seal void with a fake live launch. The launcher dials them; the arbiter's own scan cache uses the store in-process |
+| `beginAttachment`, `renewAttachment`, `endAttachment`, `updateAttachment` | human | an attachment session (openclaw-plugin.md §3.3, §3.6, §10.1.2 below): Mandu attached to an agent it does not run. From the data socket the agent world could record a believed posture for a session of its choosing, end the attachment that holds the human plane exposed and every seal void, or record its lost route as restored. The registering service dials them (`updateAttachment` on the admin channel, the only one believed while its attachment is live) |
 | `clearSessionPathLabels` | human | drops a session's machine path labels (confidentiality.md §8, session labels). It lowers protection: from the data socket the agent world could drop the label on its own background output file and read the file raw. Nothing calls it on its own: the labels are memory-only, and clearing one would lower the protection of a file still on disk |
 | `registerAuthGrant` | human | binds a field of the agent's own key file, or the agent's key variable (`env`, §3.8), to the host it authenticates to (agent-sign-in.md §3), which releases the key there: from the data socket the agent could bind its key to a host of its own. The launcher dials it, with its pid: the grant survives an arbiter restart while that launcher lives (agent-sign-in.md §3.2 item 4) |
 | `humanPlaneStatus` | human | whether a launch with no wall is live, by pid and session (§10.1.1): display only, but it names sessions, which `sessions` keeps on the human plane |
@@ -123,12 +124,35 @@ before, the whole command was withheld as `secret_symbol`); public rows
 still resolve in-slot (`policy/exec-classify.ts`, `secret-egress.test.ts`
 "exec OFF-dual").
 
-**Follow-up (not built):** move the U-LLM call out of the agent's tree (a
-service outside the agent world that inspect-mcp asks by symbol), so deep
-`resolve` can leave the data plane too. Until then an `any-model` (or, at a
-declared local endpoint, `local-model`) original is one data-socket call away
-from a program the agent runs; that is the level's own contract (a cleared
-model may read it) but the reader here is not a model.
+**Known gap (finding F1, 2026-10-27, kept by the maintainer's decision).**
+An `any-model` original, and at a declared local endpoint a `local-model`
+one, is one data-socket call away from any program the agent runs, and the
+caller is not made a holder: the arbiter records no process taint for it,
+so the guard does not confine its connects, sends or writes, and the
+session is not watermarked as a rung-3 read would watermark it. The reader
+here is not a model. For `any-model` that loses the rung-3 log, approval
+and confinement; for `local-model` it also lets the content (re-encoded,
+past the proxies' verbatim-value backstop) reach the vendor main model.
+`no-model` is refused at every endpoint, so the headline residency claim
+holds. The user-facing statement is in `docs/guarantees.md` §3 ("A program
+the agent runs can read an `any-model` or `local-model` file"). The arbiter
+cannot close it alone: Node cannot read `SO_PEERCRED` on the socket, and
+making the caller a holder only in the arbiter's provenance store would
+leave the guard's own `TaintedSet` unaware of it and the caller's already
+open sockets unswept.
+
+**Follow-up (not built), either of:**
+
+- *`taintCaller` in the guard (design work, about 1–2 person-weeks).* The
+  guard, which already identifies a process for a raw secret open, learns
+  of each deep resolve answered above `public` before the reply leaves:
+  it names the caller, records the taint in its `TaintedSet` and the
+  arbiter's store, sweeps the caller's open sockets as `sweep_before_taint`
+  does for a raw open, and the reply is withheld (`value: null`) when any
+  of that fails.
+- *Move the U-LLM call out of the agent's tree* (a service outside the
+  agent world that inspect-mcp asks by symbol), so deep `resolve` can leave
+  the data plane.
 
 ## 5. Where each consumer runs and which channel it uses
 
@@ -709,7 +733,8 @@ and none of it changes an answer.
   (confidentiality-plan-10 §11.13, "The launch's HOME").
 - **`humanPlaneStatus`** (a `HUMAN_PLANE_OPS` member: it names sessions,
   which `sessions` keeps on the human plane): `{exposed, since, launches:
-  [{pid, mode, posture, session?, begunAt?}]}`. A store that cannot answer
+  [{pid, mode, posture, session?, begunAt?, attachment?}]}` (`attachment`: an
+  attachment's kind, pid 0, §10.1.2). A store that cannot answer
   is exposed with one launch of pid 0, as for the belief rule.
 - **The arbiter tells each change once.** When the set of unwalled
   launches changes (begins, grows, ends), the arbiter logs it and appends
@@ -774,6 +799,67 @@ and the recap after it), with `launcher/test/unit/launch-banner.test.ts`
 (`holdUntilBanner`: held, released whole and in order once, live lines at
 once after).
 
+#### 10.1.2 An attachment is an unwalled launch with no pid (2026-10-25)
+
+Mandu attached to an agent it does not run (the OpenClaw plugin inside the
+user's own Gateway, openclaw-plugin.md §3.3) has no wall at all: the
+Gateway's programs run as the user, outside every Mandu sandbox, and reach
+the human socket and the Mandu home. Its registration (`beginAttachment`,
+human plane, sent by the resident service, never by the plugin) is
+therefore counted exactly as an unwalled, unconfined launch: while it is
+live `CacheSealStore.humanPlaneExposure` answers it (pid 0, `attachment:
+<kind>`, its session), every attested report on the human socket is a
+claim, no cache seal is honoured, and its end rotates the epoch. The
+fail-closed side wins; the attachment is also never guarded (its session
+joins the unguarded set for the arbiter's run).
+
+Its lifetime is a lease, not a pid (the service is no ancestor of the
+Gateway and may run in another pid namespace): 60 s from `beginAttachment`
+or the last `renewAttachment`, then it ends as a gone launcher does. The
+rows persist with a deadline; after a restart a row counts until its
+deadline but never past one lease from when the arbiter first saw it, and a
+deleted row does not end the in-memory copy. A shutdown with one live is
+not clean (the next start rotates). One attachment per session: a second
+registration replaces the first without a rotation. Each registration's
+period (start, last renewal, end) outlives its row in
+`attachment_periods`, written by the same three ops and nothing else, for
+`mandu scan` to mark the Gateway's transcripts under Mandu
+(confidentiality-plan-17-past-sessions-scan.md §3 item 6).
+
+The utility cost is §10.1's, for as long as the service runs: a confined
+launch on the same machine loses its guard's attestation while an
+attachment is live, and every launch rebuilds its enforcement caches. The
+human-plane watch, the dashboard's status and Home's notice name the
+attachment ("Mandu's plugin in an OpenClaw Gateway") instead of a pid.
+
+The posture record is the arbiter's own: on an attested registration the
+arbiter appends the session's `launch_posture` (emitter `arbiter`,
+`secrets: {posture: gated, gap: <kind>}`, `humanPlaneWalled: false`); on an
+unattested one (the plane already exposed) it is stored as a claim. While an
+attachment of a session is live, no `emit` of a `launch_posture` for that
+session is taken from the data socket or the exposed human socket, and the
+dashboard prefers a believed posture record over a claimed one
+(dashboard.md §4.23). Tests: `arbiter/test/unit/attachment-session.test.ts`,
+`tests/stack/attachment-session.test.ts`.
+
+**The route check's record (2026-10-25, openclaw-plugin.md §3.6).** The
+service checks that the Gateway's config still routes through Mandu, and
+reports what it finds with `updateAttachment {token, coverage, route}`: the
+coverage is the kind's or less (`modelContext: none` when model calls may go
+around the proxy, `exec`/`replies: none` when the plugin is not loaded;
+confinement-posture.ts `attachmentCoverageProblem`, the same rule
+`beginAttachment` now applies), the posture is decided by `resolvePosture`
+(`gated` / `model-route-lost` once the model context is lost), and the
+arbiter appends a new `launch_posture` carrying `attachmentRoute` (the
+problems, bounded text). Believed only on an attested channel: while the
+attachment is live the human socket is exposed, so the service sends it on
+its dashboard's admin channel; from the exposed human socket it is stored
+as a claim, which the dashboard never shows over a believed record (so no
+program in the Gateway can mark a lost route restored). The dashboard reads
+an attachment's NEWEST believed record. A registration may carry the lost
+coverage and route too (a service that starts with the route already
+lost).
+
 ### 10.2 The observability records: believed on human, claims elsewhere
 
 `emit`, `recordToolCall` and `reportExecTwins` used to be accepted from the
@@ -816,7 +902,13 @@ Now:
   ships the field (`labels.mandu_claimed`), rule 100227 shows a claim and
   rule 100214 (and so the burst, the campaign rule and its lockdown) skips
   one. The Home counts and the invariant chip still count claims (display
-  only: a claim can add a red mark, never remove one).
+  only: a claim can add a red mark, never remove one). One exception
+  (2026-10-25): the product page's "Show the real value" of an attachment
+  session (§10.1.2), whose own proxy's records are all claims because the
+  attachment holds this plane exposed, reads every event of that session
+  once the arbiter's believed registration record names it an attachment;
+  the value goes only to the signed-in person on a click
+  ([dashboard.md](../ui/dashboard.md) §4.25aj, `revealScopeEvents`).
 - **Tool calls.** `recordToolCall` is believed only from the human socket
   (the Claude proxy sends it there); a claimed record never replaces a
   believed one, and `symbolProvenance` answers a claimed one as no record

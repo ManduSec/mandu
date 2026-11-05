@@ -20,12 +20,15 @@
  * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code; mirrors
  * launcher/src/update-check.ts (`parseVersion`, `compareVersions`,
  * `newerRelease`, `updateChannel`, `installLine`, `cacheFresh`,
- * `readUpdateCache`) and the installed/dev decision of
- * launcher/src/services/layout.ts `Layout.detect`.
+ * `readUpdateCache`), the installed/dev decision of
+ * launcher/src/services/layout.ts `Layout.detect`, and, for whether the
+ * launcher checks at all, the config key's part of `updateCheckGate` (the
+ * `update-check` key through launcher/src/config.ts's bool coercion).
  */
 import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseTomlSubset } from "./config-axes.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -148,6 +151,41 @@ export function layoutOf(moduleUrl: string, env: Env, exists: (p: string) => boo
 /** The channel of the package this dashboard runs from. */
 export function dashboardChannel(env: Env, exists: (p: string) => boolean = existsSync): UpdateChannel {
   return updateChannel(layoutOf(import.meta.url, env, exists), exists);
+}
+
+// ── whether the launcher checks ──────────────────────────────────────────────
+
+/** Whether the launcher checks for a newer release, as far as the
+ *  dashboard can tell (dashboard.md §4.25 *A newer release*): `on`; `off`,
+ *  config.toml's `update-check` turns it off; `source`, a source checkout
+ *  with the key unset, which the launcher does not check from. */
+export type UpdateCheckSetting = "on" | "off" | "source";
+
+/** config.toml's `update-check` key in `text` (null: no file, or the key is
+ *  absent), with the launcher's bool coercion (config.ts `coerce`): only
+ *  `true` or `"true"` is on, any other value off. Pure. */
+export function configuredUpdateCheck(text: string | null): boolean | null {
+  if (text === null) return null;
+  const cfg = parseTomlSubset(text);
+  if (!("update-check" in cfg)) return null;
+  const v = cfg["update-check"];
+  return v === true || v === "true";
+}
+
+/** The launcher's `updateCheckGate` for its key and layout: the key, when
+ *  set, decides; unset, an installed package checks and a source checkout
+ *  does not. CI and a launch whose output is not a terminal are the
+ *  launcher's alone (the dashboard cannot see them), and so is a
+ *  `MANDU_UPDATE_CHECK` exported in a shell. Pure. */
+export function updateCheckSetting(key: boolean | null, mode: LayoutMode): UpdateCheckSetting {
+  if (key === false) return "off";
+  if (key === true || mode === "installed") return "on";
+  return "source";
+}
+
+/** The layout this dashboard's package runs in (layoutOf over this module). */
+export function dashboardLayout(env: Env, exists: (p: string) => boolean = existsSync): LayoutMode {
+  return layoutOf(import.meta.url, env, exists).mode;
 }
 
 // ── the cache ────────────────────────────────────────────────────────────────

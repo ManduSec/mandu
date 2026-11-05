@@ -8,7 +8,8 @@
  *     row the focus; a page that could not be read says why;
  *   - the agent page's *What the leak check found*: each place, its time a
  *     button that opens the step; no word names the trace; then *What to do
- *     now*, its Report a problem link the issue tracker in a new tab;
+ *     now*, its Report it privately link the private vulnerability report
+ *     form (SECURITY_REPORT_URL) in a new tab, never the public tracker;
  *   - a turn's background: *List them* asks for its steps
  *     (`&background=<turn id>`), and the first line takes the focus;
  *   - an original cut at the page's cap: signed in, *Show the whole original*
@@ -20,12 +21,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { AGENT, T, home, load, tick } from "./home-js-fixtures.js";
-import { ISSUES_URL } from "../../../src/agent-versions.js";
+import { SECURITY_REPORT_URL } from "../../../src/agent-versions.js";
 
 const row = (id: string, over: Record<string, unknown> = {}) => ({
   id, agent: "Claude Code", title: `Task ${id}`, cwd: "/home/u/ws", startedAt: "2026-09-01T10:00:00.000Z", lastAt: "2026-09-01T10:05:00.000Z", state: "idle",
   stats: { flows: 0, secret: 0, complete: 0, egressAllowed: 0, egressBlocked: 0, egressPending: 0 }, secrets: { masked: 1, early: 0 }, untrusted: 0, blocked: 0, sent: 0, holds: true, waiting: 0, notice: null, preview: null, ...over,
 });
+/** A row's Details, not the "last step" link a running row has before it. */
+const DETAILS = 'a.right[data-page-link="agent"]';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const historyRows = (doc: any) => [...doc.querySelectorAll("#history-list .row.agent")] as any[];
 /** The words a reader can reach: no hidden element's. */
@@ -62,7 +65,7 @@ test("History: Home's link opens it in a product-only build; rows newest first, 
   assert.match(rows[0].textContent, /running now, started/);
   assert.match(rows[1].textContent, /protection failed, 1 secret masked, 2 actions blocked/);
   assert.match(rows[1].textContent, /ended/);
-  assert.equal(rows[0].querySelector("a").getAttribute("href"), "/mandu/agents/s1");
+  assert.equal(rows[0].querySelector(DETAILS).getAttribute("href"), "/mandu/agents/s1");
   const more = doc.querySelector("#history-list .history-more");
   assert.equal(more.textContent, "1 more session. Show more");
   const btn = more.querySelector("button");
@@ -76,7 +79,7 @@ test("History: Home's link opens it in a product-only build; rows newest first, 
   assert.equal(doc.querySelector("#history-list .history-more"), null, "nothing more");
   assert.deepEqual(reachableDevLinks(doc), []);
   // A row opens its agent page.
-  rows[0].querySelector("a").click();
+  rows[0].querySelector(DETAILS).click();
   await tick();
   assert.equal(doc.defaultView.location.pathname, "/mandu/agents/s1");
 });
@@ -102,7 +105,7 @@ const flaggedAgent = {
     todo: [
       [T("Change "), { kind: "code", text: "API_KEY" }, T(" where it was issued, and turn the old one off: the AI's provider received it as it was.")],
       [T("If what reached the AI held a key or a password, change it the same way. Open the step to see what it was.")],
-      [T("This is a fault in Mandu, not in your rules. "), { kind: "text", text: "Report a problem", href: ISSUES_URL }, T(", with this session's time. Never paste the key itself.")],
+      [T("This is a fault in Mandu, not in your rules. "), { kind: "text", text: "Report it privately", href: SECURITY_REPORT_URL }, T(" to Mandu's maintainers, with this session's time. Do not open a public issue, and never paste the key itself.")],
     ],
   },
 };
@@ -137,20 +140,20 @@ test("the agent page says what the leak check found: each place, its time openin
   assert.deepEqual(todos.map((li) => li.textContent), [
     "Change API_KEY where it was issued, and turn the old one off: the AI's provider received it as it was.",
     "If what reached the AI held a key or a password, change it the same way. Open the step to see what it was.",
-    "This is a fault in Mandu, not in your rules. Report a problem, with this session's time. Never paste the key itself.",
+    "This is a fault in Mandu, not in your rules. Report it privately to Mandu's maintainers, with this session's time. Do not open a public issue, and never paste the key itself.",
   ]);
   assert.equal(todos[0].querySelector("code").textContent, "API_KEY");
   const links = [...todo.querySelectorAll("a")] as any[];
   assert.equal(links.length, 1);
-  assert.equal(links[0].textContent, "Report a problem");
-  assert.equal(links[0].getAttribute("href"), ISSUES_URL);
+  assert.equal(links[0].textContent, "Report it privately");
+  assert.equal(links[0].getAttribute("href"), SECURITY_REPORT_URL);
   assert.equal(links[0].getAttribute("target"), "_blank");
-  assert.match(links[0].getAttribute("rel"), /\bnoopener\b/);
+  assert.equal(links[0].getAttribute("rel"), "noopener noreferrer");
   // An address that is not https is drawn as plain words, never a link.
-  const odd = load({ extensions: "", url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...flaggedAgent, finding: { ...flaggedAgent.finding, todo: [[{ kind: "text", text: "Report a problem", href: "javascript:alert(1)" }]] } } } });
+  const odd = load({ extensions: "", url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...flaggedAgent, finding: { ...flaggedAgent.finding, todo: [[{ kind: "text", text: "Report it privately", href: "javascript:alert(1)" }], [{ kind: "text", text: "Report it privately", href: "http://github.com/mandusec/mandu/security/advisories/new" }]] } } } });
   await tick();
   assert.equal(odd.doc.querySelector("#agent-finding-todo a"), null);
-  assert.equal(odd.doc.getElementById("agent-finding-todo").textContent, "Report a problem");
+  assert.deepEqual([...odd.doc.querySelectorAll("#agent-finding-todo li")].map((li: any) => li.textContent), ["Report it privately", "Report it privately"]);
   // A session the check did not flag: no block.
   const clean = load({ extensions: "", url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, finding: null } } });
   await tick();

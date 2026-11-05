@@ -80,6 +80,7 @@ import type {
   GuardAttachResultWire,
   EgressFingerprintScanResultWire,
   StrippedPlaceholdersResultWire,
+  SigningKeysResultWire,
   TakeRelayNoticesResultWire,
   PlaceholderKnownResultWire,
   SessionLoginsWire,
@@ -138,6 +139,10 @@ import type {
   SealCacheEntriesResult,
   BeginLaunchResult,
   EndLaunchResult,
+  BeginAttachmentResult,
+  UpdateAttachmentResult,
+  RenewAttachmentResult,
+  EndAttachmentResult,
   HumanPlaneStatusResult,
   AgentReceiptTaintResultWire,
   SuggestFromScanOpRequest,
@@ -153,6 +158,7 @@ import type {
   DesymbolizationRequest,
 } from "../policy/policy-interface.js";
 import type { RelayNoticeWire } from "./relay-notices.js";
+import type { KubeOverlay, KubeUpstream } from "../policy/kubeconfig.js";
 import type { ExecShell } from "../policy/exec-classify.js";
 import type { ExecCleanVerdictReport } from "../policy/exec-clean-verdicts.js";
 import type { ExecTwinReport } from "../policy/exec-twin-store.js";
@@ -996,6 +1002,12 @@ export class ArbiterClient {
     return this.request<StrippedPlaceholdersResultWire>("strippedPlaceholders", { ...args });
   }
 
+  /** aws-sigv4-resign.md: the AWS secret-access-key placeholders a SigV4
+   *  request may have been signed with. Names only. */
+  async signingKeys(args: { sessionKey?: string } = {}): Promise<SigningKeysResultWire> {
+    return this.request<SigningKeysResultWire>("signingKeys", { ...args });
+  }
+
   /** Report a refusal of the DevTools relay's, for the browser agent's next
    *  model call (relay-notices.ts; devtools-relay.md §3.4). Names only. */
   async relayNotice(args: { notice: RelayNoticeWire; sessionKey?: string }): Promise<{ queued: true }> {
@@ -1021,6 +1033,8 @@ export class ArbiterClient {
     destination: string;
     /** The asking session's logins (secret-discovery.md §1.10). */
     sessionLogins?: SessionLoginsWire;
+    /** `reply`: a reply the model wrote (EgressFingerprintScanOpRequest.scope). */
+    scope?: "reply";
   }): Promise<EgressFingerprintScanResultWire> {
     return this.request<EgressFingerprintScanResultWire>("egressFingerprintScan", { ...args });
   }
@@ -1356,6 +1370,28 @@ export class ArbiterClient {
   /** Plan 14 §11.2 (HUMAN PLANE): a launch ended. */
   async endLaunch(token: string): Promise<EndLaunchResult> {
     return this.request("endLaunch", { token });
+  }
+
+  /** HUMAN PLANE (openclaw-plugin.md §3.3): Mandu attached to an agent it
+   *  does not run; the arbiter decides its posture from `coverage`. */
+  async beginAttachment(args: { sessionId: string; kind: string; coverage: unknown }): Promise<BeginAttachmentResult> {
+    return this.request("beginAttachment", args);
+  }
+
+  /** HUMAN PLANE (openclaw-plugin.md §3.6): the service's route check found
+   *  the attachment's config changed; the arbiter records the new posture. */
+  async updateAttachment(args: { token: string; coverage: unknown; route?: unknown }): Promise<UpdateAttachmentResult> {
+    return this.request("updateAttachment", args);
+  }
+
+  /** HUMAN PLANE: one more lease for a live attachment. */
+  async renewAttachment(token: string): Promise<RenewAttachmentResult> {
+    return this.request("renewAttachment", { token });
+  }
+
+  /** HUMAN PLANE: an attachment ended. */
+  async endAttachment(token: string): Promise<EndAttachmentResult> {
+    return this.request("endAttachment", { token });
   }
 
   /** Plan 13 D8: what the arbiter knows a binary to be (a printer, a
@@ -1789,6 +1825,17 @@ export class ArbiterClient {
    *  TLS, so npm may be served the `.npmrc` twin. */
   async registerWireRelease(sessionKey: string, inspecting: boolean, direct?: string[], opts: { pid?: number } = {}): Promise<{ inspecting: boolean }> {
     return this.request("registerWireRelease", { sessionKey, inspecting, ...(direct ? { direct } : {}), ...(opts.pid !== undefined ? { pid: opts.pid } : {}) });
+  }
+  /** kube-wire-release.md (HUMAN PLANE): the session KUBECONFIG overlay of
+   *  the launch HOME's kubeconfig, which also names the file the proxy may
+   *  dial its clusters by. */
+  async kubeOverlay(path: string, home: string): Promise<{ overlay: KubeOverlay | null; reason: string }> {
+    return this.request("kubeOverlay", { path, home });
+  }
+  /** kube-wire-release.md (HUMAN PLANE): how the egress proxy dials the
+   *  cluster at `authority` (`host:port`), or null. */
+  async kubeUpstream(authority: string): Promise<{ profile: KubeUpstream | null }> {
+    return this.request("kubeUpstream", { authority });
   }
   /** Agent-sign-in.md §3 (HUMAN PLANE): a field of the agent's own key file
    *  authenticates to `host` (the provider the launch routes). */

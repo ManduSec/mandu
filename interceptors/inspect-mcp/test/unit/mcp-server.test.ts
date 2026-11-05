@@ -151,6 +151,14 @@ test("the tool description keeps its load-bearing guidance phrases (each pins a 
   // frozen symbol instead of re-running the source call.
   assert.ok(d.includes("inspect the NEW symbol it returns"), "retry the source, inspect the new symbol");
   assert.ok(d.includes("Do NOT re-inspect the same symbol"), "a frozen symbol cannot yield new content");
+  // 2026-10-26 (demo-local-health-summary, gpt-5.6-luna on OpenClaw, twice):
+  // told to "pass result_symbol directly to Write.content", the model wrote
+  // the summary over the lab results it was asked to summarise, and the user
+  // was told nothing. Deliver where the user asked; a reply shows it to them.
+  assert.ok(d.includes("in your reply when they asked to be told or shown"), "a summary the user asked to see goes in the reply");
+  assert.ok(d.includes("never write it over a file you were asked to read"), "never over the source");
+  assert.ok(!d.includes("directly to Write.content"), "no unconditional Write");
+  assert.ok(NEXT_STEP_BY_KIND.substantive!.includes("in your reply when they asked to be told or shown"), "the result's next step says the same");
 });
 
 test("tools/call: a FAILURE content_kind adds the fixed next_step directive to the envelope", async () => {

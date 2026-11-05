@@ -21,16 +21,22 @@
   page is a DOM shell; js/home.js fetches and renders. Every string that comes
   from the server is inserted as TEXT, never as markup.
 -->
+<!-- Skip to the page (dashboard.md §4.25 *A page change moves the focus*):
+     the first Tab stop, seen only while it has the focus. home.js gives the
+     focus to the heading of the page shown; never a jump to #main, which the
+     router would read as a new visit. -->
+<a class="skip-link" id="skip-link" href="#main">Skip to the page</a>
 <header id="top">
   <div class="top-inner">
     <a class="brand" href="./" data-page-link="home">Mandu</a>
     <nav id="nav" aria-label="Pages">
       <a href="./" data-page-link="home">Home</a>
       <a href="approvals" data-page-link="approvals">Approvals <span id="nav-approvals-count" class="count" hidden>0</span></a>
-      <a href="rules" data-page-link="rules">Rules</a>
+      <a href="rules" data-page-link="rules">Rules <span id="nav-rules-unsaved" class="unsaved-mark" hidden>0</span></a>
       <a href="settings" data-page-link="settings">Settings</a>
       <a href="history" data-page-link="history">History</a>
       <a href="scan" data-page-link="scan">Scan</a>
+      <a href="plugins" data-page-link="plugins">Plugins</a>
     </nav>
     <div id="top-status" class="top-status" aria-live="polite"></div>
     <!-- A new question or rule change, said to a screen reader (dashboard.md
@@ -75,6 +81,16 @@
       <p id="exposure-fix" class="exposure-fix"></p>
     </section>
 
+    <!-- An attached OpenClaw Gateway's config no longer goes through Mandu
+         (dashboard.md §4.25 *Home notices*; the service's route check):
+         /api/home carries `routeLost` only while that is so. -->
+    <section class="block exposure" id="home-route-lost" hidden role="alert" aria-labelledby="route-lost-headline">
+      <h2 id="route-lost-headline"></h2>
+      <p id="route-lost-sentence"></p>
+      <ul id="route-lost-items" class="exposure-causes"></ul>
+      <p id="route-lost-fix" class="exposure-fix"></p>
+    </section>
+
     <!-- A newer Mandu that fixes security problems in the version you run
          (dashboard.md §4.25 *A newer release*): from /api/home's
          `about.update`, only when it carries security fixes; a plain update
@@ -86,6 +102,28 @@
       <p id="update-fix" class="exposure-fix"></p>
     </section>
 
+    <!-- The protection service refused your last edit to policy.yaml and
+         keeps the last version that worked (dashboard.md §4.25 *An edit to
+         policy.yaml Mandu refused*): /api/home's `policyFile.valid` false.
+         Amber, as the card above; the problems are on Rules, never here. -->
+    <section class="block exposure update-notice" id="home-policy-refused" hidden role="status" aria-labelledby="policy-refused-headline">
+      <h2 id="policy-refused-headline"></h2>
+      <p id="policy-refused-sentence"></p>
+      <p id="policy-refused-fix" class="exposure-fix"></p>
+    </section>
+
+    <!-- Other people on this computer can open places in Mandu's folder
+         (dashboard.md §4.25q *Home warns about open places*): /api/home's
+         `openPlaces`, the same rule as the note inside Where your data
+         lives below. Names places by what they hold, never a path or a
+         value; the dashboard changes no mode. Amber, as the card above. -->
+    <section class="block exposure update-notice" id="home-open-places" hidden role="status" aria-labelledby="open-places-headline">
+      <h2 id="open-places-headline"></h2>
+      <p id="open-places-sentence">Open to others:</p>
+      <ul id="open-places-list" class="exposure-causes"></ul>
+      <p id="open-places-fix" class="exposure-fix"></p>
+    </section>
+
     <!-- The dashboard account file changed while this dashboard ran
          (dashboard.md §6.z): /api/home's `signIn.accountChangedAt`. Every
          sign-in session ended then; this says so, and what to do if it was
@@ -93,7 +131,7 @@
     <section class="block exposure update-notice" id="home-account-changed" hidden role="alert" aria-labelledby="account-changed-headline">
       <h2 id="account-changed-headline">Your dashboard account was changed</h2>
       <p id="account-changed-sentence"></p>
-      <p class="exposure-fix">If you did not change it, something on this computer did: run <code class="code-whole">mandu dashboard --set-password</code> in your own terminal to set your own password again.</p>
+      <p class="exposure-fix">If you did not change it, something on this computer did: run <code class="code-whole" data-run>mandu dashboard --set-password</code> in your own terminal to set your own password again.</p>
     </section>
 
     <!-- The newest launch left the agent's programs able to read your
@@ -107,36 +145,52 @@
       <p id="posture-fix" class="exposure-fix"></p>
     </section>
 
-    <!-- The last `mandu scan` (dashboard.md §4.25ai): what the agents
-         already sent to the AI before Mandu, or how to find out, under the
-         hero's "secrets masked before the AI saw them" (the first-run and
-         warning cards stay right under the hero). /api/home carries
-         `scan`; the card opens the Scan page. -->
-    <section class="block scan-card" id="home-scan" hidden aria-labelledby="home-scan-headline">
-      <div class="block-head">
-        <h2 id="home-scan-headline"></h2>
-        <a id="home-scan-open" href="scan" data-page-link="scan" hidden>See the whole scan →</a>
-      </div>
-      <p id="home-scan-when" class="note dim" hidden></p>
-      <p id="home-scan-sentence"></p>
-      <div id="home-scan-figure" class="scan-flows" hidden></div>
-      <ul id="home-scan-top" class="scan-top"></ul>
-      <p id="home-scan-safe" class="scan-safe" hidden></p>
-      <p id="home-scan-worth" class="note" hidden></p>
-      <p id="home-scan-suggested" class="note" hidden></p>
-      <p id="home-scan-again" class="note"></p>
-    </section>
-
+    <!-- The questions an agent waits on come before every card that is
+         advice (dashboard.md §4.25ai *Home's card*, 2026-10-26): only the
+         first-run and warning cards above come first. -->
     <section class="block" id="home-waiting-block">
       <div class="block-head">
         <h2 id="home-waiting-title">Approvals waiting</h2>
         <a href="approvals" data-page-link="approvals">Open Approvals →</a>
       </div>
+      <!-- Shown while permission is `default`, until No thanks (dashboard.md
+           §4.25 *No thanks on Home's offer*): home.js renderNotifyControls,
+           declineNotifyOffer. -->
       <div id="notify-offer" class="notify-offer" hidden>
-        <span>Get a notification on this computer when an agent needs your OK.</span>
-        <button type="button" class="btn small" id="notify-offer-btn">Turn on</button>
+        <span id="notify-offer-words">Get a notification on this computer when an agent needs your OK or protection fails.</span>
+        <div class="notify-offer-actions">
+          <button type="button" class="btn small" id="notify-offer-no" aria-describedby="notify-offer-words">No thanks</button>
+          <button type="button" class="btn small" id="notify-offer-btn" aria-describedby="notify-offer-words">Turn on</button>
+        </div>
       </div>
+      <p id="notify-offer-later" class="note notify-offer-later" hidden>You can turn them on later in <a href="settings#notifications" id="notify-offer-later-link">Settings › Notifications</a>.</p>
       <div id="home-waiting" class="cards"></div>
+    </section>
+
+    <!-- The last `mandu scan` (dashboard.md §4.25ai): what the agents
+         already sent to the AI before Mandu, or how to find out, under
+         Approvals waiting (the first-run and warning cards stay right under
+         the hero). /api/home carries `scan`; the card opens the Scan page.
+         A card with nothing to act on folds to one line (§4.25ai). -->
+    <section class="block scan-card" id="home-scan" hidden aria-labelledby="home-scan-headline">
+      <div class="block-head" id="home-scan-head">
+        <h2 id="home-scan-headline" tabindex="-1"></h2>
+        <span class="scan-card-acts">
+          <a id="home-scan-open" href="scan" data-page-link="scan" hidden>See the whole scan →</a>
+          <button type="button" id="home-scan-fold" class="linkish" aria-label="Fold the scan card" hidden>Fold</button>
+        </span>
+      </div>
+      <p id="home-scan-folded" class="scan-folded" hidden><span id="home-scan-folded-text"></span> <button type="button" id="home-scan-show" class="linkish" aria-label="Show the scan card">Show</button></p>
+      <div id="home-scan-body">
+        <p id="home-scan-when" class="note dim" hidden></p>
+        <p id="home-scan-sentence"></p>
+        <div id="home-scan-figure" class="scan-flows" hidden></div>
+        <ul id="home-scan-top" class="scan-top"></ul>
+        <p id="home-scan-safe" class="scan-safe" hidden></p>
+        <p id="home-scan-worth" class="note" hidden></p>
+        <p id="home-scan-suggested" class="note" hidden></p>
+        <p id="home-scan-again" class="note"></p>
+      </div>
     </section>
 
     <section class="block">
@@ -152,6 +206,15 @@
       <div id="home-earlier" class="table"></div>
     </section>
 
+    <!-- What the rows' counts and marks mean, for each kind a row drawn in
+         Running now or Earlier shows (dashboard.md §4.25 *What the counts
+         mean*, *Home's fold*): home.js renderHomeMeanings. Hidden when no
+         row has one. -->
+    <details class="more glossary count-meanings home-meanings" id="home-count-meanings" hidden>
+      <summary>What the counts mean</summary>
+      <dl></dl>
+    </details>
+
     <!-- "Where your data lives" (on-disk-layout.md §9 decision 2): every
          location of the path table with what it holds and whether only you
          can open it, from GET /api/data-locations (the `mandu paths` data),
@@ -160,8 +223,9 @@
     <section class="block data-where" id="home-data-block">
       <details id="home-data">
         <summary>Where your data lives</summary>
-        <p class="note" id="home-data-about">Everything Mandu keeps for you is in one folder, <code id="home-data-folder">~/.mandu</code>. The AI cannot open it. To see every place, including the ones only Mandu's developers use, run <code class="code-whole">mandu paths</code>.</p>
+        <p class="note" id="home-data-about">Everything Mandu keeps for you is in one folder, <code id="home-data-folder">~/.mandu</code>. The AI cannot open it. To see every place, including the ones only Mandu's developers use, run <code class="code-whole" data-run>mandu paths</code>.</p>
         <p class="note data-where-open" id="home-data-open" hidden></p>
+        <p class="note data-where-broken" id="home-data-broken" hidden></p>
         <div id="home-data-list" class="table"></div>
       </details>
     </section>
@@ -181,11 +245,21 @@
     <!-- This session could not do its job: its notice, written out
          (dashboard.md §4.21 *On the product page*). -->
     <div id="agent-notice" class="posture-line" role="note" hidden></div>
+    <!-- This session ran with protection off, as it recorded (dashboard.md
+         §4.25b): Mandu only watched. -->
+    <div id="agent-off" class="posture-line" role="note" hidden></div>
     <!-- This session's launch left the agent's programs able to read your
          credential files (dashboard.md §4.23 *Product page*). -->
     <div id="agent-posture" class="posture-line" hidden></div>
     <p id="agent-values-note" class="values-note" role="note" hidden></p>
     <div id="agent-facts" class="tiles"></div>
+    <!-- What each tile counts, for a phone or a keyboard, where no tooltip
+         shows (dashboard.md §4.25 *What the counts mean*): home.js
+         drawCountMeanings. -->
+    <details class="more glossary count-meanings" id="agent-count-meanings" hidden>
+      <summary>What the counts mean</summary>
+      <dl></dl>
+    </details>
     <!-- What the leak check found (dashboard.md §4.25ae): each place, when,
          the step it opens; never the text the check found. Then what to do
          now: change each key it names, report the fault. -->
@@ -204,7 +278,29 @@
       <h2>Your secrets</h2>
       <p class="block-note" id="agent-secrets-intro"></p>
       <div id="agent-secrets" class="secret-cards"></div>
+      <!-- An unchecked record's secrets (dashboard.md §4.25b *An unchecked
+           record's path*): home.js renderRecordedSecrets. -->
+      <div id="agent-recorded" class="recorded-block" hidden>
+        <h3 class="recorded-title">What this session's record says</h3>
+        <p class="block-note">Mandu could not check these events, so this is what the record says happened, not what Mandu can vouch for. Nothing here counts above.</p>
+        <div id="agent-recorded-list" class="secret-cards"></div>
+      </div>
       <p class="block-note secret-limits" id="agent-secrets-limits"></p>
+      <!-- The files the AI read as they were, each with a link to protect it
+           in Rules (§4.25b *Files the AI read as they were*): closed on
+           load, kept as you left it while the page redraws. -->
+      <details class="more read-as-is" id="agent-read-as-is" hidden>
+        <summary id="agent-read-as-is-title"></summary>
+        <p class="block-note">Files your agent opened with its read tool. A file a command printed is not listed.</p>
+        <ul id="agent-read-as-is-list" class="read-as-is-list"></ul>
+      </details>
+    </section>
+    <section class="block" id="agent-discarded-block" hidden>
+      <!-- The secret files whose change stayed in the masked copy, from the
+           session's believed exit (§4.25b): home.js renderDiscardedWrites. -->
+      <h2>Changes Mandu did not apply to your files</h2>
+      <p class="block-note">The agent works on masked copies of your secret files. What it wrote to these went to the copy, and Mandu did not apply it to the real file. If you want the change, check the file and make it yourself.</p>
+      <ul id="agent-discarded" class="read-as-is-list"></ul>
     </section>
     <section class="block" id="agent-browser-block" hidden>
       <!-- A browser agent's run through Mandu's DevTools relay (§4.25af). -->
@@ -224,8 +320,13 @@
         <!-- Latest turn (§4.25ad): to the newest turn, at the story's end. -->
         <button type="button" class="linkish story-latest" id="agent-latest" hidden>Latest turn <span aria-hidden="true">↓</span></button>
       </div>
+      <!-- A card's Show its steps says what the story shows (§4.25b). -->
+      <p id="agent-story-status" class="sr-only" role="status" aria-live="polite"></p>
       <div id="agent-story" class="story"></div>
     </section>
+    <!-- Newer and older sessions (§4.25b): History's rows just above and
+         below this one, in its full list's order. -->
+    <nav id="agent-neighbours" class="agent-neighbours" aria-label="Other sessions" hidden></nav>
   </section>
 
   <!-- History (dashboard.md §4.25ae): every session on record, newest
@@ -237,23 +338,40 @@
       <h1>History</h1>
       <p id="history-intro">Every session Mandu recorded, newest first. Each one opens what the AI saw and what really happened.</p>
       <!-- The sessions from before Mandu are the last scan's (§4.25ai): the
-           top bar has no room for a sixth link on a phone (§4.25 *The page
-           links fit a small phone*), so the Scan page is linked here and
-           from Home's card. -->
-      <p class="note" id="history-scan">Sessions your agents ran without Mandu: <a href="scan" data-page-link="scan">what the last scan found</a>.</p>
+           Scan page is linked here and from Home's card. The line follows
+           Home's card (renderHistoryScan): how to run a scan before any, its
+           headline after one; these neutral words until the first read. -->
+      <p class="note" id="history-scan">Sessions your agents ran without Mandu: <a href="scan" data-page-link="scan">the Scan page</a>.</p>
     </div>
-    <!-- Finding a session (§4.25ae): the agent or the prompt, ?q= in the
+    <!-- Finding a session (§4.25ae): the agent, the prompt, the folder, or
+         a secret or a host the session met (by name, never a value), ?q= in the
          address; GET /api/home/history?q=. Only the sessions where Mandu
-         stepped in: its switch, &only=stepped-in in both. -->
+         stepped in: its switch, &only=stepped-in in both. Go to a day: the
+         list from that day back, &day= in the address, &before=<ms> in the
+         read; Day before and Day after step it a calendar day. -->
     <form id="history-search" class="history-search" role="search">
       <label for="history-q">Find a session</label>
-      <input type="search" id="history-q" maxlength="200" placeholder="What you asked, the agent or the folder" autocomplete="off" spellcheck="false">
+      <input type="search" id="history-q" maxlength="200" aria-keyshortcuts="/" title="Press / to come back here." placeholder="What you asked, a folder, a secret or a host" autocomplete="off" spellcheck="false">
+      <div class="history-go-day">
+        <label for="history-day">Go to a day</label>
+        <input type="date" id="history-day" autocomplete="off">
+        <button type="button" class="btn small" id="history-day-before" hidden>Day before</button>
+        <button type="button" class="btn small" id="history-day-after" hidden>Day after</button>
+        <button type="button" class="btn small" id="history-newest" hidden>Show the newest</button>
+      </div>
       <div class="history-only">
         <button type="button" class="switch" id="history-only" role="switch" aria-checked="false" aria-labelledby="history-only-words"><span class="knob"></span></button>
         <label for="history-only" id="history-only-words">Only sessions where Mandu stepped in</label>
       </div>
       <p id="history-count" class="history-count" role="status" hidden></p>
     </form>
+    <!-- What the rows' counts and marks mean, for each kind a drawn row
+         shows (dashboard.md §4.25 *What the counts mean*): home.js
+         drawHistoryMeanings. Hidden when no row has one. -->
+    <details class="more glossary count-meanings history-meanings" id="history-count-meanings" hidden>
+      <summary>What the counts mean</summary>
+      <dl></dl>
+    </details>
     <section class="block">
       <div id="history-list" class="table"></div>
     </section>
@@ -269,27 +387,60 @@
       <p id="scan-sentence"></p>
       <p id="scan-read" class="note dim" hidden></p>
       <ul id="scan-notes" class="scan-notes note" hidden></ul>
+      <!-- A scan kept while the page is open (§4.25ai *The Scan page follows
+           a new scan*): said once, politely; home.js loadScan. -->
+      <p id="scan-followed" class="note" role="status" hidden></p>
+      <!-- A link to a row the page could not open (§4.25ai *A session card
+           opens its row*): gone from the list, or a page unread; home.js
+           scanItemMissing. -->
+      <p id="scan-item-missing" class="note" role="status" hidden></p>
     </div>
     <!-- The figure (§4.25ai *The figure*): without Mandu, the real value
          reaches the AI model; with it, only its mask does. home.js
          scanFigure draws it from the server's `figure`. -->
     <section class="block scan-figure" id="scan-figure" hidden></section>
-    <div id="scan-sections"></div>
+    <div id="scan-sections" hidden></div>
     <section class="block" id="scan-risk-block" hidden aria-labelledby="scan-risk-title">
       <h2 id="scan-risk-title">Riskier sessions</h2>
       <ul id="scan-risk" class="scan-risk"></ul>
     </section>
     <section class="block" id="scan-end">
+      <!-- Before any scan its step comes first, at body size, then what the
+           page does once it runs (§4.25ai *Before any scan, the step comes
+           first*); after one, Run it again closes the page. -->
+      <p id="scan-step" hidden></p>
+      <p id="scan-step-note" class="note" hidden></p>
       <p id="scan-suggested" class="note" hidden></p>
       <p id="scan-stop"></p>
       <p id="scan-again" class="note"></p>
     </section>
   </section>
 
+  <!-- The Plugins page (dashboard.md §4.25aj): where Mandu is attached as
+       a plugin inside an agent's own app, beside the Mandu service, from
+       GET /api/plugins. A card per attached agent; a known app with none
+       shows how to attach it. -->
+  <section data-page="plugins" id="page-plugins" hidden>
+    <div class="page-head">
+      <a href="./" data-page-link="home" class="back">Back to home</a>
+      <h1>Plugins</h1>
+      <p id="plugins-intro"></p>
+    </div>
+    <section class="block plugins-service" id="plugins-service" hidden aria-labelledby="plugins-service-headline">
+      <h2 id="plugins-service-headline"></h2>
+      <p id="plugins-service-sentence"></p>
+    </section>
+    <div id="plugins-hosts"></div>
+  </section>
+
   <section data-page="approvals" id="page-approvals" hidden>
     <div class="page-head">
       <h1>Approvals</h1>
-      <p>Always allow and Block are remembered under <a href="rules" data-page-link="rules">Rules</a>. Allow once lets just this one through.</p>
+      <!-- What is true of every card (dashboard.md §4.25 *A remembered
+           answer opens where Rules keeps it*, 2026-10-27): a send is
+           refused before it is asked about, so Allow once covers the
+           agent's next try, which each card says itself. -->
+      <p>Each question says what its answers do. Allow once covers one request. When Mandu has already refused the one asked about, that is the agent's next try. Answers that last, such as Always allow and Block, are kept under <a href="rules" data-page-link="rules">Rules</a>, where you can change them.</p>
       <!-- A link per list, each with its address (/approvals#answered;
            dashboard.md §4.25 "Section links"): a list hidden while empty
            has no link. home.js drawSectionLinks from SECTIONS. -->
@@ -299,32 +450,57 @@
          dashboard.md §4.25 "Details"): shown only when it is no longer
          waiting. home.js markApprovalsAsk. -->
     <div id="approvals-focus-note" class="focus-note missing" role="note" hidden></div>
-    <section class="block" id="approvals-suggestions-block" hidden>
-      <h2>Keys Mandu found</h2>
-      <div id="approvals-suggestions" class="cards"></div>
-    </section>
     <section class="block" id="approvals-proposals-block" hidden>
-      <h2 id="approvals-proposals-head">Rule changes your agent asked for</h2>
+      <h2 id="approvals-proposals-head"><span id="approvals-proposals-words">Rule changes your agent asked for</span><span id="approvals-proposals-count" class="muted"></span></h2>
       <div id="approvals-proposals" class="cards"></div>
     </section>
     <section class="block" id="approvals-waiting-block">
-      <h2>Waiting for your answer</h2>
+      <h2>Waiting for your answer <span id="approvals-waiting-count" class="muted"></span></h2>
       <div id="approvals-waiting" class="cards"></div>
+    </section>
+    <!-- Advice, after the questions an agent waits on (dashboard.md §4.25
+         *Section links*, 2026-10-26). -->
+    <section class="block" id="approvals-suggestions-block" hidden>
+      <h2>Keys Mandu found</h2>
+      <div id="approvals-suggestions" class="cards"></div>
     </section>
     <section class="block" id="approvals-answered-block">
       <h2>Answered earlier</h2>
       <!-- Finding an answer (§4.25): the secret, the host, the program, the
            agent or the answer, ?q= in the address; GET /api/home/answered?q=.
-           Hidden while there is no answer to find. -->
+           Hidden while there is no answer to find. Go to a day (§4.25 *Go
+           to a day on Answered earlier*): the answers from that day back,
+           &day= in the address, &before=<ms> in the read, as on History. -->
       <form id="answered-search" class="history-search answered-search" role="search" hidden>
         <label for="answered-q">Find an answer</label>
-        <input type="search" id="answered-q" maxlength="200" placeholder="A secret, a host or the agent" autocomplete="off" spellcheck="false">
+        <input type="search" id="answered-q" maxlength="200" aria-keyshortcuts="/" title="Press / to come back here." placeholder="A secret, a host or the agent" autocomplete="off" spellcheck="false">
+        <div class="history-go-day">
+          <label for="answered-day">Go to a day</label>
+          <input type="date" id="answered-day" autocomplete="off">
+          <button type="button" class="btn small" id="answered-newest" hidden>Show the newest</button>
+        </div>
         <p id="answered-count" class="history-count" role="status" hidden></p>
       </form>
       <div id="approvals-answered" class="table"></div>
     </section>
     <section class="block" id="approvals-rule-history-block" hidden>
       <h2>Rule changes</h2>
+      <!-- Finding a rule change (§4.25): the sentence, the agent and its
+           folder, the file, the host, the program, the level or "Undone",
+           matched on the page over the newest 500; ?changes= in the address.
+           Hidden while there is no change to find. Go to a day (§4.25 *Go
+           to a day on Rule changes*): the changes from that day back, cut
+           on the page over the newest 500, &cday= in the address. -->
+      <form id="changes-search" class="history-search answered-search" role="search" hidden>
+        <label for="changes-q">Find a change</label>
+        <input type="search" id="changes-q" maxlength="200" aria-keyshortcuts="/" title="Press / to come back here." placeholder="A file, a host or the agent" autocomplete="off" spellcheck="false">
+        <div class="history-go-day">
+          <label for="changes-day">Go to a day</label>
+          <input type="date" id="changes-day" autocomplete="off">
+          <button type="button" class="btn small" id="changes-newest" hidden>Show the newest</button>
+        </div>
+        <p id="changes-count" class="history-count" role="status" hidden></p>
+      </form>
       <div id="approvals-rule-history" class="table"></div>
     </section>
   </section>
@@ -339,17 +515,29 @@
     </div>
     <p id="rules-off" class="rules-off" role="status" hidden></p>
     <p id="rules-pending" class="rules-off" role="status" hidden></p>
+    <!-- An edit to policy.yaml Mandu refused (dashboard.md §4.25 *Rules says
+         where your rules file is*): home.js renderRulesFile. -->
+    <div id="rules-refused" class="rules-off rules-refused" role="status" hidden></div>
     <section class="block card" id="describe-block">
       <div class="block-head">
         <h2>Describe what you want</h2>
       </div>
       <p class="note">Say it in your own words. A helper suggests rules, and nothing changes until you press Apply.</p>
+      <!-- Which AI reads what you write, or that none can (dashboard.md,
+           *Describe says which AI reads your words*): home.js describeWhere. -->
+      <p id="describe-where" class="note" hidden></p>
       <form id="describe-form" class="describe-form">
-        <textarea id="describe-text" rows="3" maxlength="2000" spellcheck="true" aria-label="Describe the rules you want" placeholder="This is my work repo. I use GitHub and PyPI. Keep .env and ~/.ssh secret. Never send anything to paste sites."></textarea>
+        <textarea id="describe-text" rows="3" maxlength="2000" spellcheck="true" aria-label="Describe the rules you want" aria-describedby="describe-where describe-count describe-cut" placeholder="This is my work repo. I use GitHub and PyPI. Keep .env and ~/.ssh secret. Never send anything to paste sites."></textarea>
+        <!-- The 2,000-character limit, said (dashboard.md *Describe what you
+             want*): home.js describeLength / describePasted. -->
+        <div class="describe-limit">
+          <span id="describe-count" class="dim" hidden></span>
+          <span id="describe-cut" role="status"></span>
+        </div>
         <div class="form-actions">
           <span id="describe-status" class="dim" role="status"></span>
           <button type="button" class="btn" id="describe-cancel" hidden>Cancel</button>
-          <button type="submit" class="btn primary" id="describe-submit">Suggest rules</button>
+          <button type="submit" class="btn primary" id="describe-submit" aria-keyshortcuts="Control+Enter Meta+Enter">Suggest rules</button>
         </div>
       </form>
       <div id="describe-result" class="describe-result" hidden></div>
@@ -369,10 +557,14 @@
         <!-- Find a rule (dashboard.md §4.25f *Find a rule*): narrows the rows
              drawn below to those whose words hold the text; no read, never
              in the address, cleared by a page change. -->
-        <input type="search" id="rules-find" class="rules-find" placeholder="Find a rule" aria-label="Find a rule" aria-describedby="rules-count" autocomplete="off" spellcheck="false" maxlength="200">
+        <input type="search" id="rules-find" class="rules-find" aria-keyshortcuts="/" title="Press / to come back here." placeholder="Find a rule" aria-label="Find a rule" aria-describedby="rules-count" autocomplete="off" spellcheck="false" maxlength="200">
         <button type="button" class="btn small primary" id="rules-add" aria-expanded="false" aria-controls="lock-form">Add a rule</button>
       </div>
+      <!-- Your rules changed elsewhere while the page was open (dashboard.md
+           §4.25 *Rules follows a change made elsewhere*): home.js followRules. -->
+      <p id="rules-changed" class="note rules-changed" role="status" hidden></p>
       <p class="note">Your rules are checked first, then the built-in protections.</p>
+      <p id="rules-file" class="note dim rules-file" hidden></p>
       <details class="more glossary" id="rules-glossary">
         <summary>What the words mean</summary>
         <dl>
@@ -428,6 +620,14 @@
            (dashboard.md §4.25 *A remembered answer opens where Rules keeps it*). -->
       <p id="rules-answer-note" class="note rules-answer-note" role="status" hidden></p>
       <div class="rules-group" id="files-group">Files and folders <span class="muted">which AI may read each one, and where it may be sent</span></div>
+      <!-- Your file rules on a path where nothing is, each a button to its row
+           (dashboard.md §4.25f *A rule on nothing says so*; home.js
+           renderFilesMissing). Outside the list; hidden with none. -->
+      <p id="files-missing" class="note dim files-missing" hidden></p>
+      <!-- The Opens it default, said once for the rows that draw no Opens it
+           line (dashboard.md §4.25p; home.js renderFilesOpensNote). Hidden
+           while no such secret row is listed. -->
+      <p id="files-opens-note" class="note dim files-opens-note" hidden></p>
       <div class="files-heads" id="files-heads" aria-hidden="true"><span>File or folder</span><span>Which AI may read it</span><span>Where it may be sent</span></div>
       <div id="files-tree" class="table files-tree" role="list" aria-label="Your rules on files and folders"></div>
       <div id="rules-list" class="rules-rest"></div>
@@ -450,6 +650,38 @@
       </div>
       <div id="by-who-list" class="by-who-list" role="tabpanel" aria-labelledby="by-who-tab-programs"></div>
       <p id="by-who-note" class="note"></p>
+      <!-- Check a host (dashboard.md §4.25aa *Check a host*): what the rules
+           and the gate say about one host a person types, from
+           /api/policy/host-check (the arbiter's read-only whyHost; home.js
+           checkHost). It changes no rule. Hidden when the service cannot
+           check a host (an older one answers 501). -->
+      <form id="host-check" class="host-check" role="search" aria-labelledby="host-check-title" autocomplete="off" novalidate>
+        <h3 id="host-check-title" class="host-check-title">Check a host</h3>
+        <p class="note" id="host-check-hint">Which of your secrets may go to a host, and what happens to the rest. Checking changes nothing.</p>
+        <div class="host-check-row">
+          <input type="text" id="host-check-q" maxlength="300" placeholder="api.example.com" spellcheck="false" autocapitalize="off" aria-label="Host name" aria-describedby="host-check-hint">
+          <button type="submit" class="btn small" id="host-check-go">Check</button>
+        </div>
+        <div id="host-check-answer" class="host-check-answer" role="status" aria-live="polite"></div>
+      </form>
+    </section>
+    <!-- Files made from your secrets (dashboard.md §4.25aa *Files made from
+         your secrets*): the files Mandu labelled on its own because what
+         wrote them held a secret, from /api/secrets' panel.derived (home.js
+         renderMadeFromSecrets). Read only, closed until Show; each file
+         opens in Add a rule, where a rule of yours decides for it. Hidden
+         while there are none. -->
+    <section class="block card" id="made-from-block" aria-labelledby="made-from-title" hidden>
+      <div class="block-head">
+        <h2 id="made-from-title">Files made from your secrets <span id="made-from-count" class="muted"></span></h2>
+        <button type="button" class="btn small" id="made-from-open" aria-expanded="false" aria-controls="made-from-view">Show</button>
+      </div>
+      <p class="note">Files Mandu keeps secret because something holding a secret wrote them.</p>
+      <div id="made-from-view" hidden>
+        <p class="note">Mandu keeps these files as secret as what they were made from: each was written by an AI session that had read a secret as it was, by a program that held a secret, or copied from a secret file. To decide for one yourself, open it and choose who may read it; your own rule for a file comes first.</p>
+        <ul id="made-from-list" class="made-from-list"></ul>
+        <div id="made-from-more"></div>
+      </div>
     </section>
     <!-- Keys Mandu found (dashboard.md §4.25r, plan 14 §5.4, §13.6): its own
          card, closed until opened (Review, or the Approvals card). Keys
@@ -475,7 +707,7 @@
           <summary>More</summary>
           <p class="note">Mandu reads the files and the git history of the projects your agents worked in, here on this computer. Type a folder to scan another project. In your home folder it reads only files named like settings or keys. Nothing changes until you press Save.</p>
         </details>
-        <div id="suggest-model" class="suggest-model">
+        <div id="suggest-model" class="suggest-model" hidden>
           <label class="suggest-model-pick">Ask a model too
             <select id="suggest-model-tier" aria-describedby="suggest-model-why">
               <option value="off">Off</option>
@@ -499,7 +731,7 @@
             <button type="button" class="btn primary" id="suggest-model-send">Send</button>
           </div>
         </div>
-        <p id="suggest-model-status" class="dim" role="status"></p>
+        <p id="suggest-model-status" class="dim" role="status" hidden></p>
         <p id="suggest-error" class="ask-error" role="alert"></p>
         <div id="files-suggested-list" class="table files-list files-suggested" role="list" aria-label="Suggested rules"></div>
       </div>
@@ -554,7 +786,9 @@
       <h2 id="settings-protection-title">Protection</h2>
       <!-- The one on/off (dashboard.md §4.25 Settings): the confidentiality
            axis, POST {mode} to /api/config/axes; turning it off asks for a
-           typed OFF. The frozen integrity axis has no switch on this page.
+           typed OFF, in any case, in the box under the row
+           (#settings-protect-confirm, home.js askOff). The frozen integrity
+           axis has no switch on this page.
            The same row says whether the protection service runs, with Start
            or Restart (#settings-services, home.js drawServices). -->
       <div class="table">
@@ -565,9 +799,14 @@
             <div class="sub service-line" id="settings-services"></div>
           </div>
           <button type="button" class="switch right" id="switch-protection" role="switch" aria-checked="false" aria-label="Protection" disabled><span class="knob"></span></button>
+          <div class="protect-confirm" id="settings-protect-confirm" role="group" aria-labelledby="settings-protect-ask" hidden></div>
         </div>
       </div>
       <p id="settings-protect-note" class="note"></p>
+      <!-- The switch moved by itself: a setting saved elsewhere (another
+           tab, mandu mode), followed on Home's poll (§4.25 *The protection
+           switch keeps what you saved*); home.js followSaved. -->
+      <p id="settings-protect-changed" class="note" role="status" hidden></p>
     </section>
     <section class="block card" id="settings-models-block" aria-labelledby="settings-models-title">
       <div class="block-head">
@@ -586,11 +825,11 @@
         <input type="hidden" id="model-original" name="original" value="">
         <label class="field">
           <span>Name</span>
-          <input type="text" id="model-name" name="name" placeholder="ollama" autocomplete="off" spellcheck="false" required>
+          <input type="text" id="model-name" name="name" placeholder="e.g. ollama" autocomplete="off" spellcheck="false" required>
         </label>
         <label class="field">
           <span>Address</span>
-          <input type="text" id="model-url" name="url" placeholder="http://127.0.0.1:11434" autocomplete="off" spellcheck="false" required>
+          <input type="text" id="model-url" name="url" placeholder="e.g. http://127.0.0.1:11434" autocomplete="off" spellcheck="false" required>
         </label>
         <label class="field">
           <span>API style</span>
@@ -601,14 +840,14 @@
         </label>
         <label class="field">
           <span>Model <span class="muted">(optional)</span></span>
-          <input type="text" id="model-model" name="model" placeholder="llama3.2" autocomplete="off" spellcheck="false">
+          <input type="text" id="model-model" name="model" placeholder="e.g. llama3.2" autocomplete="off" spellcheck="false">
         </label>
         <div class="choice-line"><label class="choice inline"><input type="checkbox" id="model-local" name="local"> <span><strong>This is my own model</strong></span></label> <span data-help="About your own model">It runs on this computer, or on a server your organization controls. On another computer, it must use an https address.</span></div>
         <div class="choice-line"><label class="choice inline"><input type="checkbox" id="model-plain-http" name="allowPlainHttp" disabled> <span><strong>Send without encryption</strong></span></label> <span data-help="About sending without encryption">Only for your own model at an http address on another computer, on a network you trust. Files marked "Your own AI only" then cross the network unencrypted. Prefer an https address.</span></div>
         <div class="choice-line"><label class="choice inline"><input type="checkbox" id="model-helper" name="helper" disabled> <span><strong>Read my own-model files with this one</strong></span></label> <span data-help="About the model that reads your own-model files">When you list more than one model of your own, files marked "Your own AI only" are read by this one. Without a choice, the first model of your own in the list reads them.</span></div>
         <label class="field">
           <span id="model-token-env-label">Token variable name <span class="muted">(optional)</span></span>
-          <input type="text" id="model-token-env" name="tokenEnv" placeholder="OLLAMA_API_KEY" autocomplete="off" spellcheck="false" aria-labelledby="model-token-env-label" aria-describedby="model-token-env-hint">
+          <input type="text" id="model-token-env" name="tokenEnv" placeholder="e.g. OLLAMA_API_KEY" autocomplete="off" spellcheck="false" aria-labelledby="model-token-env-label" aria-describedby="model-token-env-hint">
           <span class="field-hint" id="model-token-env-hint">An environment variable's name. The token itself never goes in policy.yaml.</span>
         </label>
         <div class="form-actions">
@@ -617,6 +856,9 @@
           <button type="submit" class="btn primary" id="model-save" aria-describedby="model-error">Save model</button>
         </div>
       </form>
+      <!-- Changed elsewhere while the page was open (dashboard.md §4.25
+           *Settings follows a change made elsewhere*): home.js followSettings. -->
+      <p id="models-changed" class="note rules-changed" role="status" hidden></p>
       <div id="models-notice" class="rules-notice" role="status" hidden></div>
       <div id="settings-models" class="table"></div>
     </section>
@@ -630,6 +872,9 @@
       <!-- Settings › Sensitivity labels (dashboard.md §4.25s, plan 14 §14.1):
            home.js loadLabels reads GET /api/policy/sensitivity-labels and
            sends each Save to POST /api/policy/sensitivity-labels/change. -->
+      <!-- Changed elsewhere while the page was open (dashboard.md §4.25
+           *Settings follows a change made elsewhere*): home.js followSettings. -->
+      <p id="labels-changed" class="note rules-changed" role="status" hidden></p>
       <div id="labels-notice" class="rules-notice" role="status" hidden></div>
       <div id="settings-labels" class="table"></div>
     </section>
@@ -638,15 +883,19 @@
       <p class="note">What happens when a message you type holds a secret.</p>
       <details class="more" id="settings-prompt-more">
         <summary>More</summary>
-        <p class="note" id="settings-prompt-about">Mandu checks what you type before the AI reads it. Saved to <code>prompt_filters:</code> in policy.yaml; a change applies to your next message.<span data-dev-only> Which checks run, your own word lists and a place to try them are in the <a id="settings-prompt-dev" href="dev/rules" target="_blank" rel="noopener">developer view</a>.</span></p>
+        <p class="note" id="settings-prompt-about">Mandu checks what you type before the AI reads it. Saved to <code>prompt_filters:</code> in policy.yaml; a change applies to your next message.<span data-dev-only> Which checks run and your own word lists are in the <a id="settings-prompt-dev" href="dev/rules" target="_blank" rel="noopener">developer view</a>.</span></p>
       </details>
       <!-- Settings › Prompt filters (dashboard.md §4.25y, plan 15 §13.7):
            home.js loadPromptSettings reads GET /api/policy/prompt-filters
            (the developer panel's projection in the product's words) and
            sends each change, ONE typed PolicyEdit, to POST
            /api/policy/prompt-filters/change, which asks before a change
-           that lets more through. Switches, packs, plugins and the test
-           bench stay in the developer view. -->
+           that lets more through. *Try a message* below sends a typed
+           message to POST /api/policy/prompt-filters/try, a dry run.
+           Switches, packs and plugins stay in the developer view. -->
+      <!-- Changed elsewhere while the page was open (dashboard.md §4.25
+           *Settings follows a change made elsewhere*): home.js followSettings. -->
+      <p id="prompt-changed" class="note rules-changed" role="status" hidden></p>
       <div id="prompt-notice" class="rules-notice" role="status" hidden></div>
       <div id="settings-prompt-kinds" class="table"></div>
       <details class="more" id="settings-prompt-meanings-fold">
@@ -676,12 +925,43 @@
           <button type="submit" class="btn primary" id="prompt-exception-add">Add exception</button>
         </div>
       </form>
+      <!-- Try a message (dashboard.md §4.25y): a dry run of the filter on
+           what the person typed. The answer marks spans of their own text
+           and names each kind and what would happen to it; it never shows
+           the text the AI would get. Hidden with Exceptions while the
+           filters cannot be read. -->
+      <details class="more prompt-try" id="settings-prompt-try">
+        <summary>Try a message</summary>
+        <form id="prompt-try-form" class="lock-form prompt-try-form" autocomplete="off">
+          <p class="note" id="prompt-try-about">Nothing is sent to an AI, and nothing is kept: the message stays in this box.</p>
+          <label class="field">
+            <span id="prompt-try-label">Type or paste a message to see what Mandu would do with it</span>
+            <textarea id="prompt-try-text" rows="3" maxlength="65536" spellcheck="false" aria-labelledby="prompt-try-label" aria-describedby="prompt-try-about"></textarea>
+          </label>
+          <div class="form-actions">
+            <span id="prompt-try-error" class="ask-error" role="alert"></span>
+            <button type="submit" class="btn primary" id="prompt-try-go">Try it</button>
+          </div>
+        </form>
+        <div id="prompt-try-answer" class="prompt-try-answer" role="status" hidden></div>
+      </details>
     </section>
     <section class="block card" id="settings-notify-block" aria-labelledby="settings-notify-title">
       <h2 id="settings-notify-title">Notifications</h2>
       <div class="table"><div class="row service notify-row">
         <div class="name">This browser</div>
-        <div class="sub" id="notify-state"></div>
+        <div class="notify-words">
+          <div class="sub" id="notify-state"></div>
+          <!-- What they are about, while permission is granted (dashboard.md
+               §4.25 *Only protection problems*): home.js chooseNotifyKind. -->
+          <label class="notify-kind" id="notify-kind-row" hidden>Notify me about
+            <select id="notify-kind">
+              <option value="all">Everything</option>
+              <option value="alarms">Only protection problems</option>
+              <option value="none">Nothing</option>
+            </select>
+          </label>
+        </div>
         <div class="notify-actions">
           <button type="button" class="btn small" id="notify-test" aria-label="Send a test notification" hidden>Send a test</button>
           <button type="button" class="btn small" id="notify-enable" aria-describedby="notify-state" hidden>Turn on</button>
@@ -716,7 +996,7 @@
          and shows the sign-in page. -->
     <section class="block card" id="settings-account-block" aria-labelledby="settings-account-title" hidden>
       <h2 id="settings-account-title">Dashboard account</h2>
-      <p class="note">This browser is signed in to your Mandu dashboard account. To change its password, run <code class="code-whole">mandu dashboard --set-password</code> in your own terminal.</p>
+      <p class="note">This browser is signed in to your Mandu dashboard account. To change its password, run <code class="code-whole" data-run>mandu dashboard --set-password</code> in your own terminal.</p>
       <form method="POST" action="logout" id="settings-sign-out-form">
         <button type="submit" class="btn small" id="settings-sign-out">Sign out</button>
       </form>
@@ -727,7 +1007,7 @@
         <div class="name">Version</div>
         <div class="sub" id="settings-about-version">Checking…</div>
       </div></div>
-      <p class="note">To check this computer's setup, run <code class="code-whole">mandu doctor</code> in a terminal.</p>
+      <p class="note">To check this computer's setup, run <code class="code-whole" data-run>mandu doctor</code> in a terminal.</p>
       <p class="note" id="settings-about-check" hidden>Mandu checks for a newer release when you start an agent from a terminal.</p>
       <p class="note" id="settings-about-links" hidden></p>
       <p class="note" id="settings-about-report" hidden></p>

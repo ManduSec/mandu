@@ -143,11 +143,10 @@ test("per AI: any AI reads Not secret, may read any-model when it asks; your own
   });
   const own = row(models.rows, "vllm-1");
   assert.equal(own.about, "Your own AI, on this computer.");
-  assert.deepEqual(lists(own), {
-    [BY_WHO_WORDS.asWritten]: ["~/proj/README.md"],
-    [BY_WHO_WORDS.whenAsks]: ["~/proj/contract.pdf", "~/proj/customers.csv"],
-    [BY_WHO_WORDS.alwaysMasked]: ["~/.my.cnf", "~/.ssh (and everything inside)", "~/proj/.env"],
-  });
+  // Only what differs from Any AI (queue item #98): the local-model file, then a line for the rest.
+  assert.deepEqual(lists(own), { [BY_WHO_WORDS.whenAsks]: ["~/proj/customers.csv"] });
+  assert.equal(own.rest, "The rest (5): as Any AI, above.");
+  assert.equal(row(models.rows, "Any AI").rest, undefined, "Any AI keeps its full lists, with no rest line");
   // No own AI declared: the local-model files are read by no AI, and the row says so.
   const none = toByWhoVM(byWhoRules(PATHS, []), [], { home: HOME }).models.rows;
   assert.deepEqual(none.map((r) => r.name), ["Any AI", "Your own AI"]);
@@ -158,6 +157,36 @@ test("per AI: any AI reads Not secret, may read any-model when it asks; your own
   assert.deepEqual(about.filter((x) => x.kind === "link"), [{ kind: "link", text: "Settings › Models", to: "models" }]);
   assert.equal(row(none, "Any AI").aboutParts, undefined, "a line that names no place has no parts");
   assert.deepEqual(lists(row(none, "Your own AI")), { [BY_WHO_WORDS.alwaysMasked]: ["~/proj/customers.csv"] });
+});
+
+test("§4.25aa Only what differs, AI tab: an own model lists only the files its group differs from Any AI's, then counts the rest (queue item #98)", () => {
+  const TWO = [...MODELS, { name: "ollama", url: "http://127.0.0.1:11434/v1", wire: "openai-chat", local: true }];
+  const rules = byWhoRules(PATHS, []);
+  const v = toByWhoVM(rules, TWO, { home: HOME }).models;
+  assert.deepEqual(v.rows.map((r) => r.name), ["Any AI", "vllm-1", "ollama"]);
+  // Any AI is as it was without own models.
+  assert.deepEqual(row(v.rows, "Any AI"), row(toByWhoVM(rules, [], { home: HOME }).models.rows, "Any AI"));
+  for (const name of ["vllm-1", "ollama"]) {
+    const own = row(v.rows, name);
+    assert.deepEqual(lists(own), { [BY_WHO_WORDS.whenAsks]: ["~/proj/customers.csv"] }, name);
+    assert.equal(own.rest, BY_WHO_WORDS.sameAsAnyAI(5), name);
+  }
+  // With no local-model file nothing differs: no lists, and one line says so.
+  const noLocal = toByWhoVM(byWhoRules(PATHS.filter((p) => p.level !== "local-model"), []), TWO, { home: HOME }).models.rows;
+  for (const name of ["vllm-1", "ollama"]) {
+    const own = row(noLocal, name);
+    assert.deepEqual(own.groups, [], name);
+    assert.equal(own.rest, "Everything: as Any AI, above.", name);
+  }
+  // No file goes missing: what an own model lists plus what its rest counts is every rule, once.
+  for (const [rows, total] of [[v.rows, rules.length], [noLocal, rules.length - 1]] as const) {
+    for (const r of rows.slice(1)) {
+      const shown = r.groups.flatMap((g) => g.items.map((i) => i.rule));
+      const rest = r.rest === BY_WHO_WORDS.allAsAnyAI ? total : Number(/^The rest \((\d+)\)/.exec(r.rest ?? "")?.[1] ?? 0);
+      assert.equal(new Set(shown).size, shown.length, `${r.name} lists each file once`);
+      assert.equal(shown.length + rest, total, `${r.name}: ${shown.length} listed + ${rest} as Any AI`);
+    }
+  }
 });
 
 test("an unknown level reads as no AI (fail closed); labels made on the page join, one per path, policy.yaml first", () => {

@@ -768,6 +768,9 @@ test(
     const dir = mkdtempSync(join(tmpdir(), "mandu-lm-netns-"));
     // The CA where the product would keep one: under HOME, which every
     // sandbox the launcher builds can read (a /tmp path is not always there).
+    // A fresh HOME has no ~/.cache (the CI guest's `ci` user: the nightly of
+    // 2026-10-22 failed here with ENOENT before the drill started).
+    mkdirSync(join(homedir(), ".cache"), { recursive: true });
     const caDir = realpathSync(mkdtempSync(join(homedir(), ".cache", "mandu-live-netns-ca-")));
     const caFile = join(caDir, "ca.pem");
     copyFileSync(fx.caCert, caFile);

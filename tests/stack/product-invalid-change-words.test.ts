@@ -102,7 +102,7 @@ test("the served Rules page says why the real arbiter refuses a typed pattern, t
         const r = await fetch0(url, init);
         return { ...r, json: async () => { const v = await r.json(); answers.push(JSON.stringify(v)); return v; } };
       };
-      w.confirm = () => true;
+      w.confirm = () => { throw new Error("window.confirm called"); };
       doc.getElementById("rules-add").click();
       await waitWhile(() => doc.getElementById("lock-form").hidden || doc.querySelectorAll("#files-list .row.file").length === 0);
       const typeAndChoose = async (path: string) => {
@@ -149,7 +149,7 @@ test("the served Rules page says why the real arbiter refuses a typed pattern, t
     // V3: the same page, once the typed paths are valid, saves.
     await servedProductPage(base, "/rules", (doc: Doc) => !!doc.getElementById("rules-add") && doc.querySelectorAll("#files-tree .row.file-rule").length > 0, async (doc: Doc) => {
       const w = doc.defaultView;
-      w.confirm = () => true;
+      w.confirm = () => { throw new Error("window.confirm called"); };
       doc.getElementById("rules-add").click();
       await waitWhile(() => doc.getElementById("lock-form").hidden || doc.querySelectorAll("#files-list .row.file").length === 0);
       doc.getElementById("lock-path").value = "~/notes/draft";

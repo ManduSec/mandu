@@ -78,6 +78,50 @@ test("keepScan: OpenCode's, Goose's and OpenClaw's sessions, findings, examples 
   assert.deepEqual(rec.sends?.[0]?.agents, ["openclaw"]);
 });
 
+test("keepScan: a finding's sessions not under Mandu (outsideMandu) are kept, checked, for the dashboard's count", () => {
+  const f = { kind: "known", preview: "PASS in ~/app/.env", source: { path: "~/app/.env", name: "PASS" }, sessions: 2, agents: ["openclaw"], how: { "command-output": 2 }, projects: [], duringMandu: 1, sessionsUnderMandu: 1, sessionsByTime: 0 };
+  const rec = keepScan(answer({ findings: [
+    { ...f, outsideMandu: { first: "2026-10-24T10:00:00Z", last: "2026-10-24T10:00:00Z", how: { "command-output": 1 }, extra: STRIPE } },
+    { ...f, preview: "B", outsideMandu: { last: "not a date", how: { "read-file": -3 } } },
+    { ...f, preview: "C" },
+  ] }), { ranAt: 1 })!;
+  assert.deepEqual(rec.findings[0]!.outsideMandu, { first: "2026-10-24T10:00:00.000Z", last: "2026-10-24T10:00:00.000Z", how: { "command-output": 1 } });
+  assert.deepEqual(rec.findings[1]!.outsideMandu, { how: { "read-file": 0 } }, "a bad date dropped, a bad count zero");
+  assert.equal(rec.findings[2]!.outsideMandu, undefined);
+});
+
+test("keepScan: a known value's places (lineage ★2) are kept, checked and cut; a bad mark or session id dropped; none on a key that is not yours", () => {
+  const f = { kind: "known", preview: "PASS in ~/app/.env", source: { path: "~/app/.env", name: "PASS" }, sessions: 2, agents: ["openclaw"], how: { "command-output": 2 }, projects: [], duringMandu: 1 };
+  const P = (i: number, extra: Record<string, unknown> = {}) => ({ agent: "openclaw", file: `~/.openclaw/agents/main/sessions/s${i}.jsonl`, mandu: "without", last: "2026-10-24T10:00:00Z", sessions: 1, ...extra });
+  const rec = keepScan(answer({ findings: [
+    { ...f, places: [
+      P(0, { first: "2026-10-23T10:00:00Z", value: STRIPE }),
+      P(1, { mandu: "under", manduSessions: ["mdu-1-2", "openclaw:main", "../etc", "a b", 7, "x".repeat(200), "mdu-3", "mdu-4"] }),
+      P(2, { mandu: "maybe" }),
+      { agent: "codex" },
+      ...Array.from({ length: 12 }, (_, i) => P(10 + i)),
+    ], placesMore: 3 },
+    { ...f, kind: "github-token", preview: "ghp_…", places: [P(0)] },
+  ] }), { ranAt: 1 })!;
+  const places = rec.findings[0]!.places!;
+  assert.equal(places.length, 10);
+  assert.deepEqual(places[0], { agent: "openclaw", file: "~/.openclaw/agents/main/sessions/s0.jsonl", mandu: "without", sessions: 1, first: "2026-10-23T10:00:00.000Z", last: "2026-10-24T10:00:00.000Z" }, "only the named fields");
+  assert.deepEqual(places[1]!.manduSessions, ["mdu-1-2", "openclaw:main", "mdu-3"], "a path, a space, a non-string, an overlong id dropped; three at most");
+  assert.equal(places.some((p) => p.file.endsWith("s2.jsonl")), false, "an unknown mark drops the place");
+  assert.equal(rec.findings[0]!.placesMore, 3 + 16 - 10);
+  assert.equal(rec.findings[1]!.places, undefined, "a key that is not yours keeps no places");
+  assert.equal(JSON.stringify(rec).includes(STRIPE.slice(8, 16)), false);
+  // Read back the same.
+  const dir = mkdtempSync(join(tmpdir(), "mdu-kept-places-"));
+  try {
+    const path = join(dir, "last-scan.json");
+    writeLastScan(path, rec);
+    assert.deepEqual(readLastScan(path)!.findings[0]!.places, places);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("keepScan: only the named fields, checked and cut; the optional ones kept when present", () => {
   const rec = keepScan(answer({ newerField: STRIPE }), { ranAt: Date.parse("2026-10-21T09:00:00Z"), since: Date.parse("2026-09-01T00:00:00Z") })!;
   assert.equal(rec.version, 1);
@@ -94,6 +138,9 @@ test("keepScan: only the named fields, checked and cut; the optional ones kept w
   assert.equal(rec.findings[1]!.sessionsUnderMandu, 1);
   assert.equal(rec.sends![0]!.host, "hooks.vendor.dev");
   assert.deepEqual(rec.risk, { skippedPrompts: 2, skippedWithSecret: 1, envDumps: 1 });
+  assert.deepEqual(rec.capped, { overTime: 0, overBytes: 0, tooBig: 0, overFiles: 0, readFailed: 1 }, "no `compressed` when the answer has none");
+  const partly = keepScan(answer({ capped: { overTime: 0, overBytes: 0, tooBig: 0, overFiles: 0, readFailed: 0, compressed: 2 } }), { ranAt: 1 })!;
+  assert.equal(partly.capped.compressed, 2, "the sessions not read in full are kept");
   assert.equal(keepScan({ axis: false, findings: [] }, { ranAt: 1 }), null, "an axis-OFF answer is not kept");
   assert.equal(keepScan("nonsense", { ranAt: 1 }), null);
 });

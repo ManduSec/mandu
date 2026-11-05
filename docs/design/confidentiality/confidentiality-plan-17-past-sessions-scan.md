@@ -86,7 +86,11 @@ dashboard keep "reached the AI" (the maintainer chose "CLI report only").
 seen only in sessions under Mandu (the AI saw a placeholder) is not in
 the count, one seen only by time is counted with a footnote, as before,
 and a send through the secret's variable is said to be one ("through its
-variable"), not a value the AI had.
+variable"), not a value the AI had. Nor is a session under Mandu counted
+in a leaked finding's own line (2026-10-27, found on camera in the
+OpenClaw plugin video: "2 sessions" where one was under Mandu): the line
+counts the sessions not under Mandu, with their date and ways, and says
+the others apart (§2, *Sessions under Mandu in a leaked finding*).
 
 ## 2. What it is
 
@@ -151,6 +155,62 @@ key-shaped values, those that look like test values, the values named
 like a secret and what Mandu kept, which `--all` lists under the same
 numbers, so `--show <n>` always means the same finding. Nothing found of
 yours: `✓ None of your secrets leaked to the AI`, the rest as before.
+
+**Sessions under Mandu in a leaked finding, and the advice by agent**
+(2026-10-27, the OpenClaw plugin video's second scan: OpenClaw 2026.10.7,
+one session before Mandu's plugin and one under it). A finding's line
+counts the sessions in which it reached the AI: `sessions -
+sessionsUnderMandu`, a session marked by time only counted with them (the
+mark is not a verdict, item 6, as in the kept scan's
+`sessionsWithoutMandu`). Its date and ways are theirs, from the
+finding's `outsideMandu` (item 6; an older arbiter has only the counts,
+so there the date and ways stay the finding's own). The sessions under
+Mandu get a dim line of their own under it, `1 more session ran under
+Mandu: there the AI saw only a placeholder` (in `--all`, after the
+story, which tells the newest session without Mandu); `--show` already
+splits them (`1 without Mandu, 1 under Mandu`), and its "Each time" line
+says "Each time not under Mandu" when one of its examples was. A finding
+seen only under Mandu stays out of "leaked" as before: it is one Mandu
+kept, listed by `--all` under its own heading. "Rotate it now" stays:
+the value did leak before. The dashboard's Scan page and Home's card
+count the same way (last-scan.ts `reachedPart`); their footnote already
+named the sessions with and without Mandu.
+
+```
+✗ 1 of your secrets leaked to the AI
+
+  1  ORDERHUB_PASSPHRASE   ~/projects/orders-app/.env
+     1 session, 26 Oct · a command printed it: DEBUG=1 sh orders-app/bin/sync-orders.sh
+     1 more session ran under Mandu: there the AI saw only a placeholder
+
+  → Rotate it now, where it was issued.
+
+1 session ran under Mandu: there the AI saw placeholders, not the values.
+
+✓ OpenClaw has Mandu's plugin: the AI now sees this secret only as a $MDU:… placeholder, and your agent still does its work.
+  Check it:             mandu doctor
+  One in full:          mandu scan --show 1   Everything: mandu scan --all
+  Dashboard:            run mandu dashboard and open Scan
+```
+
+The closing advice names the agents the scan read that Mandu runs, most
+sessions first, two at most, as the dashboard's start commands do
+(start-commands.ts): `Protect Claude Code:  mandu claude`, `Protect your
+agents:  mandu claude  (or mandu codex)`; for OpenClaw Mandu's plugin
+route first (`mandu openclaw install`, openclaw-plugin.md §8), its launch
+as the other way (`Protect OpenClaw:  mandu openclaw install  (or mandu
+openclaw)`). No agent Mandu runs read (no session at all): `mandu claude
+(or mandu codex)`, as before. An agent Mandu is attached to now is not
+told to protect itself again: the scan reads OpenClaw's config the way
+the launch refusal does (openclaw-install-command.ts
+`openclawAttachmentInstalled`: Mandu's plugin installed, enabled and in
+attachment mode; a file read, no connection), and says `OpenClaw has
+Mandu's plugin` (with `mandu doctor`, which checks its route); when it is
+the only agent read, the green line says so in place of "With Mandu, …".
+A launch (`mandu claude`) leaves nothing to tell it is how the person
+starts the agent, so only an attachment counts; sessions under Mandu in
+the scan do not either (a past session says nothing of now). `--all`
+ends the same way in sentences.
 
 Colour (term-style.ts, shared with `mandu demo`) only when stdout is a
 terminal, `NO_COLOR` is unset (no-color.org) and `TERM` is not `dumb`;
@@ -347,9 +407,10 @@ numbers (the saved last scan, phase 2, keeps them).
      `data` is the model's answer; never `model_config`, `usage` or an
      `error` record. It is a record of many sessions' requests, so its
      findings count it as one session and the sessions read do not.
-   - OpenClaw (`agents/<id>/sessions/<session>.jsonl`, and 9.x's
-     `agents/<id>/agent/openclaw-agent.sqlite` `transcript_events`, the same
-     entries): a `message` entry by role (a user's text; an assistant's
+   - OpenClaw (`agents/<id>/sessions/<session>.jsonl`, its archived
+     `<session>.jsonl.reset.<time>` and `<session>.jsonl.deleted.<time>`,
+     and 2026.8's and later `agents/<id>/agent/openclaw-agent.sqlite`
+     `transcript_events`, the same entries): a `message` entry by role (a user's text; an assistant's
      text, thinking and each `toolCall`'s `arguments`; a `toolResult`'s text
      content; a `bashExecution`'s command and output unless
      `excludeFromContext`; a `custom` message's content; a branch or
@@ -471,7 +532,10 @@ numbers (the saved last scan, phase 2, keeps them).
 
    **And what the agent did, as examples** (2026-10-21, the maintainer's
    "a command printed it: can you show the command?"). Each finding keeps
-   `examples` (at most 3, newest first, one per session; when none of
+   `examples` (at most 3, newest sessions first, one per session: the
+   session's FIRST text of that way, where the value got there, since
+   2026-10-27, when a live model that printed the value again while it
+   checked its fix hid the debug run that leaked it; when none of
    those went without Mandu and an older text did, that one takes the
    last place, even from a session already shown: a resumed session's
    part outside Mandu, item 6) and `examplesByHow` (at most 10 a way, the detail of
@@ -744,6 +808,43 @@ numbers (the saved last scan, phase 2, keeps them).
      transcript keeps none, or the Mandu session is an older Mandu's whose
      events carry none). This is the old mark, kept as a fallback.
 
+   **Attachment sessions** (2026-10-25). A resident OpenClaw Gateway with
+   the Mandu OpenClaw plugin runs no launch: its model calls go through a
+   proxy `mandu serve` runs for the attachment session `openclaw:<agentId>`
+   (openclaw-plugin.md §3.3), while OpenClaw writes the raw tool output into
+   its own store. Its Mandu sessions are the attachment's **periods**, which
+   the arbiter keeps in `attachment_periods` in its store
+   (cache-seals.ts, ATTACHMENT PERIODS): one row per registration, written
+   by `beginAttachment` (its start), `renewAttachment` (its last renewal)
+   and `endAttachment` or a second registration of the session (its end),
+   all three human-plane ops, on the arbiter's clock, so a period never
+   covers the past. A lapsed lease leaves no end: its period ends at its
+   last renewal, not at the deadline it missed. Each period is a window of
+   the agent `openclaw` (`manduWindowsFrom`'s `attachments`), from its
+   start to its end (now while live), and its ids are those of the
+   `tllm_call` events on the session's own stream timed inside it (the
+   anthropic-proxy records `model.responseId` for any session key, a
+   launch's or an attachment's); an id timed outside every period of its
+   session is not taken. Exact by response id where the proxy recorded
+   one, `by-time` for a period that recorded none, as for a launch. No emit
+   opens or stretches such a window: an attachment session's event file is
+   never read for a window (its arbiter-written `launch_posture`, and any
+   `launch_posture` or `session_exit` the data socket writes there once the
+   attachment ended, are skipped), only for the ids inside the periods.
+   The scan runs in a throwaway arbiter with a store of its own, so
+   `mandu scan` also sends `manduDb` (the resident store's path), which the
+   throwaway arbiter reads read-only (`attachmentPeriodsIn`, the read-only
+   open of db/store-seed.ts; a live row's deadline believed at most one
+   lease). Two limits, both the S3 line of cache-seals.ts: the proxy's
+   `tllm_call` events are claims (an attachment exposes the human plane,
+   so nothing on its stream is believed), and the Gateway's programs,
+   which run as the user outside any sandbox, can write the event file or
+   `mandu.db` itself, so a forged id or period from them is not caught; a
+   registration made while the plane is exposed (a second Gateway's) still
+   counts, since only the same programs could have made it falsely.
+   Attachments registered before the periods were kept (none shipped with
+   the proxy pool) have no windows.
+
    A subagent's file joins its parent's session; the strongest mark wins.
    The answer counts `sessionsUnderMandu` and `sessionsByTime` in all;
    `duringMandu` stays their sum for older readers; the rest ran without
@@ -798,7 +899,11 @@ numbers (the saved last scan, phase 2, keeps them).
    else without: `sessionsUnderMandu`, `sessionsByTime` and `duringMandu`
    per finding and per send count those, so they never exceed the
    finding's `sessions`; the answer's own counts stay per session (a
-   resumed session counts under Mandu there). Each example's `mandu` is
+   resumed session counts under Mandu there). When some of a finding's
+   sessions are under Mandu and some are not, `outsideMandu` gives the
+   others' first and last times and their sessions per way (absent when
+   none is under Mandu, where `first`, `last` and `how` say it, and when
+   every one is), for the report's count (§2). Each example's `mandu` is
    its own text's mark, so a resumed session can show its newer example
    under Mandu and, as the one without Mandu, an older one of its part
    outside it. Joined by id: Claude Code, Codex, OpenClaw, Goose, and
@@ -1170,6 +1275,73 @@ numbers (the saved last scan, phase 2, keeps them).
     leaves them out of its count; a send of one says "(looks like a test
     value)". The kept scan carries the mark; the dashboard reads it back
     and shows nothing of it yet.
+15. **Where the value is now** (2026-10-29, the lineage mock's ★2;
+    `TranscriptFinding.places`). For each of your secrets (a `known`
+    finding), the scan keeps the files it found the value in: each
+    transcript file, or an agent's database (OpenCode's, Goose's,
+    OpenClaw 9.x's), home as `~` and masked like an example's file
+    (`redactShown`). Per file: the agent, the sessions in it that carried
+    the value, their first and last times, the weakest mark among them
+    (`without` below `by-time` below `under`, per request as item 6
+    joins them), and the Mandu sessions they ran under (`manduSessions`,
+    at most 3: those that recorded one of the session's response ids or
+    its agent session id, else those of the same agent its time overlaps;
+    `ManduWindow.session`, the event file's name, an attachment's
+    session). At most 10 files a finding, those without Mandu first, then
+    the newest (`placesMore` counts the rest); a subagent's file is a place
+    of its own, with its parent's session's mark and times. A key that is
+    not one of yours keeps none: the page has nothing to say of where a
+    stranger's key belongs. The scan only says where; it never changes a
+    file (§7 item 2), and its places say nothing of the value but where
+    the scan read it. The launcher keeps them (`KeptPlace`, each field
+    checked; a Mandu session id only in the session page's shape), and the
+    dashboard's Scan page shows them under *Where the real value is now*
+    (dashboard.md §4.25ai), with whether each file is still there now.
+    Tests: `transcript-scan.test.ts` (places, their order and marks, by
+    id and by time, the cap, a path holding a value masked),
+    `scan-kept.test.ts`, and `tests/stack/transcript-scan-where-now.test.ts`
+    (the real scan, the kept file and the dashboard's row; both
+    transcripts unchanged).
+
+**OpenClaw's saved mask, and its archived sessions** (2026-10-25, found by
+the OpenClaw plugin video's drill). OpenClaw's `logging.redactSensitive`
+(on by default) saves a secret-looking value (a URL's password, an
+`Authorization` value, a CLI secret flag, some 90 vendor key formats, and,
+in what it saves, `…KEY|TOKEN|SECRET|PASSWORD=…` names too) as its first 6
+characters, `…` and its last 4 (`***` under 18 characters). Read in each
+release's own code: up to 2026.7.x (the JSONL store) it masks only what it
+SAVES, and the model got the value as read; from 2026.8.1 (the SQLite store,
+which came in the same release) it masks the same values before the model
+too, so there the model got the mask. So:
+
+- A record of OpenClaw's JSONL store is read as saved masked
+  (`SessionMeta.savedMasked`, transcript-stores.ts): each known value of 18
+  characters or more is also looked for by its mask (`openclawMask`), as a
+  whole token (the characters around it no letter, digit, `_` or `-`), and
+  only when no other known value has the same mask (a mask two share ties to
+  neither). Found so, it is reported as the known value it is, and the
+  finding counts the sessions found by the mask (`matchedMasked`); the
+  report says so under it ("found by the masked copy OpenClaw saved (the
+  value's first 6 and last 4 characters); OpenClaw 2026.7 and earlier sent
+  the value itself to the AI and masked only what it saved"). Its mask is
+  then no second finding of its shape. No answer holds the mask.
+- A SQLite-store session's mask is not tied to a value: the model got the
+  mask, ten characters of the value, not the value. (Its shape findings are
+  unchanged.)
+- OpenClaw renames a session the person reset (`/new`, the Control UI's New
+  session) to `<session>.jsonl.reset.<time>` and one they deleted to
+  `<session>.jsonl.deleted.<time>`, and keeps both; the scan reads both as
+  sessions (`OPENCLAW_ARCHIVED_TRANSCRIPT_RE`): what they hold went to the
+  model like any session's. Before this, a reset made a leak vanish from the
+  next scan.
+
+Tests: `transcript-scan.test.ts` (the mask, the whole-token and shared-mask
+rules, no match without `savedMasked`), `transcript-stores.test.ts` (the
+archived files are sessions and store files; the real 2026.7.1-2 store's
+masks counted as the planted keys, 2026.9.9's not), and
+`tests/stack/transcript-scan-openclaw-masked.test.ts` (`mandu scan` over
+both real stores, the 2026.7.1-2 one as a reset session: the report, `--all`
+and `--json` hold neither a value nor a mask).
 
 ## 4. Agents, in order
 
@@ -1216,7 +1388,8 @@ neither changes it nor holds the agent up (`openAgentStore`):
 `mode=ro` with no `-wal`/`-shm` present would create both (probed), which
 is why that case is immutable. Both modes are SQLite URI filenames, which
 `node:sqlite` opens from Node 22.15 (probed on 22.15.0, 22.16.0, 22.22.1;
-`sqliteUriFilenames` probes once at run time). Node 22.13, Mandu's floor,
+`sqliteUriFilenames` probes once at run time). Node 22.13, Mandu's floor
+until 2026-10-26 (22.15 since, packaging.md),
 takes the URI as a plain name and has no immutable open; a plain read-only
 open of a database with no WAL in use creates its `-wal` and `-shm` there
 too (probed), and of a rollback one takes a lock. So on 22.13 and 22.14
@@ -1228,6 +1401,29 @@ being checkpointed can meet a torn page; that session counts as
 unreadable. A database's sessions are the scan's units: each is sized by
 its rows (the per-file cap applies to it) and timed by its newest message
 (`--since`, newest first).
+
+**OpenClaw's compressed records** (2026-10-25). From 2026.8 OpenClaw keeps
+a transcript event of 1 KiB or more as zstd (`event_zstd`, with
+`event_json` NULL) whenever zstd shrinks it by a tenth (read in 2026.9.9's
+own code; its Node floor, 24.16, always has zstd). Those are the tool
+results a leak is in: a log the agent read, a command's output. `node:zlib`
+decompresses zstd from Node 22.15 (Mandu's floor since 2026-10-26), so on
+22.13 and 22.14 the scan cannot read them. Until 2026-10-25 it skipped them silently and called such a
+session clean ("None of your secrets leaked to the AI"; found by the
+OpenClaw plugin demo's replay in CI, which runs Mandu on the floor and
+OpenClaw on its own Node). Now each skipped record is counted
+(`SessionMeta.compressedUnread`), the session counts in
+`capped.compressed`, and every report says so: a note ("N OpenClaw sessions
+not read in full: OpenClaw keeps its longer messages compressed, and Mandu
+reads those on Node 22.15 or later"), and with no leak found the headline
+says none *in what Mandu could read*, amber, not the green ✓ (terminal
+report, `--all`, `--share`, the kept scan, the dashboard's Home card and
+Scan page). The rest of the session is still read. Tests:
+`transcript-stores.test.ts` (the decompressor path, none: skipped and
+counted, a torn row not counted; the scan's count on a Node without zstd,
+the record read on one with it), `scan-command.test.ts`, `scan-kept.test.ts`
+and the dashboard's `last-scan.test.ts` (the note, the headlines, an older
+record without the field).
 
 Phase 3 is deliberate: the scan is most useful for agents Mandu does not
 wrap yet, because it shows the person the same risk there.
@@ -1408,10 +1604,10 @@ CLI read, Cursor's chats counted.
   (OpenClaw's and Goose's, its request log's too,
   none from either OpenCode on the Anthropic wire), and never a local-only
   copy (OpenCode 1.x's `state.metadata.output`, `preview` and `display`,
-  Goose's `structuredContent`, OpenClaw 9.x's `details`). OpenClaw masks a
-  key-shaped value in every tool result before its model sees it and
-  keeps only the mask (`sk-ant…Nb4C`), so the planted keys are not counted
-  for it, their masks are. The store suite scans a home holding all of
+  Goose's `structuredContent`, OpenClaw 9.x's `details`). OpenClaw keeps a
+  key-shaped value only as its mask (`sk-ant…Nb4C`), so the readers yield
+  the masks; what a mask means is the scan's to decide (§3, *OpenClaw's
+  saved mask*). The store suite scans a home holding all of
   them (OpenCode 1.x and 2.x in one database, as a migrated one keeps
   both) for the planted values as known ones, and checks every store is
   left as it was. Driving the real agents found three reader faults, fixed

@@ -2,12 +2,12 @@
  * auth-substitution — the agent's own key, put back in the auth header of
  * the request the proxy forwards to its provider (agent-sign-in.md §3).
  *
- * PROVENANCE (CONTRIBUTING.md reuse policy): copied VERBATIM from
- * interceptors/anthropic-proxy/src/auth-substitution.ts (each proxy is a
- * standalone package; keep the two copies equal). NEW Mandu code (no
- * reference origin). The openai-proxy reads the same `Authorization: Bearer
- * <placeholder>` shape for Codex's saved key (`auth.json` in API-key mode,
- * agent-sign-in.md §3.9). The release itself is the egress gate's bound-destination release
+ * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code (no reference
+ * origin). ONE MODULE, TWO COPIES (both model proxies, no cross-package
+ * import): the source is interceptors/anthropic-proxy/src/auth-substitution.ts;
+ * change it, then run `node scripts/copies/module-copies.mjs generate`. The openai-proxy
+ * reads the same `Authorization: Bearer <placeholder>` shape for Codex's saved
+ * key (`auth.json` in API-key mode, agent-sign-in.md §3.9). The release itself is the egress gate's bound-destination release
  * (confidentiality.md §3.2), asked exactly as the net-proxy asks it before it
  * puts a value back on the wire (net-proxy egress.ts `gateRequest`):
  * `desymbolizationDecision` and, on allow, the shallow `resolve`, both on the
@@ -18,8 +18,12 @@
  * it routes the provider to (registerAuthGrant). Here, for each request
  * forwarded upstream:
  *
- *   - exactly TWO header shapes are read: `x-api-key: <symbol>` and
- *     `authorization: Bearer <symbol>`, the whole value one placeholder;
+ *   - exactly FOUR header shapes are read: `x-api-key: <symbol>`,
+ *     `x-goog-api-key: <symbol>` (the Gemini wire, model-wires.md §4.4),
+ *     `api-key: <symbol>` (Azure OpenAI's key header, model-wires.md §9) and
+ *     `authorization: Bearer <symbol>`, the whole value one placeholder (a
+ *     Gemini key in a `key=` query parameter is never put back: the URL is
+ *     not touched, so the provider answers 401);
  *   - the destination is the upstream's host, the scheme the upstream's;
  *   - allowed and resolved ⇒ the value replaces the placeholder in that
  *     header; anything else (a denial, an unbound host, no human plane, an
@@ -47,7 +51,7 @@ const HEADER_SAFE_RE = /^[\x21-\x7e]+$/;
  *  shape. Pure. */
 export function authHeaderSymbol(name: string, value: string): { symbol: string; render: (v: string) => string } | null {
   const n = name.toLowerCase();
-  if (n === "x-api-key") {
+  if (n === "x-api-key" || n === "x-goog-api-key" || n === "api-key") {
     return WHOLE_SYMBOL_RE.test(value) ? { symbol: value, render: (v) => v } : null;
   }
   if (n === "authorization") {
@@ -97,7 +101,7 @@ export function upstreamDestination(upstream: string): { host: string; scheme: "
 
 /**
  * Put the agent's key back into `headers` (mutated in place), for a request
- * to `dest`. Every header that is not one of the two shapes, and every
+ * to `dest`. Every header that is not one of the four shapes, and every
  * failure, is left as it is. Returns one record per auth header that held a
  * placeholder.
  */

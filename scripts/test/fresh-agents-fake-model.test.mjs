@@ -150,3 +150,36 @@ test("anthropic wire: a non-streaming request gets one Message JSON (tool call a
     assert.deepEqual(call.content[0], { type: "tool_use", id: "toolu_fake_1", name: "Read", input: { file_path: "/home/u/.aws/credentials" } });
   });
 });
+
+test("--script attach (fresh-openclaw-plugin): the read, then a call naming ~/.mandu, then a reply quoting the read's placeholder", async () => {
+  await withFake("openclaw", async (post, records) => {
+    const ack = await post("/v1/messages", { stream: true, system: SYSTEM_WITH_EXAMPLE, messages: [{ role: "user", content: "title?" }] });
+    assert.match(ack, /"text":"ok"/, "a request that advertises no read gets an ACK");
+    const call = await post("/v1/messages", { stream: true, tools: [{ name: "read" }], messages: [{ role: "user", content: "go" }] });
+    assert.match(call, /"name":"read"/);
+    assert.match(call, /\\"path\\":\\"\/home\/u\/\.aws\/credentials\\"/);
+    const read = { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fake_1", content: [{ type: "text", text: "aws_secret_access_key = $MDU:nomodel_read[e865].default.aws_secret_access_key\n" }] }] };
+    const tamper = await post("/v1/messages", { stream: true, tools: [{ name: "read" }], messages: [{ role: "user", content: "go" }, read] });
+    assert.match(tamper, /"id":"toolu_fake_2"/, "the second call has its own id");
+    assert.match(tamper, /\\"path\\":\\"~\/\.mandu\/config\.toml\\"/, "the second call names Mandu's state");
+    const refused = { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fake_2", is_error: true, content: "Mandu refused this read call" }] };
+    const final = await post("/v1/messages", { stream: true, tools: [{ name: "read" }], messages: [{ role: "user", content: "go" }, read, refused] });
+    assert.match(final, /MANDU_FAKE_DONE: the key in that file is \$MDU:nomodel_read\[e865\]\.default\.aws_secret_access_key\./,
+      "the reply quotes the read's placeholder, without the newline or a trailing dot");
+    const r = records();
+    assert.deepEqual(r.map((x) => x.kind), ["ack", "tool-call", "tamper-call", "final"]);
+    assert.deepEqual(r[3].toolResults, [read.content[0].content[0].text, "Mandu refused this read call"]);
+    assert.equal(r[1].toolResults, undefined);
+  }, ["--script", "attach"]);
+});
+
+test("--script attach: a read result with no placeholder says so in the reply, and --tamper-path is honoured", async () => {
+  await withFake("openclaw", async (post) => {
+    await post("/v1/messages", { stream: true, tools: [{ name: "read" }], messages: [{ role: "user", content: "go" }] });
+    const read = { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fake_1", content: "aws_secret_access_key = RAW" }] };
+    const tamper = await post("/v1/messages", { stream: true, tools: [{ name: "read" }], messages: [read] });
+    assert.match(tamper, /\\"path\\":\\"\/x\/\.mandu\/policy\.yaml\\"/);
+    const final = await post("/v1/messages", { stream: true, messages: [read, { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fake_2", content: "no" }] }] });
+    assert.match(final, /\(no placeholder came back\)/);
+  }, ["--script", "attach", "--tamper-path", "/x/.mandu/policy.yaml"]);
+});

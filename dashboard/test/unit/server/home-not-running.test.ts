@@ -14,6 +14,10 @@
  *   kept scan's card; the list unreadable and the probe null or absent: the
  *   read's failure stands, as before (the route answers 503 and the page
  *   says "Not connected.").
+ * - the scan card carries the kept scan's `rev` (`lastScanRev`), the one
+ *   `/api/scan` sends, so the Scan page follows a scan kept meanwhile
+ *   (§4.25ai *The Scan page follows a new scan*): null with none kept, a
+ *   new one when the file changed, none without the dep; never a path.
  *
  * Axes: no arbiter answers, so no posture is read; `secrets` stated for the
  * configured mode the hero's setup card names.
@@ -28,6 +32,7 @@ import { buildHome, HomeFacts, type HomeDeps } from "../../../src/server/home-ro
 import { manduNotRunning, type RunningProbeDeps } from "../../../src/mandu-running.js";
 import type { EventSource } from "../../../src/event-source.js";
 import type { LastScanWire } from "../../../src/view-model/last-scan.js";
+import { LastScanCache } from "../../../src/server/scan-routes.js";
 
 const AT = { arbiterSock: "/run/u/mandu/current/arbiter.sock", runtimeBase: "/run/u/mandu", eventDir: "/home/u/.mandu/events" };
 
@@ -82,7 +87,7 @@ const SCAN: LastScanWire = {
   dropped: 0, known: 1, capped: { overTime: 0, overBytes: 0, tooBig: 0, overFiles: 0, readFailed: 0 }, suggestions: null,
 };
 
-function deps(notRunning: HomeDeps["notRunning"] | "absent"): HomeDeps {
+function deps(notRunning: HomeDeps["notRunning"] | "absent", scan: LastScanWire | null = SCAN): HomeDeps {
   // The live tenant's source with no arbiter behind it: every read fails.
   const source = {
     listSessions: async () => { throw new Error("connect ENOENT /run/u/mandu/current/arbiter.sock"); },
@@ -96,7 +101,7 @@ function deps(notRunning: HomeDeps["notRunning"] | "absent"): HomeDeps {
     watchRuns: [],
     env: { MANDU_HOME: "/nonexistent/mandu-home-not-running" },
     home: "/home/u",
-    lastScan: () => SCAN,
+    lastScan: () => scan,
     ...(notRunning === "absent" ? {} : { notRunning }),
   };
 }
@@ -105,7 +110,10 @@ test("buildHome, no arbiter and Mandu not running: protection is off, the kept s
   const vm = await buildHome(deps(() => ({ everRan: false })));
   assert.equal(vm.verdict, "off");
   assert.equal(vm.headline, "Protection is off: no agent runs with Mandu.");
-  assert.match(vm.sentence, /start it with mandu claude \(or mandu codex\)\.$/);
+  // The kept scan read Claude Code sessions only: the command is that agent's
+  // (start-commands.ts); with Codex sessions too it would name both.
+  assert.match(vm.sentence, /start it with mandu claude\.$/);
+  assert.deepEqual(vm.start, ["mandu claude"]);
   assert.equal(vm.protection.connected, false);
   assert.equal(vm.protection.notRunning, true);
   assert.deepEqual(vm.agents, []);
@@ -118,4 +126,53 @@ test("buildHome, no arbiter and Mandu not running: protection is off, the kept s
   // (the test tenant): the failure stands, the page says Not connected.
   await assert.rejects(buildHome(deps(() => null)), /ENOENT/);
   await assert.rejects(buildHome(deps("absent")), /ENOENT/);
+});
+
+test("buildHome, Mandu not running: the hero, the scan card and `start` name the agents of the kept scan; no scan, today's two", async () => {
+  const goose: LastScanWire = { ...SCAN, sessions: { goose: 40 }, findings: SCAN.findings.map((f) => ({ ...f, agents: ["goose"] })) };
+  const vm = await buildHome(deps(() => ({ everRan: false }), goose));
+  assert.equal(vm.verdict, "off");
+  assert.equal(vm.sentence, "Your agents send what they read to the AI as it is, secrets included. To protect one, start it with mandu goose.");
+  assert.deepEqual(vm.sentenceParts.filter((p) => p.kind === "code").map((p) => p.text), ["mandu goose"]);
+  assert.deepEqual(vm.start, ["mandu goose"]);
+  assert.match(vm.scan?.sentence ?? "", /start your agent with mandu goose\./);
+  assert.doesNotMatch(JSON.stringify([vm.sentenceParts, vm.start, vm.scan?.parts]), /mandu codex|mandu claude|mandu gemini/);
+  // Two agents: the one with more sessions first.
+  const two = await buildHome(deps(() => ({ everRan: false }), { ...SCAN, sessions: { "claude-code": 2, opencode: 9 } }));
+  assert.match(two.sentence, /start it with mandu opencode \(or mandu claude\)\.$/);
+  // No scan kept: Mandu knows no agent of yours, today's words.
+  const none = await buildHome(deps(() => ({ everRan: false }), null));
+  assert.match(none.sentence, /start it with mandu claude \(or mandu codex\)\.$/);
+  assert.deepEqual(none.start, ["mandu claude", "mandu codex"]);
+});
+
+test("buildHome: the scan card carries the kept scan's rev, the one /api/scan sends; none kept, null; a new file, a new rev; no dep, none", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mdu-home-scan-rev-"));
+  try {
+    const file = join(dir, "last-scan.json");
+    const cache = new LastScanCache(() => file);
+    const withCache = (): HomeDeps => ({ ...deps(() => ({ everRan: false })), lastScan: () => cache.record(), lastScanRev: () => cache.keptRev() });
+    const none = await buildHome(withCache());
+    assert.equal(none.scan?.ran, false);
+    assert.ok(none.scan && "rev" in none.scan, "named with none kept too");
+    assert.equal(none.scan?.rev, null);
+    assert.equal(none.scan?.rev, cache.head().rev, "the head's rev: null");
+    writeFileSync(file, JSON.stringify(SCAN));
+    const one = await buildHome(withCache());
+    assert.equal(one.scan?.ran, true);
+    assert.match(one.scan?.rev ?? "", /^[A-Za-z0-9_-]{16}$/, "opaque");
+    assert.equal(one.scan?.rev, cache.head().rev, "the rev /api/scan sends");
+    assert.ok(!(one.scan?.rev ?? "").includes(dir) && !JSON.stringify(one.scan).includes(dir), "never the path");
+    writeFileSync(file, JSON.stringify({ ...SCAN, ranAt: "2026-10-26T09:00:00Z", known: 2 }));
+    const two = await buildHome(withCache());
+    assert.notEqual(two.scan?.rev, one.scan?.rev, "a scan kept since: another rev");
+    assert.equal(two.scan?.rev, cache.head().rev);
+    // A file that is not a record: none, as /api/scan says.
+    writeFileSync(file, "{ not json");
+    assert.equal((await buildHome(withCache())).scan?.rev, null);
+    // An older wiring (no lastScanRev): the card carries none.
+    assert.ok(!("rev" in ((await buildHome(deps(() => ({ everRan: false })))).scan ?? {})));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

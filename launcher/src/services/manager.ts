@@ -64,7 +64,7 @@ export interface ServiceHandle {
 
 /** Injectable service fns (defaults are the real ones). */
 export interface ManagerDeps {
-  startNetProxy: (plan: LaunchPlan, layout: Layout, scopeRunDir: string) => Promise<{ netProxy: { host: string; port: number }; mitmCaCert?: string; mitmCaBundle?: string; mitmUserTrust?: Record<string, string>; mitmDegraded?: string; modelHostDeny?: boolean; stop: () => void }>;
+  startNetProxy: (plan: LaunchPlan, layout: Layout, scopeRunDir: string) => Promise<{ netProxy: { host: string; port: number }; mitmCaCert?: string; mitmCaBundle?: string; mitmUserTrust?: Record<string, string>; mitmJava?: { trustStore: string; userOptions?: string }; mitmDegraded?: string; modelHostDeny?: boolean; dbRelays?: LaunchPlan["dbRelays"]; dbRootCert?: string; dbNote?: string; stop: () => void }>;
   writeExecShims: (cmds: string[], layout: Layout, arbiterSock: string, scopeRunDir: string) => string;
   writeMcpConfig: (plan: LaunchPlan, layout: Layout, scopeRunDir: string) => string;
   /** Claude only: carry the human's workspace-trust decision over to the
@@ -345,11 +345,17 @@ export async function startServices(
         plan.mitmCaCert = r.mitmCaCert;
         plan.mitmCaBundle = r.mitmCaBundle;
         plan.mitmUserTrust = r.mitmUserTrust;
+        plan.mitmJava = r.mitmJava;
         // The model-host deny (model-host-deny.ts): NO_PROXY, the connect
         // guard and the U-LLM forwarder follow the proxy that carries it.
         plan.modelHostDeny = r.modelHostDeny === true;
+        // The database login relays (db-relays.ts): the connect guard's
+        // redirects, and the agent's libpq trust for their TLS.
+        if (r.dbRelays?.length) plan.dbRelays = r.dbRelays;
+        if (r.dbRootCert) plan.dbRootCert = r.dbRootCert;
         stops.push(r.stop);
         if (r.mitmDegraded) warn(r.mitmDegraded);
+        if (r.dbNote) warn(r.dbNote);
         // Truth-in-labeling (matches the fs-sync / exec-box / landlock-net LIVE
         // banners): announce the wired rung so a human — and the live e2e oracles —
         // can read the posture from stderr. The MITM clause distinguishes the

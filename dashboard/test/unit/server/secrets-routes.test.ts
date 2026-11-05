@@ -12,6 +12,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   getSecrets,
   setSecretLabel,
@@ -198,6 +201,40 @@ test("an arbiter error is a 502 — NOT a green 'no secrets confined'", async ()
   await getSecrets(arbiter, res as any);
   assert.equal(captured.status, 502);
   assert.match((captured.body as { error: string }).error, /connection closed/);
+});
+
+test("dashboard.md §4.25f a rule on nothing says so: a label made on the page, exact or recursive, whose path has nothing on disk is marked missing; one that is there, and a pattern, are not", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "mandu-secrets-missing-"));
+  try {
+    const real = join(tmp, "shop", ".env");
+    mkdirSync(join(tmp, "shop"));
+    writeFileSync(real, "x\n");
+    // A project moved away after its .env was made No AI: created, then gone.
+    const moved = join(tmp, "old-shop", ".env");
+    mkdirSync(join(tmp, "old-shop"));
+    writeFileSync(moved, "x\n");
+    rmSync(join(tmp, "old-shop"), { recursive: true });
+    const gone = join(tmp, "deploy.token");
+    const label = (path: string, more: Record<string, unknown> = {}) => ({ path, level: "no-model", bindings: [], recursive: true, source: "user", updatedAt: 1, declassifies: false, ...more });
+    const arbiter = fakeArbiter({
+      enabled: true,
+      secrets: [],
+      labels: [label(real), label(moved), label(gone, { recursive: false }), label(join(tmp, "nowhere", "*.pem"), { glob: true })],
+    } as ConfidentialityState);
+    const { res, captured } = fakeRes();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await getSecrets(arbiter, res as any);
+    assert.equal(captured.status, 200);
+    const rows = (captured.body as SecretsResponse).panel.labels;
+    assert.deepEqual(rows.map((r) => [r.path, r.missing ?? null, r.pathIsFile ?? null]), [
+      [real, null, true],
+      [moved, true, null],
+      [gone, true, null],
+      [join(tmp, "nowhere", "*.pem"), null, null],
+    ]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 // ── POST /api/secrets/label — the labeling act ────────────────────────────────

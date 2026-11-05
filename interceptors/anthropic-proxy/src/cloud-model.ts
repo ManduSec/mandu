@@ -19,9 +19,11 @@
  *
  * MIRROR of arbiter/policy/cloud-model.ts (this package never imports the
  * arbiter's policy code) and of `isCloudBackedModel` in
- * launcher/src/model-endpoints.ts and interceptors/openai-proxy/src/cloud-model.ts; the four
- * are pinned to one table by
- * tests/stack/cloud-model-parity.test.ts. Change them together.
+ * launcher/src/model-endpoints.ts; with this module's two copies (both model
+ * proxies), the four are pinned to one table by
+ * tests/stack/cloud-model-parity.test.ts. Change them together. Of the two
+ * proxy copies the source is interceptors/anthropic-proxy/src/cloud-model.ts:
+ * change it, then run `node scripts/copies/module-copies.mjs generate`.
  *
  * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code (no reference origin).
  */

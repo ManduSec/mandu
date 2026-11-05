@@ -138,6 +138,104 @@ out of scope by decision (`docs/design/architecture/privilege-model.md` §0).
   on its own, and the Rust crates share `interceptors/Cargo.toml`
   ([Developing Mandu](docs/development.md) §3).
 
+## Add a service
+
+A good first pull request. On a fresh install, Mandu puts a key back with no
+Approvals card in exactly one case of its own: the key's format names the
+service that issued it, and the request goes over HTTPS to that service's own
+API host, with the key in the `Authorization` header. The services it knows
+are a table with one small JSON file per service, in
+`arbiter/policy/issuers/`
+([design](docs/design/confidentiality/confidentiality.md), §2.3).
+
+Because this table sends a secret without asking, **a wrong host in a file
+is a security regression**. The table is deliberately small.
+
+### What qualifies
+
+A service is added only when all three hold, each shown by the service's own
+documentation:
+
+- **its key format names it (a fixed prefix)**: `sk_live_`, `ghp_`, `npm_`.
+  A key with no prefix (Twilio's 32 hex digits), or a prefix the service
+  does not own, does not qualify;
+- **its documented API takes the key in the `Authorization` header**
+  (`Bearer`, or the user name of Basic). A key sent in another header
+  (Anthropic's `x-api-key`), in the URL or in the body does not qualify,
+  nor does a key that signs requests and never travels (AWS);
+- **its API lives at a fixed set of hosts the issuer's own documentation
+  names**: `api.stripe.com`, not "any host under `stripe.com`". A service
+  whose API host differs per customer or per project (a self-managed
+  instance, `<project>.example-cloud.co`) does not qualify.
+
+### What to put in the file
+
+`arbiter/policy/issuers/<id>.json`, for example (Notion's, as shipped):
+
+```json
+{
+  "id": "notion",
+  "name": "Notion",
+  "formats": ["^ntn_[0-9A-Za-z]{40,64}$"],
+  "shapes": ["ntn_…"],
+  "hosts": ["api.notion.com"],
+  "docs": ["https://developers.notion.com/reference/authentication"],
+  "examples": ["ntn_{x*46}"],
+  "non_examples": ["secret_{x*43}", "ntn_{x*39}"]
+}
+```
+
+- `id`: lower case, equal to the file name; the id people write under
+  `issuers_off:` in `policy.yaml` to turn the service off.
+- `formats`: regular expressions (JSON strings, so `\.` is written `\\.`)
+  over the WHOLE key: `^` the fixed prefix, then the body's alphabet and
+  length, then `$`. Groups are `(?:…)` only.
+- `shapes`: each format's prefix followed by `…`, as people read it.
+- `hosts`: the exact API hosts, lower case, no scheme, port or wildcard.
+- `docs`: `https://` links to the service's own pages that show the
+  prefix, the header and the hosts.
+- `examples`: made-up keys that match, with the random part written as a
+  run: `{x*46}` stands for 46 `x`s. Never paste a real key; the check
+  refuses a value that is not visibly a stand-in. Write the prefix and
+  then the run (`"xoxb-{x*30}"`), with no realistic-looking digits or
+  segments between them: those trip the secret scanners the repository
+  runs. `non_examples`
+  (optional): near misses that must not match.
+
+Then:
+
+1. Add the file's import and its line at the END of
+   `arbiter/policy/issuers/index.ts` (the order is the table's).
+2. Add its `id`, `name` and `hosts` at the end of `ISSUER_TABLE` in
+   `dashboard/src/view-model/issuer-words.ts` (the Rules page's copy).
+3. Add its row to the table in
+   [`confidentiality.md`](docs/design/confidentiality/confidentiality.md)
+   §2.3 and to the list in [`docs/guarantees.md`](docs/guarantees.md).
+
+### How to check it
+
+```sh
+cd arbiter && npm install && npm run check:issuers   # every check, over every file
+npm test                                             # includes the catalog's unit tests
+cd ../tests && node ../scripts/install-deps.mjs && \
+  npx tsx --test stack/issuer-catalog-egress.test.ts stack/issuer-table-parity.test.ts
+```
+
+`check:issuers` refuses, among others: an unanchored or prefix-less
+format, a format whose prefix overlaps another service's (so a value could
+match both), a host with a scheme, port, wildcard or address, a host under
+a shared-hosting suffix, an example that does not match, and a file
+`index.ts` does not import. A file that fails is left out of the table
+whole, so that service's keys ask, as before; nothing is ever matched more
+loosely. The end-to-end test sends a key made from your first example
+through the real egress proxy to each of your hosts, with no test edit.
+
+**A maintainer verifies every prefix, header and host against the
+service's own documentation before merging.** Put the links in the pull
+request and quote the lines that show each of the three criteria; the
+checks catch a malformed file, only the review catches a host that is not
+the service's.
+
 ## How a pull request is checked
 
 Every suite is listed in `tests/suites.mjs` by what it needs

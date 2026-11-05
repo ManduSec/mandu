@@ -15,11 +15,16 @@
  *       those two, `total` 2, no next page, and `query.all` every session;
  *   S2  the served `/history?q=staging` draws exactly those two rows, the
  *       box holding the search and the count "2 of 33 sessions";
+ *   S2b `/` finds: on the served `/history` a `/` on the page puts the
+ *       focus in the box, and typing "staging" there reads the server and
+ *       draws the same two rows and count;
  *   S3  the oracle for this new read: a session whose prompt pasted the
  *       registered key (the proxy masks it on the way to the model) is
  *       found by its other words, but a signed-out search for the key's
  *       value, or a piece of it, returns no row; no answer and no drawn
- *       page carries the value, and the model never got it;
+ *       page carries the value, and the model never got it; the status
+ *       line says "No session matches “…”." to a screen reader (`.sr-only`),
+ *       adding nothing beyond what was typed;
  *   S4  *An empty History has nothing to find*: over an empty event store
  *       the served `/history` hides the form and says how to start a
  *       session; a session's model call (its prompt pasting the key), then
@@ -155,6 +160,23 @@ test("History's search finds a session past the first page by what was asked, an
       assert.equal(doc.getElementById("history-count").textContent, `2 of ${ALL} sessions`);
       assert.equal(doc.querySelector("#history-list .history-more"), null);
     });
+    // `/` finds (§4.25 *`/` finds*): on the served `/history`, a `/` on the
+    // page puts the cursor in the box, and typing there runs the same
+    // server search.
+    await servedProductPage(base, "/history", (doc) => rows(doc).length === 25, async (doc) => {
+      const box = doc.getElementById("history-q");
+      assert.notEqual(doc.activeElement, box);
+      const key = new doc.defaultView.KeyboardEvent("keydown", { key: "/", code: "Slash", bubbles: true, cancelable: true });
+      doc.body.dispatchEvent(key);
+      assert.equal(doc.activeElement, box, "the focus is in Find a session");
+      assert.equal(key.defaultPrevented, true, "no / typed into it");
+      box.value = "staging";
+      box.dispatchEvent(new doc.defaultView.Event("input", { bubbles: true }));
+      await waitWhile(() => rows(doc).length !== 2);
+      assert.deepEqual(rows(doc).sort(), [...STAGING].sort());
+      assert.equal(doc.getElementById("history-count").textContent, `2 of ${ALL} sessions`);
+      assert.equal(doc.activeElement, box, "the focus stays in the box");
+    });
 
     // ── S3: the oracle ──
     const control = (await read("?q=still%20valid%20payments")).h;
@@ -170,6 +192,13 @@ test("History's search finds a session past the first page by what was asked, an
       // The box holds what was typed (the reader's own words); the list never draws a row's value.
       noValue(doc.getElementById("history-list").textContent.replace(KEY, ""), "the drawn list");
       assert.match(doc.getElementById("history-list").textContent, /No session matches/);
+      // None found is said to a screen reader, in the list's words: the
+      // typed search echoed, nothing more (§4.25ae *Finding a session*).
+      const count = doc.getElementById("history-count");
+      assert.equal(count.textContent, `No session matches \u201c${KEY}\u201d.`);
+      assert.equal(count.hidden, false);
+      assert.equal(count.classList.contains("sr-only"), true, "to a screen reader only");
+      noValue(count.textContent.replace(KEY, ""), "the status line");
     });
   } finally {
     for (const p of proxies) await p.close().catch(() => {});
@@ -347,7 +376,7 @@ test("History's search finds the sessions an agent ran in a folder by the folder
 
     // The served page: the box's new words, the two rows, each "in ~/projects/shop".
     await servedProductPage(base, "/history?q=shop", (doc) => rows(doc).length === 2, (doc) => {
-      assert.equal(doc.getElementById("history-q").getAttribute("placeholder"), "What you asked, the agent or the folder");
+      assert.equal(doc.getElementById("history-q").getAttribute("placeholder"), "What you asked, a folder, a secret or a host");
       assert.deepEqual(rows(doc).sort(), [...SHOP].sort());
       assert.equal(doc.getElementById("history-count").textContent, `2 of ${ALL} sessions`);
       assert.match(doc.getElementById("history-list").textContent, /~\/projects\/shop/);

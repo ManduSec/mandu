@@ -24,7 +24,8 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, ut
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeStores, isRunTrace, isStoreFile, openAgentStore, sqliteUriFilenames, storeItems, type OpenStores } from "../../policy/transcript-stores.js";
+import zlib from "node:zlib";
+import { closeStores, isRunTrace, isStoreFile, openAgentStore, openclawSessions, sqliteUriFilenames, storeItems, type OpenStores } from "../../policy/transcript-stores.js";
 import { fixtureRecords, layOut, REAL_FIXTURES, realFixtures, rowsToDb } from "../helpers/agent-store-fixtures.js";
 import { isTranscriptStorePath, manduWindowsFrom, scanAgentTranscripts, transcriptSources } from "../../policy/transcript-scan.js";
 import { SCAN_ONLY_AGENTS } from "../../src/generated/agents.js";
@@ -168,6 +169,29 @@ test("storeItems: OpenClaw's run trace beside a session is not a session, and st
   }
 });
 
+test("storeItems: OpenClaw's archived transcripts (a reset session, a deleted one) are sessions of the store; a JSONL session is read as saved masked", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mdu-st-"));
+  const open: OpenStores = new Map();
+  try {
+    const sessions = join(dir, "main", "sessions");
+    mkdirSync(sessions, { recursive: true });
+    const line = J({ type: "message", message: { role: "user", content: "hello" } }) + "\n";
+    // the Control UI's New session (sessions.reset) and a deleted session, as OpenClaw 2026.7.1-2 renames them
+    for (const n of ["s1.jsonl", "s0.jsonl.reset.2026-10-25T01-41-19.422Z", "s9.jsonl.deleted.2026-10-25T02-00-00.000Z", "s1.trajectory.jsonl", "sessions.json", "s2.jsonl.bak"]) writeFileSync(join(sessions, n), line);
+    const items = storeItems({ agent: "openclaw", kind: "openclaw-jsonl", root: dir }, 10, { n: 0 }, open, { n: 0 });
+    assert.deepEqual(items.map((i) => i.path.slice(sessions.length + 1)).sort(),
+      ["s0.jsonl.reset.2026-10-25T01-41-19.422Z", "s1.jsonl", "s9.jsonl.deleted.2026-10-25T02-00-00.000Z"]);
+    assert.equal(new Set(items.map((i) => i.session)).size, 3, "each its own session");
+    for (const it of items) assert.equal((await it.read()).meta.savedMasked, true, "the JSONL store is 2026.7's: its saved copy is masked, the model's was not");
+    const src = [{ agent: "openclaw" as const, kind: "openclaw-jsonl" as const, root: dir }];
+    assert.equal(isTranscriptStorePath(join(sessions, "s0.jsonl.reset.2026-10-25T01-41-19.422Z"), src), true, "a known value is never taken from it");
+    assert.equal(isStoreFile("openclaw-jsonl", dir, join(sessions, "s2.jsonl.bak")), false);
+  } finally {
+    closeStores(open);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("scanAgentTranscripts over the stores the agents wrote: each planted value by how it reached the model, OpenClaw's mask, every store unchanged", async () => {
   const home = mkdtempSync(join(tmpdir(), "mdu-real-"));
   const writers: DatabaseSync[] = [];
@@ -199,9 +223,14 @@ test("scanAgentTranscripts over the stores the agents wrote: each planted value 
     assert.deepEqual(r.sessions, { opencode: 2, goose: 1, openclaw: 2 }, "the request log is not a session");
     assert.equal(r.capped.readFailed, 0);
     const known = (name: string) => r.findings.find((f) => f.kind === "known" && f.source?.name === name);
-    // OpenClaw masked both keys before its model saw them (and kept only the mask).
-    assert.deepEqual([known("CMD_KEY")?.agents, known("CMD_KEY")?.how], [["goose", "opencode"], { "command-output": 3, "tool-result": 1 }]);
-    assert.deepEqual([known("ANTHROPIC_API_KEY")?.agents, known("ANTHROPIC_API_KEY")?.how], [["goose", "opencode"], { "read-file": 2, "command-output": 1, "tool-result": 1 }]);
+    // OpenClaw keeps both keys as its mask (`sk-ant…Nb4C`). 2026.7.1-2 (the
+    // JSONL store) sent the keys themselves to the model and masked only
+    // what it saved, so its session is found by the mask; 2026.9.9 (the
+    // SQLite store) masked them before the model too, so its session is not.
+    assert.deepEqual([known("CMD_KEY")?.agents, known("CMD_KEY")?.how], [["goose", "openclaw", "opencode"], { "command-output": 4, "tool-result": 1 }]);
+    assert.deepEqual([known("ANTHROPIC_API_KEY")?.agents, known("ANTHROPIC_API_KEY")?.how], [["goose", "openclaw", "opencode"], { "read-file": 3, "command-output": 1, "tool-result": 1 }]);
+    assert.deepEqual([known("CMD_KEY")?.matchedMasked, known("ANTHROPIC_API_KEY")?.matchedMasked], [1, 1], "one session each, by the mask");
+    assert.equal(known("PARTNER_TOKEN")?.matchedMasked, undefined, "a value OpenClaw left alone is matched as itself");
     assert.deepEqual([known("PARTNER_TOKEN")?.agents, known("PARTNER_TOKEN")?.how], [["goose", "openclaw", "opencode"], { "read-file": 4, "command-output": 1, "tool-result": 1 }]);
     assert.deepEqual(r.risk.skippedPrompts, 1, "Goose's auto mode; OpenCode keeps its allow-all config out of the session");
     assert.deepEqual(snapshot(home), before, "no store was written, no file created");
@@ -337,5 +366,59 @@ test("manduWindowsFrom: Mandu's OpenCode, Goose and OpenClaw sessions are window
     assert.deepEqual(manduWindowsFrom(dir).map((w) => w.agent).sort(), ["goose", "openclaw", "opencode"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("openclawSessions: a record OpenClaw stored compressed (event_zstd) is read through the decompressor; with none it is skipped and counted, never silent", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mdu-oczstd-"));
+  const db = new DatabaseSync(join(dir, "openclaw-agent.sqlite"));
+  try {
+    db.exec("CREATE TABLE transcript_events (session_id TEXT NOT NULL, seq INTEGER NOT NULL, event_json TEXT, created_at INTEGER NOT NULL, event_zstd BLOB, event_utf8_bytes INTEGER, PRIMARY KEY (session_id, seq));");
+    const t = Date.parse("2026-10-25T00:00:00Z");
+    const user = J({ type: "message", message: { role: "user", content: "fix the sync" } });
+    const result = J({ type: "message", message: { role: "toolResult", toolCallId: "t", toolName: "read", content: [{ type: "text", text: `K=${STRIPE}` }] } });
+    db.prepare("INSERT INTO transcript_events VALUES (?,?,?,?,?,?)").run("s", 0, user, t, null, null);
+    // the blob is the JSON itself: the test's decompressor is the identity
+    db.prepare("INSERT INTO transcript_events VALUES (?,?,?,?,?,?)").run("s", 1, null, t + 1, Buffer.from(result, "utf8"), result.length);
+    const read = (d: ((b: Uint8Array) => Buffer) | null) => openclawSessions(db, d)[0]!.read();
+    const withCodec = read((b) => Buffer.from(b));
+    assert.ok(JSON.stringify(withCodec.texts).includes(STRIPE), "the compressed tool result is read");
+    assert.equal(withCodec.meta.compressedUnread, undefined);
+    const without = read(null);
+    assert.equal(without.meta.compressedUnread, 1, "skipped and counted");
+    assert.ok(!JSON.stringify(without.texts).includes(STRIPE));
+    assert.ok([...without.texts].length > 0, "the rest of the session still read");
+    const torn = read(() => { throw new Error("torn"); });
+    assert.equal(torn.meta.compressedUnread, undefined, "a torn row is not this Node's lack");
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("scanAgentTranscripts: an OpenClaw session with records this Node cannot decompress is counted in capped.compressed (Node before 22.15), else read in full", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mdu-oczstd-scan-"));
+  const agent = join(home, ".openclaw", "agents", "main", "agent");
+  mkdirSync(agent, { recursive: true });
+  const od = new DatabaseSync(join(agent, "openclaw-agent.sqlite"));
+  try {
+    od.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE transcript_events (session_id TEXT NOT NULL, seq INTEGER NOT NULL, event_json TEXT, created_at INTEGER NOT NULL, event_zstd BLOB, PRIMARY KEY (session_id, seq));");
+    const t = Date.parse("2026-10-25T00:00:00Z");
+    const result = J({ type: "message", timestamp: "2026-10-25T00:00:01Z", message: { role: "toolResult", toolCallId: "t", toolName: "read", content: [{ type: "text", text: `K=${STRIPE}` }] } });
+    const zstd = (zlib as unknown as { zstdCompressSync?: (b: Buffer) => Buffer }).zstdCompressSync;
+    od.prepare("INSERT INTO transcript_events VALUES (?,?,?,?,?)").run("s", 0, J({ type: "message", timestamp: "2026-10-25T00:00:00Z", message: { role: "user", content: "fix the sync" } }), t, null);
+    od.prepare("INSERT INTO transcript_events VALUES (?,?,?,?,?)").run("s", 1, null, t + 1, zstd ? zstd(Buffer.from(result)) : Buffer.from("not readable here"));
+    const r = await scanAgentTranscripts({ home, sources: transcriptSources(home), known: [{ value: STRIPE, path: "~/shop/.env", name: "STRIPE_KEY" }] });
+    assert.deepEqual(r.sessions, { openclaw: 1 });
+    if (zstd) {
+      assert.equal(r.capped.compressed, 0, "this Node decompresses zstd");
+      assert.equal(r.findings.find((f) => f.kind === "known")?.sessions, 1, "the compressed tool result read");
+    } else {
+      assert.equal(r.capped.compressed, 1, "not read in full, and said");
+      assert.equal(r.findings.some((f) => f.kind === "known"), false);
+    }
+  } finally {
+    od.close();
+    rmSync(home, { recursive: true, force: true });
   }
 });

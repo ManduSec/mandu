@@ -37,6 +37,7 @@
  */
 import { rmSync } from "node:fs";
 import { manduPath } from "./generated/mandu-paths.js";
+import { ATTACHMENT_EXPOSURE_FIX, attachmentWords } from "./human-plane-watch.js";
 
 /** What a launch says about itself. */
 export interface LaunchClaim {
@@ -81,6 +82,9 @@ export interface OtherLaunch {
   mode: string;
   posture: string;
   walled: boolean;
+  /** An attachment's kind (openclaw-plugin.md §3.3; pid 0), and its session. */
+  attachment?: string;
+  session?: string;
 }
 
 /** The launcher's own reading of the arbiter's rule (cache-seals.ts
@@ -144,7 +148,12 @@ function asOthers(v: unknown): OtherLaunch[] {
     if (o === null || typeof o !== "object") continue;
     const x = o as Record<string, unknown>;
     if (typeof x.pid !== "number") continue;
-    out.push({ pid: x.pid, mode: String(x.mode ?? "unknown"), posture: String(x.posture ?? "unknown"), walled: x.walled === true });
+    const attachment = typeof x.attachment === "string" && /^[a-z][a-z0-9-]{0,40}$/.test(x.attachment) ? x.attachment : undefined;
+    const session = typeof x.session === "string" && x.session !== "" ? x.session.slice(0, 128) : undefined;
+    out.push({
+      pid: x.pid, mode: String(x.mode ?? "unknown"), posture: String(x.posture ?? "unknown"), walled: x.walled === true,
+      ...(attachment !== undefined ? { attachment, ...(session !== undefined ? { session } : {}) } : {}),
+    });
   }
   return out;
 }
@@ -188,7 +197,9 @@ export function concurrentLaunchNotice(
   strict: { requireConfinement: boolean },
 ): { lines: string[]; refuse: boolean } {
   if (posture !== "confined" || others.length === 0) return { lines: [], refuse: false };
-  const list = others.slice(0, 5).map((o) => `pid ${o.pid} (${o.mode}, ${o.posture}${o.walled ? "" : ", can reach Mandu's state"})`).join("; ");
+  const list = others.slice(0, 5).map((o) => o.attachment !== undefined
+    ? `${attachmentWords(o.attachment)} (${o.session ? `session ${o.session}, ` : ""}can reach Mandu's state)`
+    : `pid ${o.pid} (${o.mode}, ${o.posture}${o.walled ? "" : ", can reach Mandu's state"})`).join("; ");
   // An unwalled one also holds this launch's guard unbelieved: the human
   // plane watch says so, with the launch's session and the fix, and again
   // whenever that changes (human-plane-watch.ts, §10.1.1).
@@ -196,6 +207,16 @@ export function concurrentLaunchNotice(
     `WARNING: mandu: ${others.length} other Mandu launch${others.length === 1 ? " runs" : "es run"} without confinement beside this one: ${list}.`,
     "  Until it ends, its programs can rewrite this launch's placeholder files.",
   ];
+  // A plugin session (openclaw-plugin.md §3.3, the maintainer's "weaken +
+  // warn", 2026-10-25): this launch loses its guard's attestation while it
+  // runs; say so here, before the agent starts, and how to avoid it.
+  if (others.some((o) => o.attachment !== undefined)) {
+    lines.push(
+      "  A plugin session is running (Mandu's plugin in an OpenClaw Gateway), so this confined launch has lost its guard's attestation " +
+        "while it runs: secret files open as placeholders, protected writes are refused, shell output is masked once the session read a secret.",
+      ATTACHMENT_EXPOSURE_FIX,
+    );
+  }
   if (strict.requireConfinement) {
     lines.push("  Refusing to launch (--require-confinement): end the other launch first.");
   }

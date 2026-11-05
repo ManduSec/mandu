@@ -220,7 +220,7 @@ test("Your secrets: the file once, read as it was at 10:41, a placeholder from 1
   assert.deepEqual(names, ["STRIPE_KEY in /home/user/mandu-try/.env", "The file /home/user/mandu-try/deploy/staging.conf"]);
   const conf = secrets.secrets[1]!;
   const lines = conf.lines.map((l) => `${l.tone}: ${words(l.parts)}`);
-  assert.equal(lines[0], `warn: The AI read its real value at <${DELIVERED}>, before it was marked a secret. From <${MASKED_FROM}> on it got a placeholder in its place, in 2 requests.`);
+  assert.equal(lines[0], `warn: The AI read its real value at <${DELIVERED}>, before it was marked a secret. From <${MASKED_FROM}> on the AI got it masked, in 2 requests.`);
   // The AI's 10:41 reply quoted the file ("host = staging.example.com",
   // "token = \"FAKE-…\""), and the proxies forward its own replies as
   // written: never "only a placeholder" after the label.
@@ -229,7 +229,7 @@ test("Your secrets: the file once, read as it was at 10:41, a placeholder from 1
   assert.equal(lines[2], "warn: If it holds a key or a password, change it: the AI saw it as it was.");
   assert.ok(!lines.some((l) => /never the real value|only a placeholder/.test(l)), lines.join("\n"));
   // The secret masked from the start keeps its claim, and no own-words or advice line.
-  assert.match(words(secrets.secrets[0]!.lines[0]!.parts), /^The AI got only a placeholder, never the real value\./);
+  assert.match(words(secrets.secrets[0]!.lines[0]!.parts), /^The AI got only its masked version, never the real value\./);
   assert.ok(!secrets.secrets[0]!.lines.some((l) => /own words|change it|Change this key/.test(words(l.parts))));
 });
 

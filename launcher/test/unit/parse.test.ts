@@ -694,6 +694,23 @@ test("--require-confinement: flag, env, and the negation (rootless-confinement-u
   assert.equal(get(["--no-require-confinement", ...base], { MANDU_REQUIRE_CONFINEMENT: "1" }), false, "the flag overrides env");
 });
 
+test("--require-own-confinement: requires this launch's confinement only (openclaw-plugin.md §10)", () => {
+  const p = parse(["--require-own-confinement", "--target", "shell", "--", "node", "host.mjs"], BASE_ENV);
+  assert.equal(p.requireConfinement, true, "this launch refuses where it cannot confine");
+  assert.equal(p.requireOwnConfinementOnly, true, "a launch beside it only warns");
+  const full = parse(["--require-confinement", "claude"], BASE_ENV);
+  assert.equal(full.requireOwnConfinementOnly, undefined, "--require-confinement keeps the full rule");
+});
+
+test("--write-protect: absolute paths, space and = forms, repeatable; anything else is refused", () => {
+  const p = parse(["--write-protect", "/h/.openclaw/openclaw.json", "--write-protect=/src/plugin", "--target", "shell", "--", "sh"], BASE_ENV);
+  assert.deepEqual(p.writeProtectExtra, ["/h/.openclaw/openclaw.json", "/src/plugin"]);
+  assert.equal(p.argv[0], "sh", "the flag's value is not taken for the command");
+  assert.equal(parse(["claude"], BASE_ENV).writeProtectExtra, undefined);
+  assert.throws(() => parse(["--write-protect", "relative/path", "claude"], BASE_ENV), /absolute path/);
+  assert.throws(() => parse(["--write-protect", "--", "claude"], BASE_ENV), /absolute path/);
+});
+
 // ── protection mode (protection-modes.md §3.2; mode.ts holds the table) ──────
 
 test("--mode names both axes; space and = forms; plan.mode carries the name", () => {

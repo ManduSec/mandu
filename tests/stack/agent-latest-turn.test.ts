@@ -20,7 +20,20 @@
  *       `document.activeElement` is that turn; the page never scrolls
  *       sideways;
  *   T3  the oracle: the model never got the `.env` value, and no read or
- *       drawn page carries it.
+ *       drawn page carries it;
+ *   T4  the launcher recorded the launch 10 minutes before the first model
+ *       call, so the served page, drawn by its own home.js, says "running
+ *       now, started … · 10 minutes ago, last step just now" in its header
+ *       (§4.25 *The header says how long it ran*), and that "last step" is a
+ *       button that, pressed, gives the newest turn the focus; in Chromium
+ *       the press brings that turn's top into view at both widths;
+ *   T5  Home's Running now row for the session says "last step just now"
+ *       as a link to `/agents/<id>?go=latest` (§4.25 *A live row names its
+ *       last step*), named by its words and its row; pressed on the served
+ *       page, the session page opens with the newest turn focused; in
+ *       Chromium at 1280 and 390 px a real mouse press on it opens the
+ *       session page with that turn focused and its top in view, and Back
+ *       returns to Home.
  *
  * The Chromium half self-SKIPs without a Chromium (probeBrowser:
  * MANDU_TOUR_BROWSER, CHROME_PATH, a Playwright headless shell).
@@ -48,6 +61,9 @@ import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
 import type { AgentPageVM } from "../../dashboard/src/view-model/agent-page.js";
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
+import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
+import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
+import { emitLauncherEvent, launchPostureEvent } from "../../launcher/src/services/observe.js";
 import { stateAxes } from "../lib/axes.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the product default
@@ -135,6 +151,9 @@ async function start() {
     assert.equal(res.status, 200, await res.text());
     return seen.at(-1)!;
   };
+  // ── T4: the launch, recorded 10 minutes before the first model call ──
+  const launched = { ...launchPostureEvent({ scopeId: SESSION, target: "claude", argv0: "claude", notes: [] }), ts: new Date(Date.now() - 10 * 60_000).toISOString() };
+  assert.ok(await emitLauncherEvent(sock, launched, humanSock), "the launcher's emit lands");
   // ── T1: twelve turns, the third reads the .env ──
   let history: Msg[] = [];
   for (let i = 0; i < TURNS; i++) {
@@ -182,6 +201,24 @@ test("a twelve-turn session is recorded in order, and no read carries the .env v
   for (const route of ["/api/home", "/api/home/history", `/agents/${SESSION}`]) {
     assert.ok(!(await (await pageFetch(base + route)).text()).includes(VALUE), `CONFIDENTIALITY VIOLATION: ${route} carries the .env value`);
   }
+});
+
+test("the served page's header names the last step, a button to the newest turn (T4, secrets axes, explicit)", { timeout: 120_000 }, async () => {
+  const { base, page } = await start();
+  assert.ok(page.running, "the session is running");
+  assert.ok(Date.parse(page.lastAt!) - Date.parse(page.startedAt!) >= 10 * 60_000 - 1_000, `started at the launch, its last step a model call: ${page.startedAt} … ${page.lastAt}`);
+  const newest = page.story.at(-1)!.id;
+  await servedProductPage(base, `/agents/${SESSION}`, (doc) => doc.querySelectorAll("#agent-story article.turn[data-turn-id]").length === TURNS, (doc) => {
+    const when = doc.querySelector("#agent-sub .agent-when");
+    assert.match(when.textContent, /^running now, started .+ · 10 minutes ago, last step just now$/, "no folder recorded for this session");
+    const b = when.querySelector("button.agent-last-go");
+    assert.ok(b, "the last step is a button with twelve turns");
+    assert.equal(b.getAttribute("aria-label"), "Last step just now: go to the latest turn");
+    assert.equal(doc.getElementById("agent-latest").hidden, false);
+    b.click();
+    assert.equal(doc.activeElement.dataset.turnId, newest, "the newest turn has the focus");
+    assert.ok(!doc.body.textContent.includes(VALUE), "CONFIDENTIALITY VIOLATION: the served page shows the .env value");
+  });
 });
 
 test("in a real Chromium at 1280 and 390 px: Latest turn shows in the story head and takes the focus to the newest turn, in view", {
@@ -250,6 +287,89 @@ test("in a real Chromium at 1280 and 390 px: Latest turn shows in the story head
       assert.ok(c.last.top >= 0 && c.last.top < c.view.h, `the newest turn's top is in the viewport at ${width} px (${c.last.top} of ${c.view.h})`);
       assert.ok(c.active, `the newest turn has the focus at ${width} px`);
       assert.ok(c.page <= c.cw, `no sideways scroll after the press at ${width} px`);
+
+      // T4: the header's "last step" goes there too.
+      await evaluate(`scrollTo(0, 0), document.activeElement.blur(), true`);
+      await until(`back at the top at ${width} px`, `scrollY === 0`);
+      assert.equal(await evaluate(`document.querySelector("#agent-sub button.agent-last-go").textContent`), "last step just now");
+      await evaluate(`document.querySelector("#agent-sub button.agent-last-go").click(), true`);
+      await until(`scrolled by the header at ${width} px`, `scrollY > 0`);
+      const h = await measure();
+      assert.ok(h.last.top >= 0 && h.last.top < h.view.h, `the header's last step brings the newest turn's top into view at ${width} px (${h.last.top} of ${h.view.h})`);
+      assert.ok(h.active, `the newest turn has the focus after the header's press at ${width} px`);
+    }
+  } finally {
+    cdp.close();
+    await tour.stopProc(proc);
+  }
+});
+
+const homeLink = `document.querySelector('#home-agents .row.agent[data-session="${SESSION}"] a.agent-last-link')`;
+
+test("Home's Running now row links its last step to the newest turn, and the served page lands there (T5, secrets axes, explicit)", { timeout: 120_000 }, async () => {
+  const { base, page } = await start();
+  const newest = page.story.at(-1)!.id;
+  await servedProductPage(base, "/", (doc) => !!doc.defaultView.eval(homeLink), async (doc) => {
+    const a = doc.defaultView.eval(homeLink);
+    assert.equal(a.getAttribute("href"), `/agents/${SESSION}?go=latest`);
+    assert.equal(a.textContent, "last step just now");
+    assert.equal(a.getAttribute("aria-label"), "Last step just now: go to the latest turn of Claude Code, Question 1", "its words, where it goes and its row (its first prompt, no folder recorded)");
+    assert.equal(a.closest(".row.agent").querySelector("a.right").getAttribute("href"), `/agents/${SESSION}`, "Details opens the page at its top");
+    a.click();
+    await waitWhile(() => doc.activeElement?.dataset?.turnId !== newest);
+    assert.equal(doc.defaultView.location.pathname + doc.defaultView.location.search, `/agents/${SESSION}`, "`go` used once");
+    assert.equal(doc.activeElement.dataset.turnId, newest, "the newest turn has the focus");
+    assert.ok(!doc.body.textContent.includes(VALUE), "CONFIDENTIALITY VIOLATION: the served page shows the .env value");
+  });
+});
+
+test("in a real Chromium at 1280 and 390 px: pressing a Running now row's \"last step\" opens the session at its newest turn, in view; Back returns to Home", {
+  skip: chromium ? false : "no Chromium found (MANDU_TOUR_BROWSER, CHROME_PATH, a Playwright headless shell)", timeout: 180_000,
+}, async () => {
+  const { base, page } = await start();
+  const newest = page.story.at(-1)!.id;
+  const tmp = mkdtempSync(join(tmpdir(), "mandu-latest-turn-home-cdp-"));
+  dirs.push(tmp);
+  const { proc, wsUrl } = await tour.startBrowser(chromium as string, join(tmp, "chrome"), process.env);
+  const cdp = await tour.Cdp.connect(wsUrl);
+  try {
+    const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    const send = (method: string, params: object = {}) => cdp.send(method, params, sessionId);
+    const evaluate = async (expression: string) => {
+      const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+      if (r.exceptionDetails) throw new Error(`page script failed: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`);
+      return r.result.value;
+    };
+    const until = async (what: string, expression: string) => {
+      let ok = false;
+      for (const end = Date.now() + 30_000; Date.now() < end && !ok; await new Promise((r) => setTimeout(r, 100))) {
+        try { ok = await evaluate(expression); } catch { /* navigating */ }
+      }
+      assert.ok(ok, what);
+    };
+    await send("Page.enable");
+    await send("Runtime.enable");
+    const last = `[...document.querySelectorAll("#agent-story article.turn[data-turn-id]")].at(-1)`;
+    for (const width of [1280, 390]) {
+      await send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: width < 600 });
+      await send("Page.navigate", { url: `${base}/` });
+      await until(`Home's row drawn at ${width} px`, `!!${homeLink} && document.fonts.status === "loaded"`);
+      const box = await evaluate(`(() => { const a = ${homeLink}; a.scrollIntoView({ block: "center" }); const r = a.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height, href: a.getAttribute("href"), cw: document.documentElement.clientWidth }; })()`);
+      assert.equal(box.href, `/agents/${SESSION}?go=latest`);
+      assert.ok(box.w > 0 && box.h > 0 && box.x > 0 && box.x < box.cw, `the link is on the screen at ${width} px (${JSON.stringify(box)})`);
+      assert.equal(await evaluate(`document.elementFromPoint(${box.x}, ${box.y}).closest("a.agent-last-link") === ${homeLink}`), true, `nothing covers the link at ${width} px`);
+      for (const type of ["mousePressed", "mouseReleased"]) await send("Input.dispatchMouseEvent", { type, x: box.x, y: box.y, button: "left", clickCount: 1 });
+      await until(`the session page with its newest turn focused at ${width} px`, `location.pathname === "/agents/${SESSION}" && document.activeElement === ${last}`);
+      await until(`scrolled to the newest turn at ${width} px`, `scrollY > 0`);
+      const m = await evaluate(`(() => { const t = ${last}; return { id: t.dataset.turnId, top: t.getBoundingClientRect().top, h: innerHeight, search: location.search, page: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, body: document.body.innerText }; })()`);
+      assert.equal(m.id, newest);
+      assert.ok(m.top >= 0 && m.top < m.h, `the newest turn's top is in the viewport at ${width} px (${m.top} of ${m.h})`);
+      assert.equal(m.search, "", "`go` used once");
+      assert.ok(m.page <= m.cw, `no sideways scroll at ${width} px`);
+      assert.ok(!m.body.includes(VALUE), "CONFIDENTIALITY VIOLATION: the page shows the .env value");
+      await evaluate(`history.back(), true`);
+      await until(`Back returns to Home at ${width} px`, `location.pathname === "/" && !document.getElementById("page-home").hidden`);
     }
   } finally {
     cdp.close();

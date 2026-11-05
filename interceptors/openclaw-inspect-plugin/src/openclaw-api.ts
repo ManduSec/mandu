@@ -114,4 +114,70 @@ export interface OpenClawPluginApiLike {
     tool: PluginAgentTool | PluginToolFactory,
     opts?: PluginToolOptions,
   ): void;
+  /** Register a typed lifecycle hook (OpenClawPluginApi.on, 2026.3.x on).
+   *  Optional here because the inspect-only registration never calls it; the
+   *  attachment registration refuses to load without it (hooks.ts). */
+  on?(hookName: string, handler: (event: never, ctx: never) => unknown, opts?: PluginHookOptions): void;
+}
+
+/** registerHook options the plugin uses (PluginHookRegistrationOptions). */
+export interface PluginHookOptions {
+  priority?: number;
+  timeoutMs?: number;
+}
+
+/** `before_tool_call`'s event (PluginHookBeforeToolCallEvent, subset; the
+ *  same fields in 2026.9.9 and 2026.10.7). */
+export interface BeforeToolCallEvent {
+  toolName: string;
+  params: Record<string, unknown>;
+  runId?: string;
+  toolCallId?: string;
+  /** Best-effort paths the host derived from params (apply_patch); a hint. */
+  derivedPaths?: readonly string[];
+}
+
+/** `before_tool_call`'s context (PluginHookToolContext, subset). */
+export interface ToolHookContext {
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  toolName?: string;
+  toolCallId?: string;
+  channelId?: string;
+}
+
+/** `before_tool_call`'s result (PluginHookBeforeToolCallResult, subset). A
+ *  throw or a 15 s timeout blocks the call (fails closed). */
+export interface BeforeToolCallResult {
+  block?: boolean;
+  blockReason?: string;
+}
+
+/** `message_sending`'s event (PluginHookMessageSendingEvent). */
+export interface MessageSendingEvent {
+  to: string;
+  content: string;
+  replyToId?: string | number;
+  threadId?: string | number;
+  metadata?: Record<string, unknown>;
+}
+
+/** `message_sending`'s context (PluginHookMessageContext, subset). No
+ *  agentId: the agent comes from the sessionKey (`agent:<id>:…`). */
+export interface MessageHookContext {
+  channelId: string;
+  accountId?: string;
+  conversationId?: string;
+  sessionKey?: string;
+  senderId?: string;
+}
+
+/** `message_sending`'s result (PluginHookMessageSendingResult). A throw is
+ *  logged and the original content is sent (fails open). */
+export interface MessageSendingResult {
+  content?: string;
+  cancel?: boolean;
+  cancelReason?: string;
 }

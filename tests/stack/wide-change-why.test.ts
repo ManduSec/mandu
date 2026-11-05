@@ -28,12 +28,20 @@
  *       never a `T…Z` timestamp; after its Allow, Rules › Sending data
  *       reads "Always allowed until …", the same moment. W5's oracle covers
  *       these reads.
+ *   W7  (2026-10-31, *Where the line is drawn*) the connect card's line is
+ *       its own, the element right before the foot, never in it; the foot
+ *       is the link, then the field, Allow and Not now.
+ *   W8  the same card in headless Chromium at 1280 px (skips with no
+ *       Chromium): the line stands above the link's line, the link at the
+ *       left, the field, Allow and Not now on the link's line at the
+ *       card's right edge; no secret on the page.
  *
  * Axes: secrets (stated).
  */
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type { ChildProcess } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -48,6 +56,7 @@ import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { stateAxes } from "../lib/axes.js";
+import { chromiumBinary, READY, startChromium, stopChromium } from "../lib/chromium.js";
 import { humanSockIn } from "../lib/human-plane.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF
@@ -120,6 +129,17 @@ test("Approvals over the real arbiter: a wide change's foot names what it opens;
       assert.equal(foot(send.proposalId), "This lets masked data from docs.python.org be sent anywhere. Type ALLOW if you mean it.");
       assert.match(card(doc, connect.proposalId).querySelector(".proposal-rows").textContent, /connect to any address/, "the row says the same place");
       assert.doesNotMatch(doc.body.textContent, /no limit on one side/, "the code's own wording is gone");
+      // W7: the line of its own, right before the foot.
+      for (const id of [connect.proposalId, send.proposalId]) {
+        const c = card(doc, id);
+        const why = c.querySelector(".wide-why");
+        const foot = c.querySelector(".proposal-confirm").parentElement;
+        assert.equal(why.parentElement, c, `${id}: the line is the card's own`);
+        assert.equal(why.nextElementSibling, foot, `${id}: right before the foot`);
+        assert.equal(foot.querySelector(".wide-why"), null, `${id}: not in the foot`);
+        assert.deepEqual(([...foot.children] as Doc[]).map((k) => k.className), ["ask-link", "proposal-confirm", "ask-actions", "confirm-hint"], `${id}: the link, the field, the answers`);
+        assert.deepEqual(([...foot.querySelectorAll(".ask-actions button")] as Doc[]).map((b) => b.textContent), ["Allow", "Not now"]);
+      }
       noValue(doc.body.textContent, "the rendered Approvals page");
       // W3: Allow waits for the whole word (in any case since *The typed
       // ALLOW takes any case*).
@@ -205,6 +225,129 @@ test("Approvals over the real arbiter: a wide change's foot names what it opens;
       noValue(doc.body.textContent, "the rendered Rules page");
     }, { headers: signedIn, css: "" });
   } finally {
+    await dashboard.close();
+    wired.close();
+    agent.close();
+    await arbiter.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+const BIN = chromiumBinary();
+
+/** A DevTools client over Node's built-in WebSocket. */
+async function devtools(wsUrl: string) {
+  const ws = new WebSocket(wsUrl);
+  await new Promise<void>((resolve, reject) => {
+    ws.addEventListener("open", () => resolve(), { once: true });
+    ws.addEventListener("error", () => reject(new Error(`no DevTools at ${wsUrl}`)), { once: true });
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const waiting = new Map<number, (m: any) => void>();
+  ws.addEventListener("message", (ev) => {
+    const m = JSON.parse(String(ev.data));
+    if (typeof m.id === "number") waiting.get(m.id)?.(m);
+  });
+  let id = 1;
+  return {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    send(method: string, params: Record<string, unknown> = {}): Promise<any> {
+      const my = id++;
+      return new Promise((resolve) => { waiting.set(my, resolve); ws.send(JSON.stringify({ id: my, method, params })); });
+    },
+    close: () => ws.close(),
+  };
+}
+
+test("W8: at 1280 px the wide change's line stands above the foot, the link left and the field with the answers at the card's right", { skip: BIN === null ? "no headless Chromium (Playwright's headless shell) on this host" : false, timeout: 120_000 }, async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "mandu-wide-why-1280-"));
+  const home = join(tmp, "home");
+  mkdirSync(home, { recursive: true });
+  const env = join(home, ".env");
+  writeFileSync(env, `STRIPE_KEY=${VALUE}\n`);
+  const policyPath = join(tmp, "policy.yaml");
+  writeFileSync(policyPath, ["version: 1", "paths:", `  - { path: "${env}", level: no-model }`, ""].join("\n"));
+  const socketPath = join(tmp, "arbiter.sock");
+  const adminSock = join(tmp, "admin.sock");
+  const humanPath = humanSockIn(tmp);
+  const arbiter = new ArbiterServer({
+    socketPath, adminSocketPath: adminSock, humanSocketPath: humanPath,
+    dbPath: join(tmp, "mandu.db"), eventDir: join(tmp, "events"), policyPath, policyPollMs: 0,
+    adminPolicyDir: null, promptPackDir: null, adminPromptPackDir: null,
+    confidentiality: true, integrity: false, log: () => {},
+  });
+  await arbiter.listen();
+  const agent = new ArbiterClient(socketPath);
+  await agent.connect();
+  const wired = await makeApprovalsArbiter(socketPath, () => ({ socketPath: adminSock }));
+  assert.ok(wired?.policyDoc, "the production adapter has the policy surface");
+  const dashboard = new DashboardServer({
+    source: new ArbiterEventSource({ socketPath, humanSocketPath: humanPath }),
+    approvalsArbiter: wired.arbiter, secretsArbiter: wired.secrets, policyDocArbiter: wired.policyDoc,
+    fileBrowserHome: home,
+    configEnv: { MANDU_HOME: join(tmp, "mhome"), MANDU_POLICY_FILE: policyPath, HOME: home },
+    log: () => {}, ...ADMIN_OPTS,
+  });
+  const base = `http://127.0.0.1:${await dashboard.listen(0)}`;
+  const profile = join(tmp, "chrome");
+  let chrome: ChildProcess | null = null;
+  let page: Awaited<ReturnType<typeof devtools>> | null = null;
+  try {
+    const connect = await agent.policyPropose({ edits: [{ op: "allow-connect", host: "*" }], reason: "reach the API", sessionKey: "s-wide" });
+    assert.ok(!connect.applied && "proposalId" in connect, `a wide change waits for the person: ${JSON.stringify(connect)}`);
+    const started = await startChromium(BIN!, profile, `${base}${dashboard.adminLoginPath()}`);
+    chrome = started.proc;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let target: any = null;
+    for (let i = 0; i < 50 && target === null; i++) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const list = (await (await pageFetch(`http://127.0.0.1:${started.port}/json/list`)).json()) as any[];
+      target = list.find((x) => x.type === "page") ?? null;
+      if (target === null) await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(target, "the page is listed");
+    page = await devtools(target.webSocketDebuggerUrl);
+    const p = page;
+    const evaluate = async (expression: string): Promise<unknown> => (await p.send("Runtime.evaluate", { expression, returnByValue: true })).result?.result?.value;
+    const until = async (expression: string, what: string): Promise<void> => {
+      for (let i = 0; i < 150; i++) {
+        if (await evaluate(expression) === true) return;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      assert.fail(`the page never showed ${what}`);
+    };
+    await until(`${READY} && location.pathname === "/"`, "Home after the sign-in link");
+    await p.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+    await p.send("Page.navigate", { url: `${base}/approvals` });
+    const sel = `#approvals-proposals [data-id="${connect.proposalId}"]`;
+    await until(`${READY} && location.pathname === "/approvals" && !!document.querySelector('${sel} .wide-why') && !!document.querySelector('${sel} .ask-link')`, "the wide change's card with its link");
+    const facts = JSON.parse(String(await evaluate(`JSON.stringify((() => {
+      const card = document.querySelector('${sel}');
+      const box = (e) => { const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, mid: (r.top + r.bottom) / 2 }; };
+      const pick = (s) => box(card.querySelector(s));
+      return {
+        card: box(card), padRight: parseFloat(getComputedStyle(card).paddingRight), padLeft: parseFloat(getComputedStyle(card).paddingLeft),
+        why: pick('.wide-why'), link: pick('.ask-link'), field: pick('.proposal-confirm'),
+        allow: pick('.proposal-allow'), actions: pick('.ask-actions'),
+        words: card.querySelector('.wide-why').textContent,
+        text: document.body.innerText,
+      };
+    })())`)));
+    assert.equal(facts.words, "This lets your agent's programs connect to any address. Type ALLOW if you mean it.");
+    assert.ok(facts.why.bottom <= facts.link.top, `the line stands above the link's line (${facts.why.bottom} <= ${facts.link.top})`);
+    assert.ok(Math.abs(facts.link.left - (facts.card.left + facts.padLeft)) <= 2, `the link at the card's left (${facts.link.left})`);
+    for (const k of ["field", "allow", "actions"] as const) {
+      assert.ok(Math.abs(facts[k].mid - facts.link.mid) <= 4, `${k} on the link's line (${facts[k].mid} vs ${facts.link.mid})`);
+    }
+    assert.ok(facts.field.left > facts.link.right + 40, `the field sits right, apart from the link (${facts.field.left} > ${facts.link.right})`);
+    assert.ok(facts.field.right <= facts.allow.left, "the field beside the Allow it turns on");
+    const inner = facts.card.right - facts.padRight;
+    assert.ok(Math.abs(facts.actions.right - inner) <= 2, `the answers end at the card's right padding (${facts.actions.right} vs ${inner})`);
+    assert.ok(!facts.text.includes(VALUE), "CONFIDENTIALITY VIOLATION: the page carries the file's value");
+    assert.doesNotMatch(facts.text, TOKEN, "the page carries no token");
+  } finally {
+    page?.close();
+    await stopChromium(chrome, profile);
     await dashboard.close();
     wired.close();
     agent.close();

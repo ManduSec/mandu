@@ -114,3 +114,13 @@ test("only the dedicated MANDU_ULLM_* names feed the U-LLM slice", () => {
   assert.equal(cfg.ullmEnv.ANTHROPIC_BASE_URL, "https://api.anthropic.com");
   assert.equal(cfg.ullmEnv.ANTHROPIC_API_KEY, "sk-quarantine");
 });
+
+test("the confined-commands tier's block (openclaw-plugin.md §10): read in an attachment only; a broken one is refused, never read as off", () => {
+  const sandbox = { launcher: ["/opt/mandu/launcher/mandu-run.sh"], writeProtect: ["/h/.openclaw/openclaw.json", "relative"], statusFile: "/run/s.json" };
+  const cfg = resolvePluginConfig({ arbiterSock: SOCK, attachment: true, sandbox }, {});
+  assert.deepEqual(cfg.sandbox, { launcher: ["/opt/mandu/launcher/mandu-run.sh"], writeProtect: ["/h/.openclaw/openclaw.json"], statusFile: "/run/s.json" });
+  assert.equal(resolvePluginConfig({ arbiterSock: SOCK, sandbox }, {}).sandbox, undefined, "the per-run config of `mandu openclaw` has no tier");
+  assert.equal(resolvePluginConfig({ arbiterSock: SOCK, attachment: true }, {}).sandbox, undefined);
+  assert.throws(() => resolvePluginConfig({ arbiterSock: SOCK, attachment: true, sandbox: { launcher: [] } }, {}), /half-configured/);
+  assert.throws(() => resolvePluginConfig({ arbiterSock: SOCK, attachment: true, sandbox: { launcher: ["mandu"] } }, {}), /absolute argv/);
+});

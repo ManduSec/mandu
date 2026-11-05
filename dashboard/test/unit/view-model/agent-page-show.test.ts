@@ -201,9 +201,11 @@ test("Home, protection failed: with the developer view, its trace; without, the 
     { kind: "link", text: "Open that agent's page", to: "agent", session: "s9" },
     { kind: "text", text: " to see which." },
   ]);
+  // Several: each one named, a link to its page (home-failed-names.test.ts
+  // has the words; until 2026-10-25 none was named and nothing was a link).
   const bareTwo = failedHome(["s8", "s9"], false);
-  assert.equal(bareTwo.sentenceParts.some((p) => p.kind === "link"), false);
-  assert.equal(bareTwo.sentenceParts.map((p) => p.text).join(""), "2 items reached the AI unmasked in the last 24 hours. Each agent where it happened says \"protection failed\" below, and its page shows which.");
+  assert.deepEqual(bareTwo.sentenceParts.flatMap((p) => (p.kind === "link" && p.to === "agent" ? [[p.to, p.session]] : [])), [["agent", "s8"], ["agent", "s9"]]);
+  assert.match(bareTwo.sentence, /^2 items reached the AI unmasked in the last 24 hours, in Codex CLI, ended 11:00 UTC and Codex CLI, ended 11:00 UTC\. Open each to see which\.$/);
   assert.equal(traced(bareTwo.sentenceParts), false);
 });
 

@@ -151,7 +151,7 @@ test("a script with a double-quoted placeholder gets an explanatory refusal (bas
       if (!step) await new Promise((r) => setTimeout(r, 20));
     }
     assert.ok(step, `the refused request is a step of the page: ${JSON.stringify(page?.story)}`);
-    assert.match(words(step.why!), /^The program's shell had emptied the secret's placeholder \(it was not in single quotes\)/);
+    assert.match(words(step.why!), /^The program's shell had emptied the secret's mask \(it was not in single quotes\)/);
     assert.ok(!JSON.stringify(page).includes(KEY), "no value on the product page");
 
     // (d) the control: single-quoted, the bound host gets the real key

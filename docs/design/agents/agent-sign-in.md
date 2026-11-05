@@ -674,8 +674,10 @@ bound-destination release
    a `HUMAN_PLANE_OPS` member: from the data socket the agent could bind its
    key to a host of its own.
 2. **The ask, per request.** For each request it forwards, the proxy reads
-   exactly two headers: `x-api-key` when its whole value is one placeholder,
-   and `authorization` when it is `Bearer <placeholder>`. For that symbol it
+   exactly four headers: `x-api-key`, `x-goog-api-key` (the Gemini wire,
+   since 2026-10-25) and `api-key` (OpenClaw's Azure OpenAI api, since
+   2026-10-26, model-wires.md §9.2) when its whole value is one placeholder, and
+   `authorization` when it is `Bearer <placeholder>`. For that symbol it
    asks what the net-proxy asks before it puts a value back on the wire
    (net-proxy `egress.ts`), both on the human plane:
    `desymbolizationDecision {symbol, boundary: "network", destination: <the
@@ -748,7 +750,7 @@ it:
 | the upstream's host is not bound (a route the launch did not grant, the grant of an ended launch after a restart) | the placeholder | the gate answers `egress:secret-unbound` and files one Inbox ask for that symbol and host (memoized); a human's *Allow* there declassifies the key for that host |
 | no human plane, the arbiter unreachable, an op missing | the placeholder | `resolve` is never asked on the data socket |
 | an unknown symbol, a `resolve` that answers null | the placeholder | nothing to put back |
-| the placeholder anywhere else (another header, the body, the URL) | as written | the release reads two header shapes only |
+| the placeholder anywhere else (another header, the body, the URL: a Gemini key in a `key=` query parameter too) | as written | the release reads four header shapes only (`x-api-key`, `x-goog-api-key`, `api-key`, `authorization: Bearer`) |
 | a key granted for https, a plain-http upstream | the placeholder | the wire scheme rule (`egress:secret-https-only`); only a loopback grant may be plain http |
 
 The proxy never makes up a 401 (§2.4 item 5). Goose's own retry on 401 gets
@@ -756,9 +758,13 @@ the same answer.
 
 ### 3.4 Both wires, streaming, both proxies
 
-- **Both wires of the anthropic-proxy.** The Messages path (`x-api-key`) and
+- **Every wire of the anthropic-proxy.** The Messages path (`x-api-key`),
   the OpenAI routes it serves under `/_mandu/openai/<id>` (Goose's `openai`
-  provider, `Authorization: Bearer`), each against its own upstream's host.
+  provider, `Authorization: Bearer`) and the Gemini routes under
+  `/_mandu/google/<id>` (Goose's `google` provider, `x-goog-api-key`,
+  2026-10-25, model-wires.md §4.4); an OpenClaw Azure OpenAI provider's
+  `api-key` under `/_mandu/openai/<id>` (2026-10-26, model-wires.md §9.2),
+  each against its own upstream's host.
   A bodyless relay (`GET /v1/models`) gets the same treatment.
 - **Streaming.** The substitution runs once, on the request headers, before
   the send; the retry on 429/529 reuses them. The SSE answer is not touched.
@@ -977,7 +983,9 @@ side now grants them:
 1. **The file.** `gooseKeyGrantPlan` grants each routed provider's key
    field of `secrets.yaml` to its upstream's host when that is the
    provider's own API host over https (`openrouter.ai`, `api.x.ai`,
-   `api.router.tetrate.ai`) or this machine's loopback. LiteLLM is a proxy
+   `api.router.tetrate.ai`; since 2026-10-25 Goose's `google` provider's
+   `GOOGLE_API_KEY` to `generativelanguage.googleapis.com`,
+   supported-agents.md §5.6.5) or this machine's loopback. LiteLLM is a proxy
    server the user runs, with no vendor host: loopback only. Ollama takes no
    key and asks for nothing (a launch routing only Ollama grants nothing).
    The all-or-nothing rule of §3.2 item 3 stands: one ungrantable routed
@@ -1127,7 +1135,7 @@ both directions, on the granted field alone, dropped with the arbiter's
 memory, the scheme rule; the persisted grant taken back after a restart
 while its launcher lives, never for a gone launcher or a reused pid, never
 without a pid, the row holding no value, the gone rows pruned), `interceptors/anthropic-proxy/test/unit/auth-substitution.test.ts`
-(the two header shapes, every other place untouched, every failure keeping
+(the three header shapes, every other place untouched, every failure keeping
 the placeholder, a value with a line break refused),
 `launcher/test/unit/agent-key-grant.test.ts` (which launches are granted,
 and to which host), `launcher/test/component/goose-auth-substitution.test.ts`

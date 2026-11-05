@@ -115,7 +115,7 @@ test("an owner-only home: nothing flagged, and the places older versions used ar
     assert.ok(r.rows.every((x) => !/\/(\.config|\.local\/state|\.cache)\/mandu(\/|$)/.test(x.path)), "only the new layout");
     const text = renderPaths(r);
     assert.doesNotMatch(text, /\(!\)|Other users|older versions/);
-    assert.match(text, /~\/\.mandu\/state\/mandu\.db +0600 +the placeholders/);
+    assert.match(text, /~\/\.mandu\/state\/mandu\.db +0600 +the masked values/);
   } finally {
     h.rm();
   }

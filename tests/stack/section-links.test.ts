@@ -19,10 +19,16 @@
  *   L1  `/rules#who` and `/settings#prompt-filters` open with that card's
  *       heading focused, the card at the top of the window (or the page
  *       scrolled to its end, when it ends less than a window below the
- *       card), the heading in view, the hash still in the address;
+ *       card), the heading in view, the hash still in the address; at
+ *       1280 px the top of the window is under the top bar, which stays in
+ *       sight there (dashboard.md §4.25 *The bar stays in sight on a wide
+ *       window*): the card lands the bar and 8 px down, 73 px;
  *   L2  the row of links under each title is in the page's flow (never
- *       sticky or fixed), a link per card (five on Rules, seven on Settings
- *       since About, 2026-10-20), inside the page's width;
+ *       sticky or fixed), a link per card shown (five on Rules, whose
+ *       Files made from your secrets hides while empty, as its link does;
+ *       seven on Settings since About, 2026-10-20, with the admin link:
+ *       no Dashboard account, whose card is hidden), inside the page's
+ *       width;
  *   L3  the oracle: no page carries the registered key or a token;
  *   L4  Approvals (2026-10-23), with the net-proxy on its production client
  *       having stopped two sends of a registered file's key, one answered
@@ -32,7 +38,13 @@
  *       their lists are hidden, so are their links, and no "·" ends the
  *       row);
  *   L5  `/approvals#rule-changes` with no rule change opens the page at its
- *       top, no list's heading focused.
+ *       top, no list's heading focused;
+ *   L6  a browser signed in on the sign-in page (the account as the
+ *       launcher's `--set-password` writes it, the password posted to
+ *       `/login` over the real route, 2026-11-04): Settings' row reads
+ *       "… Appearance · Dashboard account · About", eight links, and
+ *       `/settings#account` lands on the card with Sign out, its heading
+ *       focused and in view, the hash still in the address.
  *
  * Self-SKIPs without a Chromium (scripts/tour-screenshots.mjs probeBrowser:
  * MANDU_TOUR_BROWSER, CHROME_PATH, a Playwright headless shell, or one on
@@ -56,6 +68,8 @@ import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import { ADMIN_COOKIE, ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { AccountFile } from "../../dashboard/src/account.js";
+import { makeAccount, writeAccount } from "../../launcher/src/dashboard-account.js";
 import { stateAxes } from "../lib/axes.js";
 import { humanSockIn } from "../lib/human-plane.js";
 
@@ -77,6 +91,9 @@ const KEY = "sk_" + "live_sectionLinksRegisteredCanary0000001";
 /** The file key the net-proxy stops twice (L4, L5). */
 const FILE_KEY = "sk_" + "live_sectionLinksApprovalsCanary000002";
 const SESSION = "1791500000-062";
+/** The dashboard account a browser signs in with (L6). */
+const USER = "alice";
+const PASSWORD = "the section links' own password";
 /** One absolute-form request through the forward proxy. */
 function viaProxy(port: number, url: string, body: string): Promise<{ status: number; body: string }> {
   const u = new URL(url);
@@ -96,8 +113,10 @@ function viaProxy(port: number, url: string, body: string): Promise<{ status: nu
 }
 const RULES = 6;
 const VIEWS = [
-  { width: 1280, height: 800, mobile: false },
-  { width: 390, height: 844, mobile: true },
+  { width: 1280, height: 800, mobile: false, room: 73 },
+  // 8 px on a phone since 2026-10-31 (dashboard.md §4.25 *The bar stays in
+  // sight on a wide window*).
+  { width: 390, height: 844, mobile: true, room: 8 },
 ];
 const CASES = [
   { path: "/rules#who", page: "rules", card: "by-who-block", head: "by-who-title", links: 5 },
@@ -150,6 +169,17 @@ test("an address naming a card of Approvals, Rules or Settings opens there, its 
     fileBrowserHome: home, configEnv: { MANDU_HOME: join(tmp, "mandu-home") }, log: () => {}, ...ADMIN_OPTS,
   });
   const base = `http://127.0.0.1:${await dashboard.listen(0)}`;
+  // L6: the same arbiter behind a dashboard with an account, as
+  // `mandu dashboard --set-password` writes it, and no admin link: the way
+  // in is the sign-in page.
+  const accountFile = join(tmp, "dashboard-account.json");
+  writeAccount(accountFile, await makeAccount(USER, PASSWORD));
+  const signedDashboard = new DashboardServer({
+    source: new ArbiterEventSource({ socketPath, humanSocketPath: humanPath }),
+    approvalsArbiter: wired.arbiter, policyDocArbiter: wired.policyDoc, account: new AccountFile(accountFile),
+    fileBrowserHome: home, configEnv: { MANDU_HOME: join(tmp, "mandu-home") }, log: () => {},
+  });
+  const signedBase = `http://127.0.0.1:${await signedDashboard.listen(0)}`;
   const { proc, wsUrl } = await tour.startBrowser(browser as string, join(tmp, "chrome"), process.env);
   const cdp = await tour.Cdp.connect(wsUrl);
   const pages: string[] = [];
@@ -191,9 +221,11 @@ test("an address naming a card of Approvals, Rules or Settings opens there, its 
           const ch = card.getBoundingClientRect(), hh = head.getBoundingClientRect();
           return {
             top: Math.round(ch.top), scrollY: Math.round(scrollY), max: Math.round(max), innerHeight,
+            room: parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0,
             headTop: Math.round(hh.top), headBottom: Math.round(hh.bottom), hidden: card.hidden,
             focus: document.activeElement?.id, address: location.pathname + location.hash,
-            navPosition: getComputedStyle(nav).position, navLinks: nav.querySelectorAll('a').length,
+            navPosition: getComputedStyle(nav).position, navLinks: [...nav.querySelectorAll('li')].filter((li) => getComputedStyle(li).display !== 'none').length,
+            navKeys: [...nav.querySelectorAll('li')].filter((li) => getComputedStyle(li).display !== 'none').map((li) => li.querySelector('a').dataset.section),
             navOver: Math.round(nav.scrollWidth - nav.clientWidth), pageOver: Math.round(document.scrollingElement.scrollWidth - innerWidth),
             text: document.body.innerText,
           };
@@ -204,11 +236,13 @@ test("an address naming a card of Approvals, Rules or Settings opens there, its 
         assert.equal(m.focus, c.head, `${what}: its heading keeps the focus`);
         assert.equal(m.address, c.path, `${what}: the address keeps its hash`);
         assert.ok(m.scrollY > 0, `${what}: the page scrolled to the card (${JSON.stringify(m)})`);
-        assert.ok(Math.abs(m.top) <= 1 || m.scrollY >= m.max - 1, `${what}: the card is at the top, or the page at its end (${JSON.stringify({ top: m.top, scrollY: m.scrollY, max: m.max })})`);
-        assert.ok(m.headTop >= 0 && m.headBottom <= m.innerHeight, `${what}: the heading is in view (${m.headTop}–${m.headBottom} of ${m.innerHeight})`);
+        assert.equal(m.room, view.room, `${what}: the window keeps the top bar's room`);
+        assert.ok(Math.abs(m.top - view.room) <= 1 || m.scrollY >= m.max - 1, `${what}: the card is at the top, below the bar, or the page at its end (${JSON.stringify({ top: m.top, room: m.room, scrollY: m.scrollY, max: m.max })})`);
+        assert.ok(m.headTop >= view.room && m.headBottom <= m.innerHeight, `${what}: the heading is in view (${m.headTop}–${m.headBottom} of ${m.innerHeight})`);
         // L2
         assert.equal(m.navPosition, "static", `${what}: the row is in the page's flow`);
         assert.equal(m.navLinks, c.links, `${what}: a link per card`);
+        assert.ok(!m.navKeys.includes("account"), `${what}: the admin link holds no sign-in, so no Dashboard account link (${m.navKeys})`);
         assert.ok(m.navOver <= 0 && m.pageOver <= 0, `${what}: the row wraps inside the page (${m.navOver}, ${m.pageOver})`);
       }
     }
@@ -253,6 +287,7 @@ test("an address naming a card of Approvals, Rules or Settings opens there, its 
         const ch = card.getBoundingClientRect(), hh = head.getBoundingClientRect();
         return {
           top: Math.round(ch.top), scrollY: Math.round(scrollY), max: Math.round(max), innerHeight,
+          room: parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0,
           headTop: Math.round(hh.top), headBottom: Math.round(hh.bottom),
           focused: document.activeElement === head, address: location.pathname + location.hash,
           navPosition: getComputedStyle(nav).position,
@@ -265,8 +300,9 @@ test("an address naming a card of Approvals, Rules or Settings opens there, its 
       pages.push(m.text);
       assert.equal(m.focused, true, `${what}: its heading keeps the focus`);
       assert.equal(m.address, "/approvals#answered", `${what}: the address keeps its hash`);
-      assert.ok(Math.abs(m.top) <= 1 || m.scrollY >= m.max - 1, `${what}: the list is at the top, or the page at its end (${JSON.stringify({ top: m.top, scrollY: m.scrollY, max: m.max })})`);
-      assert.ok(m.headTop >= 0 && m.headBottom <= m.innerHeight, `${what}: the heading is in view (${m.headTop}–${m.headBottom} of ${m.innerHeight})`);
+      assert.equal(m.room, view.room, `${what}: the window keeps the top bar's room`);
+      assert.ok(Math.abs(m.top - view.room) <= 1 || m.scrollY >= m.max - 1, `${what}: the list is at the top, below the bar, or the page at its end (${JSON.stringify({ top: m.top, room: m.room, scrollY: m.scrollY, max: m.max })})`);
+      assert.ok(m.headTop >= view.room && m.headBottom <= m.innerHeight, `${what}: the heading is in view (${m.headTop}–${m.headBottom} of ${m.innerHeight})`);
       assert.equal(m.navPosition, "static", `${what}: the row is in the page's flow`);
       assert.deepEqual(m.links, ["waiting", "answered"], `${what}: a link per list shown, none to a hidden one`);
       assert.deepEqual(m.dots, ['"·"', "none"], `${what}: a "·" between the links shown, none after the last`);
@@ -289,8 +325,58 @@ test("an address naming a card of Approvals, Rules or Settings opens there, its 
       assert.notEqual(t.focus, "H2", `${what}: no list's heading took the focus`);
     }
 
+    // ── L6: a browser signed in on the sign-in page ──────────────────────────
+    const signedIn = await fetch(`${signedBase}/login`, {
+      method: "POST", redirect: "manual",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: signedBase, Accept: "text/html" },
+      body: new URLSearchParams({ user: USER, password: PASSWORD, next: "/settings" }).toString(),
+    });
+    assert.equal(signedIn.status, 303, "signed in over the real route");
+    const signInCookie = /mandu_signin=[^;]+/.exec(signedIn.headers.get("set-cookie") ?? "")?.[0];
+    assert.ok(signInCookie, "a sign-in cookie");
+    const at = signInCookie.indexOf("=");
+    await s("Network.setCookie", { name: signInCookie.slice(0, at), value: signInCookie.slice(at + 1), url: signedBase, httpOnly: true, sameSite: "Strict" });
+    for (const view of VIEWS) {
+      await s("Emulation.setDeviceMetricsOverride", { width: view.width, height: view.height, deviceScaleFactor: 1, mobile: view.mobile });
+      const what = `/settings#account signed in, at ${view.width} px`;
+      await s("Page.navigate", { url: signedBase + "/settings#account" });
+      let landed = false;
+      for (const end = Date.now() + 30_000; Date.now() < end; await new Promise((r) => setTimeout(r, 150))) {
+        try { landed = await evaluate(`document.readyState === "complete" && document.activeElement?.id === "settings-account-title"`); } catch { /* navigating */ }
+        if (landed) break;
+      }
+      assert.ok(landed, `${what}: the Dashboard account card's heading took the focus`);
+      await evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => r(true), 300))))");
+      const m = await evaluate(`(() => {
+        const card = document.getElementById('settings-account-block');
+        const head = document.getElementById('settings-account-title');
+        const nav = document.querySelector('#page-settings .page-head nav.section-links');
+        const max = document.scrollingElement.scrollHeight - innerHeight;
+        const ch = card.getBoundingClientRect(), hh = head.getBoundingClientRect();
+        const shown = [...nav.querySelectorAll('li')].filter((li) => getComputedStyle(li).display !== 'none');
+        return {
+          top: Math.round(ch.top), scrollY: Math.round(scrollY), max: Math.round(max), innerHeight,
+          headTop: Math.round(hh.top), headBottom: Math.round(hh.bottom), hidden: card.hidden,
+          signOut: !!card.querySelector('#settings-sign-out'), focus: document.activeElement?.id, address: location.pathname + location.hash,
+          words: shown.map((li) => li.textContent).join(' · '),
+          navOver: Math.round(nav.scrollWidth - nav.clientWidth), pageOver: Math.round(document.scrollingElement.scrollWidth - innerWidth),
+          text: document.body.innerText,
+        };
+      })()`);
+      pages.push(m.text);
+      assert.equal(m.hidden, false, `${what}: the card is shown`);
+      assert.equal(m.signOut, true, `${what}: it holds Sign out`);
+      assert.equal(m.focus, "settings-account-title", `${what}: its heading keeps the focus`);
+      assert.equal(m.address, "/settings#account", `${what}: the address keeps its hash`);
+      assert.equal(m.words, "Protection · Models · Sensitivity labels · Prompt filters · Notifications · Appearance · Dashboard account · About", `${what}: the row names it, in the cards' order`);
+      assert.ok(m.scrollY > 0, `${what}: the page scrolled to the card (${JSON.stringify({ scrollY: m.scrollY, max: m.max })})`);
+      assert.ok(Math.abs(m.top - view.room) <= 1 || m.scrollY >= m.max - 1, `${what}: the card is at the top, below the bar, or the page at its end (${JSON.stringify({ top: m.top, scrollY: m.scrollY, max: m.max })})`);
+      assert.ok(m.headTop >= view.room && m.headBottom <= m.innerHeight, `${what}: the heading is in view (${m.headTop}–${m.headBottom} of ${m.innerHeight})`);
+      assert.ok(m.navOver <= 0 && m.pageOver <= 0, `${what}: the row wraps inside the page (${m.navOver}, ${m.pageOver})`);
+    }
+
     // L3: the oracle.
-    assert.equal(pages.length, VIEWS.length * (CASES.length + 2), "every page was read");
+    assert.equal(pages.length, VIEWS.length * (CASES.length + 3), "every page was read");
     for (const p of pages) {
       assert.ok(!p.includes(KEY), "no page carries the registered key");
       assert.ok(!p.includes(FILE_KEY), "nor the file's key");
@@ -300,6 +386,7 @@ test("an address naming a card of Approvals, Rules or Settings opens there, its 
     cdp.close();
     await tour.stopProc(proc);
     await dashboard.close();
+    await signedDashboard.close();
     await proxy.close();
     netClient.close();
     netHuman.close();

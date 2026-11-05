@@ -160,7 +160,10 @@ test("per principal over the real arbiter: programs, hosts and AI read back as t
       "May read it when it asks": ["~/ws/memo.txt", "~/ws/notes.md"],
       "Always sees it masked": ["~/ws/.env", "~/ws/contract.txt"],
     });
-    assert.deepEqual(lists(v.models.rows, "vllm-1")["May read it when it asks"], ["~/ws/contract.txt", "~/ws/memo.txt", "~/ws/notes.md"]);
+    // Your own AI lists only what differs from Any AI (queue item #98): the
+    // local-model file it may read when it asks, and a line for the rest.
+    assert.deepEqual(lists(v.models.rows, "vllm-1"), { "May read it when it asks": ["~/ws/contract.txt"] });
+    assert.equal(v.models.rows.find((r: any) => r.name === "vllm-1").rest, "The rest (3): as Any AI, above.");
     assert.equal((await gate.pathLevel(envPath)).level, "no-model");
     assert.equal((await gate.pathLevel(notesPath)).level, "any-model");
     assert.equal((await gate.pathLevel(contractPath)).level, "local-model");
@@ -203,6 +206,58 @@ test("per principal over the real arbiter: programs, hosts and AI read back as t
     await server.close();
     wired.close();
     gate.close();
+    await arbiter.close();
+  }
+});
+
+test("the page's rules unread and none in policy.yaml: the served card never says 'No rule of yours' (queue item #164)", { timeout: 60_000 }, async () => {
+  // As the docs' tour runs it: a real arbiter answers the policy, the
+  // dashboard has no secrets arbiter, so the labels made on the page are
+  // unread (dashboard.md §4.25aa *An empty list that could not read every
+  // rule says so*).
+  const dir = mkdtempSync(join(tmpdir(), "mandu-by-who-unread-"));
+  dirs.push(dir);
+  const home = join(dir, "home");
+  mkdirSync(home, { recursive: true });
+  const dataSock = join(dir, "arbiter.sock");
+  const policyPath = join(dir, "policy.yaml");
+  writeFileSync(policyPath, "version: 1\n");
+  const arbiter = new ArbiterServer({
+    socketPath: dataSock, dbPath: join(dir, "mandu.db"), eventDir: join(dir, "events"),
+    policyPath, policyPollMs: 0, integrity: false, confidentiality: true, log: () => {},
+  });
+  await arbiter.listen();
+  const server = new DashboardServer({
+    source: new ArbiterEventSource({ socketPath: dataSock }),
+    fileBrowserHome: home,
+    log: () => {},
+    ...ADMIN_OPTS,
+  });
+  const port = await server.listen(0);
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const r = await pageFetch(`${base}/api/policy/by-who`, { headers: CSRF_ADMIN });
+    assert.equal(r.status, 200);
+    const v = ((await r.json()) as any).byWho;
+    assert.equal(v.available, true, "policy.yaml was read");
+    assert.equal(v.partial, true, "the page's rules were not");
+    for (const key of ["programs", "hosts", "models"]) assert.deepEqual(v[key].rows, [], `${key}: nothing to list`);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    type Doc = any;
+    const signedIn = { Cookie: ADMIN_COOKIE };
+    await servedProductPage(base, "/rules", (doc: Doc) => !!doc.querySelector("#by-who-list .empty"), async (doc: Doc) => {
+      for (const key of ["programs", "hosts", "models"]) {
+        doc.getElementById(`by-who-tab-${key}`).click();
+        const block = doc.getElementById("by-who-block");
+        assert.equal(block.hidden, false, `${key}: the card is shown`);
+        assert.doesNotMatch(block.textContent, /No rule of yours/, `${key}: no claim the page cannot make`);
+        assert.equal(doc.querySelector("#by-who-list .empty")?.textContent,
+          "No rule in policy.yaml makes a file secret. The rules made on this page could not be read, so they are not listed here.", key);
+        assert.doesNotMatch(doc.getElementById("by-who-note").textContent, /could not be read/, `${key}: said once`);
+      }
+    }, { headers: signedIn });
+  } finally {
+    await server.close();
     await arbiter.close();
   }
 });

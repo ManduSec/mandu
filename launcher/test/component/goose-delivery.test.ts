@@ -161,7 +161,7 @@ test("the openai provider launches ROUTED: both providers pinned to openai, OPEN
 
 test("refused: a provider Mandu does not route, from argv, env or config, for the session or its subagents (the delegate bypass); openai at an endpoint the proxy cannot reach", async () => {
   await withRig(async (r) => {
-    await expectRefused(() => main(["--no-scope", "--", r.bin, "run", "--provider", "google", "-t", "x"], env(r)), /--provider names the provider `google`/);
+    await expectRefused(() => main(["--no-scope", "--", r.bin, "run", "--provider", "gcp_vertex_ai", "-t", "x"], env(r)), /--provider names the provider `gcp_vertex_ai`/);
     await expectRefused(() => main(["--no-scope", "--", r.bin], env(r, { GOOSE_PROVIDER: "groq" })), /GOOSE_PROVIDER names the provider `groq`/);
     await expectRefused(() => main(["--no-scope", "--", r.bin], env(r, { GOOSE_SUBAGENT_PROVIDER: "lmstudio" })), /GOOSE_SUBAGENT_PROVIDER names the provider `lmstudio`/);
     await expectRefused(() => main(["--no-scope", "--", r.bin], env(r, { GOOSE_PROVIDER: "openai", OPENAI_HOST: "http://llm.corp.example:8000" })),
@@ -236,6 +236,6 @@ test("`mandu goose review`: launches with the routing env (its `goose run` child
     assert.equal(got.env["ANTHROPIC_HOST"], "http://127.0.0.1:8788");
     assert.equal(got.env["GOOSE_PROVIDER"], "anthropic");
     assert.equal(got.env["OTEL_SDK_DISABLED"], "true");
-    await expectRefused(() => main(["--no-scope", "--", r.bin, "review", "-s", "dir", "--provider", "google"], env(r)), /--provider names the provider `google`/);
+    await expectRefused(() => main(["--no-scope", "--", r.bin, "review", "-s", "dir", "--provider", "gcp_vertex_ai"], env(r)), /--provider names the provider `gcp_vertex_ai`/);
   });
 });

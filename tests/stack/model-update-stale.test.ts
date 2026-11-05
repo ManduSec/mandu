@@ -54,6 +54,14 @@ const KEY = "sk_" + "live_modelUpdateStaleStackCanary0000000001";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Doc = any;
 const modelRow = (doc: Doc, name: string) => [...doc.querySelectorAll("#settings-models .model-row")].find((r: Doc) => r.dataset.name === name);
+/** The question a change asks on the page (dashboard.md §4.25n), drawn
+ *  under `root`: its "… anyway" pressed once it is there. */
+async function anyway(root: () => Doc): Promise<void> {
+  await waitWhile(() => !root()?.querySelector(".ask-in-place-yes"));
+  const yes = root().querySelector(".ask-in-place-yes");
+  yes.focus();
+  yes.click();
+}
 const byId = (doc: Doc, id: string) => doc.getElementById(id);
 const submit = (doc: Doc) => byId(doc, "model-form").dispatchEvent(new doc.defaultView.Event("submit", { cancelable: true }));
 
@@ -109,13 +117,14 @@ test("Settings over the real arbiter: an update read before another change to th
     const ready = (doc: Doc) => doc.querySelectorAll("#settings-models .model-row").length === 2;
 
     await servedProductPage(base, "/settings", ready, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
 
       // S1 + S2: the form read lab; mine changes meanwhile; Save applies.
       modelRow(doc, "lab").querySelector(".model-edit-btn").click();
       byId(doc, "model-model").value = "mistral-large";
       await elsewhere([{ op: "update-model", name: "mine", url: "http://127.0.0.1:11434", wire: "openai-chat", model: "llama3.3", local: true }]);
       submit(doc);
+      await anyway(() => byId(doc, "model-form"));
       await waitWhile(() => !/^Saved lab\./.test(byId(doc, "models-notice").textContent ?? ""));
       assert.match(byId(doc, "models-notice").textContent, /^Saved lab\./, "a change to another model does not refuse the save");
       assert.equal((await endpoint("lab"))?.model, "mistral-large");
@@ -151,6 +160,7 @@ test("Settings over the real arbiter: an update read before another change to th
       // S5: compared, the newer address kept, saved again.
       byId(doc, "model-url").value = "https://lab2.example/v1";
       submit(doc);
+      await anyway(() => byId(doc, "model-form"));
       await waitWhile(() => !/^Saved lab\./.test(byId(doc, "models-notice").textContent ?? "") || !byId(doc, "model-form").hidden);
       assert.equal(byId(doc, "model-form").hidden, true);
       assert.deepEqual(await endpoint("lab"), { name: "lab", url: "https://lab2.example/v1", wire: "openai-chat", model: "mistral-xl", local: false });

@@ -152,6 +152,32 @@ test("Rules › Built-in protections, protection off: Turn it on in Settings ope
   assert.equal(doc.activeElement, sw.disabled ? doc.querySelector("#settings-protection-block h2") : sw);
 });
 
+test("Rules › Built-in protections, protection off with On saved for the next start: the item says what is left to do, and Open Settings › Protection opens there (§4.25)", async () => {
+  const builtIn = {
+    note: "protection is off",
+    items: ["Mandu only watches: nothing is masked, and your secrets are not guarded. On is saved and starts when the protection service restarts. Open Settings › Protection."],
+    itemsParts: [[
+      { kind: "text", text: "Mandu only watches: nothing is masked, and your secrets are not guarded. " },
+      { kind: "text", text: "On is saved and starts when the protection service restarts. " },
+      { kind: "link", text: "Open Settings › Protection", to: "protection" },
+      { kind: "text", text: "." },
+    ]],
+    issuers: null,
+  };
+  const { doc, window } = load({ url: RULES_URL, homeVm: home({ builtIn }) });
+  await tick();
+  const items = [...doc.querySelectorAll("#builtin-list li")] as any[];
+  assert.equal(items.length, 1);
+  assert.equal(items[0].textContent, builtIn.items[0]);
+  const links = [...items[0].querySelectorAll("a")] as any[];
+  assert.deepEqual(links.map((a) => [a.textContent, a.getAttribute("href")]), [["Open Settings › Protection", "/mandu/settings#protection"]]);
+  const seen = scrolls(window);
+  links[0].click();
+  await tick(30);
+  assert.equal(window.location.pathname, "/mandu/settings");
+  assert.ok(seen.includes("settings-protection-block"), JSON.stringify(seen));
+});
+
 // ── Approvals: a file that takes no Always (§4.34) ───────────────────────────
 
 const H = "hooks.slack.com";

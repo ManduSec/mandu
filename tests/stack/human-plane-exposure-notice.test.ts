@@ -26,6 +26,9 @@
  *     claim by then), the notice names its agent as its Home row does, a
  *     link to its page, over the real dashboard server; the served product
  *     page draws the link and opens that agent's page in place (§4.25x);
+ *     its card says "masked copies of secret files", and the served Home's
+ *     and Rules' text holds neither "placeholder" nor "this machine"
+ *     (§4.25u);
  *   - the served product page, open with notifications granted while the
  *     plane is walled, raises one notification when the unwalled launch
  *     starts, in fixed words that hold neither its pid nor its session id
@@ -239,6 +242,17 @@ test("e2e: the unwalled launch's session is on record: the notice names its agen
     await servedProductPage(base, "/", (doc) => !doc.getElementById("home-exposure").hidden && !!doc.querySelector("#exposure-causes li"), async (doc) => {
       const li = doc.querySelector("#exposure-causes li");
       assert.equal(li.textContent, cause.words);
+      // The product's words (dashboard.md §4.25u): the card and the served
+      // Home's and Rules' text say "masked copies", never "placeholder" or
+      // "this machine".
+      const card = doc.getElementById("home-exposure").textContent;
+      assert.match(card, /those agents get masked copies of secret files/);
+      for (const id of ["page-home", "page-rules"]) {
+        const text = doc.getElementById(id).textContent;
+        assert.ok(text.length > 100, `${id} is served`);
+        assert.doesNotMatch(text, /placeholder/i, `${id}: ${text.match(/.{0,60}placeholder.{0,60}/i)?.[0]}`);
+        assert.doesNotMatch(text, /this machine/, `${id}: ${text.match(/.{0,60}this machine.{0,60}/)?.[0]}`);
+      }
       assert.equal(li.dataset.pid, String(process.pid));
       const links = [...li.querySelectorAll("a")] as Array<{ textContent: string; getAttribute(n: string): string | null; dataset: Record<string, string>; dispatchEvent(e: unknown): boolean }>;
       assert.equal(links.length, 1);

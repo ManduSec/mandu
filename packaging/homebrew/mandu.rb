@@ -8,11 +8,11 @@
 class Mandu < Formula
   desc "Keep an AI agent's secrets from its model, at the OS level"
   homepage "https://example.invalid/mandu"
-  url "https://example.invalid/mandu/mandusec-mandu-0.2.0-beta.8.tgz"
+  url "https://example.invalid/mandu/mandusec-mandu-0.2.0-beta.9.tgz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "Apache-2.0"
 
-  # Mandu's floor is Node 22.13.0 (launcher/src/node-floor.ts); node@22 is past it.
+  # Mandu's floor is Node 22.15.0 (launcher/src/node-floor.ts); node@22 is past it.
   depends_on "node@22"
 
   def install

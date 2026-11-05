@@ -377,6 +377,31 @@ test("status: a session whose agent exited (`exited`) is never RUNNING by recenc
   assert.equal(inRun.testing[0]!.sessions[0]!.status, "running", "a member of a running test run with no result yet stays running");
 });
 
+test("status: a session whose launch is alive (`live`) is RUNNING however long it has been quiet; a recorded exit or a verdict still decides (§4.10.4)", () => {
+  const nowMs = Date.parse("2026-07-06T10:40:00.000Z");
+  const quiet = new Date(nowMs - 30 * 60_000).toISOString();
+  assert.ok(nowMs - Date.parse(quiet) > RUNNING_WINDOW_MS, "the fixture is past the recency window");
+  const out = buildSidebarSections(
+    [
+      { ...s("1750000000-42", "L1", quiet), firstTs: quiet, live: true },
+      { ...s("1750000001-43", "L2", quiet), firstTs: quiet, live: true, exited: true },
+      { ...s("1750000002-44", "L3", quiet), firstTs: quiet },
+      { ...s("1750000003-45", "L4", quiet), firstTs: quiet, live: true, checksVerdict: "fail" },
+    ],
+    [],
+    nowMs,
+  );
+  const of = (id: string) => out.live.find((b) => b.id === id)!;
+  assert.equal(of("L1").sessions[0]!.status, "running", "launch alive, quiet 30 minutes: still running");
+  assert.equal(of("L1").status, "running", "and so is its batch");
+  assert.equal(of("L2").sessions[0]!.status, undefined, "launch alive but the exit recorded: ended");
+  assert.equal(of("L3").sessions[0]!.status, undefined, "neither: quiet 30 minutes is not running (the recency rule, unchanged)");
+  assert.equal(of("L4").sessions[0]!.status, "fail", "a verdict still wins over a live launch");
+  // In a day group of its own, too.
+  const day = buildSidebarSections([{ ...s("1750000004-46", undefined, quiet), live: true }], [], nowMs);
+  assert.equal(day.live[0]!.sessions[0]!.status, "running");
+});
+
 test("status: nowMs omitted disables the recency rule (deterministic legacy callers)", () => {
   const out = buildSidebarSections([s("1750000000-42", "L1", "2026-07-06T10:00:00.000Z")]);
   assert.equal(out.live[0]!.sessions[0]!.status, undefined);

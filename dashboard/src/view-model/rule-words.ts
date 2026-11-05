@@ -11,6 +11,7 @@
 
 import type { HomeTextPart } from "./ask-words.js";
 import { toolFamily } from "./tool-family.js";
+import { categoryWords, kindName } from "./prompt-settings.js";
 
 export const TERMS = {
   masked: "Masked",
@@ -56,6 +57,11 @@ export interface PlainRule {
    *  your message to the AI", `promptAnswerWords`). Their text joined is
    *  `subject`. Absent on every other kind. */
   subjectParts?: HomeTextPart[];
+  /** A held message's answer whose subject names its kind in words ("A card
+   *  number in your message to the AI"): the category id it is about
+   *  (`pii.payment-card`), which Rules keeps in the row's tooltip and in
+   *  what Find a rule matches. Absent on every other row. */
+  category?: string;
   reach: string | null;
   /** `reach` as parts, when it names something: a send's file, address or
    *  command, a program's files, a send rule's sources, each a code
@@ -71,6 +77,11 @@ export interface PlainRule {
   until?: string;
   /** A file rule: which programs may open the real file (`opensWords`). */
   opens?: string;
+  /** Beside `opens`: true when the rule has no `readers:`, so `opens` is
+   *  the default every such file shares. The page then draws no line on the
+   *  row and says the default once under Files and folders (dashboard.md
+   *  §4.25p, *Opens it*), without comparing words. */
+  opensDefault?: boolean;
   /** A file rule with `values:` (plan 13 §5.2): where each value may be
    *  sent, as one sentence (`perValueWords`). */
   send?: string;
@@ -335,9 +346,10 @@ export function holderAnswerWords(files: readonly string[], target: string, stat
 
 /** Plan 15 §7: a past answer about a found part of the human's own message
  *  (`prompt:<category>#<ref>` × `model:<session>[#turn:<ref>]`). The text
- *  itself is never in the row; the category names it, as code, as the
- *  Approvals card that asked does (§4.25u *Rules names a held message's
- *  answer*). Its effect says what went to the AI, in Approvals' words
+ *  itself is never in the row; the category names it as the Approvals card
+ *  that asked does (§4.25u *Rules names a held message's answer*): a kind
+ *  Mandu has words for in Settings' words ("A card number"), its id kept in
+ *  `category` for the tooltip and Find; an organization's own as code. Its effect says what went to the AI, in Approvals' words
  *  ("Sent as written", "Sent masked"): a masked message was not stopped,
  *  which *Always blocked* ("Stopped without asking you") said (§4.25u
  *  *A held message's answer says what was sent*). */
@@ -346,9 +358,11 @@ export function promptAnswerWords(subject: string, target: string, status: "pend
   const category = named ?? "a found part";
   const effect = status === "approved" ? "Sent as written" : status === "denied" ? "Sent masked" : TERMS.ask;
   const message = target.includes("#turn:");
+  const words = named !== undefined && categoryWords(named) !== null ? `${kindName(named)} in your message to the AI` : null;
   return {
-    subject: `${category} in your message to the AI`,
-    ...(named !== undefined ? { subjectParts: [{ kind: "code" as const, text: named }, { kind: "text" as const, text: " in your message to the AI" }] } : {}),
+    subject: words ?? `${category} in your message to the AI`,
+    ...(words !== null ? { subjectParts: [{ kind: "text" as const, text: words }], category: named! }
+      : named !== undefined ? { subjectParts: [{ kind: "code" as const, text: named }, { kind: "text" as const, text: " in your message to the AI" }] } : {}),
     reach: status === "denied"
       ? (message ? "masked in that one message" : "masked for that session")
       : (message ? "as you wrote it, in that one message" : "as you wrote it, for that session"),

@@ -41,6 +41,23 @@
  *                         text (Goose's ollama provider): a response whose
  *                         text carries one is ended (openai-sse.ts).
  *                         Malformed value = fatal.
+ *   MANDU_GOOGLE_UPSTREAMS optional JSON object, provider id → base URL: the
+ *                         Gemini providers routed through this proxy under
+ *                         /_mandu/google/<id> (gemini-wire.ts, model-wires.md
+ *                         §5; set by the launcher, or by `mandu serve`'s
+ *                         pool). Malformed value = fatal.
+ *   MANDU_VERTEX_UPSTREAMS optional JSON object of at most one entry,
+ *                         provider id → its own address or null (Google's
+ *                         own Vertex host per location): the Vertex AI
+ *                         provider served at the proxy's root
+ *                         (route.ts classifyVertexRoute, model-wires.md
+ *                         §4.1; set by the launcher). Malformed = fatal.
+ *   MANDU_OLLAMA_UPSTREAMS optional JSON object, provider id → base URL: the
+ *                         Ollama providers routed through this proxy on
+ *                         Ollama's native chat API under /_mandu/ollama/<id>
+ *                         (ollama-wire.ts, model-wires.md "The Ollama wire";
+ *                         set by the launcher, or by `mandu serve`'s pool).
+ *                         Malformed value = fatal.
  *   MANDU_SESSION_KEY   optional session key threaded into arbiter calls
  *   MANDU_INBOUND_SPEC  optional agent trust-spec id for THIS session
  *                         (agent-e2e-harness.md §7.1): bound to
@@ -76,6 +93,8 @@ import { AnthropicProxy } from "./proxy.js";
 import { ArbiterClientAdapter, type RealArbiterClient } from "./arbiter-client.js";
 import { ViewMap, parseViewMapEnv } from "./view-map.js";
 import { parseOpenAiTextCallsEnv, parseOpenAiUpstreamsEnv } from "./openai-wire.js";
+import { parseGoogleUpstreamsEnv, parseVertexUpstreamsEnv } from "./gemini-wire.js";
+import { parseOllamaUpstreamsEnv } from "./ollama-wire.js";
 import { armLifeline } from "./lifeline.js";
 import { parseReserveMax, reserveEnabled } from "./reserve-block.js";
 
@@ -157,9 +176,15 @@ async function main(): Promise<void> {
   }
   let openaiUpstreams: Record<string, string>;
   let openaiTextCalls: string[];
+  let googleUpstreams: Record<string, string>;
+  let vertexUpstream: ReturnType<typeof parseVertexUpstreamsEnv>;
+  let ollamaUpstreams: Record<string, string>;
   try {
     openaiUpstreams = parseOpenAiUpstreamsEnv(process.env["MANDU_OPENAI_UPSTREAMS"]);
     openaiTextCalls = parseOpenAiTextCallsEnv(process.env["MANDU_OPENAI_TEXT_CALLS"]);
+    googleUpstreams = parseGoogleUpstreamsEnv(process.env["MANDU_GOOGLE_UPSTREAMS"]);
+    vertexUpstream = parseVertexUpstreamsEnv(process.env["MANDU_VERTEX_UPSTREAMS"]);
+    ollamaUpstreams = parseOllamaUpstreamsEnv(process.env["MANDU_OLLAMA_UPSTREAMS"]);
   } catch (err) {
     console.error(`[anthropic-proxy] ${(err as Error).message}`);
     process.exit(2);
@@ -223,6 +248,12 @@ async function main(): Promise<void> {
     openaiUpstreams,
     // The routes whose agent runs a tool call written in the model's text.
     openaiTextCalls,
+    // The session's routed Gemini providers (model-wires.md §5).
+    googleUpstreams,
+    // The session's Vertex AI provider, at the root (model-wires.md §4.1).
+    vertexUpstream,
+    // The session's routed Ollama providers (model-wires.md, "The Ollama wire").
+    ollamaUpstreams,
     // Reply row reservation (reply-row-reservation.md §3.2): the kill switch
     // and the row cap. The request-side collapse and strip run regardless.
     replyReserve: {
@@ -258,6 +289,15 @@ async function main(): Promise<void> {
   );
   for (const [id, url] of Object.entries(openaiUpstreams)) {
     console.error(`[anthropic-proxy] routed provider: ${id} → ${url} (at /_mandu/openai/${id})`);
+  }
+  for (const [id, url] of Object.entries(googleUpstreams)) {
+    console.error(`[anthropic-proxy] routed Gemini provider: ${id} → ${url} (at /_mandu/google/${id})`);
+  }
+  if (vertexUpstream) {
+    console.error(`[anthropic-proxy] routed Vertex AI provider: ${vertexUpstream.provider} → ${vertexUpstream.upstream ?? "Google's Vertex host for each location"} (at /v1/projects/…)`);
+  }
+  for (const [id, url] of Object.entries(ollamaUpstreams)) {
+    console.error(`[anthropic-proxy] routed Ollama provider: ${id} → ${url} (at /_mandu/ollama/${id})`);
   }
   if (viewMap) {
     for (const p of viewMap.roots()) {

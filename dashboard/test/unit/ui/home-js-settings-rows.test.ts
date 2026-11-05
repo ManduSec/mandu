@@ -151,6 +151,9 @@ test("a refusal on a label or a prompt filter row spans the row, under its contr
   });
   await tick();
   const label = doc.querySelector(`#settings-labels .label-row[data-id="${HC}"]`);
+  const pick = label.querySelector("select.label-level");
+  pick.value = "local-model";
+  pick.dispatchEvent(new doc.defaultView.Event("change", { bubbles: true }));
   label.querySelector(".label-save-btn").click();
   await tick();
   const labelError = label.querySelector(".ask-error");

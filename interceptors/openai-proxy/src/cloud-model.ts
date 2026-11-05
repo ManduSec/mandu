@@ -5,8 +5,7 @@
  * Ollama serves cloud-backed models (`gpt-oss:120b-cloud`, `glm-4.6:cloud`, …)
  * through the same loopback API as its own models, so a main model the
  * operator declared `local: true` at http://127.0.0.1:11434 still relays the
- * conversation to the vendor when the agent asks for such a name. This copy
- * serves the openai-proxy (Codex; plan 11 §7.2). The proxy
+ * conversation to the vendor when the agent asks for such a name. The proxy
  * refuses those requests when its upstream is a declared local model
  * (`ProxyOptions.upstreamLocal`, env `MANDU_UPSTREAM_LOCAL=1`, set by the
  * launcher).
@@ -20,9 +19,11 @@
  *
  * MIRROR of arbiter/policy/cloud-model.ts (this package never imports the
  * arbiter's policy code) and of `isCloudBackedModel` in
- * launcher/src/model-endpoints.ts and of interceptors/anthropic-proxy/src/cloud-model.ts;
- * the four are pinned to one table by
- * tests/stack/cloud-model-parity.test.ts. Change them together.
+ * launcher/src/model-endpoints.ts; with this module's two copies (both model
+ * proxies), the four are pinned to one table by
+ * tests/stack/cloud-model-parity.test.ts. Change them together. Of the two
+ * proxy copies the source is interceptors/anthropic-proxy/src/cloud-model.ts:
+ * change it, then run `node scripts/copies/module-copies.mjs generate`.
  *
  * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code (no reference origin).
  */

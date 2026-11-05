@@ -54,7 +54,7 @@ const STEP = {
 };
 /** A Your secrets card; its line names its ref, so the test tells apart two
  *  cards whose headings read alike. */
-const card = (file: string, ref: string) => ({ what: [T("The file "), code(file)], level: "No AI", saw: "masked", lines: [{ tone: "good", parts: [T(`The AI got only a placeholder (${ref.slice(-2)}).`)] }], ref });
+const card = (file: string, ref: string) => ({ what: [T("The file "), code(file)], level: "No AI", saw: "masked", lines: [{ tone: "good", parts: [T(`The AI got only its masked version (${ref.slice(-2)}).`)] }], ref });
 const CARD_A = card("~/ws/.env", REF_A);
 const CARD_B = card("~/ws/key.pem", REF_B);
 /** B named as A is: the same heading words, another secret. */

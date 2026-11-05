@@ -6,6 +6,9 @@
  * - A command in a sentence the page writes is `code`, as on the first-run
  *   card: Home › Running now, Home › Where your data lives (its failure and
  *   its "open to others" note), Settings › Protection service.
+ * - The commands that start your agent are `/api/home`'s `start` (the
+ *   agents you use): Running now, History and Settings › Protection while
+ *   nothing runs; an older server's answer without it keeps today's two.
  * - Approvals › Answered earlier says it could not check while the queue is
  *   unknown, not a bare heading.
  * - A text button (`button.link-btn`, "Add a rule") reads as a link:
@@ -41,6 +44,7 @@ import { promptSettingsVM } from "../../../src/view-model/prompt-settings.js";
 import { labelSettingsVM } from "../../../src/view-model/sensitivity-labels.js";
 import { toPolicyPanelViewModel } from "../../../src/view-model/policy-panel.js";
 
+const SETTINGS_URL = "http://127.0.0.1:4500/mandu/settings";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const codes = (node: any): string[] => [...node.querySelectorAll("code")].map((c: any) => c.textContent);
 
@@ -53,6 +57,50 @@ test("Running now, no agent: the sentence reads the same, and both commands are 
   const empty = doc.querySelector("#home-agents .empty");
   assert.equal(empty.textContent, "No agent is running right now. Start one with mandu claude or mandu codex.");
   assert.deepEqual(codes(empty), ["mandu claude", "mandu codex"]);
+});
+
+test("the commands name the agents you use (`start`, dashboard.md §4.25): Running now, History and Settings › Protection; without `start`, today's two", async () => {
+  const idle = home().agents.filter((a) => a.state === "idle");
+  const one = load({ homeVm: home({ verdict: "quiet", waiting: [], agents: idle, start: ["mandu goose"] }) });
+  await tick();
+  const running = one.doc.querySelector("#home-agents .empty");
+  assert.equal(running.textContent, "No agent is running right now. Start one with mandu goose.");
+  assert.deepEqual(codes(running), ["mandu goose"]);
+  const two = load({ homeVm: home({ verdict: "quiet", waiting: [], agents: idle, start: ["mandu opencode", "mandu claude"] }) });
+  await tick();
+  assert.equal(two.doc.querySelector("#home-agents .empty").textContent, "No agent is running right now. Start one with mandu opencode or mandu claude.");
+
+  // History with no session on record.
+  const empty = { "GET home/history": { total: 0, rows: [], next: null } };
+  const hist = load({ url: "http://127.0.0.1:4500/mandu/history", homeVm: home({ start: ["mandu goose"] }), routes: empty });
+  await tick();
+  const line = hist.doc.querySelector("#history-list .empty");
+  assert.equal(line.textContent, "No session has been recorded yet. Start your agent through Mandu, mandu goose, and it shows up here.");
+  assert.deepEqual(codes(line), ["mandu goose"]);
+  const older = load({ url: "http://127.0.0.1:4500/mandu/history", homeVm: home(), routes: empty });
+  await tick();
+  assert.equal(older.doc.querySelector("#history-list .empty").textContent, "No session has been recorded yet. Start your agent through Mandu, mandu claude or mandu codex, and it shows up here.", "an older server sends no start");
+
+  // Settings › Protection while nothing of Mandu's runs.
+  const notRunning = { level: "unknown", configured: "secrets", connected: false, notRunning: true };
+  const settings = (over: Record<string, unknown>) => load({ url: SETTINGS_URL, homeVm: home({ verdict: "off", protection: notRunning, waitingKnown: false, waiting: [], agents: [], ...over }) });
+  const goose = settings({ start: ["mandu goose"] });
+  await tick();
+  assert.equal(goose.doc.getElementById("settings-protect-text").textContent, "Saved as on. Mandu is not running now, so no agent is protected. It starts with your first agent: mandu goose.");
+  const two2 = settings({ start: ["mandu opencode", "mandu claude"] });
+  await tick();
+  // The commands as code, `a` or `b`, as Home draws them (#234: once a
+  // plain-words `a (or b)`).
+  assert.match(two2.doc.getElementById("settings-protect-text").textContent, /It starts with your first agent: mandu opencode or mandu claude\.$/);
+  assert.deepEqual(codes(two2.doc.getElementById("settings-protect-text")), ["mandu opencode", "mandu claude"]);
+  const none = settings({});
+  await tick();
+  assert.match(none.doc.getElementById("settings-protect-text").textContent, /It starts with your first agent: mandu claude or mandu codex\.$/);
+  assert.deepEqual(codes(none.doc.getElementById("settings-protect-text")), ["mandu claude", "mandu codex"]);
+  // Only commands: a malformed entry is dropped, and none left is today's two.
+  const bad = load({ homeVm: home({ verdict: "quiet", waiting: [], agents: idle, start: [42, ""] }) });
+  await tick();
+  assert.deepEqual(codes(bad.doc.querySelector("#home-agents .empty")), ["mandu claude", "mandu codex"]);
 });
 
 const LOCATIONS = {
@@ -189,7 +237,6 @@ function styled(doc: any): (e: any) => any {
   doc.head.append(s);
   return (e) => doc.defaultView.getComputedStyle(e);
 }
-const SETTINGS_URL = "http://127.0.0.1:4500/mandu/settings";
 
 test("Settings › Prompt filters: its notes are rows of the list, and No exceptions has one frame", async () => {
   const vm = promptSettingsVM({

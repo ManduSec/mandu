@@ -7,7 +7,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { openclawDefaultArgv, openclawLaunchRefusal, openclawRunsLocally, readOpenclawArgv } from "../../src/openclaw-argv.js";
+import { openclawDefaultArgv, openclawGatewayClientNotice, openclawLaunchRefusal, openclawRunsGateway, openclawRunsLocally, readOpenclawArgv } from "../../src/openclaw-argv.js";
 import { parse } from "../../src/parse.js";
 import { testRuntimeDir } from "../lib/test-runtime.js";
 
@@ -70,6 +70,25 @@ test("refused even with the opt-in: bare openclaw (onboarding / Crestodian), cre
   assert.match(openclawLaunchRefusal(["openclaw"], {})!, /mandu openclaw chat/, "bare `mandu openclaw` points at chat");
 });
 
+test("the Gateway service stays refused; the advice names the plugin (mandu openclaw install) and says when it is already attached", () => {
+  const argv = ["openclaw", "gateway", "start"];
+  const notAttached = openclawLaunchRefusal(argv, {}, { attached: () => false })!;
+  assert.match(notAttached, /manages the Gateway SERVICE/);
+  assert.match(notAttached, /mandu serve start`, then `mandu openclaw install/);
+  assert.equal(openclawLaunchRefusal(argv, {})!, notAttached, "no probe: the not-installed advice");
+  const attached = openclawLaunchRefusal(argv, {}, { attached: () => true })!;
+  assert.match(attached, /refusing `openclaw gateway`/, "still refused: this launch would protect nothing");
+  assert.match(attached, /already attached to Mandu through its plugin/);
+  assert.match(attached, /Run `openclaw gateway start` without `mandu`/);
+  const broken = openclawLaunchRefusal(argv, {}, { attached: () => { throw new Error("unreadable"); } })!;
+  assert.equal(broken, notAttached, "a probe that fails is 'not attached'");
+  // The probe is asked only for a Gateway-service shape.
+  let asked = 0;
+  assert.equal(openclawLaunchRefusal(["openclaw", "chat"], {}, { attached: () => { asked++; return true; } }), null);
+  assert.equal(openclawLaunchRefusal(["openclaw", "gateway"], {}, { attached: () => { asked++; return true; } }), null);
+  assert.equal(asked, 0);
+});
+
 test("parse: a refused shape throws before anything launches; confined shapes and non-openclaw targets parse", () => {
   assert.throws(() => parse(["openclaw", "tui"], ENV), /refusing `openclaw tui`/);
   assert.throws(() => parse(["--target", "openclaw", "--", "openclaw", "agent", "-m", "x"], ENV), /refusing `openclaw agent`/);
@@ -109,4 +128,19 @@ test("bare `mandu openclaw` runs `openclaw chat`; help, version, subcommands and
   // A caller that skips the mapping still meets the refusal (Crestodian is not routed).
   assert.match(openclawLaunchRefusal(["openclaw"], {})!, /bare `openclaw` starts onboarding or Crestodian/);
   assert.throws(() => parse(["openclaw", "crestodian"], ENV), /Crestodian/);
+});
+
+test("a Gateway run under Mandu says which clients it protects: OpenClaw's own clients run a failed turn themselves on the user's unrouted config", () => {
+  for (const argv of [["openclaw", "gateway"], ["openclaw", "gateway", "run"], ["openclaw", "gateway", "--port", "18789", "run"], ["openclaw", "--profile", "w", "gateway", "--bind", "loopback"]]) {
+    assert.ok(openclawRunsGateway(argv), argv.join(" "));
+    const note = openclawGatewayClientNotice(argv);
+    assert.match(note ?? "", /runs under Mandu/, argv.join(" "));
+    assert.match(note!, /`mandu openclaw agent`/);
+    assert.match(note!, /MANDU_OPENCLAW_GATEWAY_CLIENT=1/);
+    assert.match(note!, /plain `openclaw agent` or `openclaw tui` .* runs a turn itself .* goes around Mandu/);
+    assert.match(note!, /a client outside Mandu \(a plain `openclaw agent`, a remote app\) cannot connect to this Gateway with your Gateway token/);
+  }
+  for (const argv of [["openclaw", "chat"], ["openclaw", "agent", "--local", "-m", "x"], ["openclaw", "tui"], ["openclaw", "gateway", "status"], ["/opt/wrapper.sh"]]) {
+    assert.equal(openclawGatewayClientNotice(argv), null, argv.join(" "));
+  }
 });

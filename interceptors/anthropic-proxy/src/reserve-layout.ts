@@ -14,7 +14,8 @@
  *   interceptors/anthropic-proxy/src/reserve-layout.ts  (Claude)
  *   interceptors/openai-proxy/src/reserve-layout.ts     (Codex)
  * and tests/stack/reserve-layout-parity.test.ts fails unless
- * the four are byte-identical. Change the canonical copy and copy it out.
+ * the four are byte-identical. Change the canonical copy, then run
+ * `node scripts/copies/module-copies.mjs generate`.
  *
  * PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code (2026-09-30). The wrap
  * is a re-implementation of the algorithm of `wrap-ansi` (MIT, the

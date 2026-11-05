@@ -29,9 +29,16 @@
  *       rendered page carries the registered value; the page and
  *       `/api/home` carry no token;
  *   S4  (2026-10-17, §4.25u *A send rule's dot is its answer's*) on the
- *       served page each send rule's menu has the dot of an answer with the
- *       same words: the two block rules and the Block answer one red, the
- *       allow rule green, and a fourth rule, expired, the grey ring.
+ *       served page each send rule's menu has the dot of what it does now.
+ *       Since 2026-10-30 (§4.25e *A send rule says when the mode leaves it
+ *       nothing to decide*) these axes, the Secrets mode, leave a host's
+ *       rule nothing to decide: the two block rules and the allow rule are
+ *       grey and say so, the Block answer stays red, and the fourth rule,
+ *       expired, keeps the grey ring and no line. Red and green rules with
+ *       the integrity axis on: `home-js-rules-send.test.ts` S6;
+ *   S5  (2026-10-28, §4.25e *each group says what it decides*) the served
+ *       line under *Sending data*, over the Block answer and the block
+ *       rules, says what is blocked as well as what may go.
  *
  * Axes: secrets (stated).
  */
@@ -191,18 +198,29 @@ test("Rules over the real arbiter: a send row names its file and sources as code
       const byTitle = (t: string) => sendRows(doc).find((r) => r.querySelector(".rule-text").title === t);
       const menu = (t: string) => [byTitle(t).querySelector("select").options[0].textContent, byTitle(t).querySelector(".label-pick").getAttribute("data-effect")];
       assert.deepEqual(["anywhere", "api.github.com", "b.example", "old.example", DEST].map(menu), [
-        ["Always allowed", "allow"],
-        ["Always blocked", "block"],
-        ["Always blocked", "block"],
+        ["Always allowed", "none"],
+        ["Always blocked", "none"],
+        ["Always blocked", "none"],
         ["Expired, no longer used", "none"],
         ["Always blocked", "block"],
-      ], "each menu's colour is what the rule does now, as the answer's is");
+      ], "each menu's colour is what the rule does now: in the Secrets mode a host's rule decides nothing, the answer still blocks");
+      const idle = (t: string) => byTitle(t).querySelector(".rule-mode-note")?.textContent ?? null;
+      assert.deepEqual(["anywhere", "api.github.com", "b.example", "old.example", DEST].map(idle), [
+        ...Array(3).fill("Decides nothing in the Secrets mode: a rule for a host never covers your secrets, and this mode masks only secrets."),
+        null, null,
+      ], "the rules in force say so; the expired rule and the answer do not");
       const dot = (t: string) => win.getComputedStyle(byTitle(t).querySelector(".label-dot")).backgroundColor;
-      assert.equal(dot("b.example"), dot(DEST), "a block rule's dot is the Block answer's");
-      assert.equal(dot("api.github.com"), dot(DEST), "both block rules alike");
-      assert.notEqual(dot("anywhere"), dot(DEST), "allowed is not blocked's colour");
-      assert.notEqual(dot("old.example"), dot(DEST), "an expired rule's dot is not filled red");
-      assert.notEqual(dot("old.example"), dot("anywhere"), "nor green");
+      for (const t of ["anywhere", "api.github.com", "b.example", "old.example"]) {
+        assert.notEqual(dot(t), dot(DEST), `${t}: its dot is not filled red`);
+        assert.equal(dot(t), dot("old.example"), `${t}: grey, as an expired rule's`);
+      }
+
+      // ── S5: the group's line says what it blocks too ──
+      const groupOf = (r: Doc) => r.parentElement.previousElementSibling;
+      for (const t of [DEST, "b.example", "anywhere"]) assert.equal(groupOf(byTitle(t)).firstChild.textContent, "Sending data", `${t}: under Sending data`);
+      const line = groupOf(byTitle(DEST)).querySelector(".muted").textContent;
+      assert.match(line, /may go/, `the line says what may go: ${line}`);
+      assert.match(line, /blocked/, `and what is blocked, over the Block answer: ${line}`);
     }, { headers: { Cookie: ADMIN_COOKIE, "X-Mandu-Control": "1" }, css: styles });
 
     // ── S3: the routes the page reads, signed out ──

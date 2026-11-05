@@ -21,6 +21,11 @@
  *   S6  each outcome is drawn in the words the server searches
  *       (ANSWERED_OUTCOME_WORDS), so "blocked" finds the rows that say
  *       Blocked.
+ *   S7  *None found is said*: while a search finds none, the status line
+ *       holds the list's "No answer matches “…”." (no Clear), `.sr-only`
+ *       and not hidden, so a screen reader announces it; a poll that finds
+ *       none again leaves its text node as it was; a search that finds some
+ *       shows the count, seen; Clear empties the line and hides it.
  */
 
 import { test } from "node:test";
@@ -83,7 +88,7 @@ test("S1: typing reads after the typing stops; the matches, their count, ?q= in 
   assert.equal(window.location.pathname + window.location.search, "/mandu/approvals?q=pastebin");
   assert.equal(window.history.length, entries, "the address is replaced, not pushed");
   assert.equal(doc.activeElement, box(doc), "the focus stays in the box");
-  for (const r of rows(doc)) assert.equal(r.querySelector("button").textContent, "Allow instead", "each found row keeps its reversal");
+  for (const r of rows(doc)) assert.equal(r.querySelector("button").textContent, "Always allow instead", "each found row keeps its reversal");
   // One match: "1 of 63 answers matches".
   const one = load({ extensions: "", url: URL + "?q=KEY_5", homeVm: vm(), routes: { "GET home/answered?limit=20&q=KEY_5": found([ALL[5]], 1, null, "key_5") } });
   await tick();
@@ -122,7 +127,9 @@ test("S3: no match says so with Clear, which empties the box and the address and
   assert.equal(rows(doc).length, 0);
   const empty = doc.querySelector("#approvals-answered .empty");
   assert.equal(empty.textContent, "No answer matches “nowhere”. Clear");
-  assert.equal(count(doc).hidden, true, "no count line when nothing matched: the list says so");
+  assert.equal(count(doc).hidden, false, "the status line says it too");
+  assert.equal(count(doc).classList.contains("sr-only"), true, "to a screen reader only: on screen the list says so");
+  assert.equal(count(doc).textContent, "No answer matches “nowhere”.");
   empty.querySelector("button.history-clear").click();
   await tick();
   assert.equal(box(doc).value, "");
@@ -193,4 +200,35 @@ test("S6: each outcome is drawn in the words the server searches", async () => {
   const drawn = rows(doc);
   assert.equal(drawn.length, outcomes.length);
   outcomes.forEach((o, i) => assert.equal(drawn[i].querySelector(".outcome").textContent, ANSWERED_OUTCOME_WORDS[o], `the ${o} row`));
+});
+
+test("S7: none found is said to a screen reader, once; a search that finds some shows its count; Clear empties the line", async () => {
+  const { doc, calls } = load({ extensions: "", url: `${URL}?q=nowhere`, homeVm: vm(), routes: {
+    "GET home/answered?limit=20&q=nowhere": found([], 0, null, "nowhere"),
+    "GET home/answered?limit=20&q=pastebin": found(PASTE.slice(0, 20), 21, PASTE[19]!.id),
+  } });
+  await tick();
+  const line = count(doc);
+  assert.equal(line.textContent, "No answer matches “nowhere”.");
+  assert.equal(line.hidden, false, "shown, so its change is announced");
+  assert.equal(line.classList.contains("sr-only"), true);
+  const said = line.firstChild;
+  const before = reads(calls).length;
+  await poll(doc);
+  assert.deepEqual(reads(calls).slice(before), ["home/answered?limit=20&q=nowhere"], "the poll read the search again");
+  assert.equal(line.firstChild, said, "a poll that finds none again does not write the line again");
+  type(doc, "pastebin");
+  await settle();
+  assert.equal(line.textContent, "21 of 63 answers match");
+  assert.equal(line.hidden, false);
+  assert.equal(line.classList.contains("sr-only"), false, "a count is seen, as before");
+  type(doc, "nowhere");
+  await settle();
+  assert.equal(line.textContent, "No answer matches “nowhere”.");
+  assert.equal(line.classList.contains("sr-only"), true, "none again: said again");
+  doc.querySelector("#approvals-answered button.history-clear").click();
+  await tick();
+  assert.equal(line.textContent, "");
+  assert.equal(line.hidden, true);
+  assert.equal(line.classList.contains("sr-only"), false);
 });

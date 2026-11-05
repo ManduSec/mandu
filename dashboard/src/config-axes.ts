@@ -248,6 +248,14 @@ function safeRead(p: string): string | null {
   }
 }
 
+/** The resolved config file's text (resolveConfigPath), or null when there
+ *  is none or it cannot be read: Home's poll reads it once for the
+ *  Protection card's mode and About Mandu's `update-check` key. */
+export function readConfigText(env: Env): string | null {
+  const path = resolveConfigPath(env);
+  return path ? safeRead(path) : null;
+}
+
 /** The full §4.19 GET shape for the resolved config file. A missing/unreadable
  *  file reads as "nothing configured" (all nulls) — the defaults then rule,
  *  which is exactly what a cold arbiter start would run. */

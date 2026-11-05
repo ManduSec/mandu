@@ -122,7 +122,7 @@ test("render: every section, tilde paths, the resolved spelling, the ledger with
   assert.match(out, /a dry run: nothing registered, no agent started/);
   assert.match(out, /roots: ~, ~\/ws/);
   assert.match(out, /✓ credential files are protected \(posture: confined\)/);
-  assert.match(out, /placeholder copy of each credential file/);
+  assert.match(out, /masked copy of each credential file/);
   assert.match(out, /Checked by: the running Mandu service at \/run\/a\.sock \(secret protection on\)/);
   assert.match(out, /Would be masked: 3 credential files/);
   assert.match(out, /✓ ~\/\.ssh\/id_ed25519 → \/mnt\/keys\/real-key\s+no AI\s+catalog:ssh/);

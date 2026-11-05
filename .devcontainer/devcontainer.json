@@ -1,0 +1,17 @@
+// Try Mandu without installing it: the README's "Open in GitHub Codespaces"
+// opens this container (docs/getting-started.md, "Try it in a codespace";
+// docs/design/distribution/packaging.md §3.1). Any devcontainer host
+// (VS Code Dev Containers, the devcontainer CLI) opens it too.
+//
+// No privileged mode, no added capabilities, no runArgs: Mandu never needs
+// root, and what this container's kernel allows (Landlock, seccomp, user
+// namespaces) `mandu doctor` reports.
+{
+  "name": "Try Mandu",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteUser": "node",
+  "postAttachCommand": "echo 'Mandu is installed. Run: mandu demo (about a minute, offline, no API key). Then: mandu doctor'",
+  "customizations": {
+    "codespaces": { "openFiles": ["docs/getting-started.md"] }
+  }
+}

@@ -10,7 +10,7 @@
    Theme: light by default, dark follows the system. A page may pin one with
    `data-theme="light" | "dark"` on <html>: both pages set it from one stored
    choice (`mandu.theme` in the browser), the product's Settings › Appearance
-   and the inspector's Appearance row.
+   and the inspector's Appearance row. A print is always light.
 
    Fonts are self-hosted from fonts/ (latin subset, woff2, SIL OFL 1.1; the
    licenses sit beside the files): the dashboard runs on loopback, offline,
@@ -30,6 +30,11 @@
   --panel: #ffffff;
   --panel-2: #fbfaf6;
   --line: #dedcd3;
+  /* The edge of a place to type or choose (a text box, a search box, a text
+     area, a menu): 3:1 on every ground a field is drawn on, a ticked row's
+     tint too (WCAG 1.4.11; dashboard.md *Every field's edge reads 3:1*).
+     --line stays the dividers', the cards' and the buttons' edge. */
+  --field-line: #8a8880;
   --line-2: #ecebe4;
   --ink: #1c1c20;
   --ink-2: #3d3d44;
@@ -39,7 +44,7 @@
   --accent-ink: #164767;
   --ok: #1b7448;
   --ok-bg: #dcefe3;
-  --warn: #a35d00;
+  --warn: #985700;
   --warn-bg: #fbeedb;
   --warn-line: #e8c48f;
   --bad: #b4342a;
@@ -70,6 +75,7 @@
     --panel: #1f2126;
     --panel-2: #1b1d21;
     --line: #34363d;
+    --field-line: #787a82;
     --line-2: #2a2c32;
     --ink: #ecebe6;
     --ink-2: #cfcec8;
@@ -101,6 +107,7 @@
   --panel: #1f2126;
   --panel-2: #1b1d21;
   --line: #34363d;
+  --field-line: #787a82;
   --line-2: #2a2c32;
   --ink: #ecebe6;
   --ink-2: #cfcec8;
@@ -124,6 +131,44 @@
   --pink: #e38ab6;
   --purple: #b39cef;
   --cyan: #6fc3d9;
+}
+/* On paper, the light palette (dashboard.md §4.25b, 2026-10-26): a page
+   printed or saved as PDF reads dark on white whatever the theme on screen.
+   The light :root values again; `:root:root:root` outranks both dark rules
+   above whatever their order. css-print-palette.test.ts keeps it equal to
+   the light block, so a new palette variable goes in both. */
+@media print {
+  :root:root:root {
+    color-scheme: light;
+    --bg: #f4f3ee;
+    --panel: #ffffff;
+    --panel-2: #fbfaf6;
+    --line: #dedcd3;
+    --field-line: #8a8880;
+    --line-2: #ecebe4;
+    --ink: #1c1c20;
+    --ink-2: #3d3d44;
+    --ink-3: #5a5a62;
+    --ink-4: #6c6c74;
+    --accent: #1f5f8b;
+    --accent-ink: #164767;
+    --ok: #1b7448;
+    --ok-bg: #dcefe3;
+    --warn: #985700;
+    --warn-bg: #fbeedb;
+    --warn-line: #e8c48f;
+    --bad: #b4342a;
+    --bad-bg: #f6dcd9;
+    --bad-line: #e2a9a3;
+    --ok-line: #9fcfb2;
+    --key: #a07400;
+    --code-bg: #f0efe8;
+    --code-ink: #6b3fa0;
+    --sym: #7a6400;
+    --pink: #a23a72;
+    --purple: #6a4ea8;
+    --cyan: #16708a;
+  }
 }
 
 * { box-sizing: border-box; }

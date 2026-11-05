@@ -28,7 +28,12 @@
  *      OWN model factory (productionAssistantModel, the real inspect-mcp
  *      selector) with no API key and a PATH holding no claude/codex answers
  *      503 `{unconfigured, reason: "no-channel"}` in plain words, and nothing
- *      is written to the policy, nothing filed.
+ *      is written to the policy, nothing filed;
+ *   7. which AI reads the box (dashboard.md, *Describe says which AI reads
+ *      your words*): the same production selection behind
+ *      `GET /api/policy/assistant/channel` answers `no-channel` with no key
+ *      and no CLI, and `claude` (the enum only) with a fake `claude` on
+ *      PATH, which it never runs.
  */
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -281,6 +286,60 @@ test("Describe box with no helper: the production model factory, no key and no c
     await server.close();
     wired.close();
     admin.close();
+    await arbiter.close();
+  }
+});
+
+test("Describe says which AI reads the box: the production channel read, no key and no claude/codex ⇒ no-channel; a claude on PATH ⇒ claude, never spawned", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-dash-assistant-channel-"));
+  dirs.push(dir);
+  const dataSock = join(dir, "arbiter.sock");
+  const adminSock = join(dir, "admin.sock");
+  const policyPath = join(dir, "policy.yaml");
+  writeFileSync(policyPath, "version: 1\n");
+  const arbiter = new ArbiterServer({
+    socketPath: dataSock, adminSocketPath: adminSock, dbPath: join(dir, "mandu.db"), eventDir: join(dir, "events"),
+    policyPath, policyPollMs: 0, integrity: true, confidentiality: true, log: () => {},
+  });
+  await arbiter.listen();
+  const wired = await makeApprovalsArbiter(dataSock, () => ({ socketPath: adminSock }));
+  assert.ok(wired?.policyDoc);
+  // No `assistantModel`, no `assistantChannel`: the server's own selection
+  // over process.env, read at the request.
+  const HELPER_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "MANDU_ULLM_MODE", "MANDU_ULLM_MODULE", "MANDU_ULLM_BINARY", "MANDU_ULLM_BINARY_PATH", "MANDU_ULLM_FORWARDER", "MANDU_ULLM_MODEL", "PATH"];
+  const saved = new Map(HELPER_ENV.map((k) => [k, process.env[k]]));
+  const restore = () => { for (const [k, v] of saved) if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+  // A PATH of our own: a `which` that finds only what is in this directory
+  // (shell only: nothing else is on this PATH), and, for the second read, a `claude` that leaves a mark if it is run.
+  const bin = mkdtempSync(join(dir, "bin-"));
+  const ran = join(dir, "claude-ran");
+  writeFileSync(join(bin, "which"), '#!/bin/sh\n[ -x "${0%/*}/$1" ]\n', { mode: 0o755 });
+  const server = new DashboardServer({ source: fakeSource, policyDocArbiter: wired.policyDoc, log: () => {}, ...ADMIN_OPTS });
+  const port = await server.listen(0);
+  const read = async () => {
+    for (const k of HELPER_ENV) delete process.env[k];
+    process.env["PATH"] = bin;
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/api/policy/assistant/channel`, { headers: CSRF_ADMIN });
+      return { status: r.status, text: await r.text() };
+    } finally {
+      restore();
+    }
+  };
+  try {
+    const none = await read();
+    assert.equal(none.status, 200, none.text);
+    assert.deepEqual(JSON.parse(none.text), { ready: false, reason: "no-channel" });
+    writeFileSync(join(bin, "claude"), `#!/bin/sh\necho ran > ${JSON.stringify(ran)}\n`, { mode: 0o755 });
+    const claude = await read();
+    assert.equal(claude.status, 200, claude.text);
+    assert.deepEqual(JSON.parse(claude.text), { ready: true, via: "claude" }, "the enum only: no path, no model");
+    assert.throws(() => readFileSync(ran), "the channel read never runs the CLI");
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/policy/assistant/channel`)).status, 403, "an admin read");
+  } finally {
+    restore();
+    await server.close();
+    wired.close();
     await arbiter.close();
   }
 });

@@ -27,6 +27,22 @@
  * A finding under a locked administrator's row that is not `ask` has no
  * let-through button and says why (`lockedWhy`, work ledger P1, 2026-10-07).
  *
+ * Pins, Try a message (dashboard.md §4.25y *Try a message*): the fold posts
+ * the typed text alone to the try route with the page's control header;
+ * each found span of the typed text is marked and its line names the kind
+ * (the server's words) and what would happen to it; no finding says
+ * "Nothing in it …"; protection off says Mandu would only note these; an
+ * exception in force is said under the answer; a refusal is drawn as text;
+ * the fold is hidden while the card is unread; server text is text and no
+ * `$MDU:` string reaches the page, even one the server sent by mistake.
+ * The answer follows the card (*The answer follows the card*, queue item
+ * #255): a change made on it (a kind's choice, its Undo, an exception added)
+ * asks again for the text that was tried, not the box's, and redraws in
+ * place; with no answer drawn, or a refusal, nothing is asked; a re-ask that
+ * fails keeps the answer with one line saying it is from before the change,
+ * never an error; a change while Try it is out asks again once it answers,
+ * and never leaves Try it off; Ctrl+Enter / Cmd+Enter press Try it.
+ *
  * Axes: none (display only).
  */
 import { test } from "node:test";
@@ -90,9 +106,8 @@ test("Settings › Prompt filters: each kind with its choice and who set it; a l
   assert.match(doc.getElementById("settings-prompt-dev").getAttribute("href"), /\/mandu\/dev\/rules$/);
 });
 
-test("a choice sends one typed edit; a relaxation asks first and resends what was shown; a lock's refusal is said on the row", async () => {
+test("a choice sends one typed edit; a relaxation asks first, under the row, and Apply anyway resends what was shown; a lock's refusal is said on the row", async () => {
   const posts: any[] = [];
-  const asked: string[] = [];
   const page = load({ url: SETTINGS_URL, routes: {
     "GET policy/prompt-filters": { settings: VM },
     "POST policy/prompt-filters/change": (b: any) => {
@@ -104,23 +119,27 @@ test("a choice sends one typed edit; a relaxation asks first and resends what wa
       return { applied: true, changeId: "pc-9" };
     },
   } });
-  page.window.confirm = (q: string) => (asked.push(q), true);
   await tick();
   const sel = kindRow(page.doc, "secret.registered").querySelector("select");
   sel.value = "block";
   sel.dispatchEvent(new page.window.Event("change"));
   await tick();
   assert.deepEqual(posts.shift(), { edit: { op: "set-prompt-action", category: "secret.registered", action: "block" } });
-  assert.equal(asked.length, 0, "a tightening is not asked about");
+  assert.equal(page.doc.querySelector("#settings-prompt-kinds .ask-in-place"), null, "a tightening is not asked about");
   assert.match(page.doc.getElementById("prompt-notice").textContent, /A secret Mandu already knows: Block the message\. It applies to your next message\.Undo/);
 
   const sel2 = kindRow(page.doc, "secret.registered").querySelector("select");
   sel2.value = "log";
   sel2.dispatchEvent(new page.window.Event("change"));
   await tick();
-  assert.equal(asked.length, 1);
-  assert.match(asked[0]!, /In your prompts, secret\.registered is only recorded\./);
-  assert.match(asked[0]!, /Your prompts would carry more to the AI/);
+  const box = kindRow(page.doc, "secret.registered").nextElementSibling;
+  assert.ok(box.classList.contains("ask-in-place"), "asked under the row");
+  assert.equal(box.querySelector(".ask-in-place-words").textContent, "In your prompts, secret.registered is only recorded.");
+  assert.deepEqual([...box.querySelectorAll(".ask-in-place-list li")].map((li: any) => li.textContent), ["Your prompts would carry more to the AI"]);
+  assert.deepEqual([...box.querySelectorAll("button")].map((b: any) => b.textContent), ["Apply anyway", "Cancel"]);
+  assert.equal(posts.length, 1, "nothing more until Apply anyway");
+  box.querySelector(".ask-in-place-yes").click();
+  await tick();
   assert.deepEqual(posts.splice(0), [
     { edit: { op: "set-prompt-action", category: "secret.registered", action: "log" } },
     { edit: { op: "set-prompt-action", category: "secret.registered", action: "log" }, expected: ["k"] },
@@ -133,7 +152,7 @@ test("a choice sends one typed edit; a relaxation asks first and resends what wa
   assert.match(kindRow(page.doc, "secret.shape").textContent, /set by your administrator \(\/etc\/mandu\/policy\.d\/10-org\.yaml\)/);
 });
 
-test("declining the question changes nothing; Use the default, Remove and Add send their edits", async () => {
+test("Cancel at the question changes nothing; Use the default, Remove and Add send their edits", async () => {
   const posts: any[] = [];
   const page = load({ url: SETTINGS_URL, routes: {
     "GET policy/prompt-filters": { settings: VM },
@@ -142,16 +161,28 @@ test("declining the question changes nothing; Use the default, Remove and Add se
       : { applied: true, changeId: "pc-1" }),
   } });
   await tick();
-  page.window.confirm = () => false;
-  (page.doc.getElementById("prompt-exception-match") as any).value = "*@corp.example";
+  const form = page.doc.getElementById("prompt-exception-form");
+  const match = page.doc.getElementById("prompt-exception-match") as any;
+  match.value = "*@corp.example";
   (page.doc.getElementById("prompt-exception-kind") as any).value = "pii.email";
-  page.doc.getElementById("prompt-exception-form").dispatchEvent(new page.window.Event("submit", { cancelable: true }));
+  form.dispatchEvent(new page.window.Event("submit", { cancelable: true }));
   await tick();
-  assert.deepEqual(posts.splice(0), [{ edit: { op: "add-prompt-exception", category: "pii.email", match: "*@corp.example" } }], "declined: not resent");
-  page.window.confirm = () => true;
-  page.doc.getElementById("prompt-exception-form").dispatchEvent(new page.window.Event("submit", { cancelable: true }));
+  // Asked in the form, above its button (dashboard.md §4.25n).
+  let box = form.querySelector(".ask-in-place");
+  assert.equal(box.nextElementSibling, form.querySelector(".form-actions"));
+  assert.equal(box.querySelector(".ask-in-place-words").textContent, "Let it through.");
+  [...box.querySelectorAll("button")].find((b: any) => b.textContent === "Cancel").click();
+  await tick();
+  assert.deepEqual(posts.splice(0), [{ edit: { op: "add-prompt-exception", category: "pii.email", match: "*@corp.example" } }], "Cancel: not resent");
+  assert.equal(form.querySelector(".ask-in-place"), null);
+  assert.equal(match.value, "*@corp.example", "Cancel keeps what was typed");
+  form.dispatchEvent(new page.window.Event("submit", { cancelable: true }));
+  await tick();
+  box = form.querySelector(".ask-in-place");
+  box.querySelector(".ask-in-place-yes").click();
   await tick();
   assert.deepEqual(posts.splice(0).map((p) => p.expected ?? null), [null, ["x"]]);
+  assert.equal(match.value, "", "added: the box is empty again");
   kindRow(page.doc, "pii.email").querySelector(".prompt-reset-btn").click();
   await tick();
   assert.deepEqual(posts.splice(0), [{ edit: { op: "remove-prompt-action", category: "pii.email" } }]);
@@ -320,15 +351,22 @@ const AGENT_WITH_NOTES = {
   unplacedNotes: [UNSENT],
 };
 const AGENT_URL = "http://127.0.0.1:4500/mandu/agents/s1";
+/** Let it through on a note's row: its button opens the question in the
+ *  row (dashboard.md §4.25y), and the question's own Let it through sends. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function letThrough(item: any, which: ".prompt-let-once" | ".prompt-let-session"): Promise<void> {
+  item.querySelector(which).click();
+  await tick();
+  item.querySelector(".ask-in-place .ask-in-place-yes").click();
+  await tick();
+}
 
-test("the note: its lines under your message; Let it through asks, then names the finding to the let-through route", async () => {
+test("the note: its lines under your message; Let it through asks in the note, then names the finding to the let-through route", async () => {
   const posts: any[] = [];
-  const asked: string[] = [];
   const page = load({ url: AGENT_URL, routes: {
     "GET home/agent?session=s1": AGENT_WITH_NOTES,
     "POST prompt-filters/let-through": (b: any) => (posts.push(b), { approval: { id: "egr-3" }, scope: b.scope }),
   } });
-  page.window.confirm = (q: string) => (asked.push(q), true);
   await tick();
   const turn = page.doc.querySelector('#agent-story article.turn[data-turn-id="turn:i1"]');
   const note = turn.querySelector(".turn-q .prompt-note");
@@ -337,35 +375,81 @@ test("the note: its lines under your message; Let it through asks, then names th
   const items = [...note.querySelectorAll(".prompt-note-item")] as any[];
   assert.equal(items.length, 1, "a finding with nothing to do shows no row");
   assert.match(items[0].textContent, /^An email address/);
-  items[0].querySelector(".prompt-let-session").click();
+  const session = items[0].querySelector(".prompt-let-session");
+  session.focus();
+  session.click();
   await tick();
-  assert.equal(asked.length, 1);
-  assert.match(asked[0]!, /Let an email address through for the rest of this session\?/);
+  const box = items[0].querySelector(".ask-in-place");
+  assert.ok(box, "asked in the row of the note");
+  assert.equal(box.querySelector(".ask-in-place-words").textContent,
+    "Let an email address through for the rest of this session? The AI reads it as you wrote it in every message of this session.");
+  assert.equal(page.doc.activeElement, box.querySelector(".ask-in-place-words"), "the sentence has the focus, never Let it through");
+  assert.deepEqual([...box.querySelectorAll("button")].map((b: any) => b.textContent), ["Let it through", "Cancel"]);
+  assert.deepEqual(posts, [], "nothing is sent until the second press");
+  box.querySelector(".ask-in-place-yes").click();
+  await tick();
   assert.deepEqual(posts, [{ session: "s1", eventId: "ev-<i>1</i>", index: 0, scope: "session" }]);
+  assert.equal(items[0].querySelector(".ask-in-place"), null, "the question goes");
   assert.equal(items[0].querySelector(".prompt-let-once"), null, "answered: the buttons go");
   assert.match(items[0].textContent, /Let through for this session\./);
   assert.equal(page.doc.querySelector("#agent-story i"), null);
   assert.ok(!page.doc.body.textContent.includes("$MDU:"));
 });
 
-test("the note: declining changes nothing; a refusal is said; Show what was hidden fetches the original on a click, as text", async () => {
+test("the note: a poll that draws the story again keeps the question in the row, its sentence holding the focus", async () => {
+  let reads = 0;
+  const page = load({ url: AGENT_URL, routes: {
+    // Each read differs (a field the page does not show), so each poll
+    // draws the story again.
+    "GET home/agent?session=s1": () => ({ ...AGENT_WITH_NOTES, read: ++reads }),
+  } });
+  await tick();
+  const once = page.doc.querySelector("#agent-story .prompt-note-item .prompt-let-once");
+  once.focus();
+  once.click();
+  await tick();
+  const before = page.doc.querySelector("#agent-story .ask-in-place");
+  const was = reads;
+  Object.defineProperty(page.doc, "visibilityState", { value: "visible", configurable: true });
+  page.doc.dispatchEvent(new page.window.Event("visibilitychange"));
+  await tick(40);
+  assert.ok(reads > was, "the poll read the page");
+  const after = page.doc.querySelector("#agent-story .prompt-note-item .ask-in-place");
+  assert.ok(after, "the question is drawn again");
+  assert.notEqual(after, before, "in the new story");
+  assert.equal(page.doc.activeElement, after.querySelector(".ask-in-place-words"), "the focus on its sentence again");
+});
+
+test("the note: Cancel and Escape change nothing; a refusal is said; Show what was hidden fetches the original on a click, as text", async () => {
   const posts: any[] = [];
   const page = load({ url: AGENT_URL, routes: {
     "GET home/agent?session=s1": AGENT_WITH_NOTES,
     "POST prompt-filters/let-through": (b: any) => (posts.push(b), { status: 409, body: { error: "this finding cannot be let through" } }),
     "POST prompt-filters/reveal": (b: any) => (posts.push(b), { original: "<img src=x onerror=alert(1)>me@corp.example" }),
   } });
-  page.window.confirm = () => false;
   await tick();
   const item = page.doc.querySelector("#agent-story .prompt-note-item");
-  item.querySelector(".prompt-let-once").click();
+  const once = item.querySelector(".prompt-let-once");
+  once.focus();
+  once.click();
   await tick();
-  assert.deepEqual(posts, [], "declined: nothing sent");
-  page.window.confirm = () => true;
-  item.querySelector(".prompt-let-once").click();
+  assert.equal(item.querySelector(".ask-in-place-words").textContent,
+    "Let an email address through in this message? The AI reads it as you wrote it from the agent's next request on.");
+  [...item.querySelectorAll(".ask-in-place button")].find((b: any) => b.textContent === "Cancel").click();
   await tick();
+  assert.equal(item.querySelector(".ask-in-place"), null);
+  assert.equal(page.doc.activeElement, once, "Cancel gives the focus back to the button that asked");
+  once.click();
+  await tick();
+  item.querySelector(".ask-in-place-words").dispatchEvent(new page.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  await tick();
+  assert.equal(item.querySelector(".ask-in-place"), null, "Escape is Cancel");
+  assert.equal(page.doc.activeElement, once);
+  assert.deepEqual(posts, [], "Cancel: nothing sent");
+  await letThrough(item, ".prompt-let-once");
   assert.deepEqual(posts.splice(0), [{ session: "s1", eventId: "ev-<i>1</i>", index: 0, scope: "once" }]);
   assert.match(item.textContent, /this finding cannot be let through/);
+  assert.equal(page.doc.activeElement, once, "the answer is said on the row, the focus on the button that asked");
   const pre = page.doc.querySelector("#agent-story .prompt-hidden-text");
   assert.equal(pre.hidden, true);
   assert.equal(pre.textContent, "", "the page has no original before the click");
@@ -395,7 +479,6 @@ test("the note under a locked administrator's ask row: no session button, the re
     "GET home/agent?session=s1": { ...AGENT_WITH_NOTES, story: [{ ...AGENT.story[0], promptNote: locked }, { ...AGENT.story[1], promptNote: null }] },
     "POST prompt-filters/let-through": (b: any) => (posts.push(b), { approval: { id: "egr-4" }, scope: b.scope }),
   } });
-  page.window.confirm = () => true;
   await tick();
   const items = [...page.doc.querySelectorAll("#agent-story .prompt-note-item")] as any[];
   assert.equal(items.length, 2);
@@ -404,8 +487,7 @@ test("the note under a locked administrator's ask row: no session button, the re
   assert.equal(page.doc.querySelector("#agent-story .prompt-note-item b"), null);
   assert.equal(items[1].querySelector(".prompt-let-once"), null);
   assert.equal(items[1].querySelector(".prompt-let-once-only").textContent, WHY);
-  items[0].querySelector(".prompt-let-once").click();
-  await tick();
+  await letThrough(items[0], ".prompt-let-once");
   assert.deepEqual(posts, [{ session: "s1", eventId: "ev-2", index: 0, scope: "once" }]);
   assert.equal(items[0].querySelector(".prompt-let-once-only"), null, "answered: the reason goes with the buttons");
   assert.match(items[0].textContent, /Let through in this message\./);
@@ -427,7 +509,6 @@ test("the note under a locked administrator's row that is not ask: no let-throug
     "GET home/agent?session=s1": { ...AGENT_WITH_NOTES, story: [{ ...AGENT.story[0], promptNote: locked }, { ...AGENT.story[1], promptNote: null }] },
     "POST prompt-filters/let-through": (b: any) => (posts.push(b), { approval: { id: "egr-5" }, scope: b.scope }),
   } });
-  page.window.confirm = () => true;
   await tick();
   const items = [...page.doc.querySelectorAll("#agent-story .prompt-note-item")] as any[];
   assert.equal(items.length, 3, "a locked finding keeps its row, to say why");
@@ -441,8 +522,7 @@ test("the note under a locked administrator's row that is not ask: no let-throug
   assert.equal(items[1].querySelector(".prompt-let-locked").textContent, HIDDEN);
   assert.ok(items[1].querySelector(".prompt-reveal"), "Show what was hidden lets nothing through: it stays");
   assert.equal(items[2].querySelector(".prompt-let-locked"), null, "an unlocked kind says no lock");
-  items[2].querySelector(".prompt-let-once").click();
-  await tick();
+  await letThrough(items[2], ".prompt-let-once");
   assert.deepEqual(posts, [{ session: "s1", eventId: "ev-3", index: 2, scope: "once" }]);
 });
 
@@ -452,4 +532,249 @@ test("a message that never reached the AI is its own card, placed by its time", 
   const cards = [...page.doc.querySelectorAll("#agent-story article.turn")] as any[];
   assert.deepEqual(cards.map((c) => c.dataset.turnId ?? "unsent"), ["turn:i1", "unsent", "turn:i2"]);
   assert.match(cards[1].textContent, /A message you wrote.*Your message was not sent to the AI: it holds a card number\./);
+});
+
+// ── Try a message ────────────────────────────────────────────────────────────
+const TRY_TEXT = "mail ann@corp.test the key sk-123";
+/** Type `text` into the box and press Try it. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function tryMessage(page: any, text: string): Promise<void> {
+  page.doc.getElementById("prompt-try-text").value = text;
+  page.doc.getElementById("prompt-try-form").dispatchEvent(new page.window.Event("submit", { cancelable: true }));
+  await tick();
+}
+
+test("Try a message: the typed text with each found span marked, one line per finding naming its kind and what would happen", async () => {
+  const posts: unknown[] = [];
+  const page = load({ url: SETTINGS_URL, routes: {
+    "GET policy/prompt-filters": { settings: VM },
+    "POST policy/prompt-filters/try": (b: unknown) => (posts.push(b), {
+      enforcing: true, action: "rewrite",
+      findings: [
+        // out of order, and one carrying a symbol the page must never draw
+        { start: 27, end: 33, category: "acme.<b>key</b>", name: "acme.<b>key</b>", named: true, action: "block", symbol: "$MDU:prompt_filter[1a2b3c4d]" },
+        { start: 5, end: 18, category: "pii.email", name: "An email address", named: false, action: "mask" },
+      ],
+    }),
+  } });
+  await tick();
+  const fold = page.doc.getElementById("settings-prompt-try");
+  assert.equal(fold.hidden, false);
+  assert.match(fold.textContent, /Nothing is sent to an AI, and nothing is kept/);
+  assert.equal(page.doc.getElementById("prompt-try-text").getAttribute("maxlength"), "65536", "the bench's BENCH_MAX_CHARS");
+  await tryMessage(page, TRY_TEXT);
+  assert.deepEqual(posts, [{ text: TRY_TEXT }], "the text alone: the server fixes the origin");
+  const call = page.calls.find((c) => c.url === "/mandu/api/policy/prompt-filters/try");
+  assert.equal(call?.headers["X-Mandu-Control"], "1");
+  const said = page.doc.querySelector("#prompt-try-answer .prompt-try-said");
+  assert.equal(said.textContent, TRY_TEXT, "the typed text again, whole");
+  assert.deepEqual([...said.querySelectorAll("mark")].map((m: any) => m.textContent), ["ann@corp.test", "sk-123"]);
+  const lines = [...page.doc.querySelectorAll("#prompt-try-answer .prompt-try-line")].map((l: any) => l.textContent);
+  assert.deepEqual(lines, [
+    "An email address: hidden. The AI would get a short code in its place.",
+    "acme.<b>key</b>: blocked. The message would not be sent.",
+  ]);
+  assert.equal(page.doc.querySelector("#prompt-try-answer .prompt-try-line code").textContent, "acme.<b>key</b>", "an organization's kind as code, as text");
+  assert.equal(page.doc.querySelector("#page-settings b"), null, "server text is never HTML");
+  assert.match(page.doc.getElementById("prompt-try-answer").textContent, /What matches one of your exceptions is not marked/);
+  assert.equal(page.doc.querySelector(".prompt-try-off"), null);
+  assert.ok(!page.doc.body.textContent.includes("$MDU:"), "no symbol on the page");
+  assert.ok(!page.doc.body.innerHTML.includes("$MDU:"), "not even in an attribute");
+  assert.equal(page.doc.getElementById("prompt-try-text").value, TRY_TEXT, "the text stays in the box");
+});
+
+test("Try a message: nothing found says so; protection off says Mandu would only note these; a refusal is text", async () => {
+  let answer: unknown = { enforcing: true, action: "pass", findings: [] };
+  const page = load({ url: SETTINGS_URL, routes: { "GET policy/prompt-filters": { settings: DEFAULT_VM }, "POST policy/prompt-filters/try": () => answer } });
+  await tick();
+  await tryMessage(page, "hello there");
+  const box = page.doc.getElementById("prompt-try-answer");
+  assert.equal(box.hidden, false);
+  assert.equal(box.textContent, "Nothing in it would be held or masked.", "no exception in force: no exception line");
+
+  answer = { enforcing: false, action: "pass", findings: [{ start: 0, end: 5, category: "secret.registered", name: "A secret Mandu already knows", named: false, action: "log" }] };
+  await tryMessage(page, "hunter2 is it");
+  assert.match(box.textContent, /A secret Mandu already knows: sent as written\. Mandu would only note it\./);
+  assert.match(page.doc.querySelector(".prompt-try-off").textContent, /^Protection is off, so Mandu would only note these\.$/);
+
+  answer = { enforcing: true, action: "block", reason: "Mandu could not check this prompt: the prompt filter acme did not run.", findings: [] };
+  await tryMessage(page, "anything");
+  assert.equal(box.textContent, "Mandu could not check this prompt: the prompt filter acme did not run.");
+
+  answer = { status: 413, body: { error: "The message is <i>longer</i> than 65,536 characters." } };
+  await tryMessage(page, "x");
+  assert.equal(box.hidden, true, "a refusal replaces the answer");
+  assert.equal(page.doc.getElementById("prompt-try-error").textContent, "The message is <i>longer</i> than 65,536 characters.");
+  assert.equal(page.doc.querySelector("#page-settings i"), null);
+
+  const before = page.calls.length;
+  await tryMessage(page, "   ");
+  assert.equal(page.calls.length, before, "an empty box asks nothing");
+  assert.equal(page.doc.getElementById("prompt-try-error").textContent, "Type a message to try.");
+});
+
+test("Try a message is hidden while the card cannot be read, as Exceptions is", async () => {
+  const bad = load({ url: SETTINGS_URL, routes: { "GET policy/prompt-filters": { status: 502, body: { error: "The protection service did not answer." } } } });
+  await tick();
+  assert.equal(bad.doc.getElementById("settings-prompt-try").hidden, true);
+  assert.equal(bad.doc.getElementById("settings-prompt-exceptions-head").hidden, true);
+});
+
+// ── Try a message follows the card (dashboard.md §4.25y *The answer follows the card*) ──
+const TRIED = "mail ann@example.com today";
+const EMAIL = (action: string) => ({ enforcing: true, action: "rewrite", findings: [{ start: 5, end: 20, category: "pii.email", name: "An email address", named: false, action }] });
+const NO_EXC_VM = promptSettingsVM({ ...PROJ, exceptions: [] });
+const tryPosts = (page: any): unknown[] => page.calls.filter((c: any) => c.url === "/mandu/api/policy/prompt-filters/try").map((c: any) => c.body);
+const answerLines = (doc: any): string[] => ([...doc.querySelectorAll("#prompt-try-answer .prompt-try-line")] as any[]).map((l) => l.textContent);
+
+test("Try a message follows the card: an exception added there asks again for the tried text, not the box's, and the new answer ends with the exceptions line", async () => {
+  let vm = NO_EXC_VM;
+  const page = load({ url: SETTINGS_URL, routes: {
+    "GET policy/prompt-filters": () => ({ settings: vm }),
+    "POST policy/prompt-filters/change": (b: any) => b.expected
+      ? (vm = VM, { applied: true, changeId: "pc-2" })
+      : { applied: false, confirm: true, expected: ["e"], rows: [[{ kind: "text", text: "Let it through" }]], wouldLet: [], warnings: [] },
+    "POST policy/prompt-filters/try": () => (tryPosts(page).length === 1 ? EMAIL("mask") : { enforcing: true, action: "pass", findings: [] }),
+  } });
+  await tick();
+  await tryMessage(page, TRIED);
+  const box = page.doc.getElementById("prompt-try-answer");
+  assert.deepEqual(answerLines(page.doc), ["An email address: hidden. The AI would get a short code in its place."]);
+  assert.equal(page.doc.querySelector(".prompt-try-except"), null, "no exception in force yet");
+  // The box is edited after the try: the answer is still about what was tried.
+  page.doc.getElementById("prompt-try-text").value = "something else";
+  const form = page.doc.getElementById("prompt-exception-form");
+  (page.doc.getElementById("prompt-exception-kind") as any).value = "pii.email";
+  (page.doc.getElementById("prompt-exception-match") as any).value = "*@example.com";
+  form.dispatchEvent(new page.window.Event("submit", { cancelable: true }));
+  await tick();
+  assert.equal(tryPosts(page).length, 1, "the question alone asks nothing again");
+  form.querySelector(".ask-in-place .ask-in-place-yes").click();
+  await tick(20);
+  assert.deepEqual(tryPosts(page), [{ text: TRIED }, { text: TRIED }], "asked again with the tried text, with no second press");
+  assert.equal(box.hidden, false);
+  assert.equal(page.doc.querySelector("#prompt-try-answer mark"), null, "the address is no longer marked");
+  assert.equal(box.lastElementChild.className, "prompt-try-except");
+  assert.match(box.textContent, /^Nothing in it would be held or masked\.What matches one of your exceptions is not marked/);
+  assert.equal(page.doc.getElementById("prompt-try-text").value, "something else", "the box keeps what is in it");
+  assert.equal(page.doc.getElementById("prompt-try-go").disabled, false, "no busy button for a re-ask");
+  assert.equal(page.doc.getElementById("prompt-try-form").getAttribute("aria-busy"), null);
+  assert.equal(page.doc.getElementById("prompt-try-error").textContent, "");
+});
+
+test("Try a message follows the card: a kind's choice and its Undo each ask again, each answer drawn", async () => {
+  let action = "mask";
+  const page = load({ url: SETTINGS_URL, routes: {
+    "GET policy/prompt-filters": () => ({ settings: promptSettingsVM({ ...PROJ, actions: (PROJ.actions ?? []).map((a) => (a.category === "pii.email" ? { ...a, action } : a)) }) }),
+    "POST policy/prompt-filters/change": (b: any) => (action = b.edit.action, { applied: true, changeId: "pc-3" }),
+    "POST policy/changes/pc-3/undo": () => (action = "mask", { ok: true }),
+    "POST policy/prompt-filters/try": () => EMAIL(action),
+  } });
+  await tick();
+  await tryMessage(page, TRIED);
+  assert.deepEqual(answerLines(page.doc), ["An email address: hidden. The AI would get a short code in its place."]);
+  const sel = kindRow(page.doc, "pii.email").querySelector("select");
+  sel.value = "log";
+  sel.dispatchEvent(new page.window.Event("change"));
+  await tick(20);
+  assert.equal(tryPosts(page).length, 2);
+  assert.deepEqual(answerLines(page.doc), ["An email address: sent as written. Mandu would only note it."]);
+  [...page.doc.querySelectorAll("#prompt-notice button")].find((b: any) => b.textContent === "Undo").click();
+  await tick(20);
+  assert.equal(page.doc.getElementById("prompt-notice").textContent, "Undone.");
+  assert.deepEqual(tryPosts(page), [{ text: TRIED }, { text: TRIED }, { text: TRIED }], "the Undo asks again too");
+  assert.deepEqual(answerLines(page.doc), ["An email address: hidden. The AI would get a short code in its place."]);
+});
+
+test("Try a message follows the card only while an answer is drawn: none, or a refusal, asks nothing", async () => {
+  let refuse = false;
+  const page = load({ url: SETTINGS_URL, routes: {
+    "GET policy/prompt-filters": { settings: VM },
+    "POST policy/prompt-filters/change": { applied: true, changeId: "pc-4" },
+    "POST policy/prompt-filters/try": () => (refuse ? { status: 502, body: { error: "The protection service did not answer." } } : EMAIL("mask")),
+  } });
+  await tick();
+  const choose = async (v: string) => {
+    const sel = kindRow(page.doc, "secret.registered").querySelector("select");
+    sel.value = v;
+    sel.dispatchEvent(new page.window.Event("change"));
+    await tick(20);
+  };
+  await choose("block");
+  assert.equal(page.doc.getElementById("prompt-notice").hidden, false, "the change was made");
+  assert.deepEqual(tryPosts(page), [], "no answer drawn: nothing asked");
+  refuse = true;
+  await tryMessage(page, TRIED);
+  assert.equal(page.doc.getElementById("prompt-try-answer").hidden, true);
+  await choose("mask");
+  assert.equal(tryPosts(page).length, 1, "a refusal is not asked again");
+});
+
+test("Try a message: a re-ask that fails keeps the answer and says it is from before the change, never in red", async () => {
+  const page = load({ url: SETTINGS_URL, routes: {
+    "GET policy/prompt-filters": { settings: VM },
+    "POST policy/prompt-filters/change": { applied: true, changeId: "pc-5" },
+    "POST policy/prompt-filters/try": () => (tryPosts(page).length === 2 ? { status: 403, body: { error: "Sign in to the dashboard first." } } : EMAIL("mask")),
+  } });
+  await tick();
+  await tryMessage(page, TRIED);
+  const box = page.doc.getElementById("prompt-try-answer");
+  const sel = kindRow(page.doc, "pii.email").querySelector("select");
+  sel.value = "block";
+  sel.dispatchEvent(new page.window.Event("change"));
+  await tick(20);
+  assert.equal(tryPosts(page).length, 2, "asked again");
+  assert.equal(box.hidden, false, "the old answer stays");
+  assert.deepEqual(answerLines(page.doc), ["An email address: hidden. The AI would get a short code in its place."]);
+  assert.equal(box.lastElementChild.className, "prompt-try-stale");
+  assert.equal(box.lastElementChild.textContent, "This answer is from before your last change. Press Try it to check again.");
+  assert.equal(page.doc.getElementById("prompt-try-error").textContent, "", "no refusal for a read the person did not ask for");
+  await tryMessage(page, TRIED);
+  assert.equal(page.doc.querySelector(".prompt-try-stale"), null, "a press draws a fresh answer");
+});
+
+test("Try a message: a change while Try it is out asks again once it answers, and Try it is never left off", async () => {
+  let release: () => void = () => {};
+  const page = load({ url: SETTINGS_URL, routes: {
+    "GET policy/prompt-filters": { settings: VM },
+    "POST policy/prompt-filters/change": { applied: true, changeId: "pc-6" },
+    "POST policy/prompt-filters/try": () => (tryPosts(page).length === 1 ? new Promise((r) => { release = () => r(EMAIL("mask")); }) : EMAIL("block")),
+  } });
+  await tick();
+  await tryMessage(page, TRIED);
+  const go = page.doc.getElementById("prompt-try-go");
+  assert.equal(go.disabled, true, "the press is out");
+  const sel = kindRow(page.doc, "pii.email").querySelector("select");
+  sel.value = "block";
+  sel.dispatchEvent(new page.window.Event("change"));
+  await tick(20);
+  assert.equal(tryPosts(page).length, 1, "not asked again while the press is out");
+  release();
+  await tick(20);
+  assert.equal(go.disabled, false, "the press's button is back");
+  assert.equal(page.doc.getElementById("prompt-try-form").getAttribute("aria-busy"), null);
+  assert.deepEqual(tryPosts(page), [{ text: TRIED }, { text: TRIED }], "asked again once it answered");
+  assert.deepEqual(answerLines(page.doc), ["An email address: blocked. The message would not be sent."]);
+});
+
+test("Try a message: Ctrl+Enter and Cmd+Enter press Try it; Enter alone, with Alt, or while composing does not", async () => {
+  const page = load({ url: SETTINGS_URL, routes: { "GET policy/prompt-filters": { settings: VM }, "POST policy/prompt-filters/try": () => EMAIL("mask") } });
+  await tick();
+  const input = page.doc.getElementById("prompt-try-text");
+  input.value = TRIED;
+  const key = async (init: Record<string, unknown>) => {
+    const e = new page.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
+    input.dispatchEvent(e);
+    await tick();
+    return e.defaultPrevented;
+  };
+  for (const init of [{}, { shiftKey: true }, { ctrlKey: true, altKey: true }, { ctrlKey: true, isComposing: true }, { metaKey: true, isComposing: true }]) {
+    assert.equal(await key(init), false, `left alone: ${JSON.stringify(init)}`);
+  }
+  assert.equal(tryPosts(page).length, 0, "Enter alone makes a new line");
+  assert.equal(await key({ ctrlKey: true }), true);
+  assert.equal(tryPosts(page).length, 1, "Ctrl+Enter presses Try it");
+  assert.deepEqual(answerLines(page.doc), ["An email address: hidden. The AI would get a short code in its place."]);
+  assert.equal(await key({ metaKey: true }), true);
+  assert.equal(tryPosts(page).length, 2, "Cmd+Enter too");
 });

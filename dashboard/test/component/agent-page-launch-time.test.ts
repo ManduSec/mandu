@@ -6,7 +6,9 @@
  * /api/home/agent carries "Mandu took … to start this session" with the
  * slowest steps first, and the clean-up line; signed out it is the same
  * (the times are no value the AI did not see). A session whose launch
- * recorded none gets no line.
+ * recorded none gets no line. Its exit's `discardedWrites` (§4.25b,
+ * *Changes Mandu did not apply to your files*) are listed `~/…` under the
+ * server's home, signed in and out, and not from a claimed exit.
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -19,6 +21,7 @@ import { FileEventSource } from "../../src/event-source.js";
 import { ADMIN_OPTS, CSRF_ADMIN } from "../unit/admin-session.js";
 
 const dir = mkdtempSync(join(tmpdir(), "mandu-launch-time-"));
+const HOME = "/home/u";
 let server: DashboardServer;
 let base: string;
 
@@ -49,7 +52,20 @@ before(async () => {
     ev("sess-plain", "launch_posture", "2026-10-21T01:00:00.000Z", { target: "claude", argv0: "claude", live: [], dropped: [], notes: [] }),
     ev("sess-plain", "tllm_call", "2026-10-21T01:00:02.000Z", {}),
   ].join("\n") + "\n");
-  server = new DashboardServer({ ...ADMIN_OPTS, source: new FileEventSource(dir), log: () => {}, extensions: [] });
+  // An exit naming a secret file whose masked copy the agent changed
+  // (dashboard.md §4.25b, *Changes Mandu did not apply to your files*), as
+  // observe.ts `sessionExitEvent` writes it; and the same event as a claim.
+  for (const [id, claimed] of [["sess-wrote", false], ["sess-claimed", true]] as const) {
+    writeFileSync(join(dir, `${id}.ndjson`), [
+      ev(id, "tllm_call", "2026-10-21T01:00:02.000Z", {}),
+      ev(id, "session_exit", "2026-10-21T01:00:09.000Z", {
+        code: 0, durationMs: 9000, output: null, discardedWrites: [`${HOME}/app/.env`],
+        input: { symbolized: `agent exited 0 after 9s; the agent changed 1 protected file (${HOME}/app/.env): the change stayed in the placeholder copy and never reached the real file`, original: null, differs: false, symbols: [] },
+        ...(claimed ? { claimed: true } : {}),
+      }),
+    ].join("\n") + "\n");
+  }
+  server = new DashboardServer({ ...ADMIN_OPTS, source: new FileEventSource(dir), log: () => {}, extensions: [], fileBrowserHome: HOME });
   base = `http://127.0.0.1:${await server.listen(0)}`;
 });
 
@@ -77,4 +93,12 @@ test("the served page's projection says how long Mandu took to start and to clea
 
 test("a launch that recorded no timings: no line", async () => {
   assert.equal((await page("sess-plain", true)).launchTime, null);
+});
+
+test("an exit that names a changed secret file lists it, ~/… under home, signed in and out; the same event as a claim lists nothing (§4.25b)", async () => {
+  const vm = await page("sess-wrote", true);
+  assert.deepEqual(vm.discardedWrites, { files: ["~/app/.env"], more: 0 });
+  assert.deepEqual((await page("sess-wrote", false)).discardedWrites, vm.discardedWrites, "signed out: the same paths");
+  assert.equal((await page("sess-claimed", true)).discardedWrites, null, "a claimed exit makes the page list nothing");
+  assert.equal((await page("sess-timed", true)).discardedWrites, null, "an exit without the field: none");
 });

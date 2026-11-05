@@ -242,7 +242,43 @@ mount -t 9p -o trans=virtio,version=9p2000.L     out     /mnt/out     || echo "9
 mount -t 9p -o trans=virtio,version=9p2000.L,ro artifacts /mnt/artifacts || echo "9p artifacts mount failed"
 RESULT_FILE=/mnt/out/RESULT; LOG_FILE=/mnt/out/suite.log
 echo "pending" > "$RESULT_FILE" 2>/dev/null || true
-finish() { echo "$1" > "$RESULT_FILE"; sync; poweroff; }
+# A refused poweroff (a block inhibitor: unattended-upgrades holds one while it
+# upgrades systemd) left the guest up until the executor's hard timeout, the
+# RESULT long written (ubuntu-2604, 0.2.0-beta.9's tag run). A run's disk is
+# thrown away, so its guest goes down regardless; the provisioning boot's disk
+# becomes the cached layer, so that boot never cuts a package install short.
+finish() {
+  echo "$1" > "$RESULT_FILE"; sync
+  poweroff && return 0
+  echo "guest: poweroff refused (an inhibitor holds it)"
+  [[ "$SUITE" == __provision__ ]] || systemctl poweroff --ignore-inhibitors
+}
+
+# Ubuntu's background apt (os-test-matrix.md §10.17.1). The provisioned layer
+# is up to a week old, so on boot apt-daily and apt-daily-upgrade have missed
+# their runs and start at once. On ubuntu-2604 (0.2.0-beta.9's tag run,
+# 2026-11-05) unattended-upgrades then held the dpkg lock past fresh-agents'
+# 10-minute wait (its `apt install bubblewrap` failed, and every Codex sandbox
+# check after it) and the shutdown inhibitor above. The matrix tests the
+# suites' own apt use, not the distro's upgrades: the timers stop for this
+# boot, a run already going is asked to stop after the package in hand
+# (unattended-upgrade's SIGTERM handler), and the runner waits for every apt
+# process to end, at most 15 minutes. Every boot: provisioning, a run, a resume.
+quiet_background_apt() {
+  local i
+  systemctl stop apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+  for ((i = 0; i < 180; i++)); do
+    pkill -TERM -f '^/usr/bin/python3 /usr/bin/unattended-upgrade( |$)' 2>/dev/null || true
+    if ! pgrep -f '/usr/lib/apt/apt.systemd.daily|/usr/bin/unattended-upgrade( |$)' >/dev/null 2>&1 \
+       && ! pgrep -x 'apt-get|apt|dpkg' >/dev/null 2>&1; then
+      (( i == 0 )) || echo "guest: background apt ended after $((i * 5))s"
+      return 0
+    fi
+    (( i == 0 )) && echo "guest: background apt is running; asked it to stop, waiting (at most 15 min)"
+    sleep 5
+  done
+  echo "guest: background apt still running after 15 min; a suite's apt may wait on the dpkg lock"
+}
 
 # Reboots (a distro upgrade, os-test-matrix.md §2.1). A suite that needs the
 # guest rebooted saves its own state and exits 75: the runner marks the next
@@ -260,6 +296,7 @@ if [[ -f $RESUME_FLAG ]]; then
 fi
 
 for kv in $SYSCTLS; do sysctl -w "$kv" || echo "sysctl $kv failed"; done
+quiet_background_apt
 
 if [[ $RESUME -eq 0 ]]; then
 # Provisioning gate. cloud-init's package module only WARNS when the mirror is
@@ -328,6 +365,11 @@ else
   rm -rf "$WORK/.git" "$WORK/interceptors/target"
   find "$WORK" -maxdepth 3 -name node_modules -type d -exec rm -rf {} + 2>/dev/null
 fi
+# A git worktree's `.git` is a FILE naming the host's repository, which the
+# directory excludes above let through: it goes, or cp cannot put the
+# one-commit repository in its place (every suite run from a worktree had a
+# guest copy whose git pointed at a host path; found 2026-10-25).
+rm -rf "$WORK/.git"
 [[ -d /mnt/artifacts/.mandu-git ]] && cp -a /mnt/artifacts/.mandu-git "$WORK/.git"
 OWNER=root:root; [[ -n "$RUN_AS" ]] && OWNER="$RUN_AS:$RUN_AS"
 chown -R "$OWNER" "$WORK" "$MWORK" 2>/dev/null || true

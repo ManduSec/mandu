@@ -21,8 +21,10 @@
  *   W1  on the session page and on History, `a.back`, and on Home and the
  *       session page, the `a.more` to the rule change, start at their
  *       column's left edge and are no wider than their words plus their
- *       padding (where the words fit the column on one line: 1280 and
- *       390 px); at 320 px the longer link wraps inside its column;
+ *       padding (where the words fit the column on one line, always at
+ *       1280 px); a longer link wraps inside its column only where its
+ *       words on one line are wider than the column (Home's line names
+ *       the agent and folder that asked, so it wraps at 390 px too);
  *   W2  a click 200 px right of "Back to home" (on its row, inside the
  *       column) leaves the page where it was; at 1280 px a click 200 px
  *       right of Home's link to Approvals does too; a click on the words
@@ -74,13 +76,14 @@ const ENV_VALUE = `linkWidthStackEnvValue_${process.pid}_0001`;
 const SESSION = `link-width-${process.pid}`;
 const WIDTHS = [1280, 390, 320];
 const BACK = "Back to home";
-const HOME_MORE = "1 rule change your agent asked for is in Approvals";
+// One session asked, so Home names its agent and folder (dashboard.md *A rule change and the agent that asked*).
+const HOME_MORE = "1 rule change Claude Code in ~/proj asked for is in Approvals";
 const AGENT_MORE = "1 rule change this agent asked for is in Approvals";
 
 /** A link's box, its words' box (a Range over its contents), its padding,
  *  its column's box, and where the page is. Window px. */
 interface Box { left: number; right: number; top: number; bottom: number }
-interface Shot { words: string; link: Box; text: Box; pad: number; column: Box; lines: number }
+interface Shot { words: string; link: Box; text: Box; pad: number; column: Box; lines: number; oneLine: number }
 const measure = (selector: string) => `(() => {
   const a = document.querySelector(${JSON.stringify(selector)});
   if (!a) return null;
@@ -88,12 +91,24 @@ const measure = (selector: string) => `(() => {
   const range = document.createRange();
   range.selectNodeContents(a);
   const cs = getComputedStyle(a);
+  // Lines, not boxes: a link that holds a code (a folder) has a box per
+  // node on one line, so a box whose middle is below the line before starts
+  // a new one.
+  let lines = 0, bottom = -Infinity;
+  for (const r of [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0).sort((x, y) => x.top - y.top)) {
+    if ((r.top + r.bottom) / 2 > bottom) { lines++; bottom = r.bottom; } else bottom = Math.max(bottom, r.bottom);
+  }
+  // The width of the words on one line, measured with no wrap.
+  const wrap = a.style.whiteSpace;
+  a.style.whiteSpace = "nowrap";
+  const oneLine = range.getBoundingClientRect().width;
+  a.style.whiteSpace = wrap;
   const col = a.parentElement, ccs = getComputedStyle(col), cr = col.getBoundingClientRect();
   return {
     words: a.textContent, link: box(a.getBoundingClientRect()), text: box(range.getBoundingClientRect()),
     pad: parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight),
     column: { left: cr.left + parseFloat(ccs.paddingLeft), right: cr.right - parseFloat(ccs.paddingRight), top: cr.top, bottom: cr.bottom },
-    lines: range.getClientRects().length,
+    lines, oneLine,
   };
 })()`;
 
@@ -229,9 +244,11 @@ test("Back to home and the links to Approvals are only as wide as their words, a
           assert.ok(m.link.right - m.link.left <= m.text.right - m.text.left + m.pad + 1,
             `${at}: ${Math.round(m.link.right - m.link.left)}px wide around words of ${Math.round(m.text.right - m.text.left)}px (padding ${m.pad}px)`);
         } else {
-          // Words longer than the column wrap inside it (only the longer
-          // link, only at 320 px).
-          assert.equal(width, 320, `${at}: one line where the words fit (${m.lines} lines)`);
+          // Words longer than the column wrap inside it (only a longer
+          // link, never at 1280 px).
+          assert.notEqual(width, 1280, `${at}: one line at 1280 px (${m.lines} lines)`);
+          assert.ok(m.oneLine + m.pad > m.column.right - m.column.left,
+            `${at}: one line where the words fit (${m.lines} lines, words of ${Math.round(m.oneLine)}px in a column of ${Math.round(m.column.right - m.column.left)}px)`);
           assert.notEqual(c.words, BACK, `${at}: Back to home keeps one line`);
         }
         // W2: a click 200 px right of the words, on their row, stays on the page.

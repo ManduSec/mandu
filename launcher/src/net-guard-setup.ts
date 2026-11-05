@@ -39,7 +39,9 @@ import { helperEndpointGuardSpecs } from "./model-endpoints.js";
 import { uploadDenyGuardSpecs } from "./upload-deny.js";
 import { modelHostGuardDenySpecs } from "./model-host-deny.js";
 import { buildHintFor, resolveNativeBin, staleNativeBinNote, type NativeBinName } from "./services/native-bins.js";
+import { guardStartsHere } from "./opencode2-confidentiality.js";
 import { wireOf, type LaunchMutation, type LaunchPlan } from "./types.js";
+import { dbGuardRedirects, dbRelayPorts } from "./db-relays.js";
 
 export interface NetGuardDeps {
   /** Resolve a committed Rust bin (defaults to the real resolver). */
@@ -56,6 +58,10 @@ export interface NetGuardDeps {
    *  guard set as fallback-preserving EXTRA allows (net-guard.ts). */
   lawAllow?: string[];
   log?: (msg: string) => void;
+  /** Can the resolved bin start here (`guardStartsHere`: the bin around
+   *  `true`, without `--skip-unsupported`)? Injectable for tests, whose
+   *  bins are fake paths. */
+  probe?: (bin: string) => boolean;
   /** The host platform (run.ts passes `platform.id`). The guard is seccomp
    *  user notification, Linux only: elsewhere no bin is looked for and ONE
    *  informational line says so (never the "not built" degrade; on macOS the
@@ -69,6 +75,12 @@ export interface NetGuardDeps {
 export const NET_GUARD_LINUX_ONLY_NOTE =
   "mandu: net-guard (the connect guard that pins :443 to named hosts) is Linux only; on macOS the whole-agent " +
   "Seatbelt profile confines TCP by port instead (the network-confine line)";
+
+/** Why a guard bin that is there cannot start, in plain words (the launch
+ *  note and doctor's line). */
+export const NET_GUARD_CANNOT_START =
+  "this machine's seccomp policy refuses a call it needs (a Docker or other container's default profile refuses " +
+  "pidfd_getfd), or the kernel gives no seccomp user notification";
 
 /** Read the workspace's git remote URLs via `git config --get-regexp`. Returns []
  *  on any failure (not a repo / git absent) — the guard just skips the auto-add.
@@ -151,6 +163,16 @@ export function applyNetGuard(
   }
   const guardStale = (deps.staleNote ?? staleNativeBinNote)("mandu-net-guard", binPath);
   if (guardStale) log(guardStale);
+  // A bin that cannot start here is no guard (packaging.md §3.1): under
+  // a Docker container's default seccomp profile it fails closed at setup
+  // (exit 71) and the agent would never run. Without it the launch runs
+  // as with no bin (secret-setup.ts: `gated`, or a refusal under
+  // --require-confinement). A launch that REQUIRES the guard keeps it and
+  // fails closed at the guard (OpenCode 2 has refused before this, run.ts).
+  if (plan.netGuardRequired !== true && !(deps.probe ?? guardStartsHere)(binPath)) {
+    log(`mandu: ${asked} whole-agent connect-guard cannot start on this machine: ${NET_GUARD_CANNOT_START}; proceeding WITHOUT it.`);
+    return null;
+  }
 
   const strict = plan.landlockNetStrict === true;
   const targetProxyPort = wireOf(plan.target) === "anthropic" ? plan.proxy.port : plan.openaiProxy.port;
@@ -180,6 +202,7 @@ export function applyNetGuard(
     netProxyPort,
     ullmForwarderPort,
     cdpRelayPort: plan.cdpRelay ? plan.cdpRelay.port : null,
+    dbRelayPorts: dbRelayPorts(plan.dbRelays),
     // The model-host deny (model-host-deny.ts): no direct :443 allowance
     // for the API host; it is denied below instead.
     apiHost: plan.modelHostDeny === true ? null : apiHostFor(plan),
@@ -209,7 +232,13 @@ export function applyNetGuard(
   const deny = [...uploadDeny, ...modelDeny];
   // OpenCode 2 with confidentiality ON depends on the guard
   // (opencode2-confidentiality.ts): no in-place degrade for it.
-  const { wrapArgv } = planNetGuard({ binPath, specs, deny, extra: clean, required: plan.netGuardRequired === true });
+  // The database login release (db-relays.ts): each database's connects
+  // performed on the egress proxy's relay for it.
+  const redirects = dbGuardRedirects(plan.dbRelays ?? []);
+  const { wrapArgv } = planNetGuard({ binPath, specs, deny, redirects, extra: clean, required: plan.netGuardRequired === true });
+  if (redirects.length > 0) {
+    log(`mandu: net-guard — database logins go through Mandu's relay, which puts the password back for the server only [${(plan.dbRelays ?? []).map((r) => `${r.host}:${r.port}`).join(", ")}]`);
+  }
   if (uploadDeny.length > 0) {
     log(`mandu: net-guard — ${uploadDeny.length} upload destination(s) of this agent denied in-kernel [${uploadDeny.join(", ")}]`);
   }
@@ -230,7 +259,7 @@ export function applyNetGuard(
   mut.env[NET_GUARD_BOX_SOCKETS_ENV] = "1";
   // exec-routing.md §7.5 (2026-10-01): the only loopback ports a process
   // holding a secret reaches without a binding (sessionProxyPorts).
-  mut.env[NET_GUARD_PROXY_PORTS_ENV] = sessionProxyPorts({ netProxyPort }).join(",");
+  mut.env[NET_GUARD_PROXY_PORTS_ENV] = sessionProxyPorts({ netProxyPort, dbRelayPorts: dbRelayPorts(plan.dbRelays) }).join(",");
   // supported-agents.md §2.3.1: an OpenCode 2 launch names its executable,
   // so the guard performs its private server's ephemeral loopback bind and
   // admits the client's connect to it (net-supervisor own_server.rs). A

@@ -278,31 +278,105 @@ export function tryLine(edit: unknown, answer: unknown): Part[] {
     : [text("Content from "), code(site), text(" is masked for the AI")];
 }
 
+/** inspect-mcp's ullm-config, structurally (the part the dashboard calls). */
+interface UllmModule {
+  selectUllmConfig(env: Record<string, string | undefined>, cliAvailable: (b: "claude" | "codex") => boolean): unknown;
+  buildUllmClient(config: unknown): AssistantModel;
+  isOnPath(b: "claude" | "codex"): boolean;
+}
+
 /**
- * The production model factory: inspect-mcp's selector + client, imported at
- * runtime by a specifier built from parts (the arbiter-adapter pattern) so the
- * sibling package stays out of this package's tsc program. A bundled build
- * sets MANDU_ULLM_MODULE to the co-located dist/ullm-client.mjs.
+ * The helper's channel selection, shared by Suggest rules and the line that
+ * names the channel (dashboard.md, *Describe says which AI reads your
+ * words*): inspect-mcp's selector, imported at runtime by a specifier built
+ * from parts (the arbiter-adapter pattern) so the sibling package stays out
+ * of this package's tsc program. A bundled build sets MANDU_ULLM_MODULE to
+ * the co-located dist/ullm-client.mjs. `cliAvailable`: the PATH probe, the
+ * module's `isOnPath` unless a test stubs it. Builds no client.
  */
+async function selectAssistantChannel(
+  env: NodeJS.ProcessEnv,
+  cliAvailable?: (b: "claude" | "codex") => boolean,
+): Promise<{ mod: UllmModule; config: unknown }> {
+  const specifier = env["MANDU_ULLM_MODULE"] ?? ["..", "..", "interceptors", "inspect-mcp", "src", "ullm-config.js"].join("/");
+  let mod: UllmModule;
+  try {
+    mod = await import(specifier);
+  } catch (err) {
+    throw new AssistantUnconfiguredError(`the quarantined model channel is not installed (${(err as Error).message})`, "not-installed");
+  }
+  try {
+    return { mod, config: mod.selectUllmConfig(env, cliAvailable ?? mod.isOnPath) };
+  } catch (err) {
+    throw new AssistantUnconfiguredError((err as Error).message);
+  }
+}
+
+/** The production model factory: the shared selection, then its client. */
 export function productionAssistantModel(env: NodeJS.ProcessEnv = process.env): () => Promise<AssistantModel> {
   return async () => {
-    const specifier = env["MANDU_ULLM_MODULE"] ?? ["..", "..", "interceptors", "inspect-mcp", "src", "ullm-config.js"].join("/");
-    let mod: {
-      selectUllmConfig(env: Record<string, string | undefined>, cliAvailable: (b: "claude" | "codex") => boolean): unknown;
-      buildUllmClient(config: unknown): AssistantModel;
-      isOnPath(b: "claude" | "codex"): boolean;
-    };
-    try {
-      mod = await import(specifier);
-    } catch (err) {
-      throw new AssistantUnconfiguredError(`the quarantined model channel is not installed (${(err as Error).message})`, "not-installed");
-    }
-    let config: unknown;
-    try {
-      config = mod.selectUllmConfig(env, mod.isOnPath);
-    } catch (err) {
-      throw new AssistantUnconfiguredError((err as Error).message);
-    }
+    const { mod, config } = await selectAssistantChannel(env);
     return mod.buildUllmClient(config);
+  };
+}
+
+// ── Which AI the helper would use, before anything is written ──────────────
+
+/** Where Suggest rules would send the words: Anthropic's API (`api`), the
+ *  API at ANTHROPIC_BASE_URL (`api-custom`), the claude CLI (`claude`, or
+ *  `claude-custom` when ANTHROPIC_BASE_URL re-points it), the codex CLI. */
+export type AssistantVia = "api" | "api-custom" | "claude" | "claude-custom" | "codex";
+
+/** The answer of `GET /api/policy/assistant/channel`: an enum only, never
+ *  the key, the address, a binary path or a model name. */
+export type AssistantChannel = { ready: true; via: AssistantVia } | { ready: false; reason: AssistantUnavailableReason };
+
+const VIAS: ReadonlySet<string> = new Set<AssistantVia>(["api", "api-custom", "claude", "claude-custom", "codex"]);
+const REASONS: ReadonlySet<string> = new Set<AssistantUnavailableReason>(["no-channel", "not-installed", "api-key-missing", "cli-missing", "other"]);
+
+/** The channel's enum alone, from whatever answered: anything else is
+ *  dropped, and an answer that is neither is `other`. */
+export function channelOnly(answer: unknown): AssistantChannel {
+  const a = (answer && typeof answer === "object" ? answer : {}) as Record<string, unknown>;
+  if (a.ready === true && typeof a.via === "string" && VIAS.has(a.via)) return { ready: true, via: a.via as AssistantVia };
+  if (a.ready === false && typeof a.reason === "string" && REASONS.has(a.reason)) return { ready: false, reason: a.reason as AssistantUnavailableReason };
+  return { ready: false, reason: "other" };
+}
+
+/** A base URL that re-points the helper: set, and not Anthropic's own. */
+function customBase(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || baseUrl.trim() === "") return false;
+  return baseUrl.trim().replace(/\/+$/, "") !== "https://api.anthropic.com";
+}
+
+/** The `via` of a config `selectUllmConfig` returned, or null. For the CLI,
+ *  the binary the client would spawn, not the hint: `resolveCliBinary`'s
+ *  rule (ullm-client.ts), the hint when it names one, else codex for an
+ *  OpenAI model id and claude otherwise (a unit test holds the two equal).
+ *  The claude child is handed ANTHROPIC_BASE_URL; codex is not. */
+export function channelVia(config: unknown): AssistantVia | null {
+  const c = (config && typeof config === "object" ? config : {}) as Record<string, unknown>;
+  if (c.mode === "api") return customBase(c.baseUrl) ? "api-custom" : "api";
+  if (c.mode !== "cli") return null;
+  const model = typeof c.model === "string" ? c.model : "";
+  const openAi = model.startsWith("openai/") || model.startsWith("gpt-") || model.startsWith("o");
+  const binary = c.binary === "claude" || c.binary === "codex" ? c.binary : openAi ? "codex" : "claude";
+  if (binary === "codex") return "codex";
+  return customBase(c.baseUrl) ? "claude-custom" : "claude";
+}
+
+/** Which channel Suggest rules would use now: the same import and selection
+ *  as {@link productionAssistantModel}, and no client, no model call. */
+export function productionAssistantChannel(
+  env: NodeJS.ProcessEnv = process.env,
+  cliAvailable?: (b: "claude" | "codex") => boolean,
+): () => Promise<AssistantChannel> {
+  return async () => {
+    try {
+      const via = channelVia((await selectAssistantChannel(env, cliAvailable)).config);
+      return via ? { ready: true, via } : { ready: false, reason: "other" };
+    } catch (err) {
+      return { ready: false, reason: err instanceof AssistantUnconfiguredError ? err.reason : "other" };
+    }
   };
 }

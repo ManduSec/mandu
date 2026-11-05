@@ -165,13 +165,68 @@ test("Settings › Models: a refused Save gives the focus back to Save, on again
 
   const asked = settings({ applied: false, confirm: true, expected: ["k"], rows: [[{ kind: "text", text: "Change lab" }]], wouldLet: [], warnings: [] });
   await tick();
-  asked.window.confirm = () => false;
   enter(editOf(asked.doc, "lab"));
   press(byId(asked.doc, "model-save"));
   await tick(30);
-  assert.equal(byId(asked.doc, "model-form").hidden, false);
+  // Asked in the form, above Save (dashboard.md §4.25n): the sentence holds
+  // the focus. Escape there closes the question only, never the form with
+  // what was typed; Cancel likewise; each gives the focus back to Save.
+  const form = byId(asked.doc, "model-form");
+  const words = form.querySelector(".ask-in-place-words");
+  assert.equal(focused(asked.doc), words, "the question's sentence, never Save anyway");
+  assert.equal(byId(asked.doc, "model-save").disabled, false);
+  words.dispatchEvent(new asked.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  await tick();
+  assert.equal(form.hidden, false, "Escape on the question leaves the form open");
+  assert.equal(form.querySelector(".ask-in-place"), null);
   assert.equal(focused(asked.doc), byId(asked.doc, "model-save"), "a change not made gives the focus back to Save");
   assert.equal(byId(asked.doc, "model-error").textContent, "", "nothing was refused, so nothing describes it");
+  press(byId(asked.doc, "model-save"));
+  await tick(30);
+  const cancel = [...form.querySelectorAll(".ask-in-place button")].find((x: Doc) => x.textContent === "Cancel");
+  cancel.focus();
+  cancel.click();
+  await tick();
+  assert.equal(form.hidden, false, "Cancel on the question leaves the form open");
+  assert.equal(focused(asked.doc), byId(asked.doc, "model-save"));
+  // A field changed while it asks: the question was about other values.
+  press(byId(asked.doc, "model-save"));
+  await tick(30);
+  assert.ok(form.querySelector(".ask-in-place"));
+  const url = byId(asked.doc, "model-url");
+  url.value = "https://lab.example/v2";
+  url.dispatchEvent(new asked.window.Event("input", { bubbles: true }));
+  assert.equal(form.querySelector(".ask-in-place"), null, "an edit drops the question");
+});
+
+test("Settings › Models (#203): a refusal caught before sending keeps the focus on Save, described by its words; by Enter, in the field", async () => {
+  const page = settings();
+  const { doc } = page;
+  await tick();
+  const save = byId(doc, "model-save");
+  enter(byId(doc, "model-open"));
+  byId(doc, "model-name").value = "My Ollama";
+  byId(doc, "model-url").value = "http://127.0.0.1:11434";
+  save.focus();
+  save.click();
+  await tick(30);
+  assert.equal(page.calls.filter((c) => c.url.endsWith("/api/policy/models/change")).length, 0, "nothing was sent");
+  assert.equal(byId(doc, "model-form").hidden, false, "the form stays open to fix");
+  assert.equal(focused(doc), save, "Save keeps the focus, as after a refusal by the service");
+  assert.equal(save.disabled, false);
+  assert.equal(save.getAttribute("aria-describedby"), "model-error");
+  assert.equal(byId(doc, "model-error").textContent, "Not saved. Name: use 1 to 64 letters, digits, _ . or - (no spaces).");
+  assert.equal(byId(doc, "model-name").getAttribute("aria-invalid"), "true");
+  // Enter in the token field: the focus stays in it.
+  byId(doc, "model-name").value = "ollama";
+  const token = byId(doc, "model-token-env");
+  token.value = "$OLLAMA_KEY";
+  token.focus();
+  byId(doc, "model-form").requestSubmit();
+  await tick(30);
+  assert.equal(page.calls.filter((c) => c.url.endsWith("/api/policy/models/change")).length, 0);
+  assert.equal(focused(doc), token, "Enter in a field refused leaves the focus in the field");
+  assert.equal(token.getAttribute("aria-invalid"), "true");
 });
 
 test("Settings › Models: Enter in a field that worked gives the focus to what opened the form; one refused leaves it in the field", async () => {

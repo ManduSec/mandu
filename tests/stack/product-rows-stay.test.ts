@@ -28,7 +28,11 @@
  *       whose launch the launcher recorded 10 minutes ago, asks through the
  *       proxy and its Running now row reads "started 10 minutes ago · last
  *       step just now"; after one more model call the poll moves that
- *       moment in place, E's row the node already there.
+ *       moment in place, E's row the node already there; History's row
+ *       for E reads "running now, started 10 minutes ago · last step just
+ *       now" (§4.25ae, History lists every running session), a third call
+ *       moves that moment in place, E's row the node already there, and the
+ *       link opens E's session with its newest turn focused.
  *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON).
  */
@@ -48,6 +52,7 @@ import { emitLauncherEvent, launchPostureEvent, sessionExitEvent } from "../../l
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import type { HistoryVM } from "../../dashboard/src/view-model/home.js";
+import type { AgentPageVM } from "../../dashboard/src/view-model/agent-page.js";
 import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
@@ -222,6 +227,38 @@ test("the product page's session lists keep the rows that did not change when th
       assert.equal(rowOf(doc, "home-agents", E), e, "E's row is the node already there");
       assert.equal(e.querySelector(".agent-when").textContent, "started 10 minutes ago · last step just now");
       noValue(doc.body.textContent, "the rendered Home page");
+    });
+
+    // K5 on History: E's running row names its last step as Running now
+    // does, the link to its newest turn; a third call moves it in place.
+    await servedProductPage(base, "/history", (doc) => !!rowOf(doc, "history-list", E)?.querySelector("a.agent-last-link time.agent-last"), async (doc) => {
+      const e = rowOf(doc, "history-list", E);
+      assert.equal(e.querySelector(".agent-when").textContent, "running now, started 10 minutes ago · last step just now");
+      const link = e.querySelector("a.agent-last-link");
+      assert.equal(link.getAttribute("href"), `/agents/${E}?go=latest`);
+      assert.equal(link.getAttribute("aria-label"), "Last step just now: go to the latest turn of Claude Code, Check the build.", "named as Running now names it");
+      const before = link.querySelector("time.agent-last").getAttribute("datetime");
+
+      await new Promise((r) => setTimeout(r, 20));
+      await ask(E, [{ role: "user", content: "Check the build once more." }]);
+      await history((h) => h.rows.some((r) => r.id === E && r.lastAt !== null && Date.parse(r.lastAt) > Date.parse(before)));
+      poll(doc);
+      await waitWhile(() => link.querySelector("time.agent-last").getAttribute("datetime") === before);
+      assert.ok(Date.parse(link.querySelector("time.agent-last").getAttribute("datetime")) > Date.parse(before), "the last step moved on");
+      assert.equal(rowOf(doc, "history-list", E), e, "E's row is the node already there");
+      assert.equal(e.querySelector("a.agent-last-link"), link, "and so is its link");
+      assert.equal(e.querySelector(".agent-when").textContent, "running now, started 10 minutes ago · last step just now");
+
+      // Pressed, the link opens E's session with its newest turn focused.
+      const text = await (await pageFetch(`${base}/api/home/agent?session=${E}`)).text();
+      noValue(text, "/api/home/agent");
+      const newest = (JSON.parse(text) as AgentPageVM).story?.at(-1)?.id ?? "";
+      assert.ok(newest, "the session page has a turn");
+      link.click();
+      await waitWhile(() => doc.activeElement?.dataset?.turnId !== newest);
+      assert.equal(doc.defaultView.location.pathname + doc.defaultView.location.search, `/agents/${E}`, "`go` used once");
+      assert.equal(doc.activeElement.dataset.turnId, newest, "the newest turn has the focus");
+      noValue(doc.body.textContent, "the rendered session page");
     });
   } finally {
     for (const p of proxies.values()) await p.close();

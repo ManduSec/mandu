@@ -38,6 +38,7 @@ import { ArbiterClient } from "../../ipc/client.js";
 import { NO_ADMIN_LAYER, setAdminLayer } from "../../policy/admin-layer.js";
 import type { ConfineLegs } from "../../prompt-filter/plugin-confine.js";
 import { stateAxes } from "../axes.js";
+import { NODE_COPY_SKIP } from "../node-copy.js";
 
 stateAxes("secrets"); // this suite states its axes (protection-modes.md §4)
 
@@ -92,7 +93,7 @@ async function rig(policyYaml: string, packs: Record<string, string>, o: { guard
 const POLICY = (filters: string, actions = "  actions:\n    acme.codename: mask\n"): string =>
   `version: 1\nmodels:\n  - name: ollama\n    url: http://127.0.0.1:11434\n    wire: openai-chat\n    model: llama3.2\n    local: true\n  - name: remote\n    url: https://api.example.com\n    wire: openai-chat\n    model: x\nprompt_filters:\n  filters:\n${filters}${actions}`;
 
-test("a plugin's findings act on human AND harness text, at the pack's level; one run per request; cached", async () => {
+test("a plugin's findings act on human AND harness text, at the pack's level; one run per request; cached", { skip: NODE_COPY_SKIP }, async () => {
   const r = await rig(POLICY("    acme-cls: on\n"), { acme: pluginPack("acme-cls", ["--find", "Falcon", "acme.codename", "--find", "Kim Lee", "pii.person"]) });
   try {
     const out = await r.data.filterPrompt({ session: "s1", agent: "claude-code", segments: [
@@ -137,7 +138,7 @@ test("a plugin's findings act on human AND harness text, at the pack's level; on
   }
 });
 
-test("the plugin runs from the private copy, with the allowlisted environment only", async () => {
+test("the plugin runs from the private copy, with the allowlisted environment only", { skip: NODE_COPY_SKIP }, async () => {
   const r0 = mkdtempSync(join(tmpdir(), "mdu-prompt-plugin-env-"));
   dirs.push(r0);
   const envFile = join(r0, "env.json");
@@ -157,7 +158,7 @@ test("the plugin runs from the private copy, with the allowlisted environment on
   }
 });
 
-test("every failure blocks with no text under the default on_error; on_error: pass lets the prompt through", async () => {
+test("every failure blocks with no text under the default on_error; on_error: pass lets the prompt through", { skip: NODE_COPY_SKIP }, async () => {
   const cases: Array<{ name: string; filters: string; pack: string; why: RegExp; guard?: string | null; legs?: ConfineLegs }> = [
     { name: "a changed pin", filters: "    acme-cls: on\n", pack: pluginPack("acme-cls", [], { scriptSha: "0".repeat(64) }), why: /its pin: .*fake-plugin\.mjs changed since it was pinned/ },
     { name: "a timeout", filters: "    acme-cls: on\n", pack: pluginPack("acme-cls", ["--sleep", "3000"], { deadline: 300 }), why: /did not answer within 300 ms/ },
@@ -231,7 +232,7 @@ function modularPack(main: string, modules: Array<{ path: string; sha256: string
 // P0 item 13 (b): a plugin's imports loaded unpinned from the directory it
 // was installed in. Now they are pinned (`modules:`) and loaded from the
 // verified copy; nothing else of that directory is there to load.
-test("a plugin's modules: a pinned one loads from the verified tree; a tampered one, or one it did not pin, blocks the prompt (fail closed)", async () => {
+test("a plugin's modules: a pinned one loads from the verified tree; a tampered one, or one it did not pin, blocks the prompt (fail closed)", { skip: NODE_COPY_SKIP }, async () => {
   const p = modularPlugin();
   const pinned = { path: p.words, sha256: sha(p.words) };
   const r = await rig(POLICY("    acme-cls: on\n"), { acme: modularPack(p.main, [pinned]) });
@@ -263,7 +264,7 @@ test("a plugin's modules: a pinned one loads from the verified tree; a tampered 
   }
 });
 
-test("a plugin slower than the client's idle timeout: progress frames keep the call alive; a client that did not ask gets none", async () => {
+test("a plugin slower than the client's idle timeout: progress frames keep the call alive; a client that did not ask gets none", { skip: NODE_COPY_SKIP }, async () => {
   const r = await rig(POLICY("    acme-cls: on\n"), { acme: pluginPack("acme-cls", ["--sleep", "2500", "--find", "Falcon", "acme.codename"], { deadline: 8000 }) });
   const sock = join(r.dir, "a.sock");
   const quick = new ArbiterClient(sock, { requestTimeoutMs: 1800 });
@@ -285,7 +286,7 @@ test("a plugin slower than the client's idle timeout: progress frames keep the c
   }
 });
 
-test("the endpoint: a local: true model is told to the plugin, which reaches it", async () => {
+test("the endpoint: a local: true model is told to the plugin, which reaches it", { skip: NODE_COPY_SKIP }, async () => {
   const { createServer } = await import("node:http");
   let seen = "";
   const model = createServer((req, res) => {

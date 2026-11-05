@@ -61,6 +61,8 @@ import { commandLikeText, stricterLevel } from "./unmapped-exec.js";
 import { AFTER_THE_FACT_MARKER, AFTER_THE_FACT_SYSTEM_NOTE, afterTheFactLine, type ClearResultLedger } from "./after-the-fact.js";
 import { applyPromptFilter, PromptBlocked, PromptFilterRefusal, PromptHoldAbandoned, type PromptBlockLedger, type PromptFilterReport, type SegmentAgent } from "./prompt-filter.js";
 import { extractUserShells, restoreUserShells, userShellTexts, type ExtractedUserShell } from "./user-shell.js";
+import { twinWriteLine, twinWriteTokens } from "./twin-write-note.js";
+import { lockedObjectNote, protectedCopyNote } from "./locked-object-note.js";
 
 /** A correlated originating function_call for a function_call_output. */
 interface ToolCallRef {
@@ -234,6 +236,9 @@ export interface RewriteAudit {
   valueOnly?: Array<{ symbol: string; value: string }>;
   /** The `[mandu:secret]` note appended after the forwarded text (§11.8). */
   secretNote?: string;
+  /** The `[mandu:locked]` note appended after a public output
+   *  (confidentiality.md §7.1, "git's report on a history rewrite"). */
+  lockedNote?: string;
   /** The note carries the `masked after the fact` line (confidentiality.md
    *  §7.1): the request's instructions then also carry Mandu's note. */
   afterTheFact?: boolean;
@@ -853,6 +858,11 @@ export interface SecretTaintInfo {
    *  path-derived note's place: the call names no secret path. Explains
    *  only. */
   valueBackstop?: true;
+  /** Plan 10 §4.1, "The model is told at the call" (2026-10-27): the paths
+   *  of the call's own input that it writes and that are protected files'
+   *  placeholder copies (`twinWriteTokens` over the arbiter's
+   *  `twinWrites`); the `copy:` line names them. Explains only. */
+  twinWrites?: string[];
   why: string;
 }
 
@@ -1182,14 +1192,14 @@ function mayBeKeyListing(value: string): boolean {
 }
 
 /** Worth sending to `callTaint` for the folder-names test (plan 10 §11.8,
- *  "A folder's names", 2026-10-17): the command starts with the word `ls`
- *  and the output is a token-free text of at most 16 KiB (the arbiter's
- *  bound, claude-code-inbound.ts KEY_LISTING_OUTPUT_MAX). A traffic screen
- *  only, like `mayBeKeyListing`: the arbiter parses the command, reads the
- *  folders and decides, on the guard's evidence. Byte-identical in both
- *  proxies. */
+ *  "A folder's names", 2026-10-17; "Paths only", 2026-10-26): the command
+ *  starts with the word `ls` or `find` and the output is a token-free text
+ *  of at most 16 KiB (the arbiter's bound, claude-code-inbound.ts
+ *  KEY_LISTING_OUTPUT_MAX). A traffic screen only, like `mayBeKeyListing`:
+ *  the arbiter parses the command, reads the folders and decides, on the
+ *  guard's evidence. Byte-identical in both proxies. */
 function mayBeDirListing(command: string, value: string): boolean {
-  return /^\s*ls(?:\s|$)/.test(command) && value !== "" && value.length <= KEY_LISTING_OUTPUT_MAX && !value.includes("$MDU:");
+  return /^\s*(?:ls|find)(?:\s|$)/.test(command) && value !== "" && value.length <= KEY_LISTING_OUTPUT_MAX && !value.includes("$MDU:");
 }
 
 /** Worth sending to `callTaint` for the own-text test (plan 10 §11.13, "A
@@ -1358,7 +1368,8 @@ async function serverTaintFor(
  * with an unknown level (no-model); an arbiter without the op reports no
  * taint (nothing to mask). A rule (ii)/(iii) result is released only when the
  * verbatim-value backstop finds nothing and no mask regex matches; a backstop
- * that cannot run keeps the result masked.
+ * that cannot run keeps the result masked, and a rule other than `clear` or
+ * `mask` (one this proxy does not recognise included) masks whole.
  */
 async function secretTaintFor(
   arbiter: Arbiter,
@@ -1502,8 +1513,12 @@ async function secretTaintFor(
     return { level: "public", files: [], apps: [], rule: "secret", maskWhole: false, denied, deniedOnly: hit === null, why: hit === null ? "every open of a secret in the tree was refused and no registered value appears in the output" : `a refused tree, but ${hit}` };
   }
   const who = `${t.apps.join(", ") || "a program"} read ${t.files.map((f) => f.split("/").pop()).join(", ")}`;
-  if (t.rule === "secret") {
-    return { level: t.level, files: t.files, apps: t.apps, rule: t.rule, maskWhole: true, denied, deniedOnly: false, why: `plan 10 rule (i): ${who}; the whole output is secret` };
+  if (t.rule !== "clear" && t.rule !== "mask") {
+    // Rule (i), and fail-closed (finding F-C, 2026-10-27): only `clear` and
+    // `mask` may release, so a rule this proxy does not recognise (a typo, a
+    // newer arbiter's rule, a malformed answer) masks whole like `secret`.
+    const rule: unknown = t.rule;
+    return { level: t.level, files: t.files, apps: t.apps, rule: "secret", maskWhole: true, denied, deniedOnly: false, why: rule === "secret" ? `plan 10 rule (i): ${who}; the whole output is secret` : `plan 10: ${who}, and the output rule the arbiter sent (${JSON.stringify(rule) ?? "none"}) is not one Mandu recognises; the whole output is secret (fail-closed)` };
   }
   // rule (ii)/(iii): the value backstop, then the mask regexes
   let hit = await backstop();
@@ -1648,6 +1663,7 @@ export function buildSecretNote(t: SecretTaintInfo): string | null {
   } else if (t.files.length > 0 && !t.pathDerived && !t.valueBackstop) {
     lines.push(`note: ${t.apps.join(", ")} read ${t.files.join(", ")} (a listed reader); the output is released by the program's rule.`);
   }
+  if (t.twinWrites && t.twinWrites.length > 0) lines.push(twinWriteLine(t.twinWrites));
   if (t.twinOnly && t.twinOf && t.twinOf.length > 0 && t.dirListing) {
     // "A folder's names" (plan 10 §11.8), and beside another command
     // (folder-listing-compound.md). Byte-identical in both proxies.
@@ -1733,6 +1749,30 @@ function appendAfterTheFactNote(fco: ToolOutputItem, audit: RewriteAudit, line: 
   audit.afterTheFact = true;
 }
 
+/** Confidentiality §7.1, "git's report on a history rewrite" (same seam as
+ *  the Claude proxy; ported 2026-10-27, when Codex, given git's EACCES on a
+ *  locked object and nothing beside it, took the repository for broken and
+ *  replaced its history with one new commit): the `[mandu:locked]` note
+ *  after a PUBLIC output whose git could not read objects Mandu locked or
+ *  remove a protected file's read-only copy. Static text, the ids and the
+ *  paths the output already shows (locked-object-note.ts, the module both
+ *  proxies carry). A script cell's parts keep their shape: the note is one
+ *  more `input_text` part. */
+function appendLockedObjectNote(fco: ToolOutputItem, audit: RewriteAudit, ids: readonly string[] | undefined, paths: readonly string[] | undefined): void {
+  const notes = [ids ? lockedObjectNote(ids) : null, paths ? protectedCopyNote(paths) : null].filter((n): n is string => n !== null);
+  if (notes.length === 0) return;
+  const note = notes.join("\n");
+  if (Array.isArray(fco.output) && fco.output.length > 0 && fco.output.every(isInputTextPart)) {
+    fco.output = [...(fco.output as unknown[]), { type: "input_text", text: `\n\n${note}` }] as never;
+    audit.forwardedText = flattenOutput(fco.output);
+  } else {
+    const forwarded = `${audit.forwardedText ?? audit.value}\n\n${note}`;
+    setOutput(fco, forwarded);
+    audit.forwardedText = forwarded;
+  }
+  audit.lockedNote = note;
+}
+
 /**
  * What the forwarded request carries for THIS output, minus the proxy-authored
  * secret note and the trusted piece a split result keeps verbatim: the
@@ -1742,6 +1782,7 @@ function appendAfterTheFactNote(fco: ToolOutputItem, audit: RewriteAudit, line: 
 export function ownForwardedText(r: RewriteAudit): string {
   let text = r.forwardedText ?? (r.symbolized ? r.symbol ?? "" : r.value);
   if (r.secretNote) text = text.replace(`\n\n${r.secretNote}`, "");
+  if (r.lockedNote) text = text.replace(`\n\n${r.lockedNote}`, "");
   return r.keptVerbatim ? text.replace(r.keptVerbatim, "") : text;
 }
 
@@ -2131,6 +2172,18 @@ export async function rewriteRequest(
         why: "a shell command the user ran whose record Mandu could not read as a command and its output; the whole record is secret",
       };
     }
+    // The exec gate blocked this call (its notice is recorded above, but the
+    // output is not exactly the sentinel's): nothing it ran printed this, so
+    // whatever more it holds is masked whole, whatever the classify read in
+    // the sentinel's text (2026-10-26: it no longer reads the quoted
+    // notice's words as paths, confidentiality.md §7.1, "A word in a message
+    // is not a path"). Same seam as the Claude proxy.
+    if (gateNotice !== undefined) {
+      const why = "the exec gate blocked this command, so nothing it ran printed this; anything beyond the gate's own notice is masked whole";
+      secretTaint = secretTaint
+        ? { ...secretTaint, maskWhole: true, level: stricterLevel(secretTaint.level, "no-model"), why: `${secretTaint.why}; ${why}` }
+        : { level: "no-model", files: [], apps: [], rule: "secret", maskWhole: true, denied: [], deniedOnly: false, why };
+    }
     if (secretTaint?.maskWhole) {
       verdict = { ...verdict, confidentiality: stricterLevel(verdict.confidentiality, secretTaint.level), reason: `${verdict.reason}; ${secretTaint.why}` };
     } else if ((secretTaint?.deniedOnly || secretTaint?.twinOnly) && isSecretLevel(verdict.confidentiality)) {
@@ -2261,6 +2314,16 @@ export async function rewriteRequest(
     if (afterFactLine && (secretTaint?.pathDerived || secretTaint?.valueBackstop)) {
       const { pathDerived: _dropped, valueBackstop: _dropped2, ...rest } = secretTaint;
       secretTaint = rest;
+    }
+    // Plan 10 §4.1, "The model is told at the call" (same seam as the Claude
+    // proxy): the call writes a protected file's placeholder copy; the
+    // `copy:` line says the change never reaches the real file (answered
+    // only for a session the file guard confines). Explains only.
+    const twinWrites = twinWriteTokens(classified.twinWrites, args);
+    if (twinWrites.length > 0) {
+      secretTaint = secretTaint
+        ? { ...secretTaint, twinWrites }
+        : { level: "public", files: [], apps: [], rule: "secret", maskWhole: false, denied: [], deniedOnly: false, twinWrites, why: "the call writes a protected file's placeholder copy" };
     }
     if (untrusted || secret) {
       // The codex exec envelope dual (2026-09-05): when the arbiter trusts the
@@ -2408,6 +2471,7 @@ export async function rewriteRequest(
         reason: verdict.reason,
       });
       appendSecretNote(fco, rewrites[rewrites.length - 1]!, secretTaint);
+      if (!pathReleased && textOnly) appendLockedObjectNote(fco, rewrites[rewrites.length - 1]!, verdict.lockedObjects, verdict.protectedCopies);
     }
   }
 

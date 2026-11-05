@@ -26,7 +26,11 @@
  *       24 px, no fixed width, never `nowrap`, so it never runs past a
  *       390 px phone; the rows keep their moments;
  *   Y3  the oracle: the model never got the value, and neither the History
- *       answer, `/api/home` nor the drawn page carries it or a token.
+ *       answer, `/api/home` nor the drawn page carries it or a token;
+ *   Y4  a row's moment says the same day as its heading (dashboard.md
+ *       §4.25u *Every moment reads absolute and relative*): A, ended a day
+ *       before the page's clock, reads "ended yesterday" under "Yesterday"
+ *       (until 2026-10-28 "ended 1 day ago"), B "ended 1 minute ago".
  *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON). What is
  * under test is the served page and styles; the stack supplies the real
@@ -185,6 +189,10 @@ test("History puts real sessions under day headings, Today and Yesterday, each b
           const row = [...list(doc).querySelectorAll(".row.agent")].find((r: El) => r.dataset.session === id) as El;
           assert.match(row.textContent, /ended/, `${id} keeps its moment`);
         }
+        // Y4: a row's moment says the day its heading says.
+        const when = (id: string) => ([...list(doc).querySelectorAll(".row.agent")].find((r: El) => r.dataset.session === id) as El).querySelector(".agent-when").textContent;
+        assert.equal(when(A), "ended yesterday", `at ${width}: the word of A's heading`);
+        assert.equal(when(B), "ended 1 minute ago", `at ${width}`);
         // Y3: the drawn page carries no value.
         noValue(doc.body.textContent, `the rendered History page at ${width}`);
       }, { css, beforeScripts: clock });

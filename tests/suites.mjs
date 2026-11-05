@@ -188,7 +188,7 @@ const packages = [
   pkg("cdp-relay", "interceptors/cdp-relay", { scripts: ["test:unit", "test:component"], doc: "docs/design/agents/devtools-relay.md" }),
   pkg("inspect-mcp", "interceptors/inspect-mcp", { scripts: ["test:unit", "test:component"], doc: "docs/design/integrity/symbol-quality.md" }),
   pkg("policy-mcp", "interceptors/policy-mcp", { kind: "unit", scripts: ["test:unit"], doc: "docs/design/ui/policy-surface.md" }),
-  pkg("openclaw-inspect-plugin", "interceptors/openclaw-inspect-plugin", { kind: "unit", scripts: ["test:unit"], doc: "docs/design/agents/supported-agents.md" }),
+  pkg("openclaw-inspect-plugin", "interceptors/openclaw-inspect-plugin", { scripts: ["test:unit", "test:component"], doc: "docs/design/agents/openclaw-plugin.md" }),
   pkg("exec-wrap", "interceptors/exec-wrap", { scripts: ["test:unit", "test:component"], doc: "docs/design/integrity/exec-routing.md" }),
   pkg("reply-filter", "interceptors/reply-filter", {
     scripts: ["test:unit", "test:component"], platforms: LD, doc: "docs/design/ui/reply-row-reservation.md",
@@ -274,9 +274,11 @@ const docsLane = [
   }),
   e({
     id: "launcher.docs", kind: "unit", axis: "off", cwd: "launcher", variantOf: "launcher",
-    cmd: tsxTest("test/unit/docs-url.test.ts", "test/unit/license-manifest.test.ts"),
+    cmd: tsxTest("test/unit/docs-url.test.ts", "test/unit/license-manifest.test.ts", "test/unit/agent-skills.test.ts", "test/unit/devcontainer.test.ts"),
     needs: ["node"], timeout: 300, docsLane: true, idOnly: true, doc: "docs/design/distribution/packaging.md",
-    note: "every docsUrl() target exists; licensing.md is DECIDED",
+    note: "every docsUrl() target exists; licensing.md is DECIDED; the agent skills (skills/*/SKILL.md, " +
+      "handling-prompt.md §12): spec frontmatter, real mandu commands and flags, live links; " +
+      "the README's Get started links the codespace (packaging.md §3.1)",
   }),
 ];
 
@@ -402,6 +404,7 @@ const scriptTests = [
   // The host prep's agents are the agent registry's npm agents.
   scriptTest("fresh-install-host", "scripts/test/fresh-install-host.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
   scriptTest("fresh-agents-host", "scripts/test/fresh-agents-host.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
+  scriptTest("fresh-openclaw-plugin-host", "scripts/test/fresh-openclaw-plugin-host.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
   scriptTest("node-major", "scripts/test/node-major.test.mjs", { doc: "docs/design/testing/os-test-matrix.md" }),
   // The npm release gate's host prep (what the guest installs, which
   // credentials it may hold) and its access-token-only Codex login.
@@ -411,6 +414,8 @@ const scriptTests = [
   scriptTest("set-api-key", "scripts/test/set-api-key.test.mjs", { doc: "docs/design/testing/continuous-integration.md" }),
   // The one path table: fails when a generated copy differs from it.
   scriptTest("mandu-paths", "scripts/test/mandu-paths.test.mjs", { doc: "docs/design/architecture/on-disk-layout.md" }),
+  // The modules shipped byte-identical in several packages: fails when a copy differs from its source.
+  scriptTest("module-copies", "scripts/test/module-copies.test.mjs", { doc: "docs/development.md" }),
   scriptTest("matrix-provision", "scripts/test/matrix-provision.test.sh", { doc: "docs/design/testing/os-test-matrix.md" }),
   scriptTest("matrix-rust-toolchain", "scripts/test/matrix-rust-toolchain.test.sh", { doc: "docs/design/testing/os-test-matrix.md" }),
   scriptTest("matrix-reboot", "scripts/test/matrix-reboot.test.sh", { doc: "docs/design/testing/os-test-matrix.md" }),
@@ -425,6 +430,7 @@ const scriptTests = [
   scriptTest("ci-lane", "scripts/test/ci-lane.test.mjs", { needs: ["node", "git"], doc: "docs/design/testing/continuous-integration.md" }),
   // scripts/ci/master-check.mjs: the hourly master check's skip and record (§7.1).
   scriptTest("ci-master-check", "scripts/test/ci-master-check.test.mjs", { doc: "docs/design/testing/continuous-integration.md" }),
+  scriptTest("ci-macos-run", "scripts/test/ci-macos-run.test.mjs", { platforms: LD, doc: "docs/design/testing/continuous-integration.md" }),
   // GitHub's paths-filter semantics, which suites-manifest checks ci.yml's
   // docs filter with (§12).
   scriptTest("github-rules", "scripts/test/github-rules.test.mjs", { needs: ["node"], doc: "docs/design/testing/continuous-integration.md" }),
@@ -585,7 +591,7 @@ const kernel = [
       "(a store in the Mandu home swapped for a symlink outside it refuses the launch, plan 14 §11.2 (c)), unconfined-launch-notice " +
       "(plan 14 §11.2.1: a live unconfined launch is named in the next launch's one notice, counted on its banner and in full in its log; packaging.md §5.2: a launch from " +
       "a git worktree with no bins of its own is confined by its main checkout's bins when their provenance matches, refused and gated " +
-      "on one source byte of difference), wrap-pid-namespace, wrap-clone-filter (no sibling in the tree: clone(CLONE_PARENT) EPERM, clone3 ENOSYS, every ordinary spawn and thread still works under the real wrap, and a Go program built from net-supervisor's tests/fixtures/clone-probe.go (threads, os/exec, loopback TCP, HTTP, a Unix socket) works while its raw and Cloneflags CLONE_PARENT are refused and its UseCgroupFD clone3 spawn answers ENOSYS, the Go leg left out without go, exec-routing.md §7.5 gap (d)), wrap-open-fast-path (under the net-only wrap alone the guard's opens skip the Landlock mirror, every decision unchanged, the guard's own count of which path ran; plan 10 §4.1a, the cost of the mirror), guard-direct-open-mode (the agent's O_DIRECTORY open of its own tmp dir with Bun's stray 0666 opens with --no-landlock-net, the guard's one-step open, and with the rung on, and a create keeps its mode under the umask; plan 10 §4.1 step 3), guard-written-exec (a program the agent's tree has just copied runs at once, never ETXTBSY: the guard closes a write descriptor it handed over before the tracee resumes, confidentiality plan 10 §4.1a), guard-mirror-records (400 short-lived self-sandboxed processes: every one confined, the guard's mirror threads never one per process, a live sandbox and its later child still confined after the sweeps; plan 10 §4.1a, the mirror's records over a session),bind-only-posture, placeholder-commit-warning (a tracked protected file: the agent's `git commit -a` of its EDITED twin is named after the session with a remove-only repair that works, a commit of another file is not, a killed session's commit is named by the next launch, an untracked and an ignored protected file staged after the commit are unstaged first by the printed repair, so its amend takes neither placeholder, a walk cache swapped for a link outside the home is refused before any record behind it is read or removed, TWO SESSIONS, a killed one's `git add -A` of a never-tracked file and the next one's `git commit -a`, and THE BRANCH SWITCH, the agent's commit on a branch that never held the real files: each printed repair, run as printed, leaves the real value in no tip that moved, not in the index, and in no commit a branch that did not hold it reaches, since no command puts any version of the file back; confidentiality.md §7.2a), probe-cache-launch (a poisoned kept userns pass fails closed and is dropped, a failed probe is asked again, `mandu setup` clears the per-boot probe cache, a real pass is kept and still enacted, packaging.md §5.4), " +
+      "on one source byte of difference), openclaw-box (the OpenClaw plugin's confined-commands box over the real launcher, guard and egress proxy beside a live attachment: placeholders through a command and the fs bridge, the value only at its bound host, Mandu's state and a --write-protect path out of reach, the bridge's write-back, no box without the arbiter; openclaw-plugin.md §10), wrap-pid-namespace, wrap-clone-filter (no sibling in the tree: clone(CLONE_PARENT) EPERM, clone3 ENOSYS, every ordinary spawn and thread still works under the real wrap, and a Go program built from net-supervisor's tests/fixtures/clone-probe.go (threads, os/exec, loopback TCP, HTTP, a Unix socket) works while its raw and Cloneflags CLONE_PARENT are refused and its UseCgroupFD clone3 spawn answers ENOSYS, the Go leg left out without go, exec-routing.md §7.5 gap (d)), wrap-open-fast-path (under the net-only wrap alone the guard's opens skip the Landlock mirror, every decision unchanged, the guard's own count of which path ran; plan 10 §4.1a, the cost of the mirror), guard-direct-open-mode (the agent's O_DIRECTORY open of its own tmp dir with Bun's stray 0666 opens with --no-landlock-net, the guard's one-step open, and with the rung on, and a create keeps its mode under the umask; plan 10 §4.1 step 3), guard-written-exec (a program the agent's tree has just copied runs at once, never ETXTBSY: the guard closes a write descriptor it handed over before the tracee resumes, confidentiality plan 10 §4.1a), guard-mirror-records (400 short-lived self-sandboxed processes: every one confined, the guard's mirror threads never one per process, a live sandbox and its later child still confined after the sweeps; plan 10 §4.1a, the mirror's records over a session),bind-only-posture, placeholder-commit-warning (a tracked protected file: the agent's `git commit -a` of its EDITED twin is named after the session with a remove-only repair that works, a commit of another file is not, a killed session's commit is named by the next launch, an untracked and an ignored protected file staged after the commit are unstaged first by the printed repair, so its amend takes neither placeholder, a walk cache swapped for a link outside the home is refused before any record behind it is read or removed, TWO SESSIONS, a killed one's `git add -A` of a never-tracked file and the next one's `git commit -a`, and THE BRANCH SWITCH, the agent's commit on a branch that never held the real files: each printed repair, run as printed, leaves the real value in no tip that moved, not in the index, and in no commit a branch that did not hold it reaches, since no command puts any version of the file back; confidentiality.md §7.2a), probe-cache-launch (a poisoned kept userns pass fails closed and is dropped, a failed probe is asked again, `mandu setup` clears the per-boot probe cache, a real pass is kept and still enacted, packaging.md §5.4), " +
       "policy-restore-and-guard-settings, endpoint-added-mid-session, perimeter-netns, codex-sandbox-exec-wrap (the exec-wrap shim inside " +
       "Codex's own sandbox: network off, its seccomp refuses the arbiter dial and the shim says so, exit 77; network on, a no-model " +
       "secret's curl runs with its placeholder left as written (the sink gets the placeholder, never the value; confidentiality.md " +
@@ -632,6 +638,32 @@ const kernel = [
       "one holding an unbound file and one a file bound to 10.77.0.2 (each through its reader's pipe); a connection from " +
       "the other machine to a holder is reset and its accept answers ECONNABORTED unless it comes from the bound host, " +
       "while loopback, the connection's own local address and a Unix client are served; the non-holder serves every peer.",
+  }),
+  // The live client lanes (live-clients.md): the real clients against real
+  // servers under a launched session. Not per push: they start real
+  // servers (and the kube one a cluster), and the per-push run keeps the
+  // fake-server stack e2e of each release (db-login-release, kube-wire-release).
+  suite("live-db-clients", "sandbox/launcher/live-db-clients.test.ts", {
+    kind: "sandbox", axis: "secrets",
+    needs: ["kernel", "node", "openssl", "bwrap", "userns", "seccomp", "native-bins", "db-servers"], parallel: true,
+    ci: KERNEL_CI, timeout: 1800, doc: "docs/design/testing/live-clients.md",
+    nightly: "starts a real PostgreSQL (twice) and MySQL 8 and launches a session around the real psql and mysql (minutes); " +
+      "the per-push run keeps the fake-server stack e2e (tests/stack/db-login-release.test.ts)",
+    note: "db-login-release.md through the real launcher in `secrets` (the stand-in claude, a scripted model) in an unprivileged " +
+      "user + network namespace, the servers on 'the other machine' (10.77.0.2) as the test's own user: psql logs in from " +
+      "~/.pgpass by SCRAM-SHA-256 and md5, sslmode disable / prefer / require / verify-full, by a name and by an IP literal; " +
+      "mysql from ~/.my.cnf by mysql_native_password and caching_sha2_password; a placeholder at another relay target or a " +
+      "decoy on 203.0.113.9 gets nothing put back; no password in the model's requests, the agent's output, the events or at a decoy.",
+  }),
+  suite("live-kube-clients", "sandbox/launcher/live-kube-clients.test.ts", {
+    kind: "sandbox", axis: "secrets", needs: ["kernel", "node", "seccomp", "native-bins", "curl", "k3s"], parallel: true,
+    ci: KERNEL_CI, timeout: 1500, doc: "docs/design/testing/live-clients.md",
+    manual: "needs a real cluster: the CI guest's k3s fixture (scripts/ci/vm-run.sh --fixture k3s --only integration.live-kube-clients), " +
+      "which turns the cpu controller on above the suites, so neither the per-push nor the nightly guest starts it",
+    note: "kube-wire-release.md through the real launcher in `secrets`: the real kubectl (auth whoami, apply, wait, get, a watch, " +
+      "logs -f, exec, exec -i, port-forward) and helm (install, list) on a bearer-token and a client-certificate context of " +
+      "~/.kube/config; the token's placeholder withheld at the kubelet's port and a NodePort decoy; no token or client key in " +
+      "the model's requests, the agent's output, the events or at the decoy.",
   }),
   suite("opencode2-own-server", "sandbox/guard/opencode2-own-server.test.ts", {
     kind: "sandbox", axis: "secrets", needs: ["kernel", "node", "landlock", "seccomp", "native-bins"], parallel: true,
@@ -1216,6 +1248,7 @@ const install = [
     files: [
       "scripts/matrix/suites/fresh-install.sh", "scripts/matrix/suites/fresh-install.host.sh",
       "scripts/matrix/suites/fresh-agents.sh", "scripts/matrix/suites/fresh-agents.host.sh",
+      "scripts/matrix/suites/fresh-openclaw-plugin.sh", "scripts/matrix/suites/fresh-openclaw-plugin.host.sh",
       "scripts/matrix/suites/kernel.sh", "scripts/matrix/suites/all.sh", "scripts/matrix/suites/wrapper.sh",
     ],
     needs: ["kvm", "qemu", "network"], timeout: 60 * 60 * 6, parallel: false, doc: "docs/design/testing/os-test-matrix.md",
@@ -1357,6 +1390,22 @@ const depAudit = [
   }),
 ];
 
+// ── env: the "Try Mandu" devcontainer, built and run under Docker ──────────────
+// packaging.md §3.1: the image the README's "Open in GitHub Codespaces" opens
+// installs the PUBLISHED package from the registry, so this checks a release in
+// that container (Docker's defaults, a non-root user), not the tree under test.
+// No CI guest has a Docker engine; it runs by hand when the devcontainer or a
+// release changes.
+const devcontainer = [
+  scriptTest("devcontainer-demo", "scripts/test/devcontainer-demo.test.sh", {
+    kind: "env", axis: "secrets", needs: ["bash", "docker", "network"], internet: true,
+    parallel: false, timeout: 1800, doc: "docs/design/distribution/packaging.md",
+    manual: "needs a Docker engine and the registry; run it when .devcontainer/ or a release changes (packaging.md §3.1)",
+    note: "builds .devcontainer/Dockerfile, then in containers of it with Docker's defaults: a non-root user, Node at the floor, " +
+      "`mandu doctor` runs, `mandu demo` exits 0 with its result line; SKIPs without a reachable Docker engine.",
+  }),
+];
+
 /** Composite npm scripts: the union of several entries (run the entries instead). None
  *  today; the drills' composites are `drills:*` scripts (private/suites.mjs). */
 export const aggregates = [];
@@ -1453,6 +1502,8 @@ const PROVES = {
   "integration.forged-reports": ["exec/provenance", "model-ingress/exec-output", "fs/open-raw", "utility/no-over-block"],
   "integration.tainted-egress": ["network-egress/dns", "network-egress/upload", "fs/open-raw"],
   "integration.holder-accept": ["network-egress/upload", "fs/open-raw", "utility/no-over-block"],
+  "integration.live-db-clients": ["network-egress/upload", "model-ingress/exec-output", "fs/twin", "utility/no-over-block", "utility/task"],
+  "integration.live-kube-clients": ["network-egress/upload", "network-egress/mitm", "model-ingress/exec-output", "fs/twin", "utility/no-over-block", "utility/task"],
   "integration.https-proxy-taint": ["network-egress/upload", "network-egress/mitm", "fs/open-raw", "utility/no-over-block"],
   "integration.blind-tunnel-fork": ["network-egress/upload", "fs/open-raw", "utility/no-over-block"],
   "integration.secret-placeholder-argv": ["exec/symbol-command", "network-egress/upload", "network-egress/mitm", "fs/twin", "utility/no-over-block"],
@@ -1507,6 +1558,7 @@ const NO_PROVES = {
   "integration.launch-budget": "a launch-time budget (the host's speed against a recorded baseline), not a data path",
   "deps.audit-npm": "a supply-chain check of the lockfiles against published advisories, not a data path",
   "deps.audit-cargo": "a supply-chain check of the Cargo lockfile against the RustSec database, not a data path",
+  "scripts.devcontainer-demo": "runs the PUBLISHED package's `mandu demo` in the devcontainer image: a release in that container, not the tree under test",
 };
 
 export const entries = [
@@ -1526,6 +1578,7 @@ export const entries = [
   ...internetOnly,
   ...launchBudget,
   ...depAudit,
+  ...devcontainer,
 ];
 
 for (const [id, proves] of Object.entries(PROVES)) {

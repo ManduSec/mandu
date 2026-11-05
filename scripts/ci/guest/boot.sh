@@ -43,6 +43,12 @@
 # battery's choices (MANDU_DEMO_IDS, MANDU_DEMO_SIDES, MANDU_DEMO_MODELS,
 # MANDU_DEMO_REPEAT, MANDU_DEMO_JOBS, MANDU_DEMO_AGENTS, §9.9) reach the pipeline's environment when set.
 #
+# A fixture (vm-run.sh --fixture, job.env MANDU_CI_FIXTURES): k3s starts the
+# image's fixture-k3s.sh as root before the pipeline (or the shell), a
+# one-node cluster at 10.201.0.2 in its own network namespace for the live
+# kubectl suite (docs/design/testing/live-clients.md §3); its logs go into
+# the results under logs/fixtures/.
+#
 # Not running: the kernel command line `mandu.ci=off`, or MANDU_CI_MODE=shell,
 # which unpacks the checkout and gives the serial console a login shell as
 # `ci` in /work/mandu instead (vm-run.sh --shell); the guest powers off when
@@ -56,7 +62,8 @@ TREE=$WORK/mandu
 RESULTS=$WORK/out
 JOB=/run/mandu-ci
 CI_USER=ci
-BWRAP_CI=/usr/local/lib/mandu-ci/bwrap
+LIB_DIR=/usr/local/lib/mandu-ci
+BWRAP_CI=$LIB_DIR/bwrap
 MTIME_MANIFEST=/var/lib/mandu-ci/src.sha256
 FIXED_MTIME=946684800   # 2000-01-01: provision.sh stamps every source file with it
 
@@ -108,7 +115,7 @@ if ! tar -x -f "$IN" -C "$JOB" --no-same-owner --no-same-permissions job.env; th
   say "the input disk holds no job.env"; off
 fi
 declare -A J=()
-KEYS=" MANDU_CI_MODE MANDU_CI_KINDS MANDU_CI_NEED MANDU_CI_ONLY MANDU_CI_JOBS MANDU_CI_RUN_ID MANDU_CI_SOURCE MANDU_CI_COMMIT MANDU_CI_REF MANDU_CI_IMAGE MANDU_CI_EXEC_B64 MANDU_CI_NETWORK MANDU_CI_OLLAMA MANDU_CI_CREDENTIAL MANDU_CI_INCLUDE_FLAKY MANDU_CI_INCLUDE_INTERNET MANDU_CI_LANE MANDU_CI_BUDGET MANDU_DEMO_IDS MANDU_DEMO_SIDES MANDU_DEMO_MODELS MANDU_DEMO_REPEAT MANDU_DEMO_JOBS MANDU_DEMO_AGENTS "
+KEYS=" MANDU_CI_MODE MANDU_CI_KINDS MANDU_CI_NEED MANDU_CI_ONLY MANDU_CI_JOBS MANDU_CI_RUN_ID MANDU_CI_SOURCE MANDU_CI_COMMIT MANDU_CI_REF MANDU_CI_IMAGE MANDU_CI_EXEC_B64 MANDU_CI_NETWORK MANDU_CI_OLLAMA MANDU_CI_CREDENTIAL MANDU_CI_INCLUDE_FLAKY MANDU_CI_INCLUDE_INTERNET MANDU_CI_LANE MANDU_CI_BUDGET MANDU_CI_FIXTURES MANDU_DEMO_IDS MANDU_DEMO_SIDES MANDU_DEMO_MODELS MANDU_DEMO_REPEAT MANDU_DEMO_JOBS MANDU_DEMO_AGENTS "
 DEMO_KEYS="MANDU_DEMO_IDS MANDU_DEMO_SIDES MANDU_DEMO_MODELS MANDU_DEMO_REPEAT MANDU_DEMO_JOBS MANDU_DEMO_AGENTS"
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
@@ -321,6 +328,27 @@ else
   say "cpu: WARNING: the suites share the cpu task group of $cg_cpu, where no autogroup applies: a single-threaded suite gets a per-task slice beside the builds (continuous-integration.md §3)"
 fi
 
+# ── the fixtures a job asks for (vm-run.sh --fixture) ─────────────────────
+# MANDU_CI_FIXTURES, a comma list of names this image knows; each runs as
+# root from the image (never from the checkout), its log in the results.
+# k3s (live-clients.md §3): a one-node cluster in its own network namespace
+# at 10.201.0.2, for integration.live-kube-clients. A fixture that fails is
+# logged and the pipeline runs anyway: the suite SKIPs without its ready file.
+FIXTURE_LOGS=/run/mandu-ci-fixtures/logs
+for fx in ${J[MANDU_CI_FIXTURES]//,/ }; do
+  install -d -m 0755 /run/mandu-ci-fixtures "$FIXTURE_LOGS"
+  case "$fx" in
+    k3s)
+      t0=$(uptime_s)
+      if "$LIB_DIR/fixture-k3s.sh" /run/mandu-ci-fixtures/k3s "$FIXTURE_LOGS/k3s.log" > "$FIXTURE_LOGS/k3s.console" 2>&1; then
+        say "fixture k3s: ready in $(awk -v a="$t0" -v b="$(uptime_s)" 'BEGIN{printf "%.1f", b-a}')s ($(tail -1 "$FIXTURE_LOGS/k3s.console"))"
+      else
+        say "fixture k3s: FAILED ($(tail -1 "$FIXTURE_LOGS/k3s.console")); the suites that need it SKIP"
+      fi ;;
+    *) say "fixture: unknown fixture '$fx' refused" ;;
+  esac
+done
+
 # ── shell mode ─────────────────────────────────────────────────────────────
 if [[ "$MODE" == shell ]]; then
   say "shell mode: a login shell as $CI_USER in $TREE on the serial console; exit it to power off"
@@ -473,6 +501,10 @@ fi
 
 # ── the results ────────────────────────────────────────────────────────────
 mkdir -p "$RESULTS/logs"
+if [[ -d $FIXTURE_LOGS ]]; then
+  mkdir -p "$RESULTS/logs/fixtures"
+  for f in "$FIXTURE_LOGS"/*; do [[ -f $f ]] && tail -c $((5 * 1024 * 1024)) "$f" > "$RESULTS/logs/fixtures/${f##*/}"; done
+fi
 cp "$JOB/pipeline.log" "$RESULTS/logs/pipeline.log" 2>/dev/null
 tail -c $((5 * 1024 * 1024)) "$RESULTS/logs/pipeline.log" > "$JOB/p.tail" 2>/dev/null && mv "$JOB/p.tail" "$RESULTS/logs/pipeline.log"
 # The collector refuses an archive with anything but files and directories.

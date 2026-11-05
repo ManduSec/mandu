@@ -81,7 +81,7 @@ test("a non-empty list reaches the connect guard: --deny per host, beside the * 
   const mut = emptyMutation();
   const logs: string[] = [];
   const r = applyNetGuard(plan({ uploadDenyHosts: ["us.i.posthog.com", "collector.example:4318"] }), mut, {
-    resolveBin: () => "/bin/g", staleNote: () => null, log: (m) => logs.push(m),
+    resolveBin: () => "/bin/g", probe: () => true, staleNote: () => null, log: (m) => logs.push(m),
   });
   assert.ok(r);
   const argv = mut.launchPrefix.join(" ");
@@ -89,7 +89,7 @@ test("a non-empty list reaches the connect guard: --deny per host, beside the * 
   assert.match(argv, /--allow tcp:\*:443/, "the permissive fallback stays; the deny beats it in the guard");
   assert.ok(logs.some((l) => /2 upload destination\(s\)/.test(l)));
   const none = emptyMutation();
-  applyNetGuard(plan(), none, { resolveBin: () => "/bin/g", staleNote: () => null, log: () => {} });
+  applyNetGuard(plan(), none, { resolveBin: () => "/bin/g", probe: () => true, staleNote: () => null, log: () => {} });
   assert.ok(!none.launchPrefix.includes("--deny"), "no list, no --deny");
 });
 
@@ -149,7 +149,7 @@ test("codex: ab.chatgpt.com never reaches the connect guard (it answers on chatg
   const hosts = uploadDenyHosts("codex", {});
   const mut = emptyMutation();
   applyNetGuard(plan({ uploadDenyHosts: hosts, netProxyOnlyDenyHosts: uploadDenyProxyOnlyHosts("codex") }), mut, {
-    resolveBin: () => "/bin/g", staleNote: () => null, log: () => {},
+    resolveBin: () => "/bin/g", probe: () => true, staleNote: () => null, log: () => {},
   });
   const argv = mut.launchPrefix.join(" ");
   assert.match(argv, /--deny tcp:o33249\.ingest\.us\.sentry\.io:\*/);

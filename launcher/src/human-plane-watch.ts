@@ -41,6 +41,8 @@ export interface ExposingLaunch {
   posture: string;
   session?: string;
   begunAt?: number;
+  /** An attachment's kind (openclaw-plugin.md §3.3): it has no pid (0). */
+  attachment?: string;
 }
 
 /** `humanPlaneStatus`'s answer. */
@@ -66,6 +68,7 @@ export function parseHumanPlaneStatus(v: unknown): HumanPlaneStatusWire | null {
       posture: String(l.posture ?? "unknown"),
       ...(typeof l.session === "string" && l.session !== "" ? { session: l.session } : {}),
       ...(typeof l.begunAt === "number" ? { begunAt: l.begunAt } : {}),
+      ...(typeof l.attachment === "string" && /^[a-z][a-z0-9-]{0,40}$/.test(l.attachment) ? { attachment: l.attachment } : {}),
     });
   }
   // `exposed` with no launch named still counts (the arbiter failed closed).
@@ -75,7 +78,13 @@ export function parseHumanPlaneStatus(v: unknown): HumanPlaneStatusWire | null {
 /** One launch in words: `pid 4242 (session s, mode off)`. Pure. */
 export function launchWords(l: ExposingLaunch): string {
   const what = [l.session ? `session ${l.session}` : null, `mode ${l.mode}`].filter((p) => p !== null).join(", ");
+  if (l.attachment !== undefined) return `${attachmentWords(l.attachment)} (${what})`;
   return l.pid > 0 ? `pid ${l.pid} (${what})` : "a launch Mandu could not name (its record could not be read)";
+}
+
+/** An attachment kind in words. Pure. */
+export function attachmentWords(kind: string): string {
+  return kind === "openclaw-plugin" ? "Mandu's plugin in an OpenClaw Gateway" : `an attachment (${kind})`;
 }
 
 function list(launches: readonly ExposingLaunch[]): string {
@@ -88,20 +97,47 @@ export const EXPOSURE_FIX =
   "  To fix it: stop that launch, or start it again with its file guard on (not --mode off, not --no-net-guard; " +
   "`mandu doctor` says whether this computer can run the guard). This session is believed again on its own once it ends.";
 
+/** The fix when a plugin session (an attachment, openclaw-plugin.md §3.3)
+ *  holds the plane exposed: the maintainer's "weaken + warn" (2026-10-25)
+ *  says why and how to avoid it. Pure. */
+export const ATTACHMENT_EXPOSURE_FIX =
+  "  To avoid it: run the OpenClaw Gateway under Mandu instead (mandu openclaw gateway), or stop the Mandu service while you use " +
+  "confined launches (mandu serve stop); mandu openclaw uninstall detaches it for good. This session is believed again on its own once it ends.";
+
+/** The fix lines for these launches: the launch fix, the attachment fix, or
+ *  both. Pure. */
+export function exposureFixLines(launches: readonly ExposingLaunch[]): string[] {
+  const att = launches.some((l) => l.attachment !== undefined);
+  const other = launches.some((l) => l.attachment === undefined) || launches.length === 0;
+  return [...(other ? [EXPOSURE_FIX] : []), ...(att ? [ATTACHMENT_EXPOSURE_FIX] : [])];
+}
+
+/** Who holds the plane exposed, in the WARNING's words. Pure. */
+function exposers(launches: readonly ExposingLaunch[]): string {
+  const att = launches.filter((l) => l.attachment !== undefined).length;
+  if (att > 0 && att === launches.length) {
+    return `${att === 1 ? "a plugin session is running and can" : `${att} plugin sessions are running and can`} reach Mandu's own controls: ${list(launches)}`;
+  }
+  const one = launches.length <= 1;
+  return `${one ? "another Mandu launch" : `${launches.length} other Mandu launches`} can reach Mandu's own controls: ${list(launches)}` +
+    (att > 0 ? ` (${att === 1 ? "one is a plugin session" : `${att} are plugin sessions`})` : "");
+}
+
 /** The WARNING block when the exposure begins. Pure. */
 export function exposureLostLines(launches: readonly ExposingLaunch[]): string[] {
   const one = launches.length <= 1;
   return [
-    `WARNING: mandu: this session's file guard is not believed: ${one ? "another Mandu launch" : `${launches.length} other Mandu launches`} can reach Mandu's own controls: ${list(launches)}.`,
+    `WARNING: mandu: this session's file guard is not believed: ${exposers(launches)}.`,
     `  ${one ? "It runs" : "They run"} with no file guard and no mount layer between ${one ? "its" : "their"} agent and Mandu's human-plane socket, so Mandu cannot tell this session's guard reports from forged ones.`,
     `  Until ${one ? "it ends" : "they end"}, here: every secret file opens as its placeholder, every write to a protected file is refused, and shell output is masked once the session has read a secret.`,
-    EXPOSURE_FIX,
+    ...exposureFixLines(launches),
   ];
 }
 
 /** The line when the set changes while still exposed. Pure. */
 export function exposureChangedLine(launches: readonly ExposingLaunch[]): string {
-  return `WARNING: mandu: this session's file guard is still not believed; the launches that can reach Mandu's own controls are now: ${list(launches)}.`;
+  return `WARNING: mandu: this session's file guard is still not believed; the launches that can reach Mandu's own controls are now: ${list(launches)}.` +
+    (launches.some((l) => l.attachment !== undefined) ? ATTACHMENT_EXPOSURE_FIX.replace(/^ {2}/, " ") : "");
 }
 
 /** The line when the guard is believed again. Pure. */
@@ -132,11 +168,11 @@ export function exposureRecapLines(periods: readonly ExposurePeriod[]): string[]
   return [
     `WARNING: mandu: during this session its file guard was not believed (${spans}${periods.length > 5 ? ", …" : ""}) while another Mandu launch could reach Mandu's own controls: ${list([...who.values()])}.`,
     "  In that time secret files opened as placeholders, protected writes were refused and shell output was masked; anything that failed then can be run again now.",
-    ...(periods.at(-1)!.to === null ? [EXPOSURE_FIX] : []),
+    ...(periods.at(-1)!.to === null ? exposureFixLines(periods.at(-1)!.launches) : []),
   ];
 }
 
-const key = (ls: readonly ExposingLaunch[]): string => ls.map((l) => `${l.pid}/${l.session ?? ""}/${l.mode}`).sort().join(",");
+const key = (ls: readonly ExposingLaunch[]): string => ls.map((l) => `${l.pid}/${l.session ?? ""}/${l.mode}/${l.attachment ?? ""}`).sort().join(",");
 
 /** The watch's state machine: what to print for a new answer. Pure. */
 export function exposureStep(

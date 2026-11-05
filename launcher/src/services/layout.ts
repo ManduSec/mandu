@@ -187,6 +187,18 @@ export class Layout {
     return join(this.repoRoot, src);
   }
 
+  /**
+   * The argv that runs this launcher (`mandu`) for a program that starts a
+   * launch of its own (the OpenClaw plugin's confined-commands box,
+   * openclaw-plugin.md §10): the package's bin under this node when
+   * installed, the checkout's shim (launcher/mandu-run.sh, which picks the
+   * fresh bundle or the source) in a checkout. Absolute.
+   */
+  launcherArgv(): string[] {
+    if (this.mode === "installed") return [process.execPath, join(this.pkgRoot, "bin", "mandu.mjs")];
+    return [join(this.repoRoot, "launcher", "mandu-run.sh")];
+  }
+
   /** Env the arbiter-client consumers need when bundled (empty from source). */
   private clientEnv(): Record<string, string> {
     return this.bundled

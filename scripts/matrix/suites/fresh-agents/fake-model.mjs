@@ -22,9 +22,19 @@
 // interceptors/openai-proxy/test/helpers/mock-upstream.ts buildScriptCellSse
 // for codex ≥ 0.154's custom_tool_call `exec` cell).
 //
+// `--script attach` (the fresh-openclaw-plugin suite, os-test-matrix.md
+// §10.20; Anthropic wire only) makes the turn three tool rounds long, for
+// OpenClaw's resident Gateway with Mandu's plugin: the read of --file; on its
+// result, a second call of the same tool naming --tamper-path (default
+// `~/.mandu/config.toml`, which the plugin's before_tool_call must refuse);
+// on that result, a closing text that quotes the first `$MDU:` placeholder
+// of the read's result (the reply that must reach the user with the
+// placeholder kept). Each record of such a request also carries
+// `toolResults`, every tool result's text in order.
+//
 // Usage: node fake-model.mjs --agent claude|opencode|openclaw|codex \
 //          --file <abs path to read> --capture <ndjson out> --port-file <path>
-//          [--claude-tool Bash]
+//          [--claude-tool Bash] [--script attach [--tamper-path <path>]]
 import http from "node:http";
 import { appendFileSync, writeFileSync } from "node:fs";
 
@@ -35,6 +45,12 @@ const AGENT = args.agent;
 const FILE = args.file;
 const CAPTURE = args.capture;
 const DONE_TEXT = "MANDU_FAKE_DONE: the file came back; I only describe its shape.";
+const SCRIPT = args.script ?? "read";
+const TAMPER_PATH = args["tamper-path"] ?? "~/.mandu/config.toml";
+if (SCRIPT !== "read" && SCRIPT !== "attach") {
+  console.error(`fake-model.mjs: unknown --script ${SCRIPT} (read | attach)`);
+  process.exit(2);
+}
 if (!AGENT || !FILE || !CAPTURE || !args["port-file"]) {
   console.error("usage: fake-model.mjs --agent <a> --file <path> --capture <file> --port-file <file>");
   process.exit(2);
@@ -59,10 +75,10 @@ function anthropicText(text) {
     ["message_stop", { type: "message_stop" }],
   ];
 }
-function anthropicToolUse(name, input) {
+function anthropicToolUse(name, input, id = "toolu_fake_1") {
   return [
     msgStart("msg_fake_tool"),
-    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_fake_1", name, input: {} } }],
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id, name, input: {} } }],
     ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(input) } }],
     ["content_block_stop", { type: "content_block_stop", index: 0 }],
     ["message_delta", { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 1 } }],
@@ -154,12 +170,18 @@ const codexHasExecCell = (j) => {
 // oracles check for a symbol. Grepping the whole body would be vacuous, since
 // Mandu's handling prompt carries example $MDU: tokens of its own.
 const partsText = (c) => (typeof c === "string" ? c : Array.isArray(c) ? c.map((p) => (typeof p?.text === "string" ? p.text : "")).join("\n") : "");
-function lastToolResult(j) {
-  let last = null;
-  for (const m of j.messages ?? []) for (const b of Array.isArray(m.content) ? m.content : []) if (b?.type === "tool_result") last = partsText(b.content);
-  for (const i of Array.isArray(j.input) ? j.input : []) if (i?.type === "custom_tool_call_output" || i?.type === "function_call_output") last = partsText(i.output);
-  return last;
+function toolResults(j) {
+  const out = [];
+  for (const m of j.messages ?? []) for (const b of Array.isArray(m.content) ? m.content : []) if (b?.type === "tool_result") out.push(partsText(b.content));
+  for (const i of Array.isArray(j.input) ? j.input : []) if (i?.type === "custom_tool_call_output" || i?.type === "function_call_output") out.push(partsText(i.output));
+  return out;
 }
+function lastToolResult(j) {
+  const all = toolResults(j);
+  return all.length > 0 ? all[all.length - 1] : null;
+}
+// The first `$MDU:` placeholder in a text, without trailing punctuation.
+const firstPlaceholder = (t) => (/\$MDU:[^\s"'`,;)]+/.exec(t ?? "")?.[0] ?? null)?.replace(/[.:]+$/, "") ?? null;
 
 // ── server ───────────────────────────────────────────────────────────────────
 let toolCallSent = false;
@@ -169,6 +191,20 @@ function sse(res, events) {
   res.end();
 }
 function decide(url, j) {
+  if (url.includes("/v1/messages") && SCRIPT === "attach") {
+    const t = TOOL[AGENT];
+    const results = toolResults(j);
+    if (results.length === 0) {
+      if (t && !toolCallSent && advertises(j, t.name)) { toolCallSent = true; return ["tool-call", anthropicToolUse(t.name, t.input)]; }
+      return ["ack", anthropicText("ok")];
+    }
+    if (results.length === 1) {
+      const key = Object.keys(t?.input ?? {})[0] ?? "path";
+      return ["tamper-call", anthropicToolUse(t?.name ?? "read", { [key]: TAMPER_PATH }, "toolu_fake_2")];
+    }
+    const ph = firstPlaceholder(results[0]);
+    return ["final", anthropicText(`MANDU_FAKE_DONE: the key in that file is ${ph ?? "(no placeholder came back)"}.`)];
+  }
   if (url.includes("/v1/messages")) {
     if (isClassifier(j)) return ["classifier", anthropicVerdict()];
     if (hasToolResult(j)) return ["tool-result", anthropicText(DONE_TEXT)];
@@ -197,7 +233,8 @@ const server = http.createServer((req, res) => {
     try { j = JSON.parse(body || "{}"); } catch { /* not JSON: captured raw, answered as ACK below */ }
     const [kind, events] = req.method === "POST" ? decide(url, j) : [null, null];
     const toolResult = kind === "tool-result" ? lastToolResult(j) : undefined;
-    appendFileSync(CAPTURE, JSON.stringify({ t: Date.now(), method: req.method, url, kind, toolResult, body }) + "\n");
+    const results = SCRIPT === "attach" && (kind === "tamper-call" || kind === "final") ? toolResults(j) : undefined;
+    appendFileSync(CAPTURE, JSON.stringify({ t: Date.now(), method: req.method, url, kind, toolResult, ...(results ? { toolResults: results } : {}), body }) + "\n");
     // The Anthropic wire answers a non-streaming request with one Message JSON.
     if (events && url.includes("/v1/messages") && j.stream !== true) {
       res.writeHead(200, { "content-type": "application/json" });

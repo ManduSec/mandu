@@ -291,7 +291,7 @@ export function entryReadsTwin(r: unknown): boolean {
 }
 
 /** What an entry whose program reads the placeholder carries on the page. */
-export const READS_PLACEHOLDER = " (reads the placeholder copy)";
+export const READS_PLACEHOLDER = " (reads the masked copy)";
 
 /** The interpreters whose script an entry may pin (flow-taint.ts
  *  SCRIPT_FAMILIES); the warning names the script form only for these. */
@@ -366,8 +366,8 @@ function unvettedWarning(readers: ReadonlyArray<unknown> | undefined, j?: Arbite
   if (unique.length === 0) return null;
   const list = unique.join(", ");
   return unique.length === 1
-    ? `${list} is not a program Mandu knows keeps a file's contents out of what it prints, so it reads the placeholder copy. If you are sure it does, write { app: ${unique[0]}, prints: nothing }.`
-    : `${list} are not programs Mandu knows keep a file's contents out of what they print, so each reads the placeholder copy. If you are sure one does, write { app: <its name>, prints: nothing }.`;
+    ? `${list} is not a program Mandu knows keeps a file's contents out of what it prints, so it reads the masked copy. If you are sure it does, write { app: ${unique[0]}, prints: nothing }.`
+    : `${list} are not programs Mandu knows keep a file's contents out of what they print, so each reads the masked copy. If you are sure one does, write { app: <its name>, prints: nothing }.`;
 }
 
 /** Plan 13 D8, printers admit nothing (2026-10-03): the printers a list names. */

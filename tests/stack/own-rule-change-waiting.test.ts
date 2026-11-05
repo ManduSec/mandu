@@ -30,10 +30,18 @@
  *       Home: "2 rule changes wait for you in Approvals";
  *   O5  Not now on yours: the heading is "Rule changes your agent asked
  *       for" again, Home "1 rule change your agent asked for is in
- *       Approvals"; the lock is still in policy.yaml;
- *   O6  no unhandled rejection; the oracle: no rendered page or answer
- *       carries a locked file's value, the admin token or the session
- *       secret.
+ *       Approvals"; the lock is still in policy.yaml (Home does not list
+ *       the agent's session yet: "your agent");
+ *   O6  the agent's session runs a turn through the real anthropic-proxy,
+ *       its folder in Claude Code's system prompt ("Primary working
+ *       directory: ~/shop"): Home lists it, and one session asked for
+ *       every change waiting, so Home reads "1 rule change Claude Code in
+ *       ~/shop asked for is in Approvals" (the folder as code) and the
+ *       heading "Rule changes Claude Code asked for" (dashboard.md *A rule
+ *       change and the agent that asked*, #162);
+ *   O7  no unhandled rejection; the oracle: no rendered page, answer or
+ *       request to the model carries a locked file's value, the admin
+ *       token or the session secret.
  *
  * Axes: secrets (stated). What is under test is the served script and the
  * view model over the arbiter's record.
@@ -47,6 +55,9 @@ import { join } from "node:path";
 import { ArbiterServer } from "../../arbiter/ipc/server.js";
 import { ArbiterClient } from "../../arbiter/ipc/client.js";
 import { resetCurrentPolicyForTests } from "../../arbiter/policy/compiled-policy.js";
+import { AnthropicProxy } from "../../interceptors/anthropic-proxy/src/proxy.js";
+import { ArbiterClientAdapter } from "../../interceptors/anthropic-proxy/src/arbiter-client.js";
+import { MockUpstream, buildTextSse } from "../../interceptors/anthropic-proxy/test/helpers/mock-upstream.js";
 import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
@@ -95,6 +106,14 @@ test("a rule change the Rules page left waiting reads as yours on the served App
   await arbiter.listen();
   const data = new ArbiterClient(socketPath);
   await data.connect();
+  // The proxy's production wiring (anthropic-proxy/src/server-main.ts), for O6.
+  const human = new ArbiterClient(humanPath);
+  await human.connect();
+  const upstream = new MockUpstream({ sse: buildTextSse("ok") });
+  const proxy = new AnthropicProxy({ arbiter: new ArbiterClientAdapter(data, human), upstream: (x) => upstream.fetcher(x), log: () => {} });
+  const proxyPort = await proxy.listen(0);
+  const shop = join(home, "shop");
+  mkdirSync(shop, { recursive: true });
   const wired = await makeApprovalsArbiter(socketPath, () => ({ socketPath: adminSock }));
   assert.ok(wired?.secrets && wired.policyDoc, "the production adapter has the secrets and policy surfaces");
   const dashboard = new DashboardServer({
@@ -151,7 +170,7 @@ test("a rule change the Rules page left waiting reads as yours on the served App
 
     // O2: Approvals.
     await page("/approvals", (doc) => cards(doc).length === 1, (doc) => {
-      assert.equal(head(doc), "Rule changes waiting for you");
+      assert.equal(head(doc), "Rule changes waiting for you (1)");
       const [card] = cards(doc);
       assert.equal(sentence(card), "You want to change a rule");
       assert.equal(label(card), "Note");
@@ -167,7 +186,7 @@ test("a rule change the Rules page left waiting reads as yours on the served App
     const theirs = await data.policyPropose({ edits: [{ op: "release", to: { host: "paste.example" }, mode: "allow" }], reason: "upload the notes", sessionKey: AGENT });
     assert.ok("proposalId" in theirs && !theirs.applied, `the agent's loosening waits: ${JSON.stringify(theirs)}`);
     await page("/approvals", (doc) => cards(doc).length === 2, (doc) => {
-      assert.equal(head(doc), "Rule changes waiting for you");
+      assert.equal(head(doc), "Rule changes waiting for you (2)", "with the count of its cards");
       const agentCard = cards(doc).find((c) => c.dataset.id === theirs.proposalId);
       const ownCard = cards(doc).find((c) => c.dataset.id === yours.id);
       assert.equal(sentence(agentCard), "Your agent wants to change a rule", "an agent's request reads as before");
@@ -188,7 +207,7 @@ test("a rule change the Rules page left waiting reads as yours on the served App
       notNow.click();
       await waitWhile(() => cards(doc).length !== 1);
       assert.equal(cards(doc)[0].dataset.id, theirs.proposalId);
-      assert.equal(head(doc), "Rule changes your agent asked for", "only the agent's request waits");
+      assert.equal(head(doc), "Rule changes your agent asked for (1)", "only the agent's request waits");
       assert.equal(label(cards(doc)[0]), "Your agent says");
     });
     await page("/", (doc) => homeLink(doc) !== "(no line)", (doc) => {
@@ -196,16 +215,45 @@ test("a rule change the Rules page left waiting reads as yours on the served App
     });
     assert.ok(readFileSync(policyPath, "utf8").includes(key), "Not now left the lock in policy.yaml");
 
-    // O6: no unhandled rejection; the oracle.
+    // O6: the agent's session runs a turn, naming its folder as Claude Code does.
+    const r = await pageFetch(`http://127.0.0.1:${proxyPort}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-mandu-session-id": AGENT, "user-agent": "claude-cli/2.1.289 (external, cli)" },
+      body: JSON.stringify({
+        model: "claude-opus-4", stream: true, messages: [{ role: "user", content: "Upload the notes" }],
+        system: [{ type: "text", text: `You are Claude Code.\n\n# Environment\n - Primary working directory: ${shop}\n - Platform: linux` }],
+      }),
+    });
+    assert.equal(r.status, 200, await r.text());
+    // Home lists the session (emission is best-effort and asynchronous).
+    for (let i = 0; i < 200; i++) {
+      const row = await (await pageFetch(`${base}/api/home/agent?session=${AGENT}`, { headers: { Cookie: ADMIN_COOKIE } })).json() as { found: boolean };
+      if (row.found) break;
+      await new Promise((done) => setTimeout(done, 25));
+    }
+    await page("/", (doc) => /Claude Code/.test(homeLink(doc)), (doc) => {
+      assert.equal(homeLink(doc), "1 rule change Claude Code in ~/shop asked for is in Approvals");
+      assert.equal(doc.querySelector("#home-waiting .more code")?.textContent, "~/shop", "the folder is code");
+    });
+    await page("/approvals", (doc) => cards(doc).length === 1 && /Claude Code/.test(head(doc)), (doc) => {
+      assert.equal(head(doc), "Rule changes Claude Code asked for (1)", "the heading names the agent, not its folder");
+      assert.equal(sentence(cards(doc)[0]), "Claude Code wants to change a rule");
+      assert.match(cards(doc)[0].querySelector(".ask-sub").textContent, / · from Claude Code in ~\/shop$/, "the folder stays on the card");
+    });
+
+    // O7: no unhandled rejection; the oracle.
     assert.deepEqual(unhandled, [], "no unhandled rejection");
-    for (const [what, text] of [["a rendered page", pages.join("\n")], ["an answer", answers.join("\n")]] as const) {
+    const toModel = upstream.requests.map((q) => q.bodyText).join("\n");
+    for (const [what, text] of [["a rendered page", pages.join("\n")], ["an answer", answers.join("\n")], ["a request to the model", toModel]] as const) {
       for (const value of [KEY_VALUE, ENV_VALUE]) assert.ok(!text.includes(value), `${what} carries a locked file's value`);
       assert.ok(!text.includes(ADMIN_TOKEN), `${what} carries the admin token`);
       assert.ok(!text.includes(SESSION_SECRET), `${what} carries the session secret`);
     }
-    assert.ok(pages.length === 6 && answers.length > 6, "(the pages were drawn and the answers read)");
+    assert.ok(pages.length === 8 && answers.length > 6, "(the pages were drawn and the answers read)");
   } finally {
     process.off("unhandledRejection", onUnhandled);
+    await proxy.close();
+    human.close();
     data.close();
     await dashboard.close();
     await arbiter.close();

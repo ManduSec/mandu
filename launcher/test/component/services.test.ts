@@ -426,7 +426,7 @@ test("fail-closed abort AFTER services started tears the context proxy back down
   }, () => JSON.stringify({ ok: false, error: "mock arbiter has no secrets API" }));
 });
 
-test("the exec-wrap shim's load probe is kept for the boot (portable-wrapper.md §5): the REAL bundle, shims, probe and cache file; a kept pass skips the node start, a rebuilt bundle and the bypass probe again, a shim that cannot load is never kept and still degrades or refuses", { timeout: 120_000 }, async () => {
+test("the exec-wrap shim's load probe is kept for the boot (portable-wrapper.md §5): the REAL bundle, shims, probe and cache file; a kept pass skips the node start, a rebuilt bundle and the bypass probe again, a shim that cannot load is never kept and still degrades or refuses", { timeout: 120_000, skip: process.platform !== "linux" && "the probe is kept on Linux only (execShimProbeInputs: no boot id elsewhere)" }, async () => {
   const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
   const dir = mkdtempSync(join(tmpdir(), "mandu-shim-cache-"));
   const savedPath = process.env["PATH"];

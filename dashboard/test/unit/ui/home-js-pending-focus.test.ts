@@ -11,12 +11,13 @@
  * Changes to save, hidden while nothing waits: it said nothing. Now:
  *
  *   - the bar gone (saved, discarded, the last change dropped): the Your
- *     rules heading, where the notice says what was saved;
+ *     rules heading, where the notice says what was saved or discarded;
  *   - a change dropped or skipped while others wait: the bar's heading,
  *     never another row's button;
  *   - a weaker change asked about first: the question, never Save anyway;
  *   - a refusal: Save, on again, described by the refusal's words;
- *   - a move: the Your rules heading; a refused move says why in its own
+ *   - a move, asked first in its own box (Move them, never a browser
+ *     dialog): the Your rules heading; a refused move says why in its own
  *     box, and its button gets the focus back, described by those words;
  *   - a press made without the focus in the bar, or a focus moved elsewhere
  *     meanwhile, moves nothing.
@@ -157,7 +158,7 @@ test("Changes to save: Drop gives the focus to the bar's heading while changes s
   assert.equal(focused(doc), heading(doc), "the bar is gone: the Your rules heading");
 });
 
-test("Changes to save: Discard gives the focus to the Your rules heading, never the hidden bar", async () => {
+test("Changes to save: Discard gives the focus to the Your rules heading, never the hidden bar, where the notice says how many were discarded", async () => {
   const { doc, saves } = waiting(TWO, {});
   await tick();
   const discard = doc.getElementById("files-discard");
@@ -165,6 +166,7 @@ test("Changes to save: Discard gives the focus to the Your rules heading, never 
   discard.click();
   assert.equal(bar(doc).hidden, true, "nothing waits");
   assert.equal(focused(doc), heading(doc), "not Discard, hidden with the bar");
+  assert.equal(doc.getElementById("rules-notice").firstChild.textContent, "2 changes discarded.", "with its Undo (home-js-discard-undo.test.ts)");
   assert.equal(saves.length, 0);
 });
 
@@ -204,10 +206,19 @@ test("Move them into policy.yaml: the move gives the focus to the Your rules hea
   const box = doc.getElementById("files-move");
   assert.equal(shown(box), true);
   assert.equal(bar(doc).hidden, true, "nothing waits to be saved");
-  const move = box.querySelector("button");
+  box.ownerDocument.defaultView.confirm = () => { throw new Error("window.confirm called"); };
+  // Move asks first, in its own box (dashboard.md §4.25n *Rules asks on the
+  // page, not in a browser dialog*): Move them is what posts.
+  const ask = () => {
+    box.querySelector("button").focus();
+    box.querySelector("button").click();
+    return [...box.querySelectorAll(".ask-in-place button")].find((b: Doc) => b.textContent === "Move them");
+  };
 
-  await press(move);
+  await press(ask());
   await tick(30);
+  const move = box.querySelector("button");
+  assert.equal(move.textContent, "Move them into policy.yaml", "the question gone, the button is back");
   const words = box.querySelector(".ask-error");
   assert.ok(words, "the refusal is said in the move's own box");
   assert.match(words.textContent, /Sign in first/);
@@ -218,7 +229,7 @@ test("Move them into policy.yaml: the move gives the focus to the Your rules hea
   assert.equal(move.getAttribute("aria-describedby"), words.id, "described by the refusal's words");
 
   refuse = false;
-  await press(move);
+  await press(ask());
   await tick(30);
   assert.equal(box.hidden, true, "moved: no page rules left");
   assert.match(doc.getElementById("rules-notice").textContent, /Moved 1 rule into policy\.yaml\./);

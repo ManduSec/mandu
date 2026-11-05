@@ -942,8 +942,8 @@ test("every workflow parses as YAML, and each job's needs and outputs name what 
 // ── when GitHub runs (continuous-integration.md §12, "When GitHub runs") ──────
 // Only where GitHub is the only signal: the release check (ci.yml called by
 // release.yml on a v* tag), a manual run, and a pull request once the
-// repository is public. No macOS: a maintainer runs the darwin entries on a
-// Mac by hand (decided 2026-10-09). Never a snapshot push to main/master
+// repository is public. macOS only in the release check and a manual run
+// (ci.yml's `macos`, never blocking; continuous-integration.md §12.6). Never a snapshot push to main/master
 // (GitLab ran a superset on the commit); a v* tag starts only release.yml.
 
 const NO_PYYAML = (() => { try { execFileSync("python3", ["-c", "import yaml"], { stdio: "ignore" }); return false; } catch { return "needs python3 with PyYAML"; } })();
@@ -987,14 +987,26 @@ test("ci.yml: a documentation-only pull request runs nothing, the same cut as th
     assert.deepEqual(differ, [], "ci.yml's paths filter and lane.mjs's isDocsPath disagree");
   });
 
-test("workflows: no job runs on a macOS runner (the darwin entries run on a Mac by hand, development.md)", { skip: NO_PYYAML }, () => {
+test("workflows: only ci.yml's macos job runs on macOS: both CPUs, never a pull request, never blocking, the darwin entries through macos-run.sh", { skip: NO_PYYAML }, () => {
   assert.deepEqual(WORKFLOWS, ["ci.yml", RELEASE_WORKFLOW], "CI and the release; a new one is checked by the tests above");
   for (const f of WORKFLOWS) {
     for (const [name, job] of Object.entries(workflowDoc(f).jobs)) {
+      if (f === "ci.yml" && name === "macos") continue;
       const where = JSON.stringify([job["runs-on"], job.strategy ?? {}]);
       assert.doesNotMatch(where, /macos/i, `${f}: ${name} runs on macOS (${where})`);
     }
   }
+  const mac = workflowDoc("ci.yml").jobs.macos;
+  assert.deepEqual(mac.strategy.matrix.os, ["macos-26", "macos-26-intel"], "Apple silicon and Intel");
+  assert.equal(mac.strategy["fail-fast"], false);
+  assert.equal(mac["runs-on"], "${{ matrix.os }}");
+  assert.equal(mac["continue-on-error"], true, "macOS is not a release gate: a red cannot fail the release check");
+  assert.equal(mac.if, `\${{ (${PRIVATE_REPO_GATE_TERM}) && (github.event_name != 'pull_request') }}`, "the release check and a manual run, never a pull request");
+  assert.ok(!mac.needs, "a root job");
+  const runs = mac.steps.map((s) => s.run ?? "").join("\n");
+  assert.match(runs, /^scripts\/ci\/macos-run\.sh --out /m);
+  assert.match(runs, /MANDU_CI_OPENSSL_PREFIX=\$\(brew --prefix openssl@3\)/);
+  assert.ok(mac.steps.some((s) => s.uses?.startsWith("actions/checkout@") && s.with?.["persist-credentials"] === false), "no credential left in the checkout");
 });
 
 // ── the `session` field (the dashboard's test-session class) ──────────────────
@@ -1291,6 +1303,27 @@ test("selectEntries: a manual entry never runs with its kind, is excluded with i
   assert.deepEqual(t.selected.map((x) => x.id), ["a"]);
   assert.deepEqual(t.excluded, [{ id: "b", reason: "manual: a maintainer's batch" }]);
   assert.deepEqual(selectEntries(xs, { only: ["b"], platform: "linux" }).selected.map((x) => x.id), ["b"]);
+});
+
+test("selectEntries: a weekly entry runs on its night only (`weekly`), or named; a kind run excludes it with the reason", () => {
+  const xs = [base({ id: "a", kind: "live-drill", credential: "subscription" }), base({ id: "w", kind: "live-drill", credential: "subscription", weekly: "openclaw", agent: "openclaw" })];
+  const night = selectEntries(xs, { kinds: ["live-drill"], platform: "linux", lane: "subscription" });
+  assert.deepEqual(night.selected.map((x) => x.id), ["a"]);
+  assert.deepEqual(night.excluded, [{ id: "w", reason: "weekly: the weekly rotation's openclaw night (nightly.sh --weekly)" }]);
+  assert.deepEqual(selectEntries(xs, { kinds: ["live-drill"], platform: "linux", lane: "subscription", weekly: true }).selected.map((x) => x.id), ["a", "w"]);
+  assert.deepEqual(selectEntries(xs, { only: ["w"], platform: "linux" }).selected.map((x) => x.id), ["w"]);
+});
+
+test("check: weekly names an agent line, on a live-drill entry with a credential that is not manual", () => {
+  const root = fixture();
+  try {
+    const ok = [base({ id: "pkg.live", kind: "live-drill", cmd: ["npm", "run", "test:live"], agent: "openclaw", needs: ["node", "openclaw", "chatgpt-login"], credential: "subscription", weekly: "openclaw", provesNone: "a metric" })];
+    assert.deepEqual(checkManifest(ok, [], root).errors.filter((e) => /weekly/.test(e)), []);
+    for (const bad of [{ weekly: "nobody" }, { weekly: "openclaw", credential: undefined }, { weekly: "openclaw", manual: "a batch" }]) {
+      const errs = checkManifest(ok.map((x) => ({ ...x, ...bad })), [], root).errors;
+      assert.ok(errs.some((e) => /pkg\.live: weekly names the agent/.test(e)), `${JSON.stringify(bad)}: ${errs.join("\n")}`);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("selectEntries: a frozen entry never runs with its kind; `frozen` adds every frozen entry, whatever its kind", () => {

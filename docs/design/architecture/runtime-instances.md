@@ -62,6 +62,8 @@ pid, code rev) needed scoping.
   vm-guests/<harness>-<pid>.json      # the VM test harness guests (§10)
   test/arbiter.sock                   # the supervisor's test-tenant arbiter
   release-check/                      # the release check's gate: pending-<pid> markers, lock/ (§4.1)
+  attachments/pool.json               # `mandu serve`'s proxy pool: its record (§4.1d)
+  attachments/<session>/              # one per attachment session: anthropic-proxy.port, pool.json
   <epoch>-<pid>/                      # one scope dir per launch (§10.1)
 ```
 
@@ -231,7 +233,7 @@ on-disk-layout.md §3).
   And on macOS the agent's Seatbelt profile write-denies the registries
   themselves (`confidentiality.md` §7.3, "Mandu's runtime registries"; the
   one list is `launcher/src/runtime-registry.ts`): `instances/`,
-  `dashboards/`, `vm-guests/`, `logs/`, `test/`, `release-check/` (subpath), `current`, the
+  `dashboards/`, `vm-guests/`, `logs/`, `test/`, `release-check/`, `attachments/` (subpath), `current`, the
   legacy `arbiter.sock` and `dashboard.log` (the entry itself), the
   promotion's temp link `.current.tmp-<pid>` and `mandu dashboard`'s
   `dashboard-<pid>.port(.tmp)` (a `prefix`: a link swapped in between the
@@ -254,7 +256,7 @@ on-disk-layout.md §3).
   rendezvous), wherever the list is applied (a running guard, every mode
   but `off`, `MANDU_WRITE_PROTECT` not `0`), each in the form the guard
   needs (net-supervisor secret_open.rs `WriteForm`): the directories
-  (`instances/`, `dashboards/`, `vm-guests/`, `logs/`, `test/`, `release-check/`, and the
+  (`instances/`, `dashboards/`, `vm-guests/`, `logs/`, `test/`, `release-check/`, `attachments/`, and the
   human plane's `human/`) with everything below them; `current`, the
   legacy `arbiter.sock` and `dashboard.log` as `name` entries (the entry
   itself under its own name: resolved, `current` would have named the
@@ -1111,11 +1113,156 @@ arbiter of this release: restarted, and the launcher's real autostart run
 in the gap spawns nothing, attaches, and `current` answers from the unit's
 process; skips without a systemd user manager).
 
+### 4.1d The shipped unit: `mandu serve` (2026-10-25)
+
+**Why.** §4.1a–c grew around a hand-written user unit (the dev host's
+`mandu-dashboard.service`) that nobody else had. The resident stack is the
+form an always-on agent needs (the OpenClaw Gateway answering on a chat,
+[`openclaw-plugin.md`](../agents/openclaw-plugin.md) §3.2), so the unit is
+now shipped: `mandu serve install|start|stop|status|upgrade|uninstall`
+(`launcher/src/serve-command.ts`; the unit text and every decision pure in
+`launcher/src/serve-unit.ts`).
+
+**The unit** (`mandu.service`, a **user** unit in
+`$XDG_CONFIG_HOME/systemd/user`, else `~/.config/systemd/user`) runs what
+the hand-written one ran and what a launch's autostart runs (§10): the
+dashboard as the supervisor of the arbiter, `DASHBOARD_AUTOSTART=arbiter`,
+`MANDU_PROMOTE=1`, `MANDU_OWNER_PID=none`, `Restart=always`, so the
+dashboard's exit with its arbiter (§4.1b) is a restart of the whole stack.
+It is rendered for the mandu that installs it: the layout's dashboard
+daemon (`services/layout.ts`: the npm package's `dist/dashboard.mjs`, a
+checkout's bundle or its TypeScript through tsx) with `node` replaced by the
+absolute node running the install (a user manager's PATH holds no nvm or
+Homebrew node), its working directory, and a PATH of that node's folder and
+the system folders. The runtime dir is `%t/mandu` when the account's default
+(`$XDG_RUNTIME_DIR/mandu`), else the literal base, so the unit serves the
+stack the installing environment selects. `MANDU_HOME` and the dashboard's
+`DASHBOARD_PORT`, `DASHBOARD_HOST`, `DASHBOARD_BASE_PATH`,
+`DASHBOARD_ALLOW_HOSTS` are carried when set; nothing else of the caller's
+environment is (no key reaches the unit file). `MANDU_SERVE=1` marks the
+service's processes (unused today; the proxy pool keys on it). `KillMode=mixed`:
+the dashboard gets the SIGTERM and stops its arbiter itself, so the instance
+dir is removed and `current` cleared. The render is deterministic and names
+the release, so the file on disk differs from a fresh render exactly when the
+release, the node, a path or a carried variable changed. A marker line
+(`# X-Mandu-Serve-Unit: 1`) is what `upgrade` and `uninstall` require before
+they rewrite or remove a file; a `mandu.service` without it is refused.
+
+**The verbs.** `install` writes the unit, `daemon-reload`, `enable` (it
+starts at login), then starts it. Starting (`install`, `start`, an
+`upgrade`'s restart) follows one rule (`planStart`): another service already
+running the stack (§4.1c's `stackService`, e.g. a hand-written unit) is a
+refusal naming it, since two services on one stack replace each other's
+processes; resident daemons of the stack outside the unit (a launch's
+autostart, `mandu dashboard`) are stopped first so the unit owns the whole
+stack instead of adopting an arbiter it cannot restart (§4.1b); with a
+`mandu` session on the stack that stop is **deferred** (exit 3, nothing
+started; `--force` goes on). Then `systemctl --user start` and a wait for
+`current` to answer `hello` (twice the load-aware readiness deadline,
+§14.6) as this release. `upgrade` rewrites the file when the render changed
+and restarts when the service does not run this mandu (`planUpgrade`: the
+arbiter's release or build differs, §4.1; the arbiter is not the unit's own;
+the file changed; the unit is down); a restart under a live session is the
+release check's deferral (§4.1, `liveLaunchersOn`): it says which sessions
+and restarts nothing (exit 3), `--wait` polls every 5 s until they end,
+`--force` restarts now. Its restart is the unit stopped, what is left of the
+stack outside it stopped, the unit started, so an arbiter the unit had
+adopted (§4.1b) is replaced too. `stop` and `uninstall` refuse a running
+service under a live session without `--force`. `status` reports the unit
+(`systemctl --user show`: active state, enabled, main pid, restarts), whether
+the file is current, the arbiter (`hello`: release, pid, whether its process
+is in the unit's cgroup) against this mandu, the dashboard (its registry
+entry, its port answering), the sessions, and linger (`loginctl`: a user unit
+stops at logout unless it is on); exit 0 healthy, 1 a named problem, 3 not
+installed or not running.
+
+**Detection names it** (`stack-supervisor.ts isServeUnit`, `serveUpgradeFix`).
+§4.1a–c find any service by its cgroup and environment, so the shipped unit
+is found as the hand-written one was; what changes is the fix. A user unit
+named `mandu.service` whose folder is this mandu's own (`runsOurCode`: an npm
+package updated in place, a checkout pulled) runs this mandu's files with
+its old processes, so every refusal of §4.1 and `mandu version` name
+`mandu serve upgrade` (with `--force` where the refusal names live
+sessions), never `systemctl disable`; `describeSupervisor` calls it "the Mandu
+service mandu.service (`mandu serve`, …)". The shipped unit of another
+install (another folder) gets the general rule, as does a system unit of the
+same name.
+
+**The host.** Linux with a reachable user manager (`systemctl --user show
+-p Version` answers). Without one (a container, WSL without systemd, no
+systemd) every verb refuses with what to do instead (`mandu dashboard`; WSL's
+`[boot] systemd=true`), exit 2. macOS: refused as "not yet"; a launchd
+agent is the planned form. Nothing needs root and nothing global is written:
+the only host state is this account's unit file and its enablement
+(privilege-model.md §0). `loginctl enable-linger` is suggested, never run.
+No systemd sandboxing directive is set on the unit: the agent never runs in
+it (launches are the user's own processes), and `NoNewPrivileges=` would
+break the dashboard's git sandbox where `bwrap` is setuid.
+
+**The proxy pool** (2026-10-25, [`openclaw-plugin.md`](../agents/openclaw-plugin.md)
+§3.2): the unit's main process, the dashboard, runs one model proxy per
+declared attachment session when the unit sets `MANDU_SERVE=1`
+(`dashboard/src/supervisor/attachment-pool.ts`). The sessions are declared in
+the Mandu home (`state/serve-attachments.json`, the path table's
+`serve-attachments`; `mandu serve attach|detach openclaw`, `mandu openclaw
+install|uninstall`). Per session the pool registers its secret files (the
+launcher's `mandu serve register-secrets`), then the attachment
+(`beginAttachment` on the human socket, renewed every 20 s), then starts the
+proxy with a launch's environment for that session (its upstream from the
+service's environment, which the unit carries), on its declared port, and
+only then publishes `<runtime>/attachments/<session>/anthropic-proxy.port`
+(0600, its folder 0700). A proxy holds a lifeline to the dashboard
+(`MANDU_LIFELINE=stdin`) and names it as its owner (`MANDU_OWNER_PID`), so it
+never outlives the service. `status` lists each session (port, health,
+registration, secret count, posture), and the cost while one is live.
+
+**Reap (§10).** A session's folder holds the pool's record (`pool.json`: the
+dashboard's pid, the proxy's pid, the secret counts), and the attachments
+folder the pool's own (`attachments/pool.json`). `mandu reap` leaves every
+folder whose dashboard is alive (by its title) alone, proxies and port files
+included. Once that dashboard is gone, a proxy still running there (its
+lifeline should have ended it) is SIGTERMed after its title confirms it
+(`mandu-anthropic-proxy`), and the folder and the pool's record go; a folder
+with no record is kept for ten minutes (a pool writing it). The pool also
+sweeps the folders a SIGKILLed predecessor left when it starts. The arbiter's
+side needs no reap: an attachment is a 60 s lease, which lapses on its own.
+The declared list is the user's intent and stays until `detach` or
+`uninstall`. `attachments/` is a runtime registry entry (§2,
+`runtime-registry.ts`): a confined agent can neither rewrite a port file (it
+would route the Gateway to a proxy of its choosing) nor forge a pool record
+(reap would then spare a dead pool's proxy, or the installer adopt a forged
+port); the macOS profile and the Linux guard deny writes there, as for the
+other entries. Reading it is not denied: a port number is no secret, and a
+loopback port is reachable whether or not its number is read.
+
+**Tests.** `launcher/test/unit/serve-unit.test.ts` (the unit's lines, the
+quoting of spaces, quotes, `%` and `$` both ways and a line break refused,
+the runtime-dir spelling, only the carried variables, the real layouts'
+commands, the host classes, `planStart`, `planUpgrade` and the stop rule);
+`launcher/test/unit/serve-command.test.ts` (each verb over a fake
+`systemctl --user`: the call order, the refusals, the deferrals and
+`--force`/`--wait`, `status`'s lines, problems and exit codes);
+`launcher/test/unit/supervised-refusal.test.ts` (the shipped unit's
+refusals and `mandu version`'s fix); and
+`launcher/test/component/serve-command.test.ts` (a fake systemd,
+`test/lib/fake-systemd.ts`, runs the rendered unit's ExecStart with only a
+user manager's environment and the unit's own lines: a launch's autostarted
+stack is replaced by `install`, `status` reports the unit's own arbiter of
+this release, a later launch attaches to it without starting a second
+arbiter or dashboard, then `stop`, `start` and `uninstall` over the real
+processes). The pool: `dashboard/test/unit/supervisor/attachment-pool.test.ts`,
+`launcher/test/unit/attachment-contract.test.ts`, `serve-attachments.test.ts`,
+`reap-attachments.test.ts`, `launcher/test/component/serve-pool.test.ts` (the
+same fake systemd: attach, the port file, the lease, a killed proxy, stop) and
+`tests/stack/serve-pool-invariant.test.ts`. The host's real user manager is
+never called by a test.
+
 ## 5. Who runs in which mode
 
 | Starter | Mode | Promotes? |
 | --- | --- | --- |
 | dashboard supervisor (default) | instance (`MANDU_RUNTIME_DIR` + cleared sock env) | yes |
+| the `mandu serve` unit (the dashboard supervisor under systemd, §4.1d) | instance | yes |
 | launcher autostart (no env, no live socket) | instance (`startArbiterInstance`) | yes |
 | launcher / dashboard with explicit `$MANDU_ARBITER_SOCK` | pinned path (legacy) | n/a |
 | `cd arbiter && npm run serve` | instance | **no** (log tells how) |
@@ -1560,7 +1707,7 @@ unpromoted start; `arbiter/db/store-seed.ts`), before any store is built:
   no database). Where Node's SQLite takes a URI filename it is opened by one,
   and with no `-wal` beside it (no connection open: the last one to close
   checkpoints and deletes it) `immutable=1`, so the read creates no `-wal` /
-  `-shm` next to it. Node 22.13 (the floor, and CI's) takes no URI filename
+  `-shm` next to it. Node 22.13 (the floor until 2026-10-26, and CI's) takes no URI filename
   (the first CI run failed on exactly that); there the store is opened by its
   path, read-only, and SQLite creates the empty `-wal` and the `-shm` index
   any reader of a WAL database creates, owner-only like the store, and leaves

@@ -20,11 +20,11 @@
  *       Read is a symbol now, and the AI's reply quoting the file is
  *       forwarded as written (the fact the card states);
  *   L3  the REAL dashboard over the arbiter's store: the file's card says
- *       the AI read its real value before it was marked, then "got a
- *       placeholder in its place, in N requests" (never "only a
- *       placeholder"), then "Anything the AI wrote from its real value went
- *       back to the AI as written with each later request: Mandu does not
- *       mask the AI's own words.", then "If it holds a key or a password,
+ *       the AI read its real value before it was marked, then "the AI got
+ *       it masked, in N requests" (never "only its masked version"; before
+ *       2026-10-25 "got a placeholder in its place"), then "Anything the
+ *       AI wrote from its real value went back to the AI as written with
+ *       each later request: Mandu does not mask the AI's own words.", then "If it holds a key or a password,
  *       change it: the AI saw it as it was."; its level tag is not drawn as held
  *       (`saw` "early", §4.25b "The tag agrees with the card") and says
  *       since when, the card's own "From … on" moment (`since`); no token
@@ -79,7 +79,7 @@ after(() => {
 
 const words = (parts: { kind: string; text: string }[]) => parts.map((p) => (p.kind === "time" ? "<t>" : p.text)).join("");
 
-test("a file the AI read before it was marked: the real proxy forwards the AI's reply quoting it as written, and the real session page's card says the AI's own words are not masked, never \"only a placeholder\" (secrets axes, explicit)", async () => {
+test("a file the AI read before it was marked: the real proxy forwards the AI's reply quoting it as written, and the real session page's card says the AI's own words are not masked, never \"only its masked version\" (secrets axes, explicit)", async () => {
   const session = `early-read-own-words-${process.pid}`;
   const tmp = mkdtempSync(join(tmpdir(), "mandu-early-read-"));
   dirs.push(tmp);
@@ -204,12 +204,13 @@ test("a file the AI read before it was marked: the real proxy forwards the AI's 
     const card = fileCard(page);
     assert.ok(card, `Your secrets lists the file: ${JSON.stringify(page?.secrets)}`);
     const lines = card.lines.map((l) => `${l.tone}: ${words(l.parts)}`);
-    assert.match(lines[0]!, /^warn: The AI read its real value at <t>, before it was marked a secret\. From <t> on it got a placeholder in its place, in \d+ requests?\.$/, lines.join("\n"));
+    assert.match(lines[0]!, /^warn: The AI read its real value at <t>, before it was marked a secret\. From <t> on the AI got it masked, in \d+ requests?\.$/, lines.join("\n"));
     assert.equal(lines[1], `warn: ${OWN_WORDS}`, lines.join("\n"));
     // The value is out: the card says what to do, in a later label's words.
     assert.equal(lines[2], `warn: ${CHANGE_IT}`, lines.join("\n"));
     assert.equal(lines.filter((l) => /change it|Change this key/.test(l)).length, 1, lines.join("\n"));
-    assert.ok(!lines.some((l) => /only a placeholder|never the real value/.test(l)), lines.join("\n"));
+    assert.ok(!lines.some((l) => /only a placeholder|only its masked version|never the real value/.test(l)), lines.join("\n"));
+    assert.ok(!lines.some((l) => /placeholder|this machine/i.test(l)), `the product's words: ${lines.join("\n")}`);
     assert.deepEqual(page!.secrets!.counts, { masked: 0, early: 1 }, "the tile counts it as read before it was marked");
     // The tag agrees with the card: read before its label, since the card's
     // own "From … on" moment (the first request that carried it masked).

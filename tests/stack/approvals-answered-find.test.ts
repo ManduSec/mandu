@@ -15,11 +15,17 @@
  *       `total` 12 and `query.all` 25; two words narrow it to one key;
  *   F2  the served page at `/approvals?q=<host>` shows the search in its
  *       box, draws the 12 and says "12 of 25 answers match";
- *   F3  *Allow instead* on a found row changes that answer over the real
- *       route: the arbiter's row is approved and the row says so;
+ *   F3  *Always allow instead* on a found row changes that answer over the
+ *       real route: the arbiter's row is approved and the row says
+ *       "Always allowed", the scope its button named;
  *   F4  the oracle: nothing left the machine; a search for the secret's
  *       value finds nothing; neither the route signed out nor the drawn
- *       page carries a value or a token.
+ *       page carries a value or a token;
+ *   F5  a search that finds none (`/approvals?q=nowhere.example`, signed
+ *       in): the list says "No answer matches “nowhere.example”." with
+ *       Clear, and the status line says the same sentence to a screen
+ *       reader only (`.sr-only`, not hidden), adding nothing beyond what
+ *       was typed.
  *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON).
  */
@@ -71,7 +77,7 @@ function viaProxy(port: number, url: string, body: string): Promise<{ status: nu
   });
 }
 
-test("Find an answer lists one host's answers, and Allow instead on a found row works over the real route, no value shown (real arbiter, net-proxy, dashboard; secrets axes, explicit)", { timeout: 180_000 }, async () => {
+test("Find an answer lists one host's answers, and Always allow instead on a found row works over the real route, no value shown (real arbiter, net-proxy, dashboard; secrets axes, explicit)", { timeout: 180_000 }, async () => {
   const tmp = mkdtempSync(join(tmpdir(), "mandu-answered-find-"));
   const home = join(tmp, "home");
   mkdirSync(join(home, "shop"), { recursive: true });
@@ -172,12 +178,14 @@ test("Find an answer lists one host's answers, and Allow instead on a found row 
       const row = rows(doc)[3];
       allowed = row.dataset.id;
       const button = row.querySelector("button");
-      assert.equal(button.textContent, "Allow instead");
+      assert.equal(button.textContent, "Always allow instead", "the allow names its scope (§4.25)");
       button.click();
       const of = () => rows(doc).find((r) => r.dataset.id === allowed);
       await waitWhile(() => of()?.dataset.state === "blocked");
       assert.notEqual(of()?.dataset.state, "blocked", "the page says the new answer");
       assert.match(of()!.textContent, /allowed/i);
+      assert.equal(of()!.dataset.state, "allowed", "a standing allow, not allowed-once");
+      assert.equal(of()!.querySelector(".outcome")!.textContent, "Always allowed", "the row says what the button said");
       noValue(doc.body.textContent ?? "", "the drawn Approvals page");
     }, { headers: { Cookie: dashboard.adminCookie() } });
     const approved = (await admin.egressApprovals("approved")).find((a) => a.id === allowed);
@@ -192,6 +200,19 @@ test("Find an answer lists one host's answers, and Allow instead on a found row 
     }
     noValue(paste.text, "/api/home/answered?q= signed out");
     noValue((await find("KEY", signedIn)).text, "/api/home/answered?q= signed in");
+
+    // ── F5: none found is said to a screen reader ────────────────────────────
+    const nowhere = "nowhere.example";
+    const list = (doc: { getElementById(id: string): { textContent: string | null } }) => doc.getElementById("approvals-answered").textContent ?? "";
+    await servedProductPage(base, `/approvals?q=${nowhere}`, (doc) => /No answer matches/.test(list(doc)), (doc) => {
+      assert.deepEqual(rows(doc), []);
+      assert.equal(list(doc), `No answer matches \u201c${nowhere}\u201d. Clear`);
+      const count = doc.getElementById("answered-count");
+      assert.equal(count.textContent, `No answer matches \u201c${nowhere}\u201d.`, "the list's sentence, without Clear");
+      assert.equal(count.hidden, false, "shown, so a screen reader announces it");
+      assert.equal(count.classList.contains("sr-only"), true, "to a screen reader only: on screen the list says it");
+      noValue(count.textContent.replace(nowhere, ""), "the status line");
+    }, { headers: { Cookie: dashboard.adminCookie() } });
   } finally {
     await dashboard.close();
     await proxy.close();

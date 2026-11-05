@@ -1,0 +1,10 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "formats": ["^gh[pous]_[0-9A-Za-z]{36,251}$", "^github_pat_[0-9A-Za-z_]{50,244}$"],
+  "shapes": ["ghp_…", "gho_…", "ghu_…", "ghs_…", "github_pat_…"],
+  "hosts": ["api.github.com", "uploads.github.com"],
+  "docs": ["https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api", "https://docs.github.com/en/rest/releases/assets#upload-a-release-asset"],
+  "examples": ["ghp_{x*36}", "gho_{x*40}", "ghs_{x*36}", "github_pat_11{x*20}_{x*59}"],
+  "non_examples": ["ghr_{x*36}", "ghp_{x*35}", "github_pat_{x*49}"]
+}

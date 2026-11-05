@@ -10,6 +10,422 @@ lives in `docs/design/`.
 Beta builds of this release are numbered `0.2.0-beta.N`. (0.1.0 was an
 internal pilot and was never published.)
 
+### New in 0.2.0-beta.9
+
+- Mandu now needs Node 22.15 or newer (it was 22.13). Node has zstd from
+  22.15, and OpenClaw uses it for its ChatGPT sign-in's requests and for the
+  transcripts it stores: on 22.13 and 22.14 Mandu refused OpenClaw on a
+  ChatGPT sign-in, and `mandu scan` could not read OpenClaw's longer
+  records. `nvm install 22` gets a current 22; the installer
+  (`scripts/install.sh`) already brings its own.
+- `mandu serve` keeps the protection service and the dashboard running as a
+  systemd user service (`mandu.service`), from your login and through
+  restarts, for an agent that runs all the time: `mandu serve install`,
+  `status`, `upgrade` (after updating mandu; it restarts nothing under a
+  running session unless you add `--wait` or `--force`), `stop`, `start`
+  and `uninstall`. Launches attach to it. Linux with systemd; not yet on
+  macOS. A launch refused by an older service it set up names `mandu serve
+  upgrade`.
+- Mandu's OpenClaw plugin: `mandu openclaw install` attaches Mandu to an
+  OpenClaw Gateway you run as a service (for Telegram, WhatsApp and other
+  channels), which `mandu openclaw` cannot start. With Mandu's service
+  running (`mandu serve install`; Linux with systemd), it saves a copy of
+  your `openclaw.json` beside it, adds the Mandu plugin, and points each
+  model provider whose API Mandu reads at a model proxy the service runs
+  for that agent (`--agent <id>`, default `main`), which sends the calls
+  on to the provider's own address with your keys as OpenClaw sends them:
+  Anthropic and OpenAI, the services that speak their APIs (OpenRouter,
+  LiteLLM, vLLM, …), Gemini, Ollama, Azure OpenAI and a ChatGPT sign-in.
+  With no model allowlist of yours it writes one, so a model switch in a
+  session cannot reach a model around Mandu. A provider it cannot route
+  (Bedrock, GitHub Copilot, plain `http` to another machine, …) is named
+  and nothing is written; `--leave-unprotected` with its name keeps it as
+  it is, unprotected. Then run `openclaw gateway restart`. `mandu openclaw
+  uninstall` puts every provider back as it was and removes the plugin.
+  The service rereads the file every 30 seconds and on each change: when
+  a provider, the allowlist or the plugin no longer goes through Mandu, it
+  changes nothing but says so loudly in `mandu serve status`, `mandu
+  doctor` and on the dashboard's Home (run the install again, then restart
+  the Gateway). `mandu scan` counts the Gateway's sessions while Mandu was
+  attached as under Mandu.
+- What the plugin protects, and what it does not, next to `mandu
+  openclaw`: the Gateway's model sees your secrets only as placeholders,
+  through the same model proxy, and a chat reply that would carry a
+  protected value is not sent (replies keep the placeholders). But Mandu
+  does not start that Gateway, so without `--sandbox` (below) the programs
+  its agent runs work as you: they read your files directly and reach the
+  network without Mandu's checks. The plugin refuses tool calls that touch
+  Mandu's files, change `openclaw.json` or stop Mandu's service; that is a
+  policy against obvious attempts, not a wall. While the plugin's session
+  runs, a confined launch on the same machine (`mandu claude`, `mandu
+  codex`, …) cannot trust its file guard, so there secret files open as
+  placeholders, writes to protected files are refused and command output
+  is masked once the session read a secret; `mandu serve status`, `mandu
+  doctor` and the launch say so. To have all of it confined, run the
+  Gateway under `mandu openclaw gateway` instead.
+- `mandu openclaw install --sandbox` (Linux with unprivileged user
+  namespaces, OpenClaw 2026.7 or later) makes Mandu the Gateway's sandbox,
+  in place of OpenClaw's Docker one: every command the agent runs, and
+  every file OpenClaw's own tools read or write (`read`, `write`, `edit`,
+  `ls`, …), runs in a box Mandu confines as it confines `mandu claude`'s
+  programs. There a protected file reads as its placeholder, the network
+  leaves only through Mandu's egress check, Mandu's own files, your
+  `openclaw.json` and the plugin cannot be read or changed, and nothing
+  runs as root; a command that cannot get a box fails and says so, and
+  never runs outside it. An `edit` of a protected file (a `.env`) lands in
+  the real file with its real values put back. The install turns the
+  sandbox on for every session, the main chat too, switches elevated exec
+  off and keeps the chat, web and plugin tools allowed; `mandu doctor` and
+  `mandu serve status` say when a setting no longer holds. The Gateway
+  itself, other plugins' tools, MCP servers, paired nodes and the browser
+  still run as you. `--no-sandbox` or `mandu openclaw uninstall` puts your
+  own sandbox settings back.
+- Under `mandu openclaw`, OpenClaw's Gateway token is one placeholder, the
+  same in every launch and after Mandu restarts, wherever OpenClaw reads
+  it: `OPENCLAW_GATEWAY_TOKEN`, a token or password in the run's config
+  (`gateway.auth`, `gateway.remote`), and a `--token` or `--password` on
+  the command line of `mandu openclaw gateway`, `agent` or `tui`. The raw
+  token is never in the agent's world, and a `mandu openclaw agent` client
+  and the `mandu openclaw gateway` it calls now agree on it: on OpenClaw
+  2026.3.12 and 2026.7.1-2 such a client was refused with "gateway token
+  mismatch" and ran the turn itself. A client outside Mandu holding the
+  real token (a plain `openclaw agent`, a remote app) cannot connect to a
+  Gateway under Mandu. `mandu openclaw gateway` now says at launch which
+  clients it protects: its channels, and `mandu openclaw agent` or `tui`
+  with `MANDU_OPENCLAW_GATEWAY_CLIENT=1`. A plain `openclaw agent` or
+  `openclaw tui` is not: when its call to the Gateway fails, it runs the
+  turn itself with your own `openclaw.json`, around Mandu.
+- Vertex AI's Gemini models work under `mandu openclaw` on OpenClaw
+  2026.7.1 and later: OpenClaw's `google-vertex` provider (your own
+  `baseUrl`, or Google's regional hosts) goes through Mandu's model proxy,
+  which masks secrets in what OpenClaw sends exactly as for Gemini. An older
+  OpenClaw sends Vertex AI calls to Google whatever the `baseUrl`, so the
+  launch is refused there, naming the release. `mandu openclaw install`
+  still refuses Vertex AI (it cannot tell which OpenClaw your Gateway runs);
+  `--leave-unprotected google-vertex` keeps it on purpose. Anthropic's Claude
+  on Vertex (OpenClaw's `anthropic-vertex`) is still refused.
+- Security fix: an OpenClaw `github-copilot` provider declared with an
+  OpenAI `api` and a `baseUrl` counted as protected under `mandu openclaw`
+  and `mandu openclaw install`, but OpenClaw (2026.3.22 and later) sends
+  Copilot's model calls to the address its Copilot sign-in answers with,
+  whatever the `baseUrl`, so they went to GitHub Copilot unmasked. Both now
+  refuse GitHub Copilot, naming why; `mandu openclaw install
+  --leave-unprotected github-copilot` keeps it on purpose, and `mandu
+  doctor` reports a Copilot provider an earlier install routed as not
+  protected (run `mandu openclaw uninstall`, then install again).
+- Azure OpenAI and a ChatGPT sign-in work under OpenClaw, through Mandu's
+  model proxy instead of being refused: a provider you declare with `api:
+  "azure-openai-responses"` (your resource's `baseUrl`) or `api:
+  "openai-chatgpt-responses"`, under `mandu openclaw` and for a Gateway
+  attached with `mandu openclaw install`. What the agent sends either one is
+  masked exactly as for Anthropic and OpenAI models; your Azure key and your
+  ChatGPT sign-in go to their own service as OpenClaw sends them. OpenClaw
+  sends every Azure call to `AZURE_OPENAI_BASE_URL` (or
+  `AZURE_OPENAI_RESOURCE_NAME`) when it is set, whatever the provider's
+  address: `mandu openclaw` points that variable at Mandu's proxy, and the
+  install refuses an Azure provider while it sees one set: in your shell,
+  OpenClaw's config or `.env` files, the running Gateway's own environment
+  or its systemd user unit. The service keeps checking, so a Gateway
+  restarted later with the variable is reported as no longer protected
+  (`mandu serve status`, `mandu doctor`), and one whose environment Mandu
+  cannot read is reported as not verified rather than protected.
+- Google Gemini models work under `mandu openclaw`, `mandu opencode` and
+  `mandu goose` instead of being refused: OpenClaw's `google` provider (or
+  one you declare with `api: "google-generative-ai"`), OpenCode's `google`
+  provider (or one on `@ai-sdk/google`) and Goose's `google` provider go
+  through Mandu's model proxy, which masks secrets in what the agent sends
+  Gemini exactly as it does for Anthropic and OpenAI models. Vertex AI and
+  the Gemini CLI login are still refused, and so is AWS Bedrock.
+- Security fix: with OpenClaw's LM Studio or xAI provider routed through
+  Mandu (`mandu openclaw`, or a Gateway attached with `mandu openclaw
+  install`), a tool call the model wrote as plain text in its reply (for
+  example `[tool:exec] {"command": …}`) was run by OpenClaw 2026.7.1 and
+  later without passing Mandu's checks on what a tool call may do. Mandu now
+  stops such a reply on every OpenClaw route before OpenClaw can run it; the
+  turn ends with an error instead. A reply line that merely starts like one
+  (`<function=`, or a tool's name in brackets) is stopped too.
+- Security fix: `mandu openclaw` on OpenClaw 2026.3.12 or 2026.3.13 with an
+  OpenRouter model OpenClaw does not know (one not in
+  `models.providers.openrouter.models`) sent that model's requests, with
+  your conversation and what the agent read, straight to openrouter.ai
+  instead of through Mandu (those releases ignore the provider's address
+  for such a model). A registered secret's value in such a request was
+  refused by Mandu's network proxy, but a labelled file's text was not.
+  Mandu now lists every OpenRouter model the session can use for that run
+  and lets OpenClaw switch to no other; OpenClaw 2026.3.22 and later were
+  not affected.
+- A resident OpenClaw Gateway attached with `mandu openclaw install` routes
+  its Gemini providers (the built-in `google` when your config uses it, or
+  one you declare with `api: "google-generative-ai"`) through `mandu
+  serve`'s proxy too, instead of asking you to leave them unprotected;
+  uninstall puts their entries back as they were. Under `mandu opencode`
+  and `mandu openclaw`, your Gemini key variable (`GEMINI_API_KEY`,
+  OpenCode's `GOOGLE_GENERATIVE_AI_API_KEY`) is left as it is when your
+  Gemini provider is routed, so the provider accepts it.
+- Ollama models on Ollama's own API work under `mandu openclaw` and in a
+  Gateway attached with `mandu openclaw install`, instead of being refused
+  or left unprotected: OpenClaw's `ollama` and `ollama-cloud` providers, or
+  one you declare with `api: "ollama"` and its `baseUrl`, go through
+  Mandu's model proxy, which masks secrets in what the agent sends exactly
+  as for the other models. A reply in which the model writes a tool call as
+  text (which OpenClaw would run on that API without Mandu seeing it) is
+  stopped. An Ollama on another machine must be reached over https; your
+  `OLLAMA_API_KEY` is left as it is.
+- Under `mandu claude`, when Claude Code reads a protected file that Mandu
+  shows the agent with a placeholder for each value (a `.env`, a saved
+  login, a labelled note or tax return), the model now gets that copy:
+  every label as written and one placeholder per value, so it can put the
+  right value in the right place. Before, the reminder Claude Code adds to
+  every tool result kept the copy from being recognised, and the model got
+  one placeholder for the whole file. No value reaches the model either way.
+- Under `mandu claude`, when the agent asks for a protected file that is not
+  there, or a write to one is refused, the model now sees the error ("File
+  does not exist", `cat: …: No such file or directory`, `EACCES: permission
+  denied`) instead of a placeholder, so it can look in the right place or
+  tell you the write failed. Only the exact error text passes; anything
+  that could hold a byte of the file stays hidden.
+- Under Mandu, the agent can look for a file in a protected folder by name:
+  `find bank -name "*sept*"` or `ls bank | grep -i sep` now show the
+  matching file names, as a plain `ls bank` already did. Only names and
+  paths pass; `ls -l` (sizes and dates), `find -exec`, `-printf` and
+  anything piped through another program stay hidden.
+- A word in a message is no longer taken for a protected folder: an email or
+  commit message that says "my bank statement" no longer hides the
+  command's result because a folder named `bank` is protected. A real
+  reference to the folder (`ls bank`, `bank/statement.pdf` in the message,
+  or a quoted command a shell runs) is still hidden.
+- Under `mandu claude`, scrubbing a secret from git history works with the
+  agent seeing what it did: git's own report of a rewrite that names a
+  protected file (`git filter-branch` progress, `rm '.env'`, "Ref … was
+  rewritten", the push) reaches the model as git printed it, and when git
+  cannot read an old version of a protected file Mandu says why in one
+  line, and which history commands still work.
+- Under `mandu codex`, that line now reaches Codex too. Without it, Codex
+  took the unreadable old version for a broken repository and replaced the
+  whole history with one new commit. The line on every agent now also says
+  the repository is not damaged and must not be re-created, to run `git
+  filter-repo` in two passes (`--path <file> --invert-paths` first, then
+  `--replace-text`), and to check the result with `git log --all
+  --name-status` rather than `--stat`, which cannot read that version.
+- `mandu scan` no longer counts a session under Mandu as one where a
+  secret leaked: the entry says how many sessions it leaked in, and a line
+  under it, `1 more session ran under Mandu: there the AI saw only a
+  placeholder`. The dashboard's Scan page and Home's card count the same
+  way. The report's last lines now name the agents it read (`Protect
+  OpenClaw:  mandu openclaw install`), and an OpenClaw that already has
+  Mandu's plugin is said to be protected, with `mandu doctor` to check it,
+  instead of being told to run `mandu claude`.
+- On Linux, when the AI changes a protected file such as `.env` (an edit,
+  `sed -i`, `cat > .env`), Mandu now tells the AI in that step that the
+  change stays in the file's placeholder copy and never reaches your real
+  file, so it should not tell you the file is fixed, and should change the
+  code that reads the file instead or tell you what to change yourself. A
+  run in the session could work off the copy, and the AI used to report
+  "Fixed!" while your own `.env` was unchanged. You were told only when the
+  session ended.
+- On Linux, `psql`, `mysql` and their drivers log in with the placeholder
+  your `~/.pgpass`, `~/.my.cnf`, `PGPASSWORD` or `MYSQL_PWD` holds: the
+  connection goes to Mandu's database relay, which answers the server's
+  login with the real password, so neither the program nor the AI ever
+  holds it. Each `~/.pgpass` line and `~/.my.cnf` section that names a
+  host is put back only at that host and port, and `PGPASSWORD` or
+  `MYSQL_PWD` only at the `PGHOST` or `MYSQL_HOST` (and port) set in the
+  shell you launch from, with no setting of yours (for MySQL use
+  `127.0.0.1`: `localhost` is the local socket, which the relay does not
+  serve). With no host, a socket folder or several hosts, each login
+  waits for your OK in Approvals. Mandu never puts these passwords into a
+  web request. TLS works, Postgres's `sslmode=verify-full` included, but
+  leave Postgres's `channel_binding=require` and `require_auth` unset, and
+  use MySQL's `ssl-mode` `PREFERRED` or `REQUIRED`. A password in a
+  `DATABASE_URL` gets no relay yet, and on macOS a password login still
+  fails.
+- `aws` and the AWS SDKs work with the placeholders of
+  `~/.aws/credentials` (or of masked `AWS_ACCESS_KEY_ID`,
+  `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`), with no Approvals card
+  and no `readers` entry: they sign each request with the placeholder key,
+  and Mandu's egress proxy checks that signature and signs the request it
+  sends with the real key. The secret key never leaves the machine, not
+  even to AWS; only the signature does, with your access key id and
+  session token. This happens only over HTTPS, to a host under
+  `amazonaws.com`, `amazonaws.com.cn` or `api.aws`, and only when the host
+  a request was signed for is the host it goes to; anything else waits
+  for your OK or is refused. Uploads that sign every chunk, SigV4a and
+  presigned URLs (`aws s3 presign`) are refused. `issuers_off: [aws]`
+  under `issuer_bindings` in `policy.yaml` turns it off.
+- `kubectl` and `helm` work with the placeholder copy of your
+  `~/.kube/config`, against the clusters it names: Mandu gives the session
+  a `KUBECONFIG` that trusts Mandu's certificate and sends each cluster
+  through its proxy, which signs in there, and only there, with the real
+  token or client certificate. `kubectl exec`, `attach`, `port-forward`,
+  `logs -f` and `--watch` stream, each chunk the program sends checked as
+  it goes. Not yet: a cluster on this machine (`kind`, `minikube`), one
+  behind your own `proxy-url`, or a login through an exec credential
+  plugin. Java programs go through the session's proxy too: Mandu sets
+  `JAVA_TOOL_OPTIONS` to a session trust store and the proxy (JDK 18 or
+  later; your own options there still win), so a placeholder a Java
+  program sends gets its real value at a host your rules bind it to.
+  Every JVM then prints `Picked up JAVA_TOOL_OPTIONS`; `MANDU_JAVA_TRUST=0`
+  leaves the variable alone.
+- Agent skills: `npx skills add mandusec/mandu` installs two skills for
+  your coding agent (Claude Code, Codex, OpenCode, Goose, OpenClaw and
+  more): `mandu`, on working under Mandu (what a `$MDU:…` placeholder is,
+  passing it on as it is, what a send waiting for your OK looks like and
+  what to tell you), and `mandu-setup`, on installing and checking Mandu.
+  They are advice for the agent only: Mandu protects your secrets the same
+  with or without them, and they say that Approvals, rules, bindings, the
+  dashboard password and turning protection off are yours to decide.
+- Try Mandu with nothing to install: the README's Open in GitHub
+  Codespaces button opens a container with Node and the released Mandu,
+  where `mandu demo` runs (offline, against a stand-in AI, no API key) and
+  `mandu doctor` shows what the container supports. A container's default
+  security settings keep Mandu's file guard from starting, so there the
+  demo's Codex step shows `‹hidden› (the whole file)`, with a line saying
+  why, instead of each key. VS Code's Dev Containers opens the same
+  container on your own machine.
+- When your AI plan's usage limit is reached (a Claude subscription at its
+  5-hour or weekly limit), Mandu passes the provider's answer to the agent
+  at once, so Claude Code shows its own limit message, instead of retrying
+  it for about three minutes while the agent waited with no reply. A short
+  throttle is still retried. The session's page in the dashboard says it
+  was your AI plan's limit, not Mandu's, and when it resets.
+- `mandu scan` finds more in OpenClaw's history: sessions you reset or
+  deleted, which OpenClaw keeps beside the others (a New session used to
+  make a leak vanish from the next scan), and, up to OpenClaw 2026.7, a
+  secret of 18 characters or more that the model got but OpenClaw saved
+  shortened to its first 6 and last 4 characters; the report says it was
+  found that way. The dashboard's Scan page now opens a finding of yours
+  on "Where the real value is now": the file it belongs in, the AI service
+  that got it ("Can't be taken back"), and each agent chat history it was
+  found in (up to 10), still there or gone from this computer, with a link
+  to the session when it ran under Mandu. Mandu only shows these places;
+  it never changes an agent's chat history.
+- Where Mandu's file guard is installed but cannot start, as in a Docker
+  container under its default security profile, `mandu doctor` now says
+  so and reports `gated`, where it said credential files were protected,
+  and a launch runs without the guard under the `gated` notice (or is
+  refused with `--require-confinement`), where the agent never started.
+  And a `gated` launch that also runs without the egress gate
+  (`--no-net-proxy`, `MANDU_NET_PROXY=0` or `net-proxy = false` in
+  `config.toml`) now says so in its notice: programs the agent runs can
+  read your credential files there, and what they send is not checked.
+  `mandu doctor` names that setting too.
+- Two things that hold no secret are no longer hidden from the AI. A
+  search that leaves protected files out (`rg -g '!*.env' …`, `rg
+  --glob='!.env' …`, `grep -r --exclude=.env …`, as `--exclude-dir=`
+  already was) reaches the model as printed: the excluded name used to
+  hide the whole result and stop a later send of what it found. Only that
+  word is set aside, in a plain command (no `$…`, redirection or unquoted
+  glob); a search that names a protected file any other way stays hidden.
+  And under `mandu claude`, the project notes (`CLAUDE.md`) that Claude
+  Code attaches to the first file it reads in a folder reach the model
+  when that file is a protected one such as a `.env`, so the agent no
+  longer misses your project's instructions; they pass only when they are
+  exactly the file on disk and hold no secret.
+- Two launch flags, for a program that starts a confined launch of its
+  own: `--require-own-confinement` refuses to launch when this launch's
+  secrets cannot be confined, as `--require-confinement` does, but only
+  warns about an unconfined Mandu launch or plugin session beside it
+  (which `--require-confinement` refuses too); `--write-protect <path>`
+  (an absolute path; repeat it for more) is one more file or folder the
+  agent's programs may not change, refused like a `write_protect.deny`
+  entry in `policy.yaml` (Linux, with the file guard). The plugin's
+  `--sandbox` box starts with both.
+- Security fix: on Linux, a protected file bound to `*` in your rules (a
+  binding that names no destination) let a program that had read the file
+  connect to any host the session's own list allowed, because Mandu's file
+  guard read `*` as any host. The guard now lets such a program connect
+  nowhere, as the rule says.
+- Security fix: on Linux, when two threads of one program opened a
+  protected file at the same moment and Mandu refused one of the opens,
+  its file guard could forget that the program held the real file through
+  the other, and then judge its connections, sends and writes as if it
+  held no secret. A refused open no longer drops what another open made.
+- Security fix: when Mandu's protection service answered a model proxy
+  with an output rule the proxy did not recognise (a newer service, or a
+  malformed answer), the proxy could pass a tool's output to the model
+  without the masking the rule asked for. It now masks that output whole
+  and records that the rule was not recognised.
+- On macOS, a prompt-filter plugin (such as `mandu policy
+  classifier-pack`'s) now says that plugins run on Linux only, instead of
+  asking you to build Mandu's network guard: the guard that confines a
+  plugin is a Linux program, so on a Mac the plugin's `on_error` applies.
+- `mandu doctor` no longer marks Claude Code (and its login) as missing in
+  red on a machine that runs another agent Mandu supports, such as only
+  OpenClaw or Codex: Claude Code is then "only needed for `mandu claude`",
+  as Codex already was. With no supported agent at all it is still a ✗.
+- Home, History and a session's page mark a session that ran less guarded
+  than it looked: "protection was off" when it ran with protection off
+  (Home's last 24 hours count it), and "less protection than usual" when one
+  of Mandu's protections did not start (its page names `mandu log` and
+  `mandu doctor`). While protection has failed, every page's top bar says
+  "Protection failed", a link to where it happened.
+- Home: a question an agent waits on comes before the scan card; a quiet day
+  says when Mandu last stepped in, where and what it did; new cards warn
+  when Mandu refused your last hand edit to `policy.yaml` or other people on
+  this computer can open Mandu's records. A scan card with nothing to act on
+  folds to one line, and an agent quiet for 5 minutes stays under Running
+  now while its `mandu` launch is alive.
+- A session's page shows where each secret went: each Your secrets card
+  follows it from where it is kept to what the AI got and where it was sent
+  or stopped, and Show its steps narrows the story to that secret's turns,
+  with Previous step and Next step. The page lists the files the AI read as
+  they were, each with Protect it, and the secret files whose change Mandu
+  did not apply; Home and History rows say "changes to N files not applied".
+- Reading a session: a running session's header says when the agent last did
+  something, and "last step" on Home's and History's rows opens its newest
+  turn; each turn's time links to that turn; Newer and Older at the end step
+  through the sessions History lists; the browser tab names the folder and
+  start time. A printed or PDF session is whole, in the light palette, with
+  no buttons.
+- History: Go to a day lists the sessions from a chosen day back, with Day
+  before and Day after. Find a session also finds where a secret came up or
+  a send went ("Found here: STRIPE_KEY in ~/proj/.env", each name a link
+  into the session), and "N questions waiting for you" opens the session at
+  its question. Times read by the calendar ("yesterday", "3 weeks ago"), and
+  on a phone a long prompt no longer hides the folder.
+- Approvals lists the questions an agent waits on first, and those from
+  ended sessions as short cards under "From sessions that have ended"; on a
+  phone its questions and a session's Needs your OK are short, their answers
+  in sight. A send's card says which answers last, Allow on a rule change
+  leaves a line saying so, with Undo, and Answered earlier and Rule changes
+  sit under day headings, each with Go to a day.
+- Rules › Who may get your secrets gets Check a host (which secrets may go
+  to a host, and what happens to the rest) and Files made from your secrets
+  (kept secret because something holding a secret wrote them). Built-in
+  protections lists which files it keeps secret, Find a rule says what
+  covers a path no rule names, a rule on a path where nothing is says so,
+  and so does a send rule that decides nothing in the Secrets mode.
+- Rules says where your `policy.yaml` is and, when Mandu refused your last
+  hand edit to it, what is wrong, and the top bar's Rules link then shows
+  "!" on every page; otherwise it counts the levels waiting in Changes to
+  save. Discard and Drop there, and Describe's Discard, leave an Undo;
+  Describe says which AI will read what you write; Rules and Settings show a
+  change made elsewhere without a reload.
+- Before Mandu first runs, a part of a page it could not read says Mandu is
+  not running yet, never a fault or "(404)". Buttons that asked in a browser
+  dialog now ask on the page (a browser told to stop showing dialogs made
+  them do nothing), and turning protection off takes OFF in any case. An
+  arrow key on a Rules or Prompt filters menu no longer saves at once, and
+  an allow kept for one session or once no longer reads "Always".
+- Settings › Prompt filters gets Try a message, a dry run of what Mandu
+  would hold or mask in the text you type. Notifications can keep only the
+  protection alarms, notify from a background tab, name the session's folder
+  and close once answered; Home's offer gets No thanks. About Mandu's Report
+  a problem fills in your version, Report a security problem reports
+  privately, and a newer release links what changed.
+- A new Plugins page shows where Mandu is attached to an agent it does not
+  start, such as OpenClaw beside `mandu serve`: each agent's state, its
+  secret files and its session, and in red, with the commands that fix it,
+  when it stops going through Mandu. The Scan page shows a new scan without
+  a reload, and a leaked key there or in Keys Mandu found links to its
+  company's page for replacing it.
+- Every command the dashboard asks you to run has a Copy button. "Skip to
+  the page" is the first Tab stop, `/` jumps to the Find box on History,
+  Approvals and Rules, and Ctrl+Enter presses Describe's Suggest rules and
+  Try a message's Try it. Each turn, secret card and question is a heading,
+  what each count means opens with a tap or a key, field borders and amber
+  text meet WCAG contrast, and a wide window keeps the top bar in sight.
+
 ### New in 0.2.0-beta.8
 
 - The dashboard has an account: one username and password for every page,

@@ -1213,9 +1213,11 @@ export interface WireRelease {
  *  verdict for these programs. */
 export const CONSUMER_TABLE: ReadonlyArray<{ test: (path: string) => boolean; apps: readonly string[]; wire: WireRelease }> = [
   { test: (p) => basenameOf(p) === ".pgpass", apps: ["psql", "pg_dump", "pg_restore"],
-    wire: { served: false, why: "the Postgres wire protocol, not HTTP: the egress proxy never sees the password" } },
+    wire: { served: true, why: "the egress proxy's database relay answers the server's SCRAM or md5 login with the password (Linux, under the connect guard)" } },
   { test: (p) => /\/\.aws\/(credentials|config)$/.test(p), apps: ["aws"],
-    wire: { served: false, why: "SigV4 signs each request with the secret key: a placeholder cannot be put back after signing" } },
+    // Since 2026-10-24 (aws-sigv4-resign.md): signed with the placeholder
+    // key, the egress proxy re-signs with the real one at an AWS endpoint.
+    wire: { served: true, why: "botocore and the SDKs: HTTPS_PROXY and AWS_CA_BUNDLE; the egress proxy re-signs each SigV4 request with the real key" } },
   { test: (p) => /\/\.config\/gh\/hosts\.yml$/.test(p), apps: ["gh"],
     wire: { served: true, why: "Go: honors HTTPS_PROXY and SSL_CERT_FILE; a bearer token in a header" } },
   { test: (p) => basenameOf(p) === ".npmrc", apps: ["npm", "yarn", "pnpm", "node"],
@@ -1223,7 +1225,10 @@ export const CONSUMER_TABLE: ReadonlyArray<{ test: (path: string) => boolean; ap
   { test: (p) => /\/\.docker\/config\.json$/.test(p), apps: ["docker"],
     wire: { served: false, why: "the Docker daemon, outside the session, makes the registry requests" } },
   { test: (p) => /\/\.kube\/config$/.test(p), apps: ["kubectl", "helm"],
-    wire: { served: false, why: "trusts only the cluster CA in the kubeconfig, so it refuses the inspection certificate" } },
+    // kube-wire-release.md (2026-10-24): the session's KUBECONFIG overlay
+    // trusts the session CA for each https cluster, and the proxy dials the
+    // cluster with the real CA and client certificate.
+    wire: { served: true, why: "Go: the session KUBECONFIG overlay trusts the session CA and routes each cluster through the proxy; a bearer token in a header, a client certificate the proxy presents at the cluster" } },
   { test: (p) => /\/\.ssh\/id_[a-z0-9]+$/.test(p), apps: ["ssh", "git", "scp", "ssh-add"],
     wire: { served: false, why: "SSH: the key signs the handshake, and SSH is not HTTP" } },
   // git's opener of `.netrc` is its HTTP transport, `git-remote-http(s)`

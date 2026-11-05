@@ -39,6 +39,7 @@ import { posix } from "node:path";
 
 import type { HomeTextPart } from "./ask-words.js";
 import { tildePath } from "./file-browser.js";
+import { replaceAtFor, type ReplaceAtVM } from "./key-pages.js";
 
 // ── the wire (arbiter/ipc/protocol.ts SuggestionView), declared here so the
 //    dashboard typechecks standalone ────────────────────────────────────────
@@ -247,6 +248,10 @@ export interface SuggestionRowVM {
   /** The advice is the softer one (a file found as it is now: nothing shows
    *  the key left the machine). */
   rotateSoft: boolean;
+  /** Where to replace the key, one line per company its detectors name
+   *  (key-pages.ts), under the advice; empty with no advice, and on a
+   *  past-sessions row (its evidence holds key names, no detector). */
+  replaceAt: ReplaceAtVM[];
   by: string;
   /** Save can apply it (every edit is one this Mandu knows). */
   applicable: boolean;
@@ -415,8 +420,10 @@ export function suggestionRows(views: readonly SuggestionWire[], home: string, p
     ].filter((p) => !shown.has(p) && (shown.add(p), true)).map((p) => tildePath(p, home));
     const seen = new Set<string>();
     const found: FoundVM[] = [];
+    const rules: string[] = [];
     for (const f of s.evidence.findings) {
       for (const d of f.detectors) {
+        if (d.kind === "content-shape") rules.push(d.rule);
         const v = foundWords(d, workspace);
         const k = `${v.words}\u0000${v.mask}\u0000${v.line ?? ""}`;
         if (!seen.has(k)) { seen.add(k); found.push(v); }
@@ -448,6 +455,7 @@ export function suggestionRows(views: readonly SuggestionWire[], home: string, p
       // A label is not a key: nothing to rotate.
       rotate: labelRow ? null : pastRow ? ROTATE_WORDS : workspace ? ROTATE_SOFT_WORDS : s.rotate ? (platform === "darwin" ? MACOS_ROTATE_WORDS : ROTATE_WORDS) : null,
       rotateSoft: workspace && !labelRow && !pastRow,
+      replaceAt: labelRow || pastRow || !(workspace || s.rotate) ? [] : replaceAtFor(rules),
       by: labelRow ? LABEL_BY : pastRow ? PAST_SESSIONS_BY : SUGGESTED_BY,
       applicable: s.applicable,
       blocked: s.applicable ? null : BLOCKED_WORDS,
@@ -492,6 +500,7 @@ function modelRow(s: SuggestionWire, home: string): SuggestionRowVM {
     impact: impactWords(s, "path"),
     rotate: null,
     rotateSoft: false,
+    replaceAt: [],
     by: suggestedByModel(m?.endpoint ?? "?"),
     applicable: s.applicable,
     blocked: s.applicable ? null : BLOCKED_WORDS,

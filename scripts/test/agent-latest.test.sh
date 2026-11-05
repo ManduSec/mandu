@@ -23,7 +23,7 @@ check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 T="$(mktemp -d "${TMPDIR:-/tmp}/agent-latest.XXXXXX")"; trap 'rm -rf "$T"' EXIT
 R="$T/repo"; mkdir -p "$R/scripts/ci" "$T/bin" "$T/tmp" "$T/npm-global" "$T/home"
 cp "$REPO/scripts/ci/agent-latest.sh" "$R/scripts/ci/"
-printf 'CLAUDE_CODE_VERSION=2.1.295\nCODEX_VERSION=0.162.0\nOPENCODE2_VERSION=2.0.23\nGOOSE_VERSION=1.53.0\n' > "$R/scripts/ci/pins.env"
+printf 'CLAUDE_CODE_VERSION=2.1.295\nCODEX_VERSION=0.162.0\nOPENCODE2_VERSION=2.0.23\nOPENCLAW_VERSION=2026.7.1-2\nGOOSE_VERSION=1.53.0\n' > "$R/scripts/ci/pins.env"
 # A stub npm: `config get prefix` names a global prefix of its own; `install -g
 # --prefix P <pkg>@latest` records the call and puts a CLI printing VERSION in
 # P/bin (OpenCode 2's package installs `opencode` too, as the real one does).
@@ -67,6 +67,29 @@ check "a failing command: its exit status passes through, the prefix removed" "[
 VERSION="2.0.30" run opencode2 -- sh -c 'command -v opencode || echo no-opencode; opencode2 --version'
 check "opencode2: @opencode/cli@latest, and its own opencode left out of the prefix" \
   "grep -q '@opencode/cli@latest' '$T/calls' && grep -q '^2.0.30$' '$T/out' && ! grep -q 'mandu-agent-latest.*/bin/opencode$' '$T/out' && grep -q 'pinned 2.0.23: DRIFT' '$T/out'"
+
+# OpenClaw: installed with the agent node's npm, run through a wrapper on that
+# node (its engine floor is above Mandu's node; pins.env AGENT_NODE_VERSION)
+AN="$T/agent-node"; mkdir -p "$AN/bin"
+cat > "$AN/bin/npm" <<'EOF'
+#!/bin/sh
+echo "agent-npm $* (node first on PATH: $(command -v node))" >> "$CALLS"
+prefix=""; pkg=""
+while [ $# -gt 0 ]; do case "$1" in --prefix) prefix="$2"; shift 2 ;; -*) shift ;; *) pkg="$1"; shift ;; esac; done
+[ "$pkg" = openclaw@latest ] || exit 1
+mkdir -p "$prefix/lib/node_modules/openclaw" "$prefix/bin"
+echo "// openclaw" > "$prefix/lib/node_modules/openclaw/openclaw.mjs"
+ln -s ../lib/node_modules/openclaw/openclaw.mjs "$prefix/bin/openclaw"
+EOF
+printf '#!/bin/sh\necho "agent-node ran $1" >&2\necho "OpenClaw $VERSION (abc1234)"\n' > "$AN/bin/node"
+chmod +x "$AN/bin/npm" "$AN/bin/node"
+MANDU_AGENT_NODE_DIR="$AN" VERSION="2026.10.9" run openclaw -- sh -c 'openclaw --version'
+check "openclaw: installed by the agent node's npm with that node first on PATH, never the PATH's npm" \
+  "grep -q '^agent-npm install -g --no-audit --no-fund --prefix $T/tmp/mandu-agent-latest\\.[A-Za-z0-9]* openclaw@latest (node first on PATH: $AN/bin/node)$' '$T/calls' && ! grep -q '^npm install' '$T/calls'"
+check "openclaw: its openclaw runs openclaw.mjs on the agent node, and the version is said beside the pin" \
+  "grep -q '^agent-node ran $T/tmp/mandu-agent-latest\\.[A-Za-z0-9]*/lib/node_modules/openclaw/openclaw.mjs$' '$T/out' && grep -q 'agent-latest: openclaw 2026.10.9 from .* (pinned 2026.7.1-2: DRIFT)' '$T/out' && [[ \$(cat '$T/rc') -eq 0 ]]"
+MANDU_AGENT_NODE_DIR="$T/no-agent-node" VERSION=x run openclaw -- true
+check "openclaw without an agent node: the PATH's npm installs it (as before)" "grep -q '^npm install -g .* openclaw@latest' '$T/calls'"
 
 # a failed install stops before the command
 FAIL_INSTALL=1 VERSION=x run claude -- sh -c 'echo RAN'

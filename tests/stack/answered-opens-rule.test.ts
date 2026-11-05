@@ -4,10 +4,10 @@
  * answer opens where Rules keeps it*, §4.25h), across the REAL components.
  * Mandu-new.
  *
- * Approvals says "Always allow and Block are remembered under Rules", and
- * until 2026-10-22 no answered row led there: someone who pressed Always
- * allow by mistake, and wanted to be asked again, had to find the row among
- * every rule by hand. This suite pins the whole path with no mocks:
+ * Approvals says answers that last, "such as Always allow and Block, are
+ * kept under Rules, where you can change them", and until 2026-10-22 no
+ * answered row led there: someone who pressed Always allow by mistake, and
+ * wanted to be asked again, had to find the row among every rule by hand. This suite pins the whole path with no mocks:
  *
  *   R1  the net-proxy, wired as production wires it
  *       (`new ArbiterClientAdapter(new ArbiterClient(sock))`), stops a

@@ -20,6 +20,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  allowKeptAs,
   SPENT_HISTORY_LIMIT,
   toPolicyPanelViewModel,
   verdictDetailOf,
@@ -844,7 +845,7 @@ test("Plan 13 D8 (13), P0 item 14: the rule row shows the arbiter's judgment of 
   };
   const rows = toPolicyPanelViewModel({ ...BARE, ...EXT, ...DOC_EXT, document: doc } as PolicySnapshot).yourRules!;
   const env = rows.find((r) => r.id === "lock:/home/u/ws/.env")!;
-  assert.match(env.effect, /raw readers: mytool \(a copy of python3\.12\) \(admits nothing\), ssh-add, deploy \(reads the placeholder copy\) \(others are refused\)/);
+  assert.match(env.effect, /raw readers: mytool \(a copy of python3\.12\) \(admits nothing\), ssh-add, deploy \(reads the masked copy\) \(others are refused\)/);
   assert.match(env.warning ?? "", /mytool \(a copy of python3\.12\)/);
   const pg = rows.find((r) => r.id === "lock:/home/u/.pgpass")!;
   assert.match(pg.effect, /raw readers: mytool \(pinned\), nu \(admits nothing\) \(others are refused\)/, "nushell's binary runs code by name");
@@ -861,7 +862,7 @@ test("Plan 13 D3: a reader entry's own output rule shows beside it, for that fil
   const pg = rows.find((r) => r.id === "lock:/home/u/.pgpass")!;
   // plan 13 §8 decision (b): the shell admits nothing, and the row says so
   // plan 13 D8 (12): aws is no vetted reader, so it reads the placeholder copy
-  assert.match(pg.effect, /raw readers: ssh-add \(output shown to the AI\), aws \(output partly masked\) \(reads the placeholder copy\), ssh, bash \(admits nothing\) \(others are refused\)/);
+  assert.match(pg.effect, /raw readers: ssh-add \(output shown to the AI\), aws \(output partly masked\) \(reads the masked copy\), ssh, bash \(admits nothing\) \(others are refused\)/);
   assert.ok(pg.detail.some((d) => d.items.some((i) => /for this file only; a process holding another secret stays masked/.test(i.text))));
 });
 
@@ -919,6 +920,14 @@ test("§4.25p: a file rule's row says which programs may open the real file (pla
   assert.match(opens["lock:/home/u/.pgpass"] ?? "", /^No program opens the real file\. psql never gets the real file: it prints or runs what it reads\./, "a database shell is never a reader");
   assert.equal(opens["lock:/home/u/notes"], "Programs get a masked copy.", "no readers: list");
   assert.equal(opens["lock:/home/u/pub.txt"], undefined, "Not secret has nothing to open");
+  // Beside the words, whether they are the default (no readers: list): the
+  // page draws the line only where they are not (§4.25p).
+  const dflt = Object.fromEntries(vm.yourRules!.map((r) => [r.id, r.plain?.opensDefault]));
+  assert.equal(dflt["lock:/home/u/notes"], true, "no readers: list");
+  assert.equal(dflt["lock:/home/u/.ssh/id_ed25519"], false, "a readers: list");
+  assert.equal(dflt["lock:/home/u/proj/.env"], false);
+  assert.equal(dflt["lock:/home/u/.pgpass"], false, "a reader that admits nothing still names a program");
+  assert.equal(dflt["lock:/home/u/pub.txt"], undefined, "Not secret sends neither");
   // The words alone: several of a kind, and a listed program that is neither vetted nor vouched for.
   assert.equal(opensWords([{ name: "ssh", how: "checked" }, { name: "ssh-add", how: "checked" }, { name: "aws", how: "masked" }]),
     "ssh (checked by Mandu) and ssh-add (checked by Mandu) may open the real file. aws gets a masked copy. Other programs are refused.");
@@ -943,7 +952,7 @@ test("§4.25d: every row's plain words use the glossary's terms; the page's glos
   };
   const vm = toPolicyPanelViewModel({ ...BARE, ...EXT, ...DOC_EXT, document: doc } as PolicySnapshot);
   const words = Object.fromEntries(vm.yourRules!.map((r) => [r.id, r.plain]));
-  assert.deepEqual(words["lock:/home/u/.aws"], { subject: "/home/u/.aws", reach: "and everything inside", effect: "No AI", opens: "Programs get a masked copy." });
+  assert.deepEqual(words["lock:/home/u/.aws"], { subject: "/home/u/.aws", reach: "and everything inside", effect: "No AI", opens: "Programs get a masked copy.", opensDefault: true });
   assert.deepEqual(words["lock:/home/u/pub.txt"], { subject: "/home/u/pub.txt", reach: "this file only", effect: "Not secret" });
   assert.equal(words["lock:/home/u/notes"]!.effect, "Any AI, when it asks; may be sent to api.example.com");
   assert.equal(words["lock:**/ws-*/memo/**"]!.reach, "every matching file");
@@ -1028,6 +1037,40 @@ test("§4.25f a rule on a file reads as a file: a subtree rule whose path is a f
   const unknown = toPolicyPanelViewModel(snap).yourRules!.find((r) => r.id === "lock:/home/u/proj/deploy.token")!;
   assert.equal(unknown.plain.reach, "and everything inside");
   assert.equal(unknown.pathIsFile, undefined);
+});
+
+// ── dashboard.md §4.25f *A rule on nothing says so* ────────────────────────────
+test("§4.25f a rule on nothing says so: a lock row whose path has nothing on disk is marked missing; its reach, level and words are unchanged; no other row is", () => {
+  const doc = {
+    ...DOC_EXT.document,
+    paths: [
+      { path: "/home/u/shop/.evn", level: "no-model", bindings: ["api.example.com"], recursive: true },
+      { path: "/home/u/shop/old.token", level: "any-model", bindings: [], recursive: false },
+      { path: "/home/u/shop/.env", level: "no-model", bindings: [], recursive: true },
+      { path: "/home/u/shop/*.key", level: "no-model", bindings: [], recursive: true, glob: true },
+    ],
+  };
+  // What server/path-kinds.ts found missing (a pattern is never looked up,
+  // so one in the set changes nothing).
+  const missing = new Set(["/home/u/shop/.evn", "/home/u/shop/old.token", "/home/u/shop/*.key"]);
+  const snap = { ...BARE, ...EXT, ...DOC_EXT, document: doc } as PolicySnapshot;
+  const vm = toPolicyPanelViewModel(snap, undefined, "", new Set(["/home/u/shop/.env"]), missing);
+  const plainVm = toPolicyPanelViewModel(snap, undefined, "", new Set(["/home/u/shop/.env"]));
+  const rows = Object.fromEntries(vm.yourRules!.map((r) => [r.id, r]));
+  const before = Object.fromEntries(plainVm.yourRules!.map((r) => [r.id, r]));
+  assert.equal(rows["lock:/home/u/shop/.evn"]!.missing, true);
+  assert.equal(rows["lock:/home/u/shop/old.token"]!.missing, true, "an exact rule too");
+  assert.equal(rows["lock:/home/u/shop/.env"]!.missing, undefined, "a path that is there");
+  assert.equal(rows["lock:/home/u/shop/*.key"]!.missing, undefined, "a pattern never");
+  for (const r of vm.yourRules!.filter((x) => x.kind !== "lock")) assert.equal(r.missing, undefined, r.id);
+  // Display only: everything else on the row is as before.
+  for (const id of Object.keys(before)) {
+    const { missing: _m, ...rest } = rows[id]!;
+    assert.deepEqual(rest, before[id], id);
+  }
+  assert.deepEqual([rows["lock:/home/u/shop/.evn"]!.covers, rows["lock:/home/u/shop/.evn"]!.level, rows["lock:/home/u/shop/.evn"]!.plain.reach], ["subtree", "no-model", "and everything inside"]);
+  // Not looked at (no set): no row is marked.
+  assert.ok(plainVm.yourRules!.every((r) => r.missing === undefined));
 });
 
 test("§4.25d: a secret level's meaning promises no OK that its own row's \"may be sent to\" skips", async () => {
@@ -1167,6 +1210,33 @@ test("§4.25u Rules names a held message's answer: the category is a code part, 
   assert.equal(new Set(all).size, all.length, "no part object shared between rows");
   // A key the row cannot read names no category: its words alone, no parts.
   assert.deepEqual(promptAnswerWords("prompt:", "model:s", "approved"), { subject: "a found part in your message to the AI", reach: "as you wrote it, for that session", effect: "Sent as written" });
+});
+
+test("§4.25u a held message's answer names a kind Mandu has words for as Settings names it, one text part, its id in `category`; an organization's category stays code", async () => {
+  const { promptAnswerWords } = await import("../../../src/view-model/rule-words.js");
+  const vm = toPolicyPanelViewModel({
+    ...BARE,
+    verdicts: [
+      verdict({ id: "egr-1", symbol: "prompt:pii.payment-card#3f2a9c", destination: "model:1791210000-777", status: "approved", scope: "always" }),
+      verdict({ id: "egr-2", symbol: "prompt:pii.email#3f2a9c", destination: "model:1791210000-777#turn:01d1706f", status: "denied", scope: "always" }),
+      verdict({ id: "egr-3", symbol: "prompt:acme.codename#3f2a9c", destination: "model:1791210000-777", status: "approved", scope: "always" }),
+    ],
+  } as PolicySnapshot);
+  const rows = Object.fromEntries(vm.queue.map((q) => [q.id, q.plain]));
+  assert.deepEqual(rows["egr-1"], {
+    subject: "A card number in your message to the AI",
+    subjectParts: [{ kind: "text", text: "A card number in your message to the AI" }],
+    category: "pii.payment-card",
+    reach: "as you wrote it, for that session",
+    effect: "Sent as written",
+  }, "Settings' words with a capital, as text; the id kept for the tooltip and Find");
+  assert.equal(rows["egr-2"]!.subject, "An email address in your message to the AI");
+  assert.equal(rows["egr-2"]!.category, "pii.email");
+  assert.equal(rows["egr-2"]!.reach, "masked in that one message");
+  assert.equal(rows["egr-3"]!.subject, "acme.codename in your message to the AI", "an organization's own category: as written");
+  assert.deepEqual(rows["egr-3"]!.subjectParts, [{ kind: "code", text: "acme.codename" }, { kind: "text", text: " in your message to the AI" }]);
+  assert.equal(rows["egr-3"]!.category, undefined, "its subject already names the id");
+  assert.equal(promptAnswerWords("prompt:secret.shape.stripe-key#77aa01", "model:s", "pending").subject, "A Stripe key in your message to the AI");
 });
 
 test("§4.25u a held message's answer says what was sent: Sent as written / Sent masked, never Always allowed / Always blocked", async () => {
@@ -1320,4 +1390,41 @@ test("§4.25p: a rule's warning comes as parts too, Settings › Models a link p
   assert.ok(pg.warning, "psql runs what it reads: a warning");
   assert.deepEqual(pg.warningParts, [{ kind: "text", text: pg.warning }]);
   assert.equal(row("lock:/srv/.env").warning, undefined);
+});
+
+test("§4.25 allowKeptAs mirrors what the arbiter keeps a standing allow as: once on one run, a session's ask and a holder's send with no session; this session on one with a session; else always", () => {
+  const SHA = "a".repeat(64);
+  assert.equal(allowKeptAs("$MDU:nomodel_Read[ab12cd34].STRIPE_KEY"), "always", "a plain secret send");
+  assert.equal(allowKeptAs('holder-send:{"session":"s1","files":["/w/.env"]}'), "session");
+  assert.equal(allowKeptAs('holder-send:{"files":["/w/.env"]}'), "once", "no session to scope it to");
+  assert.equal(allowKeptAs(`open:/usr/bin/python3#${SHA}#run:py-1`), "once");
+  assert.equal(allowKeptAs(`write:/usr/bin/git#${SHA}#run:gw-1`), "once");
+  assert.equal(allowKeptAs(`write:/usr/bin/bash#${SHA}#script:/home/u/x.sh#${SHA}`), "always", "a pinned script is a standing answer");
+  assert.equal(allowKeptAs(`write:/usr/bin/git#${SHA}`), "always");
+  assert.equal(allowKeptAs("session-net:s1"), "once");
+  assert.equal(allowKeptAs("session-exec:s1"), "once");
+  assert.equal(allowKeptAs('holder-send:{"files":[]}'), "always", "not a holder's send");
+});
+
+test("§4.25 an answered queue row carries what the arbiter keeps its allow as (allowKeptAs), so Rules › Your answers names it; a standing one and a waiting one carry none", () => {
+  const SHA = "a".repeat(64);
+  const vm = toPolicyPanelViewModel({
+    ...BARE,
+    ...EXT,
+    verdicts: [
+      verdict({ id: "hs-1", symbol: 'holder-send:{"session":"s1","files":["/w/.env"]}', destination: "hooks.slack.com", status: "denied", lastSeen: 60 }),
+      verdict({ id: "hs-2", symbol: 'holder-send:{"session":"s1","files":["/w/.env"]}', destination: "paste.example", status: "approved", lastSeen: 59 }),
+      verdict({ id: "hn-1", symbol: 'holder-send:{"session":null,"files":["/w/.env"]}', destination: "paste.example", status: "denied", lastSeen: 58 }),
+      verdict({ id: "run-1", symbol: `open:/usr/bin/python3#${SHA}#run:py-1`, destination: "/w/.env", status: "denied", lastSeen: 57 }),
+      verdict({ id: "plain-1", symbol: "$MDU:nomodel_Read[ab12cd34].STRIPE_KEY", destination: "api.example.com", status: "denied", lastSeen: 56 }),
+      verdict({ id: "wait-1", symbol: 'holder-send:{"session":"s1","files":["/w/.env"]}', destination: "later.example", status: "pending", lastSeen: 55 }),
+    ],
+  });
+  const kept = (id: string) => vm.queue.find((r) => r.id === id)!.allowKeptAs;
+  assert.equal(kept("hs-1"), "session", "a holder send keyed to a session, blocked");
+  assert.equal(kept("hs-2"), "session", "and allowed");
+  assert.equal(kept("hn-1"), "once", "keyed to no session");
+  assert.equal(kept("run-1"), "once", "one run of a program");
+  assert.ok(!("allowKeptAs" in vm.queue.find((r) => r.id === "plain-1")!), "a standing answer adds no bytes (§4.30)");
+  assert.ok(!("allowKeptAs" in vm.queue.find((r) => r.id === "wait-1")!), "a waiting row decided nothing");
 });

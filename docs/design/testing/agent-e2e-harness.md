@@ -1157,9 +1157,17 @@ class as the Codex `exec -c` bypass (`codex-argv.ts`). Three layers close it:
   mid-session. Probed: 2026.6.35 and 2026.7.1 refuse `--model openai/gpt-5.5`
   ("is not allowed for agent main") and swap a non-anthropic primary for an
   allowed model; 2026.9.6 refuses the override but runs a non-anthropic
-  primary; 2026.3.12 does not enforce the allowlist and runs normally with
-  it. The refusal is therefore the guarantee; the fence narrows what a
-  session can switch to.
+  primary; 2026.3.12 does not enforce the allowlist for `--model` and runs
+  normally with it. The refusal is therefore the guarantee; the fence
+  narrows what a session can switch to. Measured 2026-10-25 on 2026.3.12:
+  the mid-session switches (the `session_status` tool, `sessions_spawn`
+  through `sessions.patch`, cron) do enforce it, by EXACT key (a wildcard
+  key is the literal model `*` there), and with no allowlist
+  `sessions.patch` takes any model. On 2026.3.12 and 2026.3.13 an
+  openrouter model the provider's `models` list does not name goes to
+  openrouter.ai whatever the route, so the run config lists every
+  openrouter model a run can reach and the allowlist names exactly those
+  (supported-agents.md §2.1, "The openrouter bypass").
 
 **Other providers through the model proxy (BUILT).** The
 refusal above stays for every provider Mandu cannot read, and an
@@ -1180,6 +1188,15 @@ published packages (`@openclaw/ai` 2026.9.6, OpenCode 1.18.32):
   §5.6 "The openai provider") picks the wire per model on its default base
   path `v1/chat/completions`: the Responses API for gpt-5 / gpt-6 /
   o-series, Chat Completions otherwise; a custom base path pins one.
+- Google Gemini (2026-10-25; model-wires.md): OpenClaw's
+  `google-generative-ai` api (its built-in `google` provider), OpenCode's
+  `@ai-sdk/google` and Goose's `google` provider speak
+  `…/models/{model}:streamGenerateContent?alt=sse`. The proxy reads that
+  wire too, under its own prefix `/_mandu/google/<provider id>` with the
+  upstreams in `MANDU_GOOGLE_UPSTREAMS`, through the same relay loop and
+  gates (`wire-adapter.ts`: one adapter per wire, the shadow builder shared
+  in `wire-shadow.ts`; the Gemini reader is `gemini-wire.ts` /
+  `gemini-sse.ts`). The stack oracle is `tests/stack/gemini-wire-secrets.test.ts`.
 
 **Where it is gated: the anthropic-proxy, not the openai-proxy.** The
 openai-proxy's gates are Codex's (`exec_command` / `cmd`, the JS script
@@ -1406,7 +1423,7 @@ OpenClaw shapes and refuses everything else before anything launches
 | `agent --local` | allowed | the one-shot embedded runtime (the e2e harness) |
 | `gateway`, `gateway run` | allowed | the Gateway itself runs in the foreground under the wrap, so it is confined and routed |
 | `--help`, `-h`, `--version`, `-V`, `help` | allowed | print and exit |
-| `tui`, `agent` without `--local`, `acp`, `acp client` | refused; `MANDU_OPENCLAW_GATEWAY_CLIENT=1` opens them | Gateway clients (`acp` is an ACP stdio bridge to the Gateway WebSocket; `acp client` spawns one). The opt-in is for a Gateway that was itself started under Mandu; the differential harness sets it (it wraps the TUI only, on purpose, §13.3 of the differential doc) |
+| `tui`, `agent` without `--local`, `acp`, `acp client` | refused; `MANDU_OPENCLAW_GATEWAY_CLIENT=1` opens them | Gateway clients (`acp` is an ACP stdio bridge to the Gateway WebSocket; `acp client` spawns one). The opt-in is for a Gateway that was itself started under Mandu; the differential harness sets it (it wraps the TUI only, on purpose, §13.3 of the differential doc). Run them under Mandu even then: when its Gateway call fails, `openclaw agent` runs the turn in the client with the client's own config (2026.3.12 on any error, 2026.7.1-2 on a lost connection or timeout; openclaw-plugin.md §9 "OpenClaw's gateway-client fallback"), routed only under the launch |
 | bare `openclaw` | runs as `openclaw chat` | bare `openclaw` starts onboarding (no authored config) or Crestodian, neither routed; a bare `mandu openclaw` means the coding agent, so parse.ts appends `chat` after any global flags (`openclawDefaultArgv`); help and version pass unchanged, and the refusal stays for a caller that skips the mapping |
 | `crestodian` | refused | the setup and repair assistant: a TUI whose model planner falls back to the Claude Code CLI or the Codex app-server harness, and which can install plugins and start or restart the Gateway service; not a shape whose model traffic this launch routes |
 | `gateway start/restart/install/call/…` | refused | the Gateway SERVICE (systemd/launchd) or a running Gateway, outside the wrap |

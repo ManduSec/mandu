@@ -554,6 +554,7 @@ raw. All four are built.
 | 2026-10-02 | The policy's filters run on every segment, not only the human's (the human's text reaches the model in title and token-count requests too); on `harness` and `side-call` text `block` and `ask` act as `redact`, since the harness's own request is not refused for text the human did not send | §3.1, §13.3 item 1 |
 | 2026-10-03 | Plugins and classifiers also run on every segment, cached by hash; §5 amended | §5 |
 | 2026-10-03 | A plugin runs only under `mandu-net-guard` (its network limited by address to the cleared endpoint); without it the plugin does not run and its `on_error` applies. The Landlock filesystem and TCP-port legs, the namespaces and the seccomp deny filter are probe-gated and may degrade, with a note | §4.3, §13.5 |
+| 2026-11-02 | So plugins run on Linux only: the guard is a Linux program (seccomp user notification). On another system the probe's note says so (`plugin-probe.ts` `noGuardNote`), not that the guard is missing a build. The protocol suites, which stand a fake guard in, skip where `node` cannot start from a copy of its binary (Homebrew's macOS node links `libnode` by `@rpath`), since a plugin runs from a verified copy | §4.3 |
 | 2026-10-03 | What a plugin may read and write: read-only `/usr`, `/lib*`, `/bin`, `/sbin`, `/etc` and the plugin's own directory (amended 2026-10-07: its verified copies instead of its own directory); one fresh scratch directory per run; no home. Environment: `PATH`, `LANG`, `LC_ALL`, `HOME` = `TMPDIR` = the scratch, the endpoint's URL and the cleared `models:` entry's token variable only. Plus `no_new_privs`, a new session, PID/IPC/UTS namespaces where available, the seccomp deny filter. No pack-declared extra paths | §4.3, §13.5 |
 | 2026-10-03 | A plugin is pinned by `exec` + `sha256` (and an optional `script` + `script_sha256` for an interpreter); the arbiter runs the verified bytes from a copy in its private directory and re-checks the pin at every spawn (a mismatch is a filter error). Modules the plugin imports stay unpinned (stated; closed 2026-10-07, below) | §4.3, §13.5 |
 | 2026-10-03 | Setting or changing a classifier's `endpoint:` is a relaxation, checked at validation and again at spawn. A plugin may only ADD findings (offsets inside the text, categories from its pack's declared list, never a built-in prefix such as `secret.registered`); a level it reports is ignored. Plugin packs are files only: read-only to the pack editor, no plugin edit for the agent | §5, §6, §13.5 |
@@ -573,7 +574,10 @@ raw. All four are built.
 Code: `arbiter/prompt-filter/` (`value-matcher.ts`, `registered-values.ts`,
 `registered-value-filter.ts`, `engine.ts`), the `filterPrompt` and
 `promptFilters` ops (`arbiter/ipc/server.ts`),
-`interceptors/{anthropic,openai}-proxy/src/prompt-filter.ts`.
+`interceptors/{anthropic,openai}-proxy/src/prompt-filter.ts` (each wire's
+segmenter) and `prompt-filter-core.ts` (since 2026-10-25: the answer
+applied, the ledgers and the hold wait, one module copied byte for byte into
+both proxies, its source in anthropic-proxy, `scripts/copies/module-copies.mjs`).
 
 1. **The matcher.** An Aho-Corasick automaton over the first 16 UTF-16 code
    units of every pattern (a whole value of 8+ characters, a line of 24+),
@@ -750,7 +754,7 @@ Code: `arbiter/prompt-filter/` (`policy.ts`, `packs.ts`, `regex.ts`,
 
 ### 13.3 Phase 2, the proxies and the agents (2026-10-02)
 
-Code: `interceptors/{anthropic,openai}-proxy/src/prompt-filter.ts`
+Code: `interceptors/{anthropic,openai}-proxy/src/prompt-filter-core.ts`
 (`PromptBlocked`, `PromptBlockLedger`), `rewrite-request.ts`
 (`RewriteBlocked`), `proxy.ts`.
 
@@ -1347,7 +1351,7 @@ Settings › Prompt filters and the note under the person's own message
    literal characters, matched leftmost with no backtracking.
 10. **A resend with nothing found clears the note** (2026-10-03). Both
     proxies keep, per session and segment text hash, the outcome they last
-    recorded (`PromptEventLedger`, in each proxy's `prompt-filter.ts`) and
+    recorded (`PromptEventLedger`, in each proxy's `prompt-filter-core.ts`) and
     record an event whenever it changes. A segment recorded with a finding
     and now answered with none (an exception, a kind set to `pass`, a filter
     turned off) records one `prompt_filter` event with no findings, action
@@ -2163,6 +2167,18 @@ string is still read as moved there. A `cd` in another string, a
 relative `workdir` (read as a `cd` target), a non-string directory key
 or no directory known still places nothing.
 
+*A glob* (2026-10-27, open). A glob places nothing (condition 1), so a call
+masked through one fingerprints every line. The live Codex take of
+demo-notion-token met it: `rg … -g '!notes-app/.env' … --glob '!*.env'`
+named `.env` only in rg negated globs, the output was masked whole, and the
+notes' upload tripped twice. That shape is no longer masked at all
+(exclusion-flags.md X4-X7: a negated glob is not read as a path), so it
+mints no path row. The gap stays open for a call still masked through a
+glob, such as a positive glob over a literally labelled folder (`-g
+'notes-app/**'`): the follow-up is to let condition 1 place a glob whose
+label hits are all registered credential files (the clean-tree R4 set C).
+Not built.
+
 *Why it is safe.* The invariant holds at the model unchanged: the result
 stays one symbol. At the network, the tripwire is not the guarantee (the
 per-symbol gate is), but the narrowing keeps everything it held of a
@@ -2266,4 +2282,7 @@ same `cd` when the folder is there is not narrowed); and in
 `path-row-bound-upload.test.ts`, Codex's batch after a
 relative and an absolute leading `cd` narrowed through the production
 openai-proxy (the notes' upload forwarded, the raw token and the
-credential line still tripping).
+credential line still tripping), and the rg shape of 2026-10-27 under the
+drill's pattern label (released, so the notes' upload is forwarded; its
+oracle: an exclusion that does not hold shows the model only the twin's
+placeholder, exclusion-flags.md §5).

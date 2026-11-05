@@ -25,7 +25,7 @@ const gatherFacts = hermetic(gatherFactsIn, 0);
 test("nodeHonorsEnvProxy: fetch from 22.21 and 24.0, http/https from 22.21 and 24.5, never 23.x", () => {
   const cases: Array<[string, boolean, boolean]> = [
     // version, fetch, https
-    ["v22.13.0", false, false], // Mandu's own floor: runs Mandu, ignores the variable
+    ["v22.13.0", false, false], // an older 22: ignores the variable
     ["v22.20.9", false, false],
     ["v22.21.0", true, true],
     ["v22.22.1", true, true],
@@ -110,7 +110,7 @@ test("gatherFacts → render: the PATH node row sits under the Node.js row; none
   assert.deepEqual(facts.pathNode, { path: "/fake/node", gap: { state: "bypass", version: "v23.11.0", apis: ["fetch", "https"] } });
   const out = renderDoctor(facts);
   const needs = out.slice(out.indexOf("What Mandu needs"), out.indexOf("Installed"));
-  assert.match(needs, /✓ Node\.js 22\.22\.1 \(22\.13\.0 or newer\)\n  ✗ node on your PATH is v23\.11\.0 \(\/fake\/node\)/);
+  assert.match(needs, /✓ Node\.js 22\.22\.1 \(22\.15\.0 or newer\)\n  ✗ node on your PATH is v23\.11\.0 \(\/fake\/node\)/);
 
   const none = await gatherFacts({}, Layout.installed("/opt/mandu"), deps({ pathNode: () => null }));
   assert.equal(none.pathNode, undefined);

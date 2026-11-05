@@ -10,7 +10,11 @@
 //   codex   the subscription lane: a REDUCED Codex sign-in (access and id
 //           token, no refresh token) cut from a DEDICATED CI account's full
 //           sign-in, which stays on the runner host and is refreshed there
-//           before each run (`refresh codex`, §9.8 "The Codex sign-in");
+//           before each run (`refresh codex`, §9.8 "The Codex sign-in").
+//           It is also OpenClaw's ChatGPT sign-in (2026-10-26): the weekly
+//           OpenClaw night runs the subscription lane with this kind alone
+//           (`--credential codex`, nightly.sh --weekly), and each OpenClaw
+//           home of a run gets only its access token;
 //   api     the API lane: vendor API keys, Anthropic and/or OpenAI;
 //   docker, gitguardian
 //           TOOL credentials, not model credentials (§9.8 "Tool

@@ -197,3 +197,29 @@ test("P5: a held message's answer says Sent as written / Sent masked; its menu o
   assert.ok(calls.some((c) => c.method === "POST" && c.url.endsWith("/api/egress/approvals/egr-1/deny")), "the reversal is the same deny");
   assert.equal(doc.getElementById("rules-notice").textContent, "Now sent masked for that session.");
 });
+
+test("P6: a known kind is named in words, as Settings names it; its id stays in the tooltip and Find a rule matches either (§4.25u *A held message's answer names its kind in words*)", async () => {
+  const known = {
+    ...promptAnswer("egr-1", "pii.payment-card", null, "approved"),
+    plain: { subject: "A card number" + IN_MESSAGE, subjectParts: [{ kind: "text", text: "A card number" + IN_MESSAGE }], category: "pii.payment-card", reach: "as you wrote it, for that session", effect: "Sent as written" },
+  };
+  const { doc } = page([known, promptAnswer("egr-2", "acme.codename", null, "approved")]);
+  await tick();
+  const row = rowOf(doc, "egr-1");
+  assert.equal(drawn(subjectOf(row)), "A card number in your message to the AI", "words, no code");
+  assert.equal(subjectOf(row).querySelector("code"), null, "no chip for a kind Mandu has words for");
+  assert.equal(row.querySelector(".rule-text").title, "A card number in your message to the AI (pii.payment-card)", "the id kept in the tooltip");
+  assert.equal(rowOf(doc, "egr-2").querySelector(".rule-text").title, "acme.codename in your message to the AI", "an organization's category: today's tooltip");
+  assert.equal(drawn(subjectOf(rowOf(doc, "egr-2"))), "[acme.codename] in your message to the AI", "an organization's category stays code");
+  const find = async (text: string) => {
+    const box = doc.getElementById("rules-find");
+    box.focus();
+    box.value = text;
+    box.dispatchEvent(new doc.defaultView.Event("input", { bubbles: true }));
+    await tick();
+    return rows(doc).filter((r) => !r.closest("[hidden]")).map((r) => r.getAttribute("data-rule"));
+  };
+  assert.deepEqual(await find("card number"), ["answer:egr-1"], "Find matches the drawn words");
+  assert.deepEqual(await find("pii.payment-card"), ["answer:egr-1"], "Find matches the id, a search-only word");
+  assert.deepEqual(await find("acme.codename"), ["answer:egr-2"]);
+});

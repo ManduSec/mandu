@@ -207,7 +207,7 @@ export type ContentKind = (typeof CONTENT_KINDS)[number];
  * (harmlessly, fail-closed) symbolized, never under-symbolized. */
 const ARTIFACT_NEXT_STEP =
   "The result_symbol is opaque by design. Re-inspection, rereading, or declassification cannot reveal untrusted data to you. " +
-  "If your instruction requested the final artifact, pass result_symbol directly as Write.content or in your reply. " +
+  "If your instruction requested the final artifact, deliver result_symbol where the user asked for it: in your reply when they asked to be told or shown (they see its real text), as Write.content when they asked for a file. " +
   "If more processing is needed, call inspect_symbol with ALL original symbols together and the final transformation, " +
   "using output_format=json for JSON artifacts. For completeness checks include all originals and the candidate, " +
   "and request the complete corrected artifact. content_kind describes the input, not output correctness.";

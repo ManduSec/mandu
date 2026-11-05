@@ -76,7 +76,26 @@ export interface HumanResolveClient {
   emit?(event: ArbiterEvent): Promise<number>;
   /** Plan 10 §11.8, "Refused connections": an attested report, so only here. */
   recordEgressRefusal?(args: EgressRefusalReport): Promise<{ recorded: boolean }>;
+  /** kube-wire-release.md: how to dial a cluster (holds a client key, so
+   *  only here). Optional: an arbiter predating it has none. */
+  kubeUpstream?(authority: string): Promise<{ profile: KubeUpstream | null }>;
   close(): void;
+}
+
+/** How the proxy dials one Kubernetes cluster (kube-wire-release.md; the
+ *  arbiter's `kubeUpstream` op, arbiter/policy/kubeconfig.ts, mirrored so
+ *  this package typechecks standalone). */
+export interface KubeUpstream {
+  /** The cluster's CA (PEM), the only trust anchor; absent: the system store. */
+  ca?: string;
+  /** SNI and the name verified (`tls-server-name`); absent: the host. */
+  servername?: string;
+  /** `insecure-skip-tls-verify: true` in the user's own file. */
+  insecure: boolean;
+  /** The client certificate and key (PEM) the proxy presents. */
+  client?: { cert: string; key: string };
+  /** Why `client` is absent though a user of the server has a certificate. */
+  clientWhy?: string;
 }
 
 /** Plan 10 §11.8: one refusal as reported to the arbiter. `procKeys` are
@@ -99,6 +118,12 @@ export type EgressRefusalKind = "tainted" | "unattributed" | "symbol" | "fingerp
 export interface StrippedPlaceholdersResult {
   found: string[];
   ruleRef?: RuleRef;
+}
+
+/** Mirrors arbiter/ipc/protocol.ts `SigningKeysResultWire`. */
+export interface SigningKeysResult {
+  /** The `$MDU:` names of the AWS secret access keys, names only. */
+  symbols: string[];
 }
 
 import type { SessionLogins } from "./session-logins.js";
@@ -149,7 +174,7 @@ export interface DesymbolizationRequest {
   /** The scheme the request travels in (`http` on the plain leg, `https` on
    *  the TLS-inspected leg): a wire-twin credential declared for https is
    *  never put back without `https` (plan 10 §11.13.1, 2026-10-03). */
-  scheme?: "http" | "https";
+  scheme?: "http" | "https" | "postgres" | "mysql";
   /** Every place in the request the symbol sits (egress.ts
    *  `requestSymbolPositions`): a credential bound only by its own config
    *  file or an auth grant is put back only when every position is
@@ -169,9 +194,11 @@ export interface DesymbolizationRequest {
 
 /** Mirrors arbiter/policy/policy-interface.ts `RequestPosition`: where a
  *  symbol sits in a request. `authorization` = the request's `Authorization`
- *  header (its value, or the decoded pair of `Basic`); `url` = the URL or
- *  its host; `header` = any other header; `body` = the body. */
-export type RequestPosition = "authorization" | "url" | "header" | "body";
+ *  header (its value, or the decoded pair of `Basic`; a SigV4 request's
+ *  `X-Amz-Security-Token` too); `url` = the URL or its host; `header` = any
+ *  other header; `body` = the body; `signature` = nowhere in the request:
+ *  the key a SigV4 request is re-signed with (sigv4.ts). */
+export type RequestPosition = "authorization" | "url" | "header" | "body" | "signature";
 
 /** Mirrors arbiter/policy/policy-interface.ts `DesymbolizationDecision`. */
 export type DesymbolizationDecision =
@@ -362,6 +389,13 @@ export interface Arbiter {
    *  check, not a gate: the text it finds holds no value, so an absent op or
    *  a THROW leaves the request to the gates as before. */
   strippedPlaceholders?(args: { candidates: string[]; sessionKey?: string }): Promise<StrippedPlaceholdersResult>;
+  /** aws-sigv4-resign.md: the placeholders of the AWS secret access keys
+   *  the session's protected files and variables hold (names only), the
+   *  candidates a SigV4 request's signature is checked against (sigv4.ts
+   *  `matchSignature`). Absent or a THROW: a SigV4 request that carries a
+   *  placeholder is refused (fail-closed); one that carries none goes to the
+   *  gates as before. */
+  signingKeys?(args: { sessionKey?: string }): Promise<SigningKeysResult>;
   /** Confidentiality.md §4, "A held request": which of these approval rows
    *  still wait for the human's answer. A read that only paces a held
    *  request's re-asks (egress.ts `holdForAnswer`); the decision is always
@@ -376,6 +410,11 @@ export interface Arbiter {
    *  take (relay-notice.ts; the arbiter's `takeRelayNotices` op). Utility,
    *  not a gate: an absent op or a THROW sends the call without them. */
   takeRelayNotices?(args: { sessionKey?: string }): Promise<RelayNotice[]>;
+  /** kube-wire-release.md: how to dial the cluster at `authority`
+   *  (`host:port`), or null for any other host. On the human plane (the
+   *  answer holds a client key). A THROW fails the request closed (502);
+   *  an absent op dials every host as before. */
+  kubeUpstream?(authority: string): Promise<KubeUpstream | null>;
 }
 
 /** The capability facts the note is built for (arbiter/ipc/protocol.ts
@@ -417,6 +456,8 @@ export interface RealArbiterClient {
   egressFingerprintScan?(args: FingerprintScanArgs): Promise<FingerprintScanResult>;
   /** Optional — an arbiter predating it has none (see `Arbiter.strippedPlaceholders`). */
   strippedPlaceholders?(args: { candidates: string[]; sessionKey?: string }): Promise<StrippedPlaceholdersResult>;
+  /** Optional — an arbiter predating it has none (see `Arbiter.signingKeys`). */
+  signingKeys?(args: { sessionKey?: string }): Promise<SigningKeysResult>;
   /** The queue's listing (`egressApprovals`): `awaitingApprovals` reads the
    *  pending rows. Optional: a test double may have none. */
   egressApprovals?(status?: "pending"): Promise<Array<{ id: string; status: string }>>;
@@ -541,6 +582,13 @@ export class ArbiterClientAdapter implements Arbiter {
     return this.client.strippedPlaceholders(args);
   }
 
+  async signingKeys(args: { sessionKey?: string }): Promise<SigningKeysResult> {
+    // An arbiter that predates the op: the caller refuses a SigV4 request
+    // that carries a placeholder (it cannot be re-signed).
+    if (!this.client.signingKeys) throw new Error("the arbiter has no signingKeys op");
+    return this.client.signingKeys(args);
+  }
+
   async awaitingApprovals(ids: readonly string[]): Promise<ReadonlySet<string>> {
     // The queue's listing on the data socket (the dashboard reads it there
     // too): names and statuses, no value. An arbiter without it throws, and
@@ -557,6 +605,15 @@ export class ArbiterClientAdapter implements Arbiter {
     // request leaves as written (model-note.ts).
     if (!this.client.handlingPrompt) throw new Error("the arbiter has no handlingPrompt op");
     return this.client.handlingPrompt(undefined, args.capabilities, args.sessionKey);
+  }
+
+  async kubeUpstream(authority: string): Promise<KubeUpstream | null> {
+    // Human plane only: the answer holds a client key. No human client, or
+    // an arbiter without the op: no profile (the system store, no client
+    // certificate, as before). A failing call throws (502, fail-closed).
+    if (!this.human?.kubeUpstream) return null;
+    const r = await this.human.kubeUpstream(authority);
+    return r?.profile ?? null;
   }
 
   async takeRelayNotices(args: { sessionKey?: string }): Promise<RelayNotice[]> {
@@ -611,6 +668,11 @@ export interface MockArbiterOptions {
   knownSecretSymbols?: string[];
   /** Make strippedPlaceholders() throw (the request goes to the gates). */
   failStripped?: boolean;
+  /** `signingKeys`' answer: the AWS secret-key placeholders (absent: the op
+   *  is missing, as on an older arbiter). */
+  signingKeys?: string[];
+  /** Make signingKeys() throw. */
+  failSigningKeys?: boolean;
   /** `awaitingApprovals`: which of these rows still wait (absent: the op
    *  throws, and a held request asks again on every poll). */
   awaitingFn?: (ids: readonly string[]) => ReadonlySet<string>;
@@ -619,6 +681,10 @@ export interface MockArbiterOptions {
   handlingNote?: string;
   /** Make takeRelayNotices() throw (the call goes without them). */
   failRelayNotices?: boolean;
+  /** kube-wire-release.md: `host:port` → the cluster's dial profile. */
+  kubeUpstream?: Record<string, KubeUpstream>;
+  /** Make kubeUpstream() throw (the request fails closed). */
+  failKubeUpstream?: boolean;
 }
 
 /**
@@ -787,6 +853,16 @@ export class MockArbiter implements Arbiter {
     return { found, ...(found.length > 0 ? { ruleRef: { source: "rule" as const, id: "egress:shell-expanded-placeholder" } } : {}) };
   }
 
+  /** Every signingKeys call, for assertions. */
+  readonly signingKeysCalls: Array<{ sessionKey?: string }> = [];
+
+  async signingKeys(args: { sessionKey?: string }): Promise<SigningKeysResult> {
+    this.signingKeysCalls.push(args);
+    if (this.opts.failSigningKeys) throw new Error("mock arbiter: signingKeys failure (injected)");
+    if (this.opts.signingKeys === undefined) throw new Error("mock arbiter: no signingKeys op");
+    return { symbols: [...this.opts.signingKeys] };
+  }
+
   /** Every awaitingApprovals call, for assertions. */
   readonly awaitingCalls: string[][] = [];
 
@@ -818,6 +894,15 @@ export class MockArbiter implements Arbiter {
     const out = this.pendingNotices.get(key) ?? [];
     this.pendingNotices.delete(key);
     return out;
+  }
+
+  /** Every kubeUpstream call's authority, for assertions. */
+  readonly kubeUpstreamCalls: string[] = [];
+
+  async kubeUpstream(authority: string): Promise<KubeUpstream | null> {
+    this.kubeUpstreamCalls.push(authority);
+    if (this.opts.failKubeUpstream) throw new Error("mock arbiter: kubeUpstream failure (injected)");
+    return this.opts.kubeUpstream?.[authority] ?? null;
   }
 
   /** Every fingerprint-scan call, for assertions. */

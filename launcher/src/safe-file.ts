@@ -27,8 +27,10 @@
  *     the whole one.
  *
  * One file, byte-identical in every package that writes such a file (the
- * launcher, anthropic-proxy, openai-proxy, net-proxy; each package stays
- * standalone): tests/stack/safe-file-parity.test.ts holds the copies equal.
+ * launcher, anthropic-proxy, openai-proxy, net-proxy, the dashboard; each
+ * package stays standalone): tests/stack/safe-file-parity.test.ts holds the copies equal.
+ * The source is launcher/src/safe-file.ts: change it, then run
+ * `node scripts/copies/module-copies.mjs generate`.
  *
  * Mandu-new (no reference origin).
  */

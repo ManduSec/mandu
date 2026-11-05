@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  DEFAULT_ISSUER_BINDINGS, ISSUERS, checkIssuerBindings, compileIssuerBindings, isIssuerHost, issuerDestinationHost,
+  DEFAULT_ISSUER_BINDINGS, ISSUERS, ISSUER_SAMPLES, checkIssuerBindings, compileIssuerBindings, isIssuerHost, issuerDestinationHost,
   issuerOfHost, issuerOfValue, issuerRelease, type IssuerBindingSettings,
 } from "../../policy/issuer-bindings.js";
 import { compilePolicy } from "../../policy/compiled-policy.js";
@@ -44,19 +44,22 @@ const KEY: Record<string, string> = {
   huggingface: ["hf", alnum(34)].join("_"),
   sendgrid: `SG.${alnum(22)}.${alnum(43)}`,
 };
+/** The sample key of an issuer: its row above, or (an issuer added since
+ *  as a file) its file's first example, written out. */
+const keyOf = (id: string): string => KEY[id] ?? ISSUER_SAMPLES.get(id)!.examples[0]!;
 const HEADER = { scheme: "https", positions: ["authorization"] } as const;
 const ON: IssuerBindingSettings = DEFAULT_ISSUER_BINDINGS;
 
 test("every issuer: its sample key names it, its hosts release, and its row cites the issuer's own docs", () => {
-  assert.deepEqual(ISSUERS.map((i) => i.id).sort(), Object.keys(KEY).sort());
+  for (const id of Object.keys(KEY)) assert.ok(ISSUERS.some((i) => i.id === id), `${id} is still in the table`);
   for (const i of ISSUERS) {
-    assert.equal(issuerOfValue(KEY[i.id]!)?.id, i.id, i.id);
+    assert.equal(issuerOfValue(keyOf(i.id))?.id, i.id, i.id);
     assert.ok(i.hosts.length > 0 && i.docs.length > 0, i.id);
     for (const d of i.docs) assert.match(d, /^https:\/\//, `${i.id}: ${d}`);
     for (const h of i.hosts) {
       assert.equal(h, h.toLowerCase(), h);
       assert.equal(issuerOfHost(h)?.id, i.id, h);
-      const r = issuerRelease({ value: KEY[i.id]!, names: ["K"], destination: h, ...HEADER }, ON);
+      const r = issuerRelease({ value: keyOf(i.id), names: ["K"], destination: h, ...HEADER }, ON);
       assert.ok("issuer" in r && r.issuer.id === i.id, `${i.id} at ${h}: ${JSON.stringify(r)}`);
     }
   }
@@ -68,7 +71,7 @@ test("every issuer: its sample key names it, its hosts release, and its row cite
 test("a key goes to its OWN issuer only: another issuer's host misses", () => {
   for (const i of ISSUERS) for (const j of ISSUERS) {
     if (i.id === j.id) continue;
-    const r = issuerRelease({ value: KEY[i.id]!, names: ["K"], destination: j.hosts[0]!, ...HEADER }, ON);
+    const r = issuerRelease({ value: keyOf(i.id), names: ["K"], destination: j.hosts[0]!, ...HEADER }, ON);
     assert.deepEqual(r, { miss: "host" }, `${i.id} key at ${j.hosts[0]}`);
   }
 });

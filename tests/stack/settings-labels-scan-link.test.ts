@@ -273,6 +273,10 @@ test("Settings › Sensitivity labels over the real arbiter: after a scan whose 
     const mapped = await call("POST", "/api/policy/sensitivity-labels/change", { action: "map", id: UNMAPPED, site: TENANT, name: "Confidential", level: "no-model", version: found.unmapped[0].version });
     assert.equal(mapped.status, 200, JSON.stringify(mapped.body));
     assert.equal(mapped.body.applied, true);
+    // Approvals › Rule changes names the card the change was made on (dashboard.md §4.25i).
+    const sentences = (await call("GET", "/api/policy/changes")).body.changes.map((c: { sentence: string }) => c.sentence);
+    assert.ok(sentences.includes("You changed your sensitivity labels in Settings"), JSON.stringify(sentences));
+    assert.ok(!sentences.some((x: string) => /models/.test(x)), JSON.stringify(sentences));
     const after = await labels();
     assert.deepEqual(after.unmapped, []);
     assert.equal(after.note, `${ALL_MAPPED_NOTE} ${PAST_CAP}`);

@@ -1,7 +1,9 @@
 /**
  * index — the OpenClaw plugin entry (module export the loader consumes).
  *
- * Mandu U-LLM channel for OpenClaw (interceptors/openclaw-inspect-plugin).
+ * Mandu for OpenClaw (interceptors/openclaw-inspect-plugin): the U-LLM
+ * channel's tools, and in a resident Gateway attached to `mandu serve` the
+ * two hooks of docs/design/agents/openclaw-plugin.md §3.5-§3.6 (src/hooks.ts).
  * OpenClaw has NO MCP client, so the inspect-mcp stdio server cannot mount for
  * it; this plugin registers the SAME inspect_symbol and declassify_symbol
  * surface as native OpenClaw plugin tools instead
@@ -26,11 +28,10 @@ const definition = {
   // Must match openclaw.plugin.json `id` (the manifest is authoritative for
   // the loader; this field is informational on the module side).
   id: "mandu-inspect",
-  name: "Mandu inspect_symbol (U-LLM quarantine channel)",
+  name: "Mandu",
   description:
-    "Process the untrusted data behind an opaque $MDU:* symbol in a quarantined " +
-    "model call and return the result re-symbolized — raw untrusted text never " +
-    "enters the privileged model's context.",
+    "inspect_symbol and declassify_symbol for the model; in a Gateway attached to " +
+    "`mandu serve`, the before_tool_call tamper policy and the message_sending reply check.",
   register(api: OpenClawPluginApiLike): void {
     registerInspectPlugin(api);
   },
@@ -47,3 +48,8 @@ export {
   INSPECT_TOOL_NAME,
 } from "./src/inspect-tool.js";
 export { resolvePluginConfig } from "./src/plugin-config.js";
+export { attachmentSession, normalizeAgentId, agentIdOfSessionKey } from "./src/attachment-session.js";
+export { ATTACHMENT_HOOKS, createBeforeToolCall, createMessageSending, registerAttachmentHooks } from "./src/hooks.js";
+export { HookArbiterAdapter, NO_RELEASE } from "./src/hook-arbiter.js";
+export { compileTamperPolicy, tamperDecision } from "./src/tamper-policy.js";
+export { decideReply, placeholdersIn } from "./src/reply-policy.js";

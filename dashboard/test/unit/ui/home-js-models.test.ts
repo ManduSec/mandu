@@ -129,7 +129,6 @@ test("plan 12 D4/D5: Settings names the lines of policy.yaml the administrator's
     } },
     "POST policy/models/change": { applied: true, changeId: "pc-9", note: "New sessions use this. Restart a running agent to use it there." },
   } });
-  window.confirm = () => true;
   await tick();
   const host = doc.getElementById("settings-models");
   assert.match(host.querySelector(".model-admin-conflicts").textContent, /^Not in use, because your administrator's settings take priority\. Change policy\.yaml to match:.*'mine' is local: true/);
@@ -177,13 +176,11 @@ function fillModelForm(doc: any, f: Record<string, string | boolean>): void {
   }
 }
 
-test("Settings › Models: Add posts the form's fields, asks with the server's rows and warning, then sends what was shown; the restart note and Undo follow", async () => {
+test("Settings › Models: Add posts the form's fields, asks on the page with the server's rows, list and warning, then sends what was shown; the restart note and Undo follow", async () => {
   let posts = 0;
-  const confirms: string[] = [];
   const { doc, window, calls } = load({ url: "http://127.0.0.1:4500/mandu/settings", routes: {
     "GET policy/panel": panelWith([]),
   } });
-  window.confirm = (msg: string) => { confirms.push(msg); return true; };
   const realFetch = window.fetch;
   window.fetch = (url: string, init: any = {}) => {
     if (url.endsWith("/api/policy/models/change")) {
@@ -201,21 +198,54 @@ test("Settings › Models: Add posts the form's fields, asks with the server's r
   fillModelForm(doc, { "model-name": " lab ", "model-url": "http://203.0.113.9:8000", "model-wire": "openai-chat", "model-model": "qwen2.5", "model-local": true, "model-token-env": "LAB_TOKEN" });
   doc.getElementById("model-form").dispatchEvent(new window.Event("submit", { cancelable: true }));
   await tick(20);
-  const sent = calls.filter((c) => c.url.endsWith("/api/policy/models/change"));
-  assert.equal(sent.length, 2);
+  let sent = calls.filter((c) => c.url.endsWith("/api/policy/models/change"));
+  assert.equal(sent.length, 1, "nothing more is sent until the second, separate press");
   assert.equal(sent[0]!.headers["X-Mandu-Control"], "1", "CSRF header");
   assert.deepEqual(sent[0]!.body, { action: "add", model: { name: "lab", url: "http://203.0.113.9:8000", wire: "openai-chat", model: "qwen2.5", local: true, helper: false, allowPlainHttp: false, tokenEnv: "LAB_TOKEN" } });
-  assert.deepEqual((sent[1]!.body as { expected: string[] }).expected, ["models\u0000lab"], "the second send carries exactly what the person was shown");
-  assert.equal(confirms.length, 1);
-  assert.match(confirms[0]!, /Add the model lab at http:\/\/203\.0\.113\.9:8000, as your own model/);
-  assert.match(confirms[0]!, /Warning: lab would count as your own model/);
+  // The question, in the form above its buttons: the change, what it opens
+  // as a list, the warning as its own line; names are codes.
+  const form = doc.getElementById("model-form");
+  const box = form.querySelector(".ask-in-place");
+  assert.ok(box, "asked in the form");
+  assert.equal(box.nextElementSibling, form.querySelector(".form-actions"), "above Save");
+  assert.equal(box.querySelector(".ask-in-place-words").textContent, "Add the model lab at http://203.0.113.9:8000, as your own model.");
+  assert.deepEqual([...box.querySelectorAll(".ask-in-place-words code")].map((c: any) => c.textContent), ["lab", "http://203.0.113.9:8000"]);
+  assert.equal(box.querySelector(".ask-in-place-k").textContent, "This changes what Mandu protects:");
+  assert.deepEqual([...box.querySelectorAll(".ask-in-place-list li")].map((li: any) => li.textContent), ["The models Mandu knows would change for lab"]);
+  const warn = box.querySelector(".proposal-warn");
+  assert.equal(warn.textContent, "Warning: lab would count as your own model, but it is far");
+  assert.equal(warn.getAttribute("role"), "note");
+  assert.deepEqual([...box.querySelectorAll("button")].map((b: any) => b.textContent), ["Save anyway", "Cancel"]);
+  assert.ok(!/Continue\?/.test(box.textContent), "the buttons ask, not a line");
+  (box.querySelector(".ask-in-place-yes") as any).click();
+  await tick(20);
+  sent = calls.filter((c) => c.url.endsWith("/api/policy/models/change"));
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[1]!.body, { ...(sent[0]!.body as object), expected: ["models\u0000lab"] }, "the second send carries exactly what the person was shown");
+  assert.equal(form.querySelector(".ask-in-place"), null, "the question goes");
   assert.equal(doc.getElementById("model-form").hidden, true, "the form closes");
   const notice = doc.getElementById("models-notice");
   assert.match(notice.textContent, /Added lab\. New sessions use this\. Restart a running agent to use it there\./);
   assert.ok([...notice.querySelectorAll("button")].some((b: any) => b.textContent === "Undo"));
 });
 
-test("Settings › Models: Cancel at the question sends nothing more; a refusal shows the validator's lines in the form", async () => {
+test("Settings › Models (#248): an empty Add a model form reads as examples ('e.g. …'), never as filled in; Edit shows the model's own values", async () => {
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/settings", routes: { "GET policy/panel": panelWith([OLLAMA, ZDR]) } });
+  await tick();
+  doc.getElementById("model-open").click();
+  const boxes = [...doc.querySelectorAll('#model-form input[type="text"]')].filter((i: any) => i.hasAttribute("placeholder"));
+  assert.deepEqual(boxes.map((i: any) => i.id), ["model-name", "model-url", "model-model", "model-token-env"], "every text box with an example");
+  for (const box of boxes as any[]) {
+    assert.equal(box.value, "", `${box.id} is empty`);
+    assert.match(box.placeholder, /^e\.g\. \S/, `${box.id}'s example says it is one: ${box.placeholder}`);
+  }
+  assert.deepEqual(boxes.map((i: any) => i.placeholder), ["e.g. ollama", "e.g. http://127.0.0.1:11434", "e.g. llama3.2", "e.g. OLLAMA_API_KEY"]);
+  doc.getElementById("model-cancel").click();
+  (doc.querySelectorAll("#settings-models .model-edit-btn")[0] as any).click();
+  assert.deepEqual(boxes.map((i: any) => i.value), ["ollama", "http://127.0.0.1:11434", "llama3.2", ""], "Edit fills the boxes with ollama's own values");
+});
+
+test("Settings › Models: Cancel at the question sends nothing more; a refusal shows the validator's lines in the form's words", async () => {
   const { doc, window, calls } = load({ url: "http://127.0.0.1:4500/mandu/settings", routes: {
     "GET policy/panel": panelWith([]),
     "POST policy/models/change": { status: 422, body: { error: "This model entry is not valid.", problems: ["url: must be an http(s) URL with no credentials in it"] } },
@@ -225,17 +255,181 @@ test("Settings › Models: Cancel at the question sends nothing more; a refusal 
   fillModelForm(doc, { "model-name": "x", "model-url": "ftp://x" });
   doc.getElementById("model-form").dispatchEvent(new window.Event("submit", { cancelable: true }));
   await tick();
-  assert.equal(doc.getElementById("model-error").textContent, "This model entry is not valid. url: must be an http(s) URL with no credentials in it");
+  assert.equal(doc.getElementById("model-error").textContent, "This model entry is not valid. Address: must be an http(s) URL with no credentials in it", "the field's label, not the policy.yaml key (#203)");
   assert.equal(doc.getElementById("model-form").hidden, false, "the form stays open to fix");
 
   const second = load({ url: "http://127.0.0.1:4500/mandu/settings", routes: { "GET policy/panel": panelWith([OLLAMA]), "POST policy/models/change": CONFIRM } });
-  second.window.confirm = () => false;
   await tick();
   (second.doc.querySelector("#settings-models .model-remove-btn") as any).click();
   await tick();
+  const box = second.doc.querySelector("#settings-models .ask-in-place");
+  assert.ok(box, "asked on the page");
+  ([...box.querySelectorAll("button")].find((b: any) => b.textContent === "Cancel") as any).click();
+  await tick();
+  assert.equal(second.doc.querySelector("#settings-models .ask-in-place"), null, "Cancel closes the question");
   assert.equal(second.calls.filter((c) => c.url.endsWith("/api/policy/models/change")).length, 1, "no second send after Cancel");
   assert.deepEqual(second.calls.find((c) => c.url.endsWith("/api/policy/models/change"))!.body, { action: "remove", name: "ollama" });
   void calls;
+});
+
+// #203: a refused Save names the form's fields and boxes, not policy.yaml
+// keys, and marks the fields it names (dashboard.md §4.25l *A refusal speaks
+// the form's words*).
+const PLAIN_HTTP_LINE = "url: 'lab' is on another machine and would receive local-model files in the clear; use https, reach it through a loopback tunnel (ssh -L), or add allow_plain_http: true to accept that";
+const invalid = (doc: any) => [...doc.querySelectorAll("#model-form [aria-invalid]")].map((f: any) => [f.id, f.getAttribute("aria-invalid")]);
+const submitModel = (doc: any, window: any) => doc.getElementById("model-form").dispatchEvent(new window.Event("submit", { cancelable: true }));
+const modelPosts = (calls: any[]) => calls.filter((c) => c.url.endsWith("/api/policy/models/change"));
+
+test("Settings › Models (#203): a refusal's lines say the form's labels and boxes, mark the fields they name, and pass an unknown line through", async () => {
+  const problems = [
+    PLAIN_HTTP_LINE,
+    "token_env: must be an environment variable NAME (the token itself never goes in policy.yaml)",
+    "model: 'gpt-oss:120b-cloud' runs on the vendor's servers (a cloud model), so 'lab' cannot be local: true; name a model that runs on your own machine, or remove local: true",
+    "tls: ca: cannot read /etc/lab-ca.pem",
+  ];
+  const { doc, window } = load({ url: "http://127.0.0.1:4500/mandu/settings", routes: {
+    "GET policy/panel": panelWith([]),
+    "POST policy/models/change": { status: 422, body: { error: "This model entry is not valid.", problems } },
+  } });
+  await tick();
+  doc.getElementById("model-open").click();
+  fillModelForm(doc, { "model-name": "lab", "model-url": "http://192.168.1.20:11434", "model-local": true, "model-model": "gpt-oss:120b-cloud", "model-token-env": "LAB_TOKEN" });
+  submitModel(doc, window);
+  await tick();
+  assert.equal(doc.getElementById("model-error").textContent, "This model entry is not valid. "
+    + "Address: 'lab' is on another machine and would receive local-model files in the clear; use https, reach it through a loopback tunnel (ssh -L), or tick Send without encryption to accept that; "
+    + "Token variable name: must be an environment variable NAME (the token itself never goes in policy.yaml); "
+    + "Model: 'gpt-oss:120b-cloud' runs on the vendor's servers (a cloud model), so 'lab' cannot be local: true; name a model that runs on your own machine, or untick This is my own model; "
+    + "tls: ca: cannot read /etc/lab-ca.pem", "labels for keys, the two phrases reworded, the unknown line as the service wrote it");
+  assert.deepEqual(invalid(doc), [["model-url", "true"], ["model-model", "true"], ["model-token-env", "true"]], "each field a line names is marked, no other");
+  // Editing a marked field unmarks it, and only it.
+  const url = doc.getElementById("model-url");
+  url.value = "https://lab.example";
+  url.dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.deepEqual(invalid(doc), [["model-model", "true"], ["model-token-env", "true"]]);
+  doc.getElementById("model-model").dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.deepEqual(invalid(doc), [["model-token-env", "true"]]);
+  // The next Save starts unmarked (its own answer marks again), and Cancel
+  // leaves none for the next opening.
+  submitModel(doc, window);
+  assert.deepEqual(invalid(doc), [], "the next Save clears the marks");
+  await tick();
+  assert.equal(invalid(doc).length, 3, "its refusal marks again");
+  doc.getElementById("model-cancel").click();
+  doc.getElementById("model-open").click();
+  assert.deepEqual(invalid(doc), [], "Cancel clears them");
+});
+
+test("Settings › Models (#203): the other keys the form edits get their labels; every other card keeps the service's words", async () => {
+  const lines: Array<[string, string, string]> = [
+    ["name: 'lab' is declared twice", "Name: 'lab' is declared twice", "model-name"],
+    ["wire: must be anthropic or openai-chat (got \"x\")", "API style: must be anthropic or openai-chat (got \"x\")", "model-wire"],
+    ["local: must be true or false", "This is my own model: must be true or false", "model-local"],
+    ["helper: only one model can be the helper's ('a' already is)", "Read my own-model files with this one: only one model can be the helper's ('a' already is)", "model-helper"],
+    ["allow_plain_http: must be true or false", "Send without encryption: must be true or false", "model-plain-http"],
+    ["models: must be a list", "models: must be a list", ""],
+  ];
+  for (const [line, said, id] of lines) {
+    const { doc, window } = load({ url: "http://127.0.0.1:4500/mandu/settings", routes: {
+      "GET policy/panel": panelWith([]),
+      "POST policy/models/change": { status: 422, body: { error: "This model entry is not valid.", problems: [line] } },
+    } });
+    await tick();
+    doc.getElementById("model-open").click();
+    fillModelForm(doc, { "model-name": "lab", "model-url": "https://lab.example" });
+    submitModel(doc, window);
+    await tick();
+    assert.equal(doc.getElementById("model-error").textContent, "This model entry is not valid. " + said, line);
+    assert.deepEqual(invalid(doc), id ? [[id, "true"]] : [], line);
+  }
+  // A model row's Remove refused keeps the service's words: the map is the
+  // form's alone.
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/settings", routes: {
+    "GET policy/panel": panelWith([OLLAMA]),
+    "POST policy/models/change": { status: 422, body: { error: "This model entry is not valid.", problems: [PLAIN_HTTP_LINE] } },
+  } });
+  await tick();
+  (doc.querySelector("#settings-models .model-remove-btn") as any).click();
+  await tick();
+  assert.match(doc.getElementById("settings-models").textContent, /url: 'lab' is on another machine .* add allow_plain_http: true to accept that/);
+});
+
+test("Settings › Models (#203): a Name with a space or a token variable typed with $ is refused before Save sends, in the form's words; a good one sends", async () => {
+  const { doc, window, calls } = load({ url: "http://127.0.0.1:4500/mandu/settings", routes: {
+    "GET policy/panel": panelWith([]),
+    "POST policy/models/change": { applied: true, changeId: "pc-1", note: "" },
+  } });
+  await tick();
+  doc.getElementById("model-open").click();
+  fillModelForm(doc, { "model-name": "My Ollama", "model-url": "http://127.0.0.1:11434" });
+  submitModel(doc, window);
+  await tick();
+  assert.equal(modelPosts(calls).length, 0, "nothing is sent");
+  assert.equal(doc.getElementById("model-error").textContent, "Not saved. Name: use 1 to 64 letters, digits, _ . or - (no spaces).");
+  assert.deepEqual(invalid(doc), [["model-name", "true"]]);
+  assert.equal(doc.getElementById("model-save").disabled, false, "Save stays on");
+  fillModelForm(doc, { "model-name": "ollama", "model-token-env": "$OLLAMA_KEY" });
+  submitModel(doc, window);
+  await tick();
+  assert.equal(modelPosts(calls).length, 0);
+  assert.equal(doc.getElementById("model-error").textContent, "Not saved. Token variable name: use the variable's name alone, such as OLLAMA_API_KEY: letters, digits and _, not starting with a digit (no $ or spaces).");
+  assert.deepEqual(invalid(doc), [["model-token-env", "true"]], "the Name, fixed, is no longer marked");
+  fillModelForm(doc, { "model-name": "a".repeat(65), "model-token-env": "1KEY" });
+  submitModel(doc, window);
+  await tick();
+  assert.equal(modelPosts(calls).length, 0);
+  assert.deepEqual(invalid(doc), [["model-name", "true"], ["model-token-env", "true"]], "both named at once");
+  assert.match(doc.getElementById("model-error").textContent, /^Not saved\. Name: .* Token variable name: /);
+  // An empty Name is the service's to answer (and the field's `required`).
+  fillModelForm(doc, { "model-name": "ollama-2", "model-token-env": "" });
+  submitModel(doc, window);
+  await tick();
+  assert.equal(modelPosts(calls).length, 1, "a good Name and an empty token field send as before");
+  assert.deepEqual(modelPosts(calls)[0]!.body, { action: "add", model: { name: "ollama-2", url: "http://127.0.0.1:11434", wire: "anthropic", model: "", local: false, helper: false, allowPlainHttp: false, tokenEnv: "" } });
+  assert.deepEqual(invalid(doc), []);
+  doc.getElementById("model-open").click();
+  doc.getElementById("model-open").click();
+  fillModelForm(doc, { "model-name": "lab_1.v2", "model-url": "https://lab.example", "model-token-env": "_LAB_TOKEN2" });
+  submitModel(doc, window);
+  await tick();
+  assert.equal(modelPosts(calls).length, 2, "a token variable's name sends");
+});
+
+test("Settings › Models: Remove and Bring back ask under their row (dashboard.md §4.25n); Remove anyway and Restore anyway send once with what was shown", async () => {
+  for (const [admin, btn, yes, action] of [[false, ".model-remove-btn", "Remove anyway", "remove"], [true, ".model-restore-btn", "Restore anyway", "restore"]] as const) {
+    const panel = admin
+      ? { panel: { ...panelWith([]).panel, modelsAdmin: { files: ["/etc/mandu/policy.d/10-corp.yaml"], removed: [{ name: "ollama", file: "/etc/mandu/policy.d/10-corp.yaml" }] } } }
+      : panelWith([OLLAMA]);
+    let posts = 0;
+    const { doc, window, calls } = load({ url: "http://127.0.0.1:4500/mandu/settings", routes: { "GET policy/panel": panel } });
+    const realFetch = window.fetch;
+    window.fetch = (url: string, init: any = {}) => {
+      if (url.endsWith("/api/policy/models/change")) {
+        calls.push({ url, method: init.method, headers: init.headers, body: JSON.parse(init.body) });
+        const body = ++posts === 1 ? CONFIRM : { applied: true, changeId: "pc-7", note: "" };
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+      }
+      return realFetch(url, init);
+    };
+    await tick();
+    const row = doc.querySelector("#settings-models .model-row[data-name='ollama']");
+    (row.querySelector(btn) as any).focus();
+    (row.querySelector(btn) as any).click();
+    await tick();
+    const box = row.nextElementSibling;
+    assert.ok(box && box.classList.contains("ask-in-place"), action + ": the question is under its row");
+    assert.equal(doc.activeElement, box.querySelector(".ask-in-place-words"), action + ": the sentence has the focus, never the button");
+    assert.deepEqual([...box.querySelectorAll(".ask-in-place-list li")].map((li: any) => li.textContent), ["The models Mandu knows would change for lab"]);
+    assert.match(box.querySelector(".proposal-warn").textContent, /^Warning: lab would count as your own model/);
+    assert.deepEqual([...box.querySelectorAll("button")].map((b: any) => b.textContent), [yes, "Cancel"]);
+    (box.querySelector(".ask-in-place-yes") as any).click();
+    await tick(20);
+    const sent = calls.filter((c) => c.url.endsWith("/api/policy/models/change"));
+    assert.equal(sent.length, 2, action + ": one more send");
+    assert.deepEqual(sent[1]!.body, { action, name: "ollama", expected: ["models\u0000lab"] });
+    assert.equal(doc.querySelector("#settings-models .ask-in-place"), null);
+    assert.match(doc.getElementById("models-notice").textContent, action === "remove" ? /^Removed ollama\./ : /^Brought back ollama\./);
+  }
 });
 
 test("Settings › Models: Edit fills the form from the row and sends an update naming the entry it started from", async () => {

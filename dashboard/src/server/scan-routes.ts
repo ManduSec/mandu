@@ -14,12 +14,15 @@
  * the source-IP and Host checks, the sign-in gate, read-gate.ts `open`):
  * they serve parts of the same view model, which holds no value (the kept
  * record has none). A row is named by its id (`f12`, `s3`), never a path,
- * and a section by its name; anything else is a 404. Mandu-new.
+ * and a section by its name; anything else is a 404. A row's examples say
+ * whether each chat-history file the scan found one of your secrets in is
+ * still there (`presenceIn`: a `stat`, a yes or no, never a read of it).
+ * Mandu-new.
  */
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, statSync } from "node:fs";
 import type { ServerResponse } from "node:http";
-import { parseLastScan, scanPageVM, type LastScanWire, type ScanPageVM } from "../view-model/last-scan.js";
+import { parseLastScan, scanPageVM, withPresence, type LastScanWire, type ScanPageVM } from "../view-model/last-scan.js";
 import { scanAfter, scanHead, scanItemDetail, scanSectionPage, type ScanHeadVM } from "../view-model/last-scan-pages.js";
 import { json } from "./http-util.js";
 
@@ -81,6 +84,14 @@ export class LastScanCache {
     return createHash("sha256").update(this.current().key).digest("base64url").slice(0, 16);
   }
 
+  /** The `rev` the head carries (null: no scan kept, as `scanHead` sends
+   *  it), without building the page: Home's card carries it, and the Scan
+   *  page reads again when it changed (dashboard.md §4.25ai *The Scan page
+   *  follows a new scan*). */
+  keptRev(): string | null {
+    return this.current().rec === null ? null : this.rev();
+  }
+
   /** The head of the Scan page. */
   head(): ScanHeadVM {
     const e = this.current();
@@ -111,12 +122,32 @@ export function apiScanSection(cache: LastScanCache, id: string, params: URLSear
   json(res, 200, page);
 }
 
-/** GET /api/scan/item/<id>?rev=: one row's examples. */
-export function apiScanItem(cache: LastScanCache, id: string, params: URLSearchParams, res: ServerResponse): void {
+/** Is a place's file still there (dashboard.md §4.25ai *Where the real
+ *  value is now*)? `~/…` under `home`, or absolute; a regular file, its
+ *  link not followed. Null: a path it does not take, or no home for `~`.
+ *  Never reads the file. */
+export function presenceIn(home: string): (path: string) => boolean | null {
+  const h = home.replace(/\/+$/, "");
+  return (path) => {
+    if (path.includes("\0") || path.split("/").includes("..")) return null;
+    const abs = path.startsWith("~/") ? (h ? `${h}/${path.slice(2)}` : null) : path.startsWith("/") ? path : null;
+    if (abs === null) return null;
+    try {
+      const st = lstatSync(abs, { throwIfNoEntry: false });
+      return st !== undefined && st.isFile();
+    } catch {
+      return null;
+    }
+  };
+}
+
+/** GET /api/scan/item/<id>?rev=: one row's examples, and where its value
+ *  is now with each file's presence (`exists`, `presenceIn`). */
+export function apiScanItem(cache: LastScanCache, id: string, params: URLSearchParams, res: ServerResponse, exists?: (path: string) => boolean | null): void {
   if (staleRev(cache, params, res)) return;
   const item = scanItemDetail(cache.page(), id);
   if (item === null) return json(res, 404, { error: "no such row" });
-  json(res, 200, item);
+  json(res, 200, exists ? { ...item, detail: withPresence(item.detail, exists) } : item);
 }
 
 /** The Scan page's paged routes: `[kind, id]` of a path, or null. */

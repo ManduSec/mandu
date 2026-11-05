@@ -280,9 +280,9 @@ test("§4.2f: a check that blocked or held the call says why in the session page
   };
   const words = (p: { kind: string; text: string }[] | undefined) => p?.map((x) => (x.kind === "code" ? `\`${x.text}\`` : x.text)).join("");
   assert.equal(why("c1"), undefined, "an allowed command has no why");
-  assert.equal(words(why("c2")), "The command would run a placeholder as code, and Mandu never runs one.");
+  assert.equal(words(why("c2")), "The command would run a mask as code, and Mandu never runs one.");
   assert.equal(words(why("c3")), "Files like this hold keys and passwords, so Mandu asks before the AI can use one.");
-  assert.equal(words(why("c4")), "This session read a secret, and this place is not a place it may go. The AI could pass a secret on in its own words, which no placeholder marks.",
+  assert.equal(words(why("c4")), "This session read a secret, and this place is not a place it may go. The AI could pass a secret on in its own words, which no mask marks.",
     "no host on a check: its recorded text names it, as the session page's tool step does");
   assert.equal(why("c5"), undefined, "a rule the words do not cover");
   assert.equal(why("c6"), undefined, "no rule recorded");

@@ -21,8 +21,11 @@
  *       drawn before says the page's sentence, with one link to Settings and
  *       no socket, errno or inspector word; the link opens Settings, whose
  *       Sensitivity labels card says the same;
- *   R3  Rules, opened now: Keys Mandu found and Describe what you want say
- *       the same, with the link;
+ *   R3  Rules, opened now: the top bar, the hero and the tab all say "Not
+ *       connected" (dashboard.md §4.25 *The top bar says on or off*; with
+ *       the arbiter stopped, Home's route answers 503, so the bar's dot is
+ *       the red of a failed read); Keys Mandu found and Describe what you
+ *       want say the same, with the link;
  *   R4  the oracle: no route nor rendered page carries the secret's value,
  *       a token, or the socket path.
  */
@@ -203,6 +206,15 @@ test("with the protection service stopped, every refusal on the product page say
     // ── R3: Rules, opened now: Keys Mandu found and Describe ─────────────────
     await servedProductPage(base, "/rules", (doc) => doc.getElementById("page-rules")?.hidden === false, async (doc) => {
       const w = doc.defaultView;
+      // Home's route, its protection service stopped, answers 503: the top
+      // bar, the hero and the tab name the state alike.
+      await waitWhile(() => text(doc, "top-status") === "" || text(doc, "hero-headline") === "");
+      assert.equal(text(doc, "top-status"), "Not connected", "the top bar");
+      assert.equal(doc.querySelector("#top-status .dot").className, "dot bad", "red: Home's read failed");
+      assert.equal(doc.querySelector("#top-status a").getAttribute("aria-label"), "Not connected: open Settings");
+      assert.equal(text(doc, "hero-headline"), "Not connected.", "the hero");
+      assert.match(doc.title, /Not connected/, "the tab");
+
       doc.getElementById("suggest-open").click();
       await waitWhile(() => text(doc, "suggest-error") === "");
       assert.equal(text(doc, "suggest-error"), UNREACHABLE_WORDS, "Keys Mandu found");

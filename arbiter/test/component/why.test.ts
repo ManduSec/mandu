@@ -66,7 +66,7 @@ destinations:
     assert.equal(pg.level, "no-model");
     assert.equal(pg.rule, "prefix:~/.pgpass", "the catalog decided, against the launching user's HOME");
     assert.deepEqual(pg.consumers, ["psql", "pg_dump", "pg_restore"]);
-    assert.equal(pg.wire?.served, false);
+    assert.equal(pg.wire?.served, true, "the database relay (db-login-release.md)");
     assert.equal(pg.twinShape, "pgpass");
 
     // Plan 10 §11.13.3: an ssh config's withheld commands, by line and

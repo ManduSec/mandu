@@ -19,7 +19,9 @@
  *       and dark: Rules with its rows and Keys Mandu found opened (which
  *       holds every field of the page's markup), and Approvals with a wide
  *       rule change and its ALLOW box. Each has a radius, a 1 px solid
- *       border in the line color, and one of the page's own backgrounds
+ *       border in the field's edge color (--field-line, 3:1 on every
+ *       ground since 2026-10-27; --line, a divider's, until then), and
+ *       one of the page's own backgrounds
  *       (a menu that cannot be changed has the held one, --panel-2); the
  *       ALLOW box is as high as the buttons beside it;
  *   E2  the scan box is drawn as Add a rule's filter box beside it on the
@@ -28,14 +30,19 @@
  *       as Add a rule's boxes do;
  *   E4  the scan view's lines take no margin of their own, so its gap
  *       spaces them;
- *   E5  the not-offered line is one sentence, drawn as the server words
- *       it;
+ *   E5  offered, the line under the menu is drawn as the server words
+ *       it; the not-offered line, which only the API and the developer
+ *       view read since 2026-10-31 (the page then hides the picker,
+ *       dashboard.md §4.25t), stays one sentence;
  *   E6  on a phone the menu, now as wide as Settings' (215 px), goes under
  *       "Ask a model too", which stays on one line: the label wraps as a
  *       line of two items and the menu is never wider than it. In Chromium
  *       at 320 px master broke the words over two lines beside a 177 px
  *       menu, and the wider menu alone would have made three and run 4 px
  *       past the card.
+ *
+ * The picker is measured offered (one model of your own): not offered, the
+ * page does not draw it.
  *
  * jsdom draws nothing, and a property no rule sets reads empty, as the
  * browser's own look would. So "the browser draws it" here is "the page's
@@ -82,7 +89,9 @@ function styled(doc: El, theme: "light" | "dark", width = 1280): void {
   doc.head.append(sheet);
 }
 
-const SUGGESTIONS = { suggestions: [], count: 0, scan: null, model: modelPickerVM(false, []) };
+/** The picker drawn: offered, with one model of your own. */
+const PICKER = modelPickerVM(true, [{ name: "ollama", local: true }]);
+const SUGGESTIONS = { suggestions: [], count: 0, scan: null, model: PICKER };
 const WIDE = {
   id: "pp-000001", status: "pending", requester: "Your agent", createdAt: Date.now() - 60_000,
   rows: [[{ kind: "text", text: "Let your agent's programs connect to " }, { kind: "code", text: "*" }]],
@@ -96,6 +105,7 @@ async function rulesPage(theme: "light" | "dark"): Promise<El> {
   await tick();
   doc.getElementById("suggest-open").click();
   await tick();
+  assert.equal(doc.getElementById("suggest-model").hidden, false, "the picker is drawn");
   styled(doc, theme);
   return doc;
 }
@@ -109,11 +119,12 @@ async function approvalsPage(theme: "light" | "dark"): Promise<El> {
 }
 const nameOf = (f: El): string => f.id || `.${String(f.className).split(" ")[0]}`;
 
-test("E1: every text box and menu on the page has a radius, a 1px border in the line color and the page's background, light and dark", async () => {
+test("E1: every text box and menu on the page has a radius, a 1px border in the field's edge color (not the divider's) and the page's background, light and dark", async () => {
   for (const theme of ["light", "dark"] as const) {
     const doc = await rulesPage(theme);
     const wide = await approvalsPage(theme);
-    const line = computedColor(doc, token("--line", theme));
+    const line = computedColor(doc, token("--field-line", theme));
+    assert.notEqual(line, computedColor(doc, token("--line", theme)), `${theme}: a field's edge is not the divider's color`);
     const grounds = new Set(["--bg", "--panel", "--panel-2"].map((t) => computedColor(doc, token(t, theme))));
     const fields = [...doc.querySelectorAll(FIELDS), ...wide.querySelectorAll("#approvals-proposals .proposal-confirm")] as El[];
     const names = fields.map(nameOf);
@@ -180,12 +191,12 @@ test("E4: the scan view's lines take no margin of their own: an empty status lin
   assert.equal(doc.getElementById("suggest-model-status").textContent, "", "the status line is empty until a run says something");
 });
 
-test("E5: not offered, the line under the menu is one sentence, as the server words it", async () => {
+test("E5: offered, the line under the menu is the server's words; the not-offered line stays one sentence", async () => {
   const doc = await rulesPage("light");
-  const line = doc.getElementById("suggest-model-why").textContent;
-  assert.equal(line, "Asking a model to suggest rules is not offered yet: it is still being tested.");
-  assert.equal(line, modelPickerVM(false, []).hint, "the page draws the server's words");
-  assert.equal((line.match(/:/g) ?? []).length, 1, "one colon: no sentence inside a sentence");
+  assert.equal(doc.getElementById("suggest-model-why").textContent, PICKER.hint, "the page draws the server's words");
+  const notOffered = modelPickerVM(false, []).hint;
+  assert.equal(notOffered, "Asking a model to suggest rules is not offered yet: it is still being tested.");
+  assert.equal((notOffered.match(/:/g) ?? []).length, 1, "one colon: no sentence inside a sentence");
 });
 
 test("E6: on a phone the model menu goes under \"Ask a model too\", which stays on one line, and is never wider than its line", async () => {
@@ -194,6 +205,7 @@ test("E6: on a phone the model menu goes under \"Ask a model too\", which stays 
     await tick();
     doc.getElementById("suggest-open").click();
     await tick();
+    assert.equal(doc.getElementById("suggest-model").hidden, false, "the picker is drawn");
     styled(doc, "light", width);
     const win = doc.defaultView;
     const label = doc.querySelector(".suggest-model .suggest-model-pick");

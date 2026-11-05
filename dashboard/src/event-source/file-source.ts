@@ -102,7 +102,7 @@ export class FileEventSource implements EventSource {
         runtime: deriveRuntime(events),
         origin: deriveOrigin(events),
         ...assertionVerdicts(events),
-        ...(deriveHealth(events) ? { health: deriveHealth(events)! } : {}),
+        ...(deriveHealth(events, process.platform) ? { health: deriveHealth(events, process.platform)! } : {}),
       };
       if (st) this.refCache.set(id, { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, ref });
       refs.push(ref);

@@ -32,6 +32,16 @@
  *       a rule without `until` draws no such line;
  *   S9  an Approvals row with a time part draws a <time>, not a code; a
  *       part kind this page does not know still draws its text.
+ *   S10 (2026-10-28, §4.25e *each group says what it decides*) the line
+ *       under *Sending data* names letting through and blocking, so it is
+ *       true of an Always blocked row under it as of an allowed one;
+ *   S11 the line under *Programs and connections* names the commands and
+ *       built-in checks you blocked, the rows it holds that are neither a
+ *       program nor a connection;
+ *   S12 the table check: with a row of every rule kind and every answer's
+ *       family, allowed and blocked, no row drawn red sits under a line
+ *       that says only what may go through, so a new blocking kind cannot
+ *       slip under a "may go" line again.
  *
  * Drives the PRODUCT page script in jsdom over the shared fetch stub
  * (home-js-fixtures.ts); across the real arbiter and dashboard,
@@ -303,4 +313,102 @@ test("S9: an Approvals row with a time part draws a <time>, not code; an unknown
   assert.equal(time.getAttribute("datetime"), until);
   assert.equal(time.textContent, clock(until));
   assert.equal(li.textContent, `Always allow sending masked data from anywhere to pastebin.com until ${clock(until)} (soon)`);
+});
+
+/** Each group's line, by its title, as the page draws them. */
+const groupLines = (doc: any) => new Map<string, string>([...doc.querySelectorAll("#rules-list .rules-group")].map((g: any) => [g.firstChild.textContent, g.querySelector(".muted").textContent]));
+const groupOf = (row: any) => row.parentElement.previousElementSibling.firstChild.textContent;
+/** Drawn red: a menu's dot (`data-effect="block"`) or the words' ✗ (`.outcome.bad`). */
+const drawnRed = (row: any) => !!row.querySelector('.label-pick[data-effect="block"], .outcome.bad');
+
+/** A built-in protection set to Block, as the panel sends it (policy-panel.ts). */
+const DISPOSITION = {
+  id: "disposition:net.untrusted-destination", kind: "disposition", subject: "net.untrusted-destination", reach: null, hits: null,
+  effect: "set to Block — the built-in ask is denied without asking", actions: { remove: true, flip: null },
+  plain: { subject: "untrusted destination", reach: "a built-in protection", effect: "Always blocked, instead of asking you" },
+};
+/** An answer about a command, as the queue sends it. */
+function execAnswer(id: string, command: string, approved: boolean) {
+  return {
+    id, status: approved ? "approved" : "denied", scope: "always", where: "exec", target: command, count: 1, sessions: [], resolvedAt: null,
+    actions: [{ approve: !approved, label: approved ? "Block instead" : "Allow instead" }],
+    plain: { subject: command, reach: "running this command", effect: approved ? "Always allowed" : "Always blocked" },
+  };
+}
+
+test("S10: the Sending data line says where data may go and where it is blocked, over an allowed and an Always blocked row", async () => {
+  const { doc } = page([sendRule("r-0011", "api.github.com", null, true, "allow"), sendRule("r-0010", "b.example", null, true, "block")],
+    [answer("egr-1", "hooks.zapier.com", [t("sending only the file "), c("~/mandu-try/.env")], true)]);
+  await tick();
+  const line = groupLines(doc).get("Sending data");
+  assert.equal(line, "where masked data and secrets may go, or are blocked from going, without asking you");
+  assert.match(line!, /may go/, "what is let through");
+  assert.match(line!, /blocked/, "and what is blocked");
+  for (const title of ["b.example", "hooks.zapier.com"]) {
+    assert.equal(groupOf(rowOf(doc, title)), "Sending data", `${title}: under the line`);
+    assert.ok(drawnRed(rowOf(doc, title)), `${title}: drawn Always blocked`);
+  }
+  assert.ok(!drawnRed(rowOf(doc, "api.github.com")), "the allowed rule is not red");
+});
+
+test("S11: the Programs and connections line names the commands and built-in checks you block", async () => {
+  const { doc } = page([DISPOSITION], [execAnswer("ex-1", "make test", true), execAnswer("ex-2", "curl evil.example", false)]);
+  await tick();
+  const line = groupLines(doc).get("Programs and connections");
+  assert.equal(line, "programs whose output the AI may read, connections the agent may open, and commands and checks you allow or block");
+  assert.match(line!, /commands and checks/, "the commands and built-in checks it holds");
+  assert.match(line!, /block/, "and that they may be blocked");
+  for (const title of ["net.untrusted-destination", "curl evil.example"]) {
+    assert.equal(groupOf(rowOf(doc, title)), "Programs and connections", `${title}: under the line`);
+    assert.ok(drawnRed(rowOf(doc, title)), `${title}: drawn blocked`);
+  }
+  assert.doesNotMatch(line!, /—|policy|egress|symbol|disposition/i, "the page's plain words");
+});
+
+test("S12: no row drawn red sits under a line that says only what may go through, for every rule kind and answer family", async () => {
+  const plainRow = (id: string, kind: string, subject: string, reach: string, effect: string) => ({
+    id, kind, subject, reach: null, hits: null, effect, actions: { remove: true, flip: null }, plain: { subject, reach, effect },
+  });
+  const yourRules = [
+    sendRule("r-0011", "api.github.com", null, true, "allow"),
+    sendRule("r-0010", "b.example", null, true, "block"),
+    sendRule("r-0013", "audit.example", null, true, "audit"),
+    plainRow("connect:*:2222", "connect-allow", "*:2222", "your agent's programs connecting", "Always allowed, from the agent's next start"),
+    DISPOSITION,
+    { ...plainRow("app:jq", "lock", "jq", "a program", "Its output is masked after it reads a secret file"), actions: { remove: false, flip: null } },
+    plainRow("origin:docs.python.org", "trusted-origin", "docs.python.org", "its content", "Reaches the AI unmasked"),
+    plainRow("origin:paste.example", "untrusted-origin", "paste.example", "its content", "Masked before the AI reads it"),
+  ];
+  const fileAnswer = (id: string, approved: boolean) => ({
+    id, status: approved ? "approved" : "denied", scope: "always", where: "file", subject: "fs:Read:read", target: `/home/u/ws/${id}.md`, count: 1, sessions: [], resolvedAt: 20,
+    actions: [{ approve: !approved, label: approved ? "Block instead" : "Allow instead" }],
+    plain: { subject: `/home/u/ws/${id}.md`, reach: "opening this file", effect: approved ? "Always allowed" : "Always blocked" },
+  });
+  const promptAnswer = (id: string, approved: boolean) => ({
+    id, status: approved ? "approved" : "denied", scope: "always", where: "prompt", subject: `prompt:acme.codename#${id}`, target: "model:1791210000-777", count: 1, sessions: [], resolvedAt: 20,
+    actions: [{ approve: !approved, label: approved ? "Send masked instead" : "Send as written instead" }],
+    plain: { subject: "acme.codename", reach: "in your message to the AI", effect: approved ? "Sent as written" : "Sent masked" },
+  });
+  const queue = [
+    answer("egr-1", "hooks.zapier.com", [t("sending only the file "), c("~/mandu-try/.env")], true),
+    { ...answer("egr-2", "paste.example", [t("sending only the file "), c("~/a.md")], true), status: "approved", plain: { subject: "paste.example", reach: "sending only the file ~/a.md", effect: "Always allowed" } },
+    execAnswer("ex-1", "make test", true), execAnswer("ex-2", "curl evil.example", false),
+    fileAnswer("f1", true), fileAnswer("f2", false),
+    promptAnswer("p1", true), promptAnswer("p2", false),
+  ];
+  const { doc } = page(yourRules, queue);
+  await tick();
+  const lines = groupLines(doc);
+  assert.deepEqual([...lines.keys()], ["Your answers about files", "Sending data", "Trusted sources", "Programs and connections"], "every group is drawn");
+  /** A line that names only what may go through: it says "may" or
+   *  "unmasked" and never "block". */
+  const letsThroughOnly = (line: string) => /\bmay\b|unmasked/.test(line) && !/block/i.test(line);
+  const red = rows(doc).filter(drawnRed);
+  assert.ok(red.length >= 6, `the blocking rows are drawn: ${red.length}`);
+  for (const r of red) {
+    const g = groupOf(r);
+    assert.ok(!letsThroughOnly(lines.get(g)!), `${r.querySelector(".rule-text").title} is drawn blocked under "${g}", whose line says only what may go: "${lines.get(g)}"`);
+  }
+  // Every group that holds a red row is one of these (the oracle sees them all).
+  assert.deepEqual([...new Set(red.map(groupOf))].sort(), ["Programs and connections", "Sending data", "Your answers about files"]);
 });

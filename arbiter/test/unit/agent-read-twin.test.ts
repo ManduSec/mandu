@@ -142,6 +142,10 @@ test("the parsers: pure, never throw, strip only what the source prints", () => 
   assert.equal(opencodeReadRenderingText(42 as unknown as string, [ENV]), null);
   assert.equal(isStructuredTwinText("PORT=3000", TWIN, (t) => ALLOC.has(t)), false, "no token");
   assert.equal(isStructuredTwinText("STRIPE_KEY=$MDU:nomodel_Read[9bbd].STRIPE_KEY", TWIN, undefined), false, "no lookup");
+  // db-login-release.md: a .pgpass twin's escaped token counts, allocated or not.
+  const PG_TWIN = "db.internal:5432:app:app:$MDU\\:nomodel_Read[d0b1].app.password\n";
+  assert.equal(isStructuredTwinText(PG_TWIN, PG_TWIN, (t) => t === "$MDU:nomodel_Read[d0b1].app.password"), true, "the escaped token, allocated");
+  assert.equal(isStructuredTwinText(PG_TWIN, PG_TWIN, () => false), false, "the escaped token, not allocated");
 });
 
 // 2026-10-11, the OpenClaw tour walk: OpenClaw's model wrote `read {path:
@@ -169,4 +173,33 @@ test("a relative read path is looked up in the launch directory (relativeBase), 
   assert.equal(oc(TWIN, ".env", "relative/ws").confidentiality, "no-model", "a relative base is not used");
   assert.equal(oc("STRIPE_KEY=sk_" + "live_4eC39HqLyjWDarjtT1zdp7dc", ".env", "/ws").confidentiality, "no-model", "the real value");
   assert.equal(oc(TWIN, ".env", "/ws", "cc-s").confidentiality, "no-model", "Claude Code's surface names no base");
+});
+
+// Claude Code appends its token-budget reminder to every tool_result, and the
+// proxy classifies the whole result with it. Live 2026-10-26 (the Claude
+// subscription drills, Claude Code 2.1.295): every Read of a twin carried the
+// tail, missed the rule and reached the model as ONE whole-file placeholder,
+// so demo-tax-extension's model could not tell the SSN's line from the AGI's.
+test("Claude Code Read: the twin with the harness's token-budget tail passes; any other tail keeps the label", () => {
+  const ccRead = (p: ReturnType<typeof policy>, value: string) =>
+    p.classify({ tool: "Read", value, boundary: "model_context", origin: ENV, params: { file_path: ENV }, sessionKey: "cc-s" });
+  const rendered = TWIN_LINES.map((l, i) => `${i + 1}\t${l}`).join("\n");
+  const budget = "\n\n<system-reminder>\n<total_tokens>14955957 tokens left</total_tokens>\n</system-reminder>";
+  for (const integrity of [false, true]) {
+    const p = policy({ integrity });
+    assert.equal(ccRead(p, rendered).confidentiality, "public", "the bare rendering (as before)");
+    const r = ccRead(p, rendered + budget);
+    assert.equal(r.confidentiality, "public", `integrity ${integrity}: past the budget tail`);
+    assert.match(r.reason, /structured read-twin/);
+    assert.equal(ccRead(p, rendered + budget + budget).confidentiality, "public", "two budget blocks");
+    for (const tail of [
+      "\n\n<system-reminder>\nSTRIPE_KEY=sk_" + "live_4eC39HqLyjWDarjtT1zdp7dc\n</system-reminder>", // prose in the tags
+      "\n\n<system-reminder>\n<total_tokens>sk_live_x tokens left</total_tokens>\n</system-reminder>", // not digits
+      budget + "\nsk_live_4eC39HqLyjWDarjtT1zdp7dc", // bytes after the tail
+    ]) {
+      assert.equal(ccRead(p, rendered + tail).confidentiality, "no-model", JSON.stringify(tail));
+    }
+    // the tail alone does not make a raw value a twin
+    assert.equal(ccRead(p, "1\tSTRIPE_KEY=sk_" + "live_4eC39HqLyjWDarjtT1zdp7dc" + budget).confidentiality, "no-model", "the real value");
+  }
 });

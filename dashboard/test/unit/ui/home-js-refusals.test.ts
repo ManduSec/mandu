@@ -25,6 +25,12 @@
  * only looks like one (a TCP refusal, a spawn error) stays as written
  * (tests/stack/product-service-down-refusals and product-service-cut prove
  * the real routes).
+ * A dashboard that did not start its protection service (no admin channel)
+ * is said in the page's words however the real routes pass it on (bare, in
+ * the label route's brackets, after "arbiter: ", or the service's own
+ * "admin-only:"), with `mandu stop` as code and no developer word; a
+ * look-alike stays as written (tests/stack/product-adopted-refusals proves
+ * the real adapter and arbiter).
  * Axes: none (display only).
  */
 import { test } from "node:test";
@@ -39,6 +45,9 @@ import { unreachableBody } from "../../../src/server/tenant.js";
 import { getSuggestions, postApply } from "../../../src/server/suggestion-routes.js";
 import { getSensitivityLabels } from "../../../src/server/sensitivity-label-routes.js";
 import { postExportLabels } from "../../../src/server/policy-doc-routes.js";
+import { resolveApproval } from "../../../src/server/approval-routes.js";
+import { setSecretLabel } from "../../../src/server/secrets-routes.js";
+import { ADMIN_UNAVAILABLE_PREFIX, adminUnavailableError } from "../../../src/server/http-util.js";
 
 /** What a route handler answered, through a stand-in response. */
 function answered(write: (res: ServerResponse) => void): { status: number; body: unknown } {
@@ -313,5 +322,77 @@ test("Files and folders: a folder the gate refuses, and a refused impact line, s
     await tick();
     assert.equal(page.doc.getElementById("files-impact").textContent, want);
     assert.deepEqual(codes(page.doc.getElementById("files-impact")), answer === ADMIN ? ["mandu dashboard --set-password"] : []);
+  }
+});
+
+// ── A dashboard that did not start its protection service (dashboard.md
+// §4.25 *An answer this dashboard cannot pass on*) ─────────────────────────
+/** The adapter's refusal with no admin channel (arbiter-adapter.ts
+ *  adminClient, its words after the shared prefix; the stack test
+ *  product-adopted-refusals proves the real adapter's text). */
+const NO_CHANNEL = adminUnavailableError(
+  "this dashboard did not start the arbiter (adopted instance), so it holds no admin channel — " +
+    "restart the services from Settings to regain control of approvals, labels, pause and deletion",
+);
+/** The protection service's own refusal of an admin op on its data socket
+ *  (arbiter/ipc/server.ts adminOnlyError, which this package cannot import;
+ *  the stack test pins it to the real one). */
+const ADMIN_ONLY = new Error("admin-only: 'resolveEgressApproval' enacts a human decision and is accepted only on the admin channel (the inherited fd held by the supervisor), never on the data socket");
+const refuse = (err: Error) => () => Promise.reject(err);
+/** Each form the real routes pass it on in: bare (an answer), in the label
+ *  route's brackets, after the secrets route's "arbiter: ", and the
+ *  service's own words. */
+const ADOPTED_FORMS = await Promise.all([
+  answeredLater((res) => resolveApproval({ egressApprovals: async () => [], resolveEgressApproval: refuse(NO_CHANNEL) } as never, "egr-1", true, res, "once")),
+  answeredLater((res) => getSensitivityLabels({ policyDocument: refuse(NO_CHANNEL) } as never, res)),
+  answeredLater((res) => setSecretLabel({ setPathLabel: refuse(NO_CHANNEL) } as never, sent({ path: "/home/u/ws/.env", confidentiality: "no-model" }), res)),
+  answeredLater((res) => resolveApproval({ egressApprovals: async () => [], resolveEgressApproval: refuse(ADMIN_ONLY) } as never, "egr-1", true, res, "once")),
+]);
+const ADMIN_CHANNEL_WORDS = "This dashboard cannot pass on your answers: the protection service was already running when the dashboard started. Nothing was changed. To fix it, run mandu stop when no agent is running with mandu, then start your agent again.";
+/** What those refusals say that the page must not. */
+const ADMIN_DEVELOPER = /arbiter|admin channel|adopted|data socket|\bfd\b|admin-only|supervisor/i;
+
+test("the routes pass the missing admin channel on in four forms, each a 503, each in developer words", () => {
+  assert.deepEqual(ADOPTED_FORMS.map((f) => f.status), [503, 503, 503, 503]);
+  const [bare, label, secrets, own] = ADOPTED_FORMS.map((f) => f.body.error);
+  assert.ok(bare!.startsWith(`${ADMIN_UNAVAILABLE_PREFIX}: `), bare);
+  assert.ok(label!.startsWith(`the protection service did not answer (${ADMIN_UNAVAILABLE_PREFIX}: `), label);
+  assert.ok(secrets!.startsWith(`arbiter: ${ADMIN_UNAVAILABLE_PREFIX}: `), secrets);
+  assert.ok(own!.startsWith("admin-only: "), own);
+  for (const f of ADOPTED_FORMS) assert.match(f.body.error, ADMIN_DEVELOPER);
+});
+
+test("an answer this dashboard cannot pass on says why and what to do, in the page's words, however the route passes it on", async () => {
+  for (const answer of ADOPTED_FORMS) {
+    const line = await allowOnceLine(answer);
+    assert.equal(line.textContent, ADMIN_CHANNEL_WORDS, answer.body.error);
+    assert.deepEqual(codes(line), ["mandu stop"], "the command is code");
+    assert.equal(line.querySelector("code").className, "code-whole", "kept on one line");
+    assert.doesNotMatch(line.textContent, ADMIN_DEVELOPER, "no inspector word");
+    assert.deepEqual(links(line), [], "no link: Settings has no Restart for it");
+  }
+});
+
+test("Settings: a label card refused for the same reason says the same sentence", async () => {
+  const { doc } = load({ url: SETTINGS, routes: { "GET policy/sensitivity-labels": ADOPTED_FORMS[1] } });
+  await tick();
+  const labels = doc.getElementById("settings-labels");
+  assert.equal(labels.textContent, ADMIN_CHANNEL_WORDS);
+  assert.deepEqual(codes(labels), ["mandu stop"]);
+  assert.doesNotMatch(doc.getElementById("page-settings").textContent, ADMIN_DEVELOPER);
+});
+
+test("a refusal that only looks like the missing admin channel is shown as written", async () => {
+  for (const answer of [
+    // Another 503 (the test above keeps its remedy) and a model's TCP refusal.
+    { status: 503, body: { error: "Restart the services from Settings to regain control." } },
+    { status: 503, body: { error: "connect ECONNREFUSED 127.0.0.1:443" } },
+    // The words inside a sentence of their own, not a wrapper.
+    { status: 502, body: { error: "the model said the admin channel unavailable is fine" } },
+    { status: 409, body: { error: "This question no longer applies: it was answered in another tab." } },
+  ]) {
+    const line = await allowOnceLine(answer);
+    assert.equal(line.textContent, answer.body.error);
+    assert.deepEqual(codes(line), []);
   }
 });

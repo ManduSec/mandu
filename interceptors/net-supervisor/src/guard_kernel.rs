@@ -1123,6 +1123,31 @@ pub fn handle_connect_notif(listener: RawFd, cfg: &GuardConfig, notif: &libc::se
     let _in_flight = cfg.secrets.as_ref().map(|_| cfg.egress.enter(crate::secret_open::tgid_of(pid)));
     let proto = dupfd.map(proto_of_fd).unwrap_or(Proto::Tcp);
     let target = Endpoint { ip: ep.ip, port: ep.port, proto };
+
+    // The database login release (db-login-release.md): a TCP connect to a
+    // database a relay serves is performed to the relay's loopback port
+    // instead, and decided there (the relay's own allow rule, and the
+    // session-proxy exception of the taint leg below). Only ever performed
+    // on the guard's copy of the socket: with no copy it is refused, since
+    // CONTINUE would let the kernel connect the tracee's own address.
+    let redirect = cfg.policy.redirect_for(&target, cfg.resolver.as_ref()).map(|r| r.to);
+    let (raw, ep, target) = match redirect {
+        Some(to) => match crate::guard::redirect_sockaddr(&raw, to) {
+            Some(relay_raw) if dupfd.is_some() => {
+                crate::diag!("mandu-net-guard: {}:{} → the database relay {to}", ep.ip, ep.port);
+                let relay = Endpoint { ip: to.ip(), port: to.port(), proto };
+                (relay_raw, relay, relay)
+            }
+            _ => {
+                if let Some(fd) = dupfd {
+                    close_fd(fd);
+                }
+                answer_errno(listener, notif, libc::EACCES);
+                return Ok(GuardOutcome::Refused { why: "a redirected connect the guard cannot perform itself (no copy of the socket, or a relay of another family)" });
+            }
+        },
+        None => (raw, ep, target),
+    };
     let (mut decision, matched) = cfg.policy.decide_matched(&target, cfg.resolver.as_ref());
 
     // supported-agents.md §2.3.1 (`own_server`): the client's connect to its
@@ -3838,7 +3863,7 @@ pub(crate) fn tainted_connect_refusal(cfg: &GuardConfig, own: &str, ancestors: V
     let refused = TaintedRefusal { files: b.files.clone(), bindings: b.bindings.clone() };
     // `unix:` bindings belong to the AF_UNIX leg and `mount:` ones to the
     // write-open (plan 13 §9 R4 (b)); here only host specs.
-    let specs: Vec<String> = b.bindings.iter().filter(|h| crate::local_exits::is_host_binding(h)).map(|h| binding_to_spec(h)).collect();
+    let specs = crate::local_exits::host_binding_specs(&b.bindings);
     match crate::guard::parse_rules(&specs) {
         Ok(rules) => {
             let policy = GuardPolicy::new(rules);
@@ -3870,21 +3895,6 @@ pub(crate) fn held_connect_once(cfg: &GuardConfig, own: &str, ancestors: Vec<Str
         session_ask_only: Some(true),
     });
     matches!(answer, Ok(b) if b.tainted && crate::held_ask::ask_admits(b.ask.as_ref()))
-}
-
-/// A binding (`host`, `host:port`, `*.suffix`, an IP/CIDR) as a guard spec:
-/// a missing port means any port.
-pub fn binding_to_spec(binding: &str) -> String {
-    let b = binding.trim();
-    if b.starts_with('[') {
-        // [v6]:port or [v6]
-        return if b.contains("]:") { b.to_string() } else { format!("{b}:*") };
-    }
-    let colons = b.matches(':').count();
-    if colons == 1 {
-        return b.to_string();
-    }
-    format!("{b}:*")
 }
 
 /// Best-effort emit of a connect-guard decision event (docs/design/integrity/exec-routing.md
@@ -4897,20 +4907,17 @@ pub fn handle_open_notif(listener: RawFd, cfg: &GuardConfig, notif: &libc::secco
                         // before it gets a byte (exec-routing.md §7.5,
                         // 2026-10-01: a socket connected before the taint
                         // carried the secret, judged only at its connect).
-                        let held_before = cfg.tainted.contains(&proc_key);
-                        cfg.tainted.insert(&proc_key);
+                        cfg.tainted.claim_raw(&proc_key);
                         let held_writes = match crate::guard_send::sweep_before_taint(cfg, pid) {
                             Ok(w) => w,
                             Err((dest, refusal)) => {
                                 // Plan 13 §4.9 (2026-10-03): refused, the
-                                // reader got no byte; one that held nothing
-                                // before is no holder, or its shell would be
+                                // reader got no byte; one that holds nothing
+                                // else is no holder, or its shell would be
                                 // judged a holder's reaper at its next wait
                                 // (`guard_wait`) for a status that carries
                                 // nothing (`exec 3<>/dev/udp/…; K=$(cat .env)`).
-                                if !held_before {
-                                    cfg.tainted.forget(&proc_key);
-                                }
+                                cfg.tainted.release_refused(&proc_key);
                                 // SAFETY: our own descriptor.
                                 unsafe { libc::close(fd) };
                                 answer_errno(listener, notif, libc::EACCES);
@@ -4935,9 +4942,7 @@ pub fn handle_open_notif(listener: RawFd, cfg: &GuardConfig, notif: &libc::secco
                         if crate::secret_open::truncate_after_lookup(flags) {
                             let reopen = |f: RawFd| open_for_tracee(&format!("/proc/self/fd/{f}"), libc::O_WRONLY).ok_or_else(|| std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EACCES));
                             if let Err(e) = truncate_held_back(fd, flags, &reopen) {
-                                if !held_before {
-                                    cfg.tainted.forget(&proc_key);
-                                }
+                                cfg.tainted.release_refused(&proc_key);
                                 close_fd(fd);
                                 return fail(e);
                             }

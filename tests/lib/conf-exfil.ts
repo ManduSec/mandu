@@ -305,13 +305,17 @@ export function assertLaunchedConfInvariant(o: {
   canary: string;
   what: string;
   readToolUseId?: string;
+  /** The exfil call's id, when the script used its own (an agent that
+   *  rewrites tool call ids, e.g. OpenClaw 2026.3.x keeps only letters and
+   *  digits, needs ids that survive it). */
+  exfilToolUseId?: string;
   wire?: "anthropic" | "responses";
   layerLog?: string;
 }): { symbol: string; exfilResult: string } {
   const responses = o.wire === "responses";
   const spanOf = responses ? functionCallOutputSpan : toolResultSpan;
   const readId = o.readToolUseId ?? (responses ? "call_mdu_conf_read" : "toolu_mdu_conf_read");
-  const exfilId = responses ? EXFIL_CALL_ID : EXFIL_TOOL_USE_ID;
+  const exfilId = o.exfilToolUseId ?? (responses ? EXFIL_CALL_ID : EXFIL_TOOL_USE_ID);
   let span: string | null = null;
   let exfilResult: string | null = null;
   for (const q of o.requests) {

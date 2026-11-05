@@ -14,10 +14,11 @@
  * a relay that holds the answer to the POST back (tests/lib/holding-relay.ts):
  *
  *   S1  the saved setting is on, and the switch says On;
- *   S2  the switch is turned off (typed OFF) and the answer is held: the
- *       dashboard saved off; the switch is held (aria-disabled), keeps the
- *       focus and still says On; two more presses ask nothing and post
- *       nothing; Settings opened again reads off and draws it, still held,
+ *   S2  the switch is turned off ("off" typed in the box it opens, and
+ *       Enter; §4.25 *Turning protection off asks on the page*) and the
+ *       answer is held: the dashboard saved off; the switch is held
+ *       (aria-disabled), has the focus and still says On; two more presses
+ *       and Enter again ask nothing and post nothing; Settings opened again reads off and draws it, still held,
  *       and a press there posts nothing;
  *   S3  the answer comes: the switch is live again, says Off, and has the
  *       focus; one POST reached the dashboard and one question was asked;
@@ -41,6 +42,7 @@ import { ADMIN_COOKIE, ADMIN_OPTS } from "../../dashboard/test/unit/admin-sessio
 import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
+import { offBox, typeInOffBox, enterInOffBox } from "../../dashboard/test/unit/ui/protect-off.js";
 import { stateAxes } from "../lib/axes.js";
 import { humanSockIn } from "../lib/human-plane.js";
 import { holdingRelay } from "../lib/holding-relay.js";
@@ -134,12 +136,20 @@ test("Settings › Protection over the real dashboard: the switch holds while it
       const keep = () => rendered.push(doc.documentElement.outerHTML);
       assert.deepEqual(protectRow(doc), { checked: "true", held: false, name: "On", text: ON_WORDS });
       keep();
+      // Each OFF box the switch opens, and each use of the browser prompt
+      // (never: the page asks in its row).
       let asked = 0;
-      doc.defaultView.prompt = () => { asked++; return "OFF"; };
+      let prompted = 0;
+      doc.defaultView.prompt = () => { prompted++; return "OFF"; };
+      const opened = () => { const box = offBox(doc); if (box && !box.box.dataset.counted) { box.box.dataset.counted = "1"; asked++; } };
 
-      // ── S2: turned off, the answer held ───────────────────────────────────
+      // ── S2: turned off in the box, the answer held ────────────────────────
       const off = relay.holdNext(AXES, "POST");
       press(doc);
+      opened();
+      assert.equal(posts(), 0, "the press asks, and posts nothing");
+      typeInOffBox(doc, "off");
+      enterInOffBox(doc);
       assert.equal(await off.asked, 200, "the dashboard answered the flip, and the relay holds it");
       assert.equal(await saved(), "off", "the dashboard saved off");
       assert.deepEqual(protectRow(doc), { checked: "true", held: true, name: "On", text: ON_WORDS },
@@ -147,6 +157,8 @@ test("Settings › Protection over the real dashboard: the switch holds while it
       assert.equal(doc.activeElement, protectSwitch(doc), "the focus stays on the switch");
       press(doc);
       press(doc);
+      enterInOffBox(doc);
+      opened();
       await waitWhile(() => posts() === 1, SETTLE_MS);
       assert.equal(asked, 1, "the typed OFF is not asked again");
       assert.equal(posts(), 1, "nothing posted again");
@@ -167,6 +179,7 @@ test("Settings › Protection over the real dashboard: the switch holds while it
       await waitWhile(() => protectRow(doc).held);
       assert.deepEqual(protectRow(doc), { checked: "false", held: false, name: "Off", text: STILL_ON });
       assert.equal(doc.activeElement, protectSwitch(doc), "the focus is still on the switch");
+      assert.equal(offBox(doc), null, "the answer closed the box");
       assert.deepEqual({ asked, posts: posts() }, { asked: 1, posts: 1 }, "one question, one POST");
       assert.equal(await saved(), "off");
 
@@ -177,7 +190,9 @@ test("Settings › Protection over the real dashboard: the switch holds while it
       assert.equal(await on.asked, 200);
       await waitWhile(() => posts() === 2, SETTLE_MS);
       assert.equal(posts(), 2, "one POST for the double press");
+      opened();
       assert.equal(asked, 1, "turning it on asks nothing");
+      assert.equal(prompted, 0, "the browser prompt is never used");
       assert.equal(protectRow(doc).held, true);
       assert.equal(await saved(), "secrets", "the dashboard saved on");
       await on.release();

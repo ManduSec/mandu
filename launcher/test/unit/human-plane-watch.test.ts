@@ -9,9 +9,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  EXPOSURE_FIX, exposureLostLines, exposureRecapLines, exposureRestoredLine, exposureStep, humanPlaneWatch,
+  ATTACHMENT_EXPOSURE_FIX, EXPOSURE_FIX, exposureChangedLine, exposureLostLines, exposureRecapLines, exposureRestoredLine, exposureStep, humanPlaneWatch,
   launchWords, parseHumanPlaneStatus, watchesHumanPlane, type HumanPlaneStatusWire,
 } from "../../src/human-plane-watch.js";
+import { concurrentLaunchNotice } from "../../src/cache-epoch.js";
 import { stateAxes } from "../axes.js";
 
 stateAxes("secrets");
@@ -35,6 +36,37 @@ test("the WARNING names each launch (pid, session, mode), says what is lost here
   assert.match(many[0]!, /and 1 more\.$/);
   assert.equal(launchWords({ pid: 5, mode: "secrets", posture: "gated" }), "pid 5 (mode secrets)");
   assert.match(exposureRestoredLine([OFF]), /^mandu: this session's file guard is believed again: the launch .*pid 4242 \(session claude-20261003-x1, mode off\).* ended\.$/);
+});
+
+test("an attachment (openclaw-plugin.md §3.3) holding the plane exposed is named by its kind and session, never as an unreadable record", () => {
+  const st = parseHumanPlaneStatus({ exposed: true, since: 1, launches: [{ pid: 0, mode: "secrets", posture: "gated", session: "openclaw:main", attachment: "openclaw-plugin" }] })!;
+  assert.deepEqual(st.launches, [{ pid: 0, mode: "secrets", posture: "gated", session: "openclaw:main", attachment: "openclaw-plugin" }]);
+  assert.equal(launchWords(st.launches[0]!), "Mandu's plugin in an OpenClaw Gateway (session openclaw:main, mode secrets)");
+  // weaken + warn (2026-10-25): it says a plugin session is running, and how to avoid it
+  const lost = exposureLostLines(st.launches);
+  assert.match(lost[0]!, /a plugin session is running and can reach Mandu's own controls: Mandu's plugin in an OpenClaw Gateway/);
+  assert.equal(lost.at(-1), ATTACHMENT_EXPOSURE_FIX);
+  assert.ok(!lost.includes(EXPOSURE_FIX), "the launch fix (--mode off) does not apply to a plugin session");
+  assert.match(ATTACHMENT_EXPOSURE_FIX, /mandu openclaw gateway/);
+  assert.match(ATTACHMENT_EXPOSURE_FIX, /mandu serve stop/);
+  // beside a launch: both fixes, the plugin session counted
+  const mixed = exposureLostLines([OFF, st.launches[0]!]);
+  assert.match(mixed[0]!, /2 other Mandu launches .*\(one is a plugin session\)\.$/);
+  assert.deepEqual(mixed.slice(-2), [EXPOSURE_FIX, ATTACHMENT_EXPOSURE_FIX]);
+  assert.match(exposureChangedLine(st.launches), /mandu openclaw gateway/);
+  assert.deepEqual(exposureRecapLines([{ from: 1, to: null, launches: st.launches }]).slice(-1), [ATTACHMENT_EXPOSURE_FIX]);
+  // a malformed kind is dropped: the row reads as the unreadable record it then is
+  const odd = parseHumanPlaneStatus({ exposed: true, since: 1, launches: [{ pid: 0, mode: "secrets", posture: "gated", attachment: "Not A Kind" }] })!;
+  assert.equal(odd.launches[0]!.attachment, undefined);
+  assert.match(launchWords(odd.launches[0]!), /could not name/);
+  // a confined launch's notice names it too
+  const n = concurrentLaunchNotice("confined", [{ pid: 0, mode: "secrets", posture: "gated", walled: false, attachment: "openclaw-plugin", session: "openclaw:main" }], { requireConfinement: false });
+  assert.match(n.lines[0]!, /Mandu's plugin in an OpenClaw Gateway \(session openclaw:main, can reach Mandu's state\)/);
+  assert.ok(n.lines.some((l) => /A plugin session is running .*lost its guard's attestation/.test(l)), n.lines.join("\n"));
+  assert.equal(n.lines.at(-1), ATTACHMENT_EXPOSURE_FIX);
+  // a plain unconfined launch beside it gets no plugin-session line
+  const plain = concurrentLaunchNotice("confined", [{ pid: 9, mode: "off", posture: "off", walled: false }], { requireConfinement: false });
+  assert.ok(!plain.lines.some((l) => /plugin session/.test(l)));
 });
 
 test("parseHumanPlaneStatus: the arbiter's answer, defensively", () => {

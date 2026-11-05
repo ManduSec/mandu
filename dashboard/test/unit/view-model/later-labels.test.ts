@@ -218,7 +218,7 @@ test("a file a later read masked learns of the earlier read: never \"never the r
   assert.equal(card.saw, "early");
   assert.ok(card.ref, "its placeholder can still be shown");
   assert.equal(card.file, "~/mandu-try/deploy/staging.conf", "and its file links to Rules");
-  assert.match(words(card.lines[0]!.parts), /^The AI read its real value at <[^>]+>, before it was marked a secret\. From <[^>]+> on it got a placeholder in its place/);
+  assert.match(words(card.lines[0]!.parts), /^The AI read its real value at <[^>]+>, before it was marked a secret\. From <[^>]+> on the AI got it masked/);
   assert.doesNotMatch(JSON.stringify(card.lines), /never the real value/);
   assert.deepEqual(p.secrets.counts, { masked: 0, early: 1 });
 });

@@ -7,7 +7,9 @@
  * (`values_off`). Mandu-new (no reference origin).
  *
  * ISSUER_TABLE is a DISPLAY COPY of the arbiter's `ISSUERS`
- * (arbiter/policy/issuer-bindings.ts: id, name, hosts; never the formats):
+ * (arbiter/policy/issuer-bindings.ts, compiled from one file per issuer in
+ * arbiter/policy/issuers/: id, name, hosts; never the formats; a new
+ * issuer's file adds its row here, appended in the same order):
  * the dashboard does not import the arbiter (the arbiter-client
  * convention), so tests/stack/issuer-table-parity keeps the copy equal, and
  * keeps `issuerState` equal to the arbiter's `compileIssuerBindings` over

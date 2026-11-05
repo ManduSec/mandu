@@ -54,7 +54,7 @@ async function captureOut(fn: (out: (s: string) => void) => Promise<unknown> | u
 }
 
 test("reserved verbs are exactly status/stop/dashboard/doctor/init/reap/setup/mode/why/revert/demo", () => {
-  assert.deepEqual([...RESERVED_SUBCOMMANDS].sort(), ["dashboard", "demo", "doctor", "init", "log", "mode", "paths", "policy", "reap", "revert", "scan", "setup", "status", "stop", "version", "why"]);
+  assert.deepEqual([...RESERVED_SUBCOMMANDS].sort(), ["dashboard", "demo", "doctor", "init", "log", "mode", "paths", "policy", "reap", "revert", "scan", "serve", "setup", "status", "stop", "version", "why"]);
 });
 
 test("parsePsLines: keeps mandu-titled procs, drops self + non-mandu, trims padding", () => {

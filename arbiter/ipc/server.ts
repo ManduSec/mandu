@@ -15,6 +15,7 @@
  */
 
 import type { PathLabelEntry } from "../policy/load-policy.js";
+import { locateSecretShapes } from "../policy/secret-detectors.js";
 import { PROTECTED_WRITE_LABELS } from "../policy/write-protect.js";
 import { binaryVetted, entryReadsTwin, entryVouches, trustVerdictSubject, unvettedOpenVerdict } from "../policy/flow-taint.js";
 import { argsCodeProblem, basenameOf, consumerWireRelease, decideOpen, entryAdmitsNothing, openerPrints, foldRules, heldTimeoutReason, inlineCodeProblem, intersectBindings, knownConsumers, loaderEnvProblem, binaryVerdictParts, matchReader, mootQuestionReason, binaryPrints, verdictNoLongerApplies, binaryRunsCode, printerOpenVerdict, readerPrints, readerRunsCode, renamedCopyOf, runtimeOf, openVerdictSubject, parseScriptFacts, readerOutputRule, scriptFactsProblem, setPackConsumers, staleInterpreterVerdict, verdictProgramOf, withPinnedReader, writeVerdictSubject } from "../policy/flow-taint.js";
@@ -26,8 +27,9 @@ import { ensurePrivateDir } from "./instance.js";
 import { releaseVersion } from "./release-version.js";
 import { arbiterBuild, type BuildIdentity } from "./build-identity.js";
 import { chmodSync, existsSync, lstatSync, readdirSync, unlinkSync, mkdirSync, statSync, renameSync, writeFileSync, readFileSync, realpathSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants } from "node:fs";
+import { MEMORY_FILE_RE } from "../policy/nested-memory.js";
 import { manduPath } from "../src/generated/mandu-paths.js";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { homedir } from "node:os";
 import { assertSocketPathFits } from "./socket-path.js";
 import { installAdminLayer, layerProblems, loadPolicyFileStrict, policyWarnings, readAdminLayer } from "../policy/policy-file-validate.js";
@@ -108,7 +110,8 @@ import { gateSurfaceFor, type GateSurface } from "../policy/tool-gate-surface.js
 import { maskedByDecision, requiresGuard, toolMapping, unguardedToolWhy, unmappedToolWhy, type ToolMapping } from "../policy/mapped-tools.js";
 import { isAgentFileTool, isAgentReceiptTool } from "../policy/agent-receipt.js";
 import { KEY_LISTING_OUTPUT_MAX, commandDirsReached, keyListingCandidates, ownTextTwinExecOutputPath, structuredTwinExecOutputPath, structuredTwinKeyListingPath, wholeFileTwinExecOutputPath, withoutHarnessBudgetTail, type KeyListingTwin } from "../policy/claude-code-inbound.js";
-import { compoundListingPaths, compoundLsCommand, compoundWithoutLs, hostListingFs, isLsArgv, lsArgvMatches, plainLsListingPaths } from "../policy/dir-listing.js";
+import { lockedObjectsIn, unlinkDeniedPathsIn } from "../policy/tool-error-notice.js";
+import { compoundListingPaths, compoundLsCommand, compoundWithoutLs, hostListingFs, hostPathsOnlyFs, isLsArgv, lsArgvMatches, pathsOnlyListingPaths, plainLsListingPaths } from "../policy/dir-listing.js";
 import { createHash, randomBytes } from "node:crypto";
 import { listUsageRules, listUsageGates, ruleRef, verdictRef, type RuleRef } from "../policy/rule-ref.js";
 import { describeLawSource, type PolicyFileConfig, type PolicyLawSource } from "../policy/load-policy.js";
@@ -125,9 +128,9 @@ import { documentExtension } from "../policy/policy-model.js";
 import { policyAgentEditSchema } from "../policy/policy-edit-schema.js";
 import { GLOB_KEY_PREFIX, compilePolicy, connectAllowSpecs, getCurrentPolicy, matchUserRules, modelLocation, modelTokenBindings, originHostOf, relaxationsOf, swapCurrentPolicy } from "../policy/compiled-policy.js";
 import { canonicalJson, diffItems, evaluateEdits, pathIdentity } from "../policy/policy-edit.js";
-import { recordWireGrant, symbolMapGeneration, type SymbolEntry } from "../symbol-table/symbol-table.js";
-import type { DesymStage, PathLevelsEntry, PathLevelsOpResult, SessionUpstreamResult, TestFlowOpRequest, TestFlowPathLabel, TestFlowResult, WhyPathOpResult, WhyHostOpResult, WhyPendingChange, CallTaintResultWire, AgentReceiptTaintResultWire, McpServerTaintResultWire, DecideProtectedWriteResultWire, DecideSecretOpenResultWire, ScanSecretValuesResultWire, FilterPromptResultWire, DocumentTextResultWire, PromptHoldsResultWire, PromptFiltersResultWire, PromptFilterPacksResultWire, PromptExceptionsResultWire, PromptPackEditOpRequest, PromptPackEditResultWire, TaintedProcessBindingsResultWire, HolderSourceBindingResultWire, SessionExecRootResultWire, GuardAttachResultWire, SessionSecretTaintResultWire, SecretTaintedProcessesResultWire, LabelWrittenPathTaintedResultWire, DerivedLabelsSinceResultWire, LabelRootsSinceResultWire, LabelledLevelResultWire, GuardCatalogWire, SessionPathLabelResultWire, ClearSessionPathLabelsResultWire, FollowDerivedLabelResultWire, GuardSettingsResult, SuggestPolicyResult, GitHistoryLocksResult, RegisterRepositoryResult, CacheSealsResult, SealCacheEntriesResult, BeginLaunchResult, EndLaunchResult, HumanPlaneStatusResult, ReaderProgramOpResult, SuggestFromScanResultWire } from "./protocol.js";
-import { EGRESS_REFUSAL_KINDS, PATH_LEVELS_MAX, STRIPPED_PLACEHOLDERS_MAX } from "./protocol.js";
+import { dropWireGrant, recordWireGrant, symbolMapGeneration, type SymbolEntry } from "../symbol-table/symbol-table.js";
+import type { DesymStage, PathLevelsEntry, PathLevelsOpResult, SessionUpstreamResult, TestFlowOpRequest, TestFlowPathLabel, TestFlowResult, WhyPathOpResult, WhyHostOpResult, WhyPendingChange, CallTaintResultWire, AgentReceiptTaintResultWire, McpServerTaintResultWire, DecideProtectedWriteResultWire, DecideSecretOpenResultWire, ScanSecretValuesResultWire, FilterPromptResultWire, DocumentTextResultWire, PromptHoldsResultWire, PromptFiltersResultWire, PromptFilterPacksResultWire, PromptExceptionsResultWire, PromptPackEditOpRequest, PromptPackEditResultWire, TaintedProcessBindingsResultWire, HolderSourceBindingResultWire, SessionExecRootResultWire, GuardAttachResultWire, SessionSecretTaintResultWire, SecretTaintedProcessesResultWire, LabelWrittenPathTaintedResultWire, DerivedLabelsSinceResultWire, LabelRootsSinceResultWire, LabelledLevelResultWire, GuardCatalogWire, SessionPathLabelResultWire, ClearSessionPathLabelsResultWire, FollowDerivedLabelResultWire, GuardSettingsResult, SuggestPolicyResult, GitHistoryLocksResult, RegisterRepositoryResult, CacheSealsResult, SealCacheEntriesResult, BeginLaunchResult, EndLaunchResult, BeginAttachmentResult, RenewAttachmentResult, UpdateAttachmentResult, EndAttachmentResult, HumanPlaneStatusResult, ReaderProgramOpResult, SuggestFromScanResultWire } from "./protocol.js";
+import { EGRESS_REFUSAL_KINDS, PATH_LEVELS_MAX, SIGNING_KEYS_MAX, STRIPPED_PLACEHOLDERS_MAX } from "./protocol.js";
 import { RelayNoticeQueue, parseRelayNotice } from "./relay-notices.js";
 
 /** The Test-a-flow probe's symbol name: never minted, never resolvable — the
@@ -188,6 +191,7 @@ import {
 } from "../policy/secret-catalog.js";
 import { compilePathGlob, pathGlobLastSegmentMatches } from "../policy/path-glob.js";
 import { namedTwinsFor, type NamedTwin, type NamedTwinKind } from "../policy/named-twins.js";
+import { shellWriteTargets } from "../policy/twin-write-targets.js";
 import { DOCUMENT_TWIN_EXTRACT } from "../policy/personal-documents.js";
 import { PathLabelStore, normalizeLabelPath, outrankedStricterPatterns, resolvePathLabel } from "../policy/path-labels.js";
 import { SessionLabelStore, type SessionLabel } from "../policy/session-labels.js";
@@ -234,7 +238,7 @@ import { RegisteredValueIndex, indexableRow, raisedRowKeptLines, scanEgressFinge
 import { scanFileForValues } from "../policy/upload-scan.js";
 import { RESIDUE_MIN_LEN, ResidueScanner, VALUE_ONLY_MAX_CHARS, planValueOnly, residueCheckText, type ValueOnlySpan } from "../policy/value-only-release.js";
 import { PATH_RELEASE_TOOLS, blankSpans, callHoldsPlaceholder, commandWords, counterfactualLookup, messageSpans, pathReleaseContentProblem, wordDirectories } from "../policy/clean-tree-release.js";
-import { withoutGrepExclusions } from "../policy/exclusion-flags.js";
+import { withoutSearchExclusions } from "../policy/exclusion-flags.js";
 import { looksLikeSecretValue } from "../policy/secret-detectors.js";
 import { isWholeWriteNotice, parseResultHead, resultHeadLength, writeNoticeRow, type ResultHeadKind } from "../policy/agent-result-head.js";
 import { RegisteredValueFilter } from "../prompt-filter/registered-value-filter.js";
@@ -273,6 +277,9 @@ import type { PromptFilter } from "../prompt-filter/filter.js";
  *  tool, a fetch or a background poll: those are masked whole as before. */
 const VALUE_ONLY_TOOLS = new Set(["Read", "read", "view", "Bash", "bash", "shell", "exec_command", "local_shell", "exec"]);
 const EXEC_OUTPUT_TOOLS = new Set(["Bash", "BashOutput", "exec_command", "shell", "local_shell", "exec", "bash"]);
+/** Plan 10 §4.1, "The model is told at the call": the file tools whose
+ *  `file_path` a `twinWrites` answer reads (Claude Code's). */
+const TWIN_WRITE_FILE_TOOLS: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit"]);
 /** How many registered files' twins one output row takes its twin lines
  *  from at most (`outputRowTwin`): an output naming more keeps the rest of
  *  its lines as pieces (fail-closed). */
@@ -292,7 +299,9 @@ import { effectiveLabelMapping, mapLabel, type LabelMappingEntry, type LabelScan
 import { LockResolver, type ResolverGit, type ResolverLimits, type ResolverSchedule } from "../policy/lock-resolution.js";
 import type { RegistryLimits, RepoWalkLimits } from "../policy/known-repos.js";
 import { defaultHistoryCacheDir, fileHistoryScanCache, type HistoryScanCache } from "../policy/secret-history-cache.js";
-import { CacheSealStore, sealGate, type CacheSealRejection, type LiveLaunch } from "../policy/cache-seals.js";
+import { attachmentPeriodsIn, CacheSealStore, claimSession, sealGate, type CacheSealRejection, type LiveLaunch } from "../policy/cache-seals.js";
+import { modeOf } from "../policy/protection-mode.js";
+import { ATTACHMENT_SESSION_PREFIX, attachmentCoverageProblem, gatedNotice, isAttachmentKind, parseCoverage, resolvePosture, type AttachmentGap, type Coverage, type PostureGap } from "../policy/confinement-posture.js";
 import { PreparedCopies, type PrepGit, type PrepLimits } from "../policy/prepared-copies.js";
 import { envSecretNameMatches, envSecretSpan, extractSecretSpans, secretFileShape } from "../policy/secret-extract.js";
 import { knownSecretsOf, SCAN_MAX_FILES, transcriptKnownFiles } from "../policy/transcript-known.js";
@@ -302,12 +311,14 @@ import { parseScanFileClaims, readRegularFile as readTranscriptClaimFile, verify
 import type { PastSessionsFile } from "../policy/policy-suggestions.js";
 import { AuthGrantStore, isGrantOrigin, parseAuthGrants } from "../secret-registry/auth-grants.js";
 import { WireReleaseStore, parseDirectHosts } from "../secret-registry/wire-release-sessions.js";
+import { isKubeconfigPath, kubeOverlay, kubeUpstream, type KubeUpstream } from "../policy/kubeconfig.js";
 import { documentBlockText } from "../policy/document-blocks.js";
-import { documentNameRows, envRowVariable, isOwnTextRow, isRegisteredFileRow, ownTextTwinFor, registerSecret, registeredDocumentText, registeredDocumentTwin, twinMatchOf, fileRegisteredAsIs, listSecretRegistry, registerEnvSecret, registeredFileSymbols, registeredFilePaths, registeredFileTwin, structuredTwinFor, structuredTwinWithSecretsFor, structuredTwinOfField, wholeFileTwinFor, wholeFileTwinOfBase, wireServableTwin, wireReleaseScheme, type RegisteredTwin } from "../secret-registry/registry.js";
+import { documentNameRows, envRowVariable, isOwnTextRow, isRegisteredFileRow, ownTextTwinFor, registerSecret, registeredDocumentText, registeredDocumentTwin, twinMatchOf, fileRegisteredAsIs, listSecretRegistry, registerEnvSecret, registeredFileSymbols, registeredFilePaths, registeredFileTwin, structuredTwinFor, structuredTwinWithSecretsFor, structuredTwinOfField, wholeFileTwinFor, wholeFileTwinOfBase, wireServableTwin, wireServableDbTwin, wireReleaseScheme, isHomeWireFile, registeredFileText, type RegisteredTwin } from "../secret-registry/registry.js";
 import { WhyPreview } from "./why-preview.js";
 import { declaredBindingsReader, issuerSourceOf, ownWireHost, releaseRestsOnWireGrant, syncCurrentBindings, syncEnvBindings, syncRegisteredBindings } from "../secret-registry/current-bindings.js";
 import { mcpConfigLike } from "../policy/mcp-config.js";
 import { issuerOfHost, issuerRelease, type Issuer } from "../policy/issuer-bindings.js";
+import { awsCredentialRole, awsSigningRelease, isAwsEndpoint, type AwsCredentialRole } from "../policy/aws-signing.js";
 import { siblingDeclaredBindings, valueSourceLevel, valueSourceView, type ValueSourceOptions } from "../secret-registry/value-sources.js";
 import {
   PROTOCOL_VERSION,
@@ -405,6 +416,9 @@ export interface ArbiterServerOptions {
   eventRetentionMs?: number;
   /** Sweep cadence for eventRetentionMs (default 1 h; tests shorten it). */
   eventRetentionSweepMs?: number;
+  /** An attachment's lease (policy/cache-seals.ts ATTACHMENT_LEASE_MS;
+   *  tests shorten it). */
+  attachmentLeaseMs?: number;
   /** Policy engine. Defaults to the lifted engine-backed data-trust policy
    * (built-in TOOL_INBOUND_SPEC + intrinsic category defaults; classify is
    * fail-closed for any unmapped tool/field). Pass a custom engine — e.g. one
@@ -630,6 +644,39 @@ export const ADMIN_SESSION_ID = "arbiter-admin";
  *  trusted by construction). The channels nest: admin ⊇ human ⊇ data. */
 export type IpcChannel = "data" | "human" | "admin";
 
+/** An attachment's route as its service's check found it (openclaw-plugin.md
+ *  §3.6), on `beginAttachment` / `updateAttachment` and on the posture
+ *  record. Bounded text only: it is shown as it is. */
+export interface AttachmentRoute {
+  state: "routed" | "lost";
+  problems: Array<{ code: string; detail: string }>;
+  config?: string;
+}
+
+export const ATTACHMENT_ROUTE_SHAPE =
+  "route must be {state: \"routed\"|\"lost\", problems: [{code, detail}] (at most 8; a code of lower-case letters and '-', a detail of at most 400 characters), config?: an absolute path}";
+
+/** The route a registrant sent: undefined when it sent none, null when it is
+ *  not one exactly. Control characters are dropped from the text. Pure. */
+export function parseAttachmentRoute(v: unknown): AttachmentRoute | undefined | null {
+  if (v === undefined) return undefined;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  if (o["state"] !== "routed" && o["state"] !== "lost") return null;
+  if (!Array.isArray(o["problems"]) || o["problems"].length > 8) return null;
+  const clean = (s: string): string => s.replace(/[\u0000-\u001f\u007f]/g, " ");
+  const problems: AttachmentRoute["problems"] = [];
+  for (const p of o["problems"] as unknown[]) {
+    const x = p !== null && typeof p === "object" && !Array.isArray(p) ? p as Record<string, unknown> : null;
+    if (x === null || typeof x["code"] !== "string" || !/^[a-z][a-z-]{0,40}$/.test(x["code"]) || typeof x["detail"] !== "string" || x["detail"].length > 400) return null;
+    problems.push({ code: x["code"], detail: clean(x["detail"]) });
+  }
+  if (o["state"] === "lost" && problems.length === 0) return null;
+  const config = o["config"];
+  if (config !== undefined && (typeof config !== "string" || !config.startsWith("/") || config.length > 4096)) return null;
+  return { state: o["state"], problems, ...(typeof config === "string" ? { config: clean(config) } : {}) };
+}
+
 export interface DispatchContext {
   channel: IpcChannel;
   /** Write one interim frame on the requester's connection (the socket
@@ -781,6 +828,15 @@ export const HUMAN_PLANE_OPS: ReadonlySet<string> = new Set([
   "sealCacheEntries",
   "beginLaunch",
   "endLaunch",
+  // An attachment (openclaw-plugin.md §3.3): from the data socket the agent
+  // world could record a believed posture for a session of its choosing, or
+  // end the attachment that holds the human plane exposed and every seal void.
+  "beginAttachment",
+  "renewAttachment",
+  "endAttachment",
+  // The service's route check (openclaw-plugin.md §3.6): from the data
+  // socket the agent world could record its attachment's route as restored.
+  "updateAttachment",
   // A session's machine path labels end with it (session-path-labels.ts):
   // from the data socket the agent world could drop the label on its own
   // background output file and read the file raw.
@@ -797,6 +853,12 @@ export const HUMAN_PLANE_OPS: ReadonlySet<string> = new Set([
   // decides whether npm is served the `.npmrc` twin, so only the launcher,
   // which started that proxy, may say it.
   "registerWireRelease",
+  // The session KUBECONFIG overlay and the launcher's word that a kubeconfig
+  // is the launch HOME's own (kube-wire-release.md): it decides which file's
+  // clusters the proxy dials with the real client certificate.
+  "kubeOverlay",
+  // How the proxy dials a cluster: the answer holds a client key.
+  "kubeUpstream",
   // Which host an agent's own key authenticates to (agent-sign-in.md §3): a
   // binding, so a release; from the data socket the agent could bind its
   // key to a host of its own.
@@ -932,8 +994,13 @@ export function verdictDecisionOf(
 /** The reason a human-socket report is answered as a claim: an unwalled
  *  launch is live, so its agent's programs reach the human socket too. */
 export function exposedHumanPlaneReason(op: string, launches: readonly LiveLaunch[]): string {
-  const who = launches.slice(0, 3).map((l) => `pid ${l.pid}, ${l.mode}/${l.posture}`).join("; ");
+  const who = launches.slice(0, 3).map((l) => `${launchName(l)}, ${l.mode}/${l.posture}`).join("; ");
   return `an unauthenticated report: '${op}' from the human socket while a launch whose agent can reach the human plane is live (${who || "unknown"}), so it is a claim, as from the data socket; it is believed again once that launch ends`;
+}
+
+/** A live launch in a log line: its pid, or an attachment's kind and session. */
+export function launchName(l: LiveLaunch): string {
+  return l.attachment !== undefined ? `attachment ${l.attachment}${l.session ? ` (session ${l.session})` : ""}` : `pid ${l.pid}`;
 }
 
 /** How long the human plane's exposure answer is reused (ms). */
@@ -941,7 +1008,7 @@ const EXPOSURE_MEMO_MS = 250;
 
 /** A launch set's identity, for telling a change once. */
 function exposureKey(launches: readonly LiveLaunch[]): string {
-  return launches.map((l) => `${l.pid}/${l.session ?? ""}/${l.mode}/${l.posture}`).sort().join(",");
+  return launches.map((l) => `${l.pid}/${l.session ?? ""}/${l.mode}/${l.posture}/${l.attachment ?? ""}`).sort().join(",");
 }
 
 /** The reason a data-socket report is answered as a claim. */
@@ -965,10 +1032,15 @@ const HUMAN_PLANE_REASON: ReadonlyMap<string, string> = new Map([
   ["sealCacheEntries", "records the seals the enforcement caches are trusted by"],
   ["beginLaunch", "records a launch whose posture decides whether the enforcement caches are trusted"],
   ["endLaunch", "ends a launch whose posture decides whether the enforcement caches are trusted"],
+  ["beginAttachment", "records an attachment, whose posture the session page shows and which holds the human plane exposed"],
+  ["renewAttachment", "keeps an attachment live, which holds the human plane exposed"],
+  ["endAttachment", "ends an attachment, which holds the human plane exposed"],
+  ["updateAttachment", "records an attachment's coverage and route, whose posture the session page shows"],
   ["humanPlaneStatus", "names the live launches (pid and session) whose agent can reach the human plane"],
   ["registerMcpServers", "names the processes whose taint decides whether an MCP server's results are masked"],
   ["registerWireRelease", "says whether a session's egress proxy puts registry tokens back, which decides whether npm reads a credential raw"],
   ["registerAuthGrant", "binds an agent's own key to the host it authenticates to, which releases the key there"],
+  ["kubeOverlay", "names the kubeconfig whose clusters the egress proxy dials with the real client certificate"],
   ["filterPrompt", "with dryRun: true tests text against the registered values without minting or a trace (the dashboard's test bench)"],
   ["promptFilterPacks", "reads the prompt filter's patterns and keywords"],
   ["promptExceptions", "reads the prompt filter's exceptions with their patterns"],
@@ -1126,6 +1198,18 @@ const EMPTY_DISCOVERY: SecretDiscoveryReport = {
 /** Plan 13 D2: a request's `flowsFrom`, validated (strings only, bounded:
  *  a malformed list is no flow, which only narrows what a holder may do,
  *  never widens it, since the guard decides who holds). */
+/** A CA, certificate or key file a kubeconfig names (kube-wire-release.md):
+ *  its text when it is a regular file of at most 1 MiB, else null. */
+function readSmallFile(path: string): string | null {
+  try {
+    const st = statSync(path);
+    if (!st.isFile() || st.size > 1024 * 1024) return null;
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 function flowsFromOf(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v.filter((k): k is string => typeof k === "string" && k.length > 0 && k.length <= 64).slice(0, 256);
@@ -1143,6 +1227,24 @@ export function isDirectoryNow(dir: string): boolean {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     return code !== "ENOENT" && code !== "ENOTDIR";
+  }
+}
+
+/** The text of a project-notes file Claude Code attaches to a Read
+ *  (confidentiality.md §7.1, "Project notes attached to a Read";
+ *  policy/nested-memory.ts): an absolute path named `CLAUDE.md` or
+ *  `CLAUDE.local.md` that is a regular file (a symlink is not followed) of
+ *  at most MEMORY_FILE_MAX bytes, read now; null otherwise, and on any
+ *  error (fail-closed: the notes block keeps today's rule, dropped). */
+export const MEMORY_FILE_MAX = 256 * 1024;
+export function memoryFileTextAt(path: string): string | null {
+  if (!path.startsWith("/") || !MEMORY_FILE_RE.test(path)) return null;
+  try {
+    const st = lstatSync(path);
+    if (!st.isFile() || st.size > MEMORY_FILE_MAX) return null;
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
   }
 }
 
@@ -1463,6 +1565,11 @@ export class ArbiterServer {
    *  still runs (wire-release-sessions.ts), never an ended launch's.
    *  Constructed in the ctor body (it needs the resolved dbPath). */
   private readonly wireReleaseSessions: WireReleaseStore;
+  /** kube-wire-release.md: the launch HOMEs' kubeconfigs a launcher named
+   *  (`kubeOverlay`, human plane), whose clusters `kubeUpstream` answers for.
+   *  In memory: after a restart a cluster is dialed as any host (the system
+   *  store, no client certificate) until the next launch names its file. */
+  private readonly kubeHomeFiles = new Set<string>();
   /** Agent-sign-in.md §3: which field of an agent's own key file
    *  authenticates to which host (registerAuthGrant, human plane). In
    *  memory, and in mandu.db for the launcher that made it: a restart takes
@@ -1538,6 +1645,24 @@ export class ArbiterServer {
   /** Plan 14 §11.1: the known-repository registry and the background lock
    *  resolution; null with the axis OFF or `lockResolution: null`. */
   private readonly lockResolver: LockResolver | null;
+  /** The locked set as one lookup, rebuilt when the resolver's snapshot
+   *  hands out a new set (isLockedObject). */
+  private lockedIds: { from: unknown; ids: Set<string> } | null = null;
+
+  /** Is `id` (lowercase hex, 40 or 64) in the global locked set (plan 14
+   *  §11.1 R2)? False with no resolver (the axis off) or on any throw. */
+  private isLockedObject(id: string): boolean {
+    if (this.lockResolver === null || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id)) return false;
+    try {
+      const set = this.lockResolver.snapshot().lockedSet;
+      if (this.lockedIds === null || this.lockedIds.from !== set) {
+        this.lockedIds = { from: set, ids: new Set([...set.sha1, ...set.sha256]) };
+      }
+      return this.lockedIds.ids.has(id);
+    } catch {
+      return false;
+    }
+  }
   /** Plan 14 §11.1 R3: the copies prepared ahead of time; null when off. */
   private readonly preparedCopies: PreparedCopies | null;
   /** Plan 14 §11.2: the seals every enforcement cache is trusted by, the
@@ -1616,6 +1741,7 @@ export class ArbiterServer {
     this.cacheSeals = new CacheSealStore({
       dbPath: this.dbPath ?? getSymbolDbPath(),
       confidentiality: this.confidentiality,
+      ...(opts.attachmentLeaseMs !== undefined ? { attachmentLeaseMs: opts.attachmentLeaseMs } : {}),
       onRotate: (e) => {
         if (e.reason !== "first start") this.emitCacheSealEvent("rotated", e.reason, []);
         // Plan 14 §11.1 R3: the prepared copies' seals are void; they are
@@ -3141,31 +3267,67 @@ export class ArbiterServer {
       const params = (req.params ?? {}) as Record<string, unknown>;
       const command = typeof params["cmd"] === "string" ? params["cmd"] as string : typeof params["command"] === "string" ? params["command"] as string : null;
       if (command === null) return [];
-      const workdir = this.policy.callWorkdirOf?.(req);
-      const start = req.callStartDir ?? (workdir !== undefined && workdir.startsWith("/") ? workdir : undefined);
-      const base = directoryMayChange(command) ? leadingCdDir(command, start) : start;
-      const home = this.sessionHome(req.sessionKey) ?? homedir();
-      return namedTwinsFor(namedPaths, {
-        base,
-        home,
-        fs: {
-          kind: (p) => {
-            try {
-              const st = statSync(p);
-              return st.isFile() ? "file" : st.isDirectory() ? "dir" : null;
-            } catch {
-              return null;
-            }
-          },
-          list: (d) => {
-            try { return readdirSync(d); } catch { return null; }
-          },
-        },
-        isSecretFile: (p) => this.protectedLevelOf(p) !== null,
-        twinKindOf: (p) => this.twinKindOfPath(p),
-      });
+      return this.namedTwinsAt(req, namedPaths, command);
     } catch (err) {
       this.log(`named twins unavailable (non-fatal, utility only): ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  /** `namedTwinsFor` over the live file system and registry, for the
+   *  call's `tokens`: relative ones read in the call's start directory, or
+   *  the leading `cd` of `command` when it may change directory. Throws on
+   *  failure (the callers answer nothing). */
+  private namedTwinsAt(req: ClassifyRequest, tokens: readonly string[], command: string | null): NamedTwin[] {
+    const workdir = this.policy.callWorkdirOf?.(req);
+    const start = req.callStartDir ?? (workdir !== undefined && workdir.startsWith("/") ? workdir : undefined);
+    const base = command !== null && directoryMayChange(command) ? leadingCdDir(command, start) : start;
+    const home = this.sessionHome(req.sessionKey) ?? homedir();
+    return namedTwinsFor(tokens, {
+      base,
+      home,
+      fs: {
+        kind: (p) => {
+          try {
+            const st = statSync(p);
+            return st.isFile() ? "file" : st.isDirectory() ? "dir" : null;
+          } catch {
+            return null;
+          }
+        },
+        list: (d) => {
+          try { return readdirSync(d); } catch { return null; }
+        },
+      },
+      isSecretFile: (p) => this.protectedLevelOf(p) !== null,
+      twinKindOf: (p) => this.twinKindOfPath(p),
+    });
+  }
+
+  /** The classify answer's `twinWrites` (twin-write-targets.ts, plan 10
+   *  §4.1 "The model is told at the call"): the path tokens of the call's
+   *  own input that it writes and that name a registered secret file Mandu
+   *  serves a twin of. A shell command's write targets are read as
+   *  `namedTwinsOf` reads its tokens (the call's start directory, or its
+   *  leading `cd`); Write / Edit / MultiEdit's `file_path` as it is. Read
+   *  off the model's own input and the registry only, never a result byte.
+   *  Only for a session the file guard confines (`sessionGuarded`: an
+   *  attested `confined` launch), where a write of such a file lands in its
+   *  twin; elsewhere (`gated`, no launch record) a program's write may reach
+   *  the real file, and the line would be false. Utility only: any failure
+   *  is no answer. */
+  private twinWritesOf(req: ClassifyRequest): string[] {
+    try {
+      if (!this.confidentiality || !this.sessionGuarded(req.sessionKey)) return [];
+      const params = (req.params ?? {}) as Record<string, unknown>;
+      const tool = String(req.tool);
+      const command = !EXEC_OUTPUT_TOOLS.has(tool) ? null : typeof params["cmd"] === "string" ? params["cmd"] as string : typeof params["command"] === "string" ? params["command"] as string : null;
+      const filePath = TWIN_WRITE_FILE_TOOLS.has(tool) && typeof params["file_path"] === "string" ? params["file_path"] as string : null;
+      const targets = command !== null ? shellWriteTargets(command) : filePath !== null && isAbsolute(filePath) ? [filePath] : [];
+      if (targets.length === 0) return [];
+      return this.namedTwinsAt(req, targets, command).map((t) => t.path);
+    } catch (err) {
+      this.log(`twin writes unavailable (non-fatal, utility only): ${(err as Error).message}`);
       return [];
     }
   }
@@ -3632,9 +3794,12 @@ export class ArbiterServer {
       } as ClassifyRequest;
       addSources([cfReq.origin, cfReq.originHuman, cfReq.params, cfReq.paramsHuman]);
       // and each as the path rules may read it: the shell command with its
-      // grep exclusions blanked (exclusion-flags.md; its implementation
-      // review found the blanked whole command answered as an empty place)
-      for (const x of [...sources]) sources.add(withoutGrepExclusions(x));
+      // grep and rg exclusions blanked (exclusion-flags.md; its
+      // implementation review found the blanked whole command answered as
+      // an empty place). Every string, whatever the tool: the same function
+      // labelForClassify and the unmapped scan apply, so each spelling they
+      // read is never answered here.
+      for (const x of [...sources]) sources.add(withoutSearchExclusions(x));
       const words = new Set(texts.flatMap((t) => commandWords(t)));
       const lookup = counterfactualLookup(this.labelLookup, {
         credentialFiles: new Set(credential.keys()), registered, exists, sources, dirs: dirs === null ? null : [...new Set(dirs)], words,
@@ -4426,7 +4591,14 @@ export class ArbiterServer {
       tool: origin === "side-call" ? "side_call" : "prompt_filter",
       value, confidentiality: level,
       ...(session ? { sessionKey: session } : {}),
-      ...(origin === "human" ? { integrity: "trusted" } : {}),
+      // The integrity axis OFF (`secrets`): no row is untrusted by origin
+      // (confidentiality.md §9, "Rule 1(b) is inert under `secrets`"), so a
+      // harness or side-call mint is trusted too. Untrusted, it set the
+      // session's untrusted-taint bit, and a HIGH session's own bound host
+      // then asked (`session:high-tainted-bound`, live 2026-10-26: an OpenClaw
+      // side call that repeated the declassified memo, masked here, held the
+      // memo's bound web_fetch on the sandbox tier while the wrapper sent it).
+      ...(origin === "human" || !this.integrity ? { integrity: "trusted" } : {}),
     } as ArbiterRequest);
     if (!r.ok) throw new Error(`filterPrompt: could not mint a symbol: ${r.error}`);
     return (r.result as { symbol: string }).symbol;
@@ -4874,6 +5046,9 @@ export class ArbiterServer {
     if (req.since !== undefined && (typeof req.since !== "number" || !Number.isFinite(req.since))) {
       return { id: req.id, ok: false, error: "scanAgentTranscripts: since must be a time in ms" };
     }
+    if (req.manduDb !== undefined && (typeof req.manduDb !== "string" || !req.manduDb.startsWith("/"))) {
+      return { id: req.id, ok: false, error: "scanAgentTranscripts: manduDb must be an absolute path" };
+    }
     if (!this.confidentiality) {
       return { id: req.id, ok: true, result: { axis: false, ...(await scanAgentTranscripts({ home, sources: [] })) } };
     }
@@ -4892,7 +5067,12 @@ export class ArbiterServer {
         home,
         sources,
         known,
-        ...(req.eventsDir !== undefined ? { manduWindows: manduWindowsFrom(req.eventsDir) } : {}),
+        // Mandu's sessions: the launches' event files, and the attachments'
+        // periods (plan 17 §3 item 6), which only the human-plane attachment
+        // ops write, never an emit: this arbiter's own, and those of the
+        // store `manduDb` names (the resident arbiter's, read-only, when the
+        // scan runs in a throwaway arbiter).
+        ...(req.eventsDir !== undefined ? { manduWindows: manduWindowsFrom(req.eventsDir, {}, this.scanAttachmentPeriods(req.manduDb)) } : {}),
         ...(req.since !== undefined ? { since: req.since } : {}),
         limits: transcriptLimitsFromEnv(process.env),
         // Where the agents' requests went, from their own settings
@@ -4907,6 +5087,15 @@ export class ArbiterServer {
     } finally {
       this.transcriptScanRunning = false;
     }
+  }
+
+  /** The attachment periods a transcript scan marks by: this arbiter's
+   *  own, and those kept in the store at `manduDb` when it is another one
+   *  (cache-seals.ts `attachmentPeriodsIn`, read-only). */
+  private scanAttachmentPeriods(manduDb: string | undefined): Array<{ session: string; kind: string; from: number; to: number }> {
+    const own = this.cacheSeals.attachmentPeriods();
+    if (manduDb === undefined || resolvePath(manduDb) === resolvePath(this.dbPath ?? getSymbolDbPath())) return own;
+    return [...own, ...attachmentPeriodsIn(manduDb)];
   }
 
   /** The values `scanAgentTranscripts` looks for by exact match
@@ -5413,7 +5602,7 @@ export class ArbiterServer {
     // log, and one event on the arbiter's audit stream. Display only: the
     // belief rule reads `launches` itself, never this.
     if (exposureKey(before) !== exposureKey(launches)) {
-      const desc = launches.map((l) => `pid ${l.pid}${l.session ? ` session ${l.session}` : ""} ${l.mode}/${l.posture}`).join("; ");
+      const desc = launches.map((l) => `${l.attachment !== undefined ? `attachment ${l.attachment}` : `pid ${l.pid}`}${l.session ? ` session ${l.session}` : ""} ${l.mode}/${l.posture}`).join("; ");
       if (launches.length > 0) {
         if (before.length === 0) this.exposedSince = now;
         this.log(`human plane exposed: ${launches.length} launch(es) whose agent can reach the human socket (${desc}); the guard's and the proxies' records there are claims until they end`);
@@ -5438,6 +5627,7 @@ export class ArbiterServer {
         pid: l.pid, mode: l.mode, posture: l.posture,
         ...(l.session !== undefined ? { session: l.session } : {}),
         ...(l.begunAt !== undefined ? { begunAt: l.begunAt } : {}),
+        ...(l.attachment !== undefined ? { attachment: l.attachment } : {}),
       })),
     };
   }
@@ -5463,6 +5653,58 @@ export class ArbiterServer {
     this.exposureTimer = null;
   }
 
+  /**
+   * An attachment's posture, on its session's stream (openclaw-plugin.md
+   * §3.3, §3.4): one `launch_posture` record written by the arbiter itself,
+   * so the session page shows the posture the arbiter decided. Believed only
+   * when the registration came on an attested channel (read before it was on
+   * the record); otherwise stored as a claim, as an emit from there would be.
+   * Best-effort, off the security path.
+   */
+  private emitAttachmentPosture(sessionId: string, kind: AttachmentGap, coverage: Coverage, gap: PostureGap, believed: boolean, route?: AttachmentRoute): void {
+    try {
+      const notice = gatedNotice(gap).join("\n");
+      const routed = coverage.modelContext === "proxy";
+      const stored = this.events.append({
+        id: `ev_${Date.now().toString(36)}${randomBytes(5).toString("hex")}`,
+        sessionId,
+        turn: 0,
+        ts: new Date().toISOString(),
+        callId: null,
+        parentId: null,
+        kind: "launch_posture",
+        view: "HumanView",
+        boundary: "model_context",
+        emitter: "arbiter",
+        invariant: { violatedInvariant: false },
+        ...(this.tenant !== undefined ? { tenant: this.tenant } : {}),
+        ...(believed ? {} : { claimed: true }),
+        target: kind === "openclaw-plugin" ? "openclaw" : kind,
+        argv0: kind,
+        live: [],
+        dropped: [notice],
+        // As a launch records it: absent with the confidentiality axis off.
+        ...(this.confidentiality ? { secrets: { posture: "gated", gap } } : {}),
+        humanPlaneWalled: false,
+        protection: { mode: modeOf({ integrity: this.integrity, confidentiality: this.confidentiality }), integrity: this.integrity, confidentiality: this.confidentiality, reported: true },
+        attachment: { kind, coverage },
+        // The service's route check (§3.6): what it found in the agent's config.
+        ...(route !== undefined ? { attachmentRoute: route } : {}),
+        notes: [notice],
+        input: {
+          symbolized: routed
+            ? `${kind} attachment: model calls through Mandu's proxy, secrets gated`
+            : `${kind} attachment: model calls NOT all through Mandu's proxy (the route check found the route lost), secrets gated`,
+          original: null, differs: false, symbols: [],
+        },
+        output: { symbolized: notice, original: null, differs: false, symbols: [] },
+      });
+      this.fanOut(stored);
+    } catch (err) {
+      this.log(`attachment posture event emit failed (ignored): ${(err as Error).message}`);
+    }
+  }
+
   /** The exposure began, changed or ended (arbiter-human-plane.md §10.1.1):
    *  one `config_change` event on the arbiter's audit stream, carrying
    *  `humanPlane: {state, since, launches, ended?}`. Pids, modes, postures
@@ -5470,7 +5712,7 @@ export class ArbiterServer {
   private emitHumanPlaneEvent(launches: readonly LiveLaunch[], before: readonly LiveLaunch[]): void {
     try {
       const exposed = launches.length > 0;
-      const name = (l: LiveLaunch): string => `pid ${l.pid}${l.session ? ` (session ${l.session})` : ""}`;
+      const name = (l: LiveLaunch): string => l.attachment !== undefined ? launchName(l) : `pid ${l.pid}${l.session ? ` (session ${l.session})` : ""}`;
       const summary = exposed
         ? `human plane EXPOSED: ${launches.length} launch(es) with no wall can reach the human socket (${launches.slice(0, 5).map((l) => `${name(l)}, ${l.mode}/${l.posture}`).join("; ")}); ` +
           `every guard and model-proxy report there is a claim until ${launches.length === 1 ? "it ends" : "they end"} (confined launches get placeholders, refused protected writes, masked shell results)`
@@ -5491,7 +5733,7 @@ export class ArbiterServer {
         humanPlane: {
           state: exposed ? "exposed" : "walled",
           since: this.exposedSince,
-          launches: launches.slice(0, 20).map((l) => ({ pid: l.pid, mode: l.mode, posture: l.posture, ...(l.session ? { session: l.session } : {}) })),
+          launches: launches.slice(0, 20).map((l) => ({ pid: l.pid, mode: l.mode, posture: l.posture, ...(l.session ? { session: l.session } : {}), ...(l.attachment !== undefined ? { attachment: l.attachment } : {}) })),
           ...(exposed ? {} : { ended: before.slice(0, 20).map((l) => ({ pid: l.pid, ...(l.session ? { session: l.session } : {}) })) }),
         },
       });
@@ -6019,7 +6261,12 @@ export class ArbiterServer {
         const policySecret = isSecret(parseConfidentialityLevel(result.confidentiality));
         // Plan 15 §13.12: the files the path rule placed its secret readings
         // on stay in this arbiter (HumanView paths), never on the wire.
-        const { namedFiles, placedFiles, ifCdFailed, ...wire } = result;
+        const { namedFiles, placedFiles, ifCdFailed, ...policyWire } = result;
+        // Plan 10 §4.1, "The model is told at the call": the files the call
+        // writes that are registered secrets' placeholder copies, on every
+        // answer below (explains only; twin-write-targets.ts).
+        const twinWrites = this.twinWritesOf(classifyReq);
+        const wire = twinWrites.length > 0 ? { ...policyWire, twinWrites } : policyWire;
         if (
           this.confidentiality && typeof cReq.value === "string" && cReq.value !== "" &&
           !policySecret &&
@@ -6065,6 +6312,19 @@ export class ArbiterServer {
           const answer = namedTwins.length > 0 ? { ...wire, namedTwins } : wire;
           if (pathRelease !== null) return { id: req.id, ok: true, result: { ...answer, pathRelease } };
           return { id: req.id, ok: true, result: answer };
+        }
+        // confidentiality.md §7.1, "git's report on a history rewrite": the
+        // locked objects a public result says git could not read, for the
+        // proxy's one-line explanation (ids only; no secret byte); and
+        // (2026-10-27) the work-tree paths it says git could not remove,
+        // a protected file's read-only copy (paths the result already
+        // shows the model).
+        if (this.confidentiality && typeof cReq.value === "string") {
+          const lockedObjects = lockedObjectsIn(cReq.value, (id) => this.isLockedObject(id));
+          const protectedCopies = unlinkDeniedPathsIn(cReq.value);
+          if (lockedObjects.length > 0 || protectedCopies.length > 0) {
+            return { id: req.id, ok: true, result: { ...wire, ...(lockedObjects.length > 0 ? { lockedObjects } : {}), ...(protectedCopies.length > 0 ? { protectedCopies } : {}) } };
+          }
         }
         return { id: req.id, ok: true, result: wire };
       }
@@ -7104,11 +7364,18 @@ export class ArbiterServer {
         // caller's own `claimed` is never taken. The arbiter's audit stream
         // takes no claim at all.
         const believed = this.attested(ctx.channel);
-        const evRec = req.event as { claimed?: unknown; sessionId?: unknown };
+        const evRec = req.event as { claimed?: unknown; sessionId?: unknown; kind?: unknown };
         if (believed) delete evRec.claimed;
         else {
           if (evRec.sessionId === ADMIN_SESSION_ID) {
             return { id: req.id, ok: false, error: `emit: the '${ADMIN_SESSION_ID}' stream takes events only from the arbiter, the dashboard's admin channel or the human socket` };
+          }
+          // An attachment's posture is the arbiter's own record of its
+          // registration (openclaw-plugin.md §3.3): no claim may stand
+          // beside it, from the plugin on the data socket or a program on
+          // the exposed human socket.
+          if (evRec.kind === "launch_posture" && typeof evRec.sessionId === "string" && this.cacheSeals.attachedSessions().has(evRec.sessionId)) {
+            return { id: req.id, ok: false, error: `emit: '${evRec.sessionId}' is an attachment session; its posture is recorded by the arbiter at beginAttachment, never by an emit` };
           }
           evRec.claimed = true;
         }
@@ -7514,7 +7781,24 @@ export class ArbiterServer {
         // each token back at its registry. Unknown session ⇒ today's default.
         const wireSession = typeof req.session === "string" ? this.wireReleaseSessions.get(req.session) : undefined;
         const wire = wireSession ? wireServableTwin(this.symbolMap, req.path, { direct: wireSession.direct }) : null;
-        const d = decideOpen(req.path, file, opener, { ask, ...(wire?.servable ? { wireTwin: { why: wire.why } } : {}) });
+        // kube-wire-release.md §2: kubectl and helm (the file's known
+        // consumers) read the twin of the launch HOME's kubeconfig whose
+        // overlay a launcher built (`kubeOverlay`) for a session whose proxy
+        // inspects TLS: the overlay routes each cluster through the proxy,
+        // which signs in there with the real token or certificate. Before
+        // (found by the live kubectl run, live-clients.md §3.3), kubectl was
+        // a known, unvetted consumer and so was ASKED for the raw file, and a
+        // session with nobody to answer refused its open after the ask's
+        // timeout.
+        const kubeWire = wireSession !== undefined && this.kubeHomeFiles.has(req.path)
+          ? { why: "the session KUBECONFIG overlay routes its clusters through the session proxy, which signs in there with the real token or client certificate (kube-wire-release.md)" }
+          : null;
+        // db-login-release.md §3.3: pg_dump (a known consumer of the HOME
+        // `.pgpass` that is not a printer) reads its twin when every line's
+        // password is bound to its own database's relay login.
+        const dbWire = wireSession !== undefined && wire?.servable !== true ? wireServableDbTwin(this.symbolMap, req.path) : null;
+        const wireTwin = wire?.servable ? { why: wire.why } : kubeWire ?? (dbWire?.servable ? { why: dbWire.why } : null);
+        const d = decideOpen(req.path, file, opener, { ask, ...(wireTwin ? { wireTwin } : {}) });
         if (d.verdict === "raw") {
           // Plan 13 D8 (12): the pin carries the word of the entry it came
           // from (a glob label's entry too, whose pin lands in an entry of
@@ -8189,6 +8473,40 @@ export class ArbiterServer {
         else this.wireReleaseSessions.clear(req.sessionKey, pid);
         return { id: req.id, ok: true, result: { inspecting: req.inspecting } };
       }
+      case "kubeOverlay": {
+        // kube-wire-release.md (human plane): the launcher asks for the
+        // session KUBECONFIG overlay of the launch HOME's own kubeconfig,
+        // built from its twin (no secret in it), and so names the file whose
+        // clusters `kubeUpstream` may answer for.
+        if (typeof req.path !== "string" || !req.path.startsWith("/") || typeof req.home !== "string" || !req.home.startsWith("/")) {
+          return { id: req.id, ok: false, error: "kubeOverlay: path and home must be absolute" };
+        }
+        if (!isKubeconfigPath(req.path) || !isHomeWireFile(req.path, req.home)) {
+          return { id: req.id, ok: true, result: { overlay: null, reason: "not the launch HOME's ~/.kube/config" } };
+        }
+        const twin = structuredTwinFor(this.symbolMap, req.path, { home: req.home, resolveLabel: this.labelLookup });
+        if (twin === null) return { id: req.id, ok: true, result: { overlay: null, reason: "not registered with a structured twin" } };
+        const overlay = kubeOverlay(twin);
+        if (overlay === null) return { id: req.id, ok: true, result: { overlay: null, reason: "no https cluster the overlay can route" } };
+        this.kubeHomeFiles.add(req.path);
+        return { id: req.id, ok: true, result: { overlay, reason: `${overlay.clusters.length} cluster(s) routed through the session proxy` } };
+      }
+      case "kubeUpstream": {
+        // kube-wire-release.md (human plane): the proxy's question before it
+        // dials `authority`. Only a file a launcher named (`kubeOverlay`) is
+        // read, from the registry's own copy of the real text.
+        if (typeof req.authority !== "string" || req.authority === "") {
+          return { id: req.id, ok: false, error: "kubeUpstream: authority is required" };
+        }
+        let profile: KubeUpstream | null = null;
+        for (const path of this.kubeHomeFiles) {
+          const real = registeredFileText(this.symbolMap, path);
+          if (real === null) continue;
+          profile = kubeUpstream(real, req.authority, { dir: dirname(path), readFile: readSmallFile });
+          if (profile !== null) break;
+        }
+        return { id: req.id, ok: true, result: { profile } };
+      }
       case "registerAuthGrant": {
         // Agent-sign-in.md §3 (human plane): the launcher's word that a field
         // of the agent's own key file authenticates to a host (the provider
@@ -8470,8 +8788,13 @@ export class ArbiterServer {
                 // the echoed command, so it must be the one the proxy
                 // recorded for the call when it recorded one.
                 const recorded = this.provenance.callCommandSignatures(req.callId);
+                const startDir = this.provenance.callStartDir(req.callId);
                 const listed = recorded.length > 0 && !recorded.includes(echoed) ? null
-                  : plainLsListingPaths(output, command, hostListingFs(this.provenance.callStartDir(req.callId), homedir()), head);
+                  : plainLsListingPaths(output, command, hostListingFs(startDir, homedir()), head)
+                    // "Paths only" (2026-10-26): a `find` or `ls … | grep`
+                    // pipeline whose every line is a path the listing could
+                    // print, on the same evidence (dir-listing.ts).
+                    ?? pathsOnlyListingPaths(output, command, hostPathsOnlyFs(startDir, homedir()), head);
                 if (listed !== null) { result.twinOf = listed; result.dirListing = true; }
               }
             }
@@ -8579,6 +8902,11 @@ export class ArbiterServer {
         // and the agent's environment carries it masked.
         const modelTokens = modelTokenBindings(law.models);
         const rules = { ...law.envSecrets, secrets: [...(law.envSecrets.secrets ?? []), ...sources.keys(), ...modelTokens.keys()] };
+        // The launch environment as a whole (db-login-release.md §3.3,
+        // 2026-10-25): `PGPASSWORD` is bound to the `PGHOST` beside it,
+        // `MYSQL_PWD` to `MYSQL_HOST`. The launcher sends every variable.
+        const launchEnv: Record<string, string> = {};
+        for (const v of req.vars) if (typeof v.name === "string" && typeof v.value === "string") launchEnv[v.name] = v.value;
         const vars = req.vars.map((v) => {
           // An auth grant's hosts (agent-sign-in.md §3.8): the variable's
           // row is bound there from its first registration, as rule 3 keeps.
@@ -8590,7 +8918,7 @@ export class ArbiterServer {
           // proxy can put the key back; else it stays exempt (raw), as
           // before, and the agent keeps a key it can use.
           const varRules = v.agentKey === true && granted.length > 0 ? { ...rules, agentKeys: [v.name] } : rules;
-          const r = registerEnvSecret(this.symbolMap, { name: v.name, value: v.value, sessionKey: req.sessionKey, rules: varRules, ...(bindings ? { bindings } : {}) }, dbPath);
+          const r = registerEnvSecret(this.symbolMap, { name: v.name, value: v.value, sessionKey: req.sessionKey, rules: varRules, launchEnv, ...(bindings ? { bindings } : {}) }, dbPath);
           // The value's own wire host, kept for the bindings sync (rule 3).
           // A registration on the human plane (the launcher's, of its own
           // environment) is RECORDED, so a restarted arbiter keeps it
@@ -8605,6 +8933,13 @@ export class ArbiterServer {
             } else {
               this.envWireHosts.set(r.symbol, r.wireHost);
             }
+          } else if (r.symbol !== null) {
+            // The same value registered again with no wire host (a
+            // `PGPASSWORD` launched without `PGHOST` now): an earlier
+            // launch's host is not kept. The human plane drops the record
+            // too; the data plane only this process's memory.
+            this.envWireHosts.delete(r.symbol);
+            if (attestedChannel(ctx.channel)) dropWireGrant(this.symbolMap, r.symbol, dbPath);
           }
           return { name: v.name, symbol: r.symbol, ...(r.twin !== undefined ? { twin: r.twin } : {}), reason: r.reason };
         });
@@ -8732,6 +9067,79 @@ export class ArbiterServer {
         const r = this.cacheSeals.endLaunch(req.token);
         this.refreshExposure();
         return { id: req.id, ok: true, result: r satisfies EndLaunchResult };
+      }
+      case "beginAttachment": {
+        // openclaw-plugin.md §3.3: the attachment form of beginLaunch. Read
+        // BEFORE it is on the record (it makes the human plane exposed).
+        const attestedClaim = this.attested(ctx.channel);
+        const kind = req.kind;
+        if (!isAttachmentKind(kind)) return { id: req.id, ok: false, error: "beginAttachment: kind must be an attachment kind (openclaw-plugin)" };
+        const prefix = ATTACHMENT_SESSION_PREFIX[kind];
+        if (typeof req.sessionId !== "string" || !req.sessionId.startsWith(prefix) || req.sessionId.length === prefix.length) {
+          return { id: req.id, ok: false, error: `beginAttachment: a ${kind} session id is '${prefix}<name>'` };
+        }
+        if (claimSession(req.sessionId) === null) {
+          return { id: req.id, ok: false, error: "beginAttachment: sessionId must be a session id (letters, digits, '.', '_', ':', '-'; at most 128)" };
+        }
+        const coverage = parseCoverage(req.coverage);
+        if (coverage === null) return { id: req.id, ok: false, error: "beginAttachment: coverage must be a coverage (confinement-posture.ts Coverage), every row with a known value" };
+        // Fail closed: an attachment has no file guard and no wall, so it is
+        // `gated` with its kind's own gap whatever else it covers, or with
+        // `model-route-lost` when its service found the route gone (§3.6);
+        // it never claims more than its kind covers.
+        const decided = resolvePosture(coverage);
+        const problem = attachmentCoverageProblem(kind, coverage);
+        if (decided.posture !== "gated" || (decided.gap !== kind && decided.gap !== "model-route-lost") || problem !== null) {
+          return { id: req.id, ok: false, error: `beginAttachment: an attachment is gated with the gap '${kind}' (its files row is {by: "none", why: "${kind}"}, and no row claims more than the kind covers${problem ? `: ${problem}` : ""}); this coverage resolves to ${decided.posture}${decided.gap ? `/${decided.gap}` : ""}` };
+        }
+        const route = parseAttachmentRoute(req.route);
+        if (route === null) return { id: req.id, ok: false, error: `beginAttachment: ${ATTACHMENT_ROUTE_SHAPE}` };
+        const r = this.cacheSeals.beginAttachment({ sessionId: req.sessionId, kind });
+        // Never guarded (mapped-tools.ts GUARD_MAPPED_TOOLS): its agent's
+        // opens meet no file guard.
+        this.unguardedSessions.add(req.sessionId);
+        this.refreshExposure();
+        this.emitAttachmentPosture(req.sessionId, kind, coverage, decided.gap!, attestedClaim, route);
+        return {
+          id: req.id, ok: true,
+          result: { token: r.token, epoch: r.epoch, expiresAt: r.expiresAt, leaseMs: r.leaseMs, posture: "gated", gap: decided.gap!, believed: attestedClaim, others: r.others } satisfies BeginAttachmentResult,
+        };
+      }
+      case "updateAttachment": {
+        // openclaw-plugin.md §3.6: the service's route check found the
+        // attachment's config changed (a route lost, or back). The arbiter
+        // decides the posture over the new coverage, by the same rule as at
+        // registration, and records it on the session's stream. Believed on
+        // an attested channel only: while the attachment is live that is the
+        // admin channel (the service's own dashboard), never the exposed
+        // human socket, so no program in the Gateway can record its route
+        // as restored where the dashboard believes it.
+        const attestedClaim = this.attested(ctx.channel);
+        const live = typeof req.token === "string" && req.token !== "" ? this.cacheSeals.attachmentOf(req.token) : null;
+        if (live === null) return { id: req.id, ok: false, error: "updateAttachment: the token is not a live attachment (ended, replaced, or its lease ran out); register again" };
+        if (!isAttachmentKind(live.kind)) return { id: req.id, ok: false, error: `updateAttachment: '${live.kind}' is not an attachment kind` };
+        const coverage = parseCoverage(req.coverage);
+        if (coverage === null) return { id: req.id, ok: false, error: "updateAttachment: coverage must be a coverage (confinement-posture.ts Coverage), every row with a known value" };
+        const decided = resolvePosture(coverage);
+        const problem = attachmentCoverageProblem(live.kind, coverage);
+        if (decided.posture !== "gated" || (decided.gap !== live.kind && decided.gap !== "model-route-lost") || problem !== null) {
+          return { id: req.id, ok: false, error: `updateAttachment: an attachment claims its kind's coverage or less${problem ? ` (${problem})` : ""}; this coverage resolves to ${decided.posture}${decided.gap ? `/${decided.gap}` : ""}` };
+        }
+        const route = parseAttachmentRoute(req.route);
+        if (route === null) return { id: req.id, ok: false, error: `updateAttachment: ${ATTACHMENT_ROUTE_SHAPE}` };
+        this.emitAttachmentPosture(live.session, live.kind, coverage, decided.gap!, attestedClaim, route);
+        return { id: req.id, ok: true, result: { posture: "gated", gap: decided.gap!, believed: attestedClaim } satisfies UpdateAttachmentResult };
+      }
+      case "renewAttachment": {
+        const r = this.cacheSeals.renewAttachment(req.token);
+        // A lease that ran out before this ended the exposure: re-read it.
+        if (!r.renewed) this.refreshExposure();
+        return { id: req.id, ok: true, result: r satisfies RenewAttachmentResult };
+      }
+      case "endAttachment": {
+        const r = this.cacheSeals.endAttachment(req.token);
+        this.refreshExposure();
+        return { id: req.id, ok: true, result: r satisfies EndAttachmentResult };
       }
       case "humanPlaneStatus": {
         // arbiter-human-plane.md §10.1.1: display only; the belief rule
@@ -9062,6 +9470,14 @@ export class ArbiterServer {
           result: { found, ...(found.length > 0 ? { ruleRef: ruleRef("egress:shell-expanded-placeholder") } : {}) },
         };
       }
+      case "signingKeys": {
+        // aws-sigv4-resign.md: the placeholders of the AWS secret access
+        // keys an AWS signing release may read (the rows `issuerSourceOf`
+        // admits, named as a secret access key), the newest first. The
+        // net-proxy checks a SigV4 request's signature against each to find
+        // the one that signed it. Names only, never a value. Axis OFF: none.
+        return { id: req.id, ok: true, result: { symbols: this.confidentiality ? this.awsSigningKeySymbols() : [] } };
+      }
       case "relayNotice": {
         // devtools-relay.md §3.4: a refusal the relay reports, kept for the
         // browser agent's next model call. Checked field by field (kinds,
@@ -9134,7 +9550,29 @@ export class ArbiterServer {
         // where its row is, never a longer text around it.
         const ownMcp = this.keptMcpValues(kept);
         const dest = req.destination ?? "";
-        const exemptText = ownMcp.size === 0 ? undefined : (text: string, symbol: string): boolean => {
+        // A REPLY (`scope: "reply"`, the OpenClaw plugin's message_sending,
+        // openclaw-plugin.md §3.5): text the MODEL wrote. No model ever sees
+        // a `no-model` tool result the proxy masked whole (it gets the
+        // placeholder, and rung 3 refuses the level outright), so a reply can
+        // hold such a row's text only where it holds a secret the row
+        // carries, each of which is a piece of its own: a registered or
+        // labelled value's row, a credential-shaped span or line of the
+        // output (`locateSecretShapes`), or the whole value. An ordinary line
+        // of that output (a meeting title the script printed beside a token)
+        // is no evidence of anything: in a reply it counts for that row no
+        // more (live 2026-10-26, demo-notion-token on Route 1: the plugin
+        // cancelled a harmless reply). A row of any lower level keeps every
+        // piece (a model it admits saw the output, or could be given it), and
+        // outbound requests keep every piece: there a program may move the
+        // output's bytes as they are.
+        const replyScope = req.scope === "reply";
+        const outputLine = (text: string, symbol: string): boolean => {
+          const e = this.symbolMap.symbols.get(symbol);
+          if (!e || e.call_id === null || e.call_id === undefined || e.field !== null) return false;
+          if (parseConfidentialityLevel(e.confidentiality) !== "no-model") return false;
+          return text !== e.value && locateSecretShapes(text).length === 0;
+        };
+        const mcpExempt = ownMcp.size === 0 ? undefined : (text: string, symbol: string): boolean => {
           if (!ownMcp.has(text)) return false;
           const host = ownMcp.get(text)!;
           if (host !== null && (dest === "" || !destinationMatchesBindings(dest, [host]))) return false;
@@ -9146,6 +9584,8 @@ export class ArbiterServer {
           if (envRowVariable(e) !== null) return false;
           return !isRegisteredFileRow(e) || originUnder(e.origin ?? "", kept);
         };
+        const exemptText = !replyScope ? mcpExempt
+          : (text: string, symbol: string): boolean => outputLine(text, symbol) || (mcpExempt?.(text, symbol) ?? false);
         const hits = scanEgressFingerprintIndexed(req.surfaces ?? [], this.syncedValueIndex(), fingerprintOf, dest, exemptText);
         return {
           id: req.id, ok: true,
@@ -9405,6 +9845,13 @@ export class ArbiterServer {
       // The read leg of "A config with no secret" (plan 10 §11.13): the
       // own-text twin the guard serves for a registered config now.
       ownTextTwin: (path) => this.ownTextOf(path),
+      // confidentiality.md §7.1, "Project notes attached to a Read": a
+      // CLAUDE.md's text on disk now, for the notes block Claude Code
+      // attaches to a Read (nested-memory.ts verifies the block against it).
+      memoryFileText: (path) => memoryFileTextAt(path),
+      // confidentiality.md §7.1, "git's report on a history rewrite": an
+      // object id in the locked set (plan 14 §11.1 R2).
+      lockedObject: (id) => this.isLockedObject(id),
       // Plan 10 §11.13: a session's launch HOME, as its launcher recorded it.
       sessionHome: (sessionKey) => this.sessionHome(sessionKey),
       // The confidentiality derivation consults the USER labels first (§6: the
@@ -10040,6 +10487,37 @@ export class ArbiterServer {
       }
     }
 
+    // The AWS SIGNING RELEASE (aws-sigv4-resign.md, aws-signing.ts): an AWS
+    // credential the gate would ask about only because nothing binds it, at
+    // an AWS endpoint over HTTPS, the secret access key only as the key the
+    // net-proxy re-signs with (`signature`), the access key id and session
+    // token only in the SigV4 credential headers. Same order as the issuer
+    // release: after every standing answer, the lockdown, and the human's
+    // answer about its FILE at this host.
+    if (this.confidentiality && result.allow === false && result.requiresApproval && result.ruleRef?.id === "egress:secret-unbound") {
+      const role = this.awsSigningReleaseOf(req);
+      if (role !== null) {
+        const fileGroup = queueable ? this.approvalGroupOf(req.symbol) : null;
+        if (fileGroup !== null) {
+          const prior = this.consultPriorVerdict(fileGroup, approvalDestination(req.destination as string), mode.kind === "live" ? mode.spends : false, req.requestId);
+          const answered = verdictDecisionOf(prior, mode);
+          if (answered) return { decision: answered, stage: "verdict" };
+        }
+        hit("egress:secret-aws-signing");
+        const what = role === "secret"
+          ? "the AWS secret access key, as the key the egress proxy signs the request with (never a byte of the request)"
+          : role === "id" ? "the AWS access key id, in the SigV4 Authorization header" : "the AWS session token, in the SigV4 X-Amz-Security-Token header";
+        return {
+          decision: {
+            allow: true,
+            reason: `${what} at '${req.destination}', an AWS endpoint, over HTTPS → allow (built-in AWS signing release, aws-sigv4-resign.md; policy.yaml issuer_bindings issuers_off: [aws] turns it off)`,
+            ruleRef: ruleRef("egress:secret-aws-signing"),
+          },
+          stage: "built-in",
+        };
+      }
+    }
+
     // Dispositions (§2.4): a built-in ask the operator set to Block denies
     // outright — nothing is queued; the row would only be noise.
     if (result.allow === false && result.requiresApproval && result.ruleRef?.source === "rule") {
@@ -10106,6 +10584,38 @@ export class ArbiterServer {
       scheme: req.scheme, positions: req.positions, probe,
     }, getCurrentPolicy().issuerBindings);
     return "issuer" in r ? r.issuer : null;
+  }
+
+  /**
+   * The AWS credential this send releases (aws-signing.ts), or null. The row
+   * must be one an issuer release may read (current-bindings.ts
+   * `issuerSourceOf`), and the send must pass `awsSigningRelease` under the
+   * law in force. A probe has no request to read and no signature to
+   * check, so it never releases (it keeps asking, as before).
+   */
+  private awsSigningReleaseOf(req: DesymbolizationRequest): AwsCredentialRole | null {
+    if (req.boundary !== "network" || typeof req.symbol !== "string" || typeof req.destination !== "string") return null;
+    if (!isAwsEndpoint(req.destination)) return null;
+    const source = issuerSourceOf(this.symbolMap, req.symbol, this.labelLookup);
+    if (source === null) return null;
+    const r = awsSigningRelease({ names: source.names, destination: req.destination, scheme: req.scheme, positions: req.positions },
+      getCurrentPolicy().issuerBindings);
+    return "role" in r ? r.role : null;
+  }
+
+  /** The `signingKeys` answer: the active rows an AWS signing release may
+   *  read whose name is a secret access key's, the newest first, at most
+   *  SIGNING_KEYS_MAX. */
+  private awsSigningKeySymbols(): string[] {
+    const rows: Array<{ name: string; created: number }> = [];
+    for (const [name, e] of this.symbolMap.symbols) {
+      if (e.obsoleted_at !== null || e.field === null) continue;
+      if (awsCredentialRole([e.field]) !== "secret") continue;
+      if (issuerSourceOf(this.symbolMap, name, this.labelLookup) === null) continue;
+      rows.push({ name, created: e.created_at });
+    }
+    rows.sort((a, b) => b.created - a.created);
+    return rows.slice(0, SIGNING_KEYS_MAX).map((r) => r.name);
   }
 
   /**

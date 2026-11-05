@@ -13,7 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ADOPTED_SENTENCE, buildServiceSummary, HELPER_NOTE, RESTART_CONFIRM } from "../../../src/view-model/service-summary.js";
+import { ADOPTED_PARTS, ADOPTED_SENTENCE, buildServiceSummary, HELPER_NOTE, RESTART_CONFIRM } from "../../../src/view-model/service-summary.js";
 import type { ServiceId, ServiceState, ServiceStatus } from "../../../src/supervisor/supervisor-defs.js";
 
 const svc = (id: ServiceId, state: ServiceState, over: Partial<ServiceStatus> = {}): ServiceStatus => ({
@@ -77,13 +77,20 @@ test("adopted (already running when the dashboard started): no Restart, which th
   assert.equal(s.name, "Running");
   assert.equal(s.action, null, "no button: stop() refuses an adopted service, so every Restart would fail");
   assert.equal(s.sentence, ADOPTED_SENTENCE);
-  assert.match(s.sentence, /^It was already running when this dashboard started, so this page cannot restart it\.$/);
+  // The consequence for every answer on the page (it holds no admin
+  // channel) and the way out, with the command as code (dashboard.md §4.25
+  // *An answer this dashboard cannot pass on*).
+  assert.equal(s.sentence, "It was already running when this dashboard started, so this page cannot restart it or pass on your answers. Run mandu stop when no agent is running with mandu, then start your agent again.");
+  assert.deepEqual(s.sentenceParts, ADOPTED_PARTS);
+  assert.equal(s.sentenceParts!.map((p) => p.text).join(""), s.sentence, "the parts are the sentence");
+  assert.deepEqual(s.sentenceParts!.filter((p) => p.kind === "code").map((p) => p.text), ["mandu stop"]);
   assert.equal(s.since, null, "its since is when this dashboard found it, not when it started");
   // Once it is no longer running, Start works again (start adopts or spawns).
   for (const state of ["stopped", "crashed"] as const) {
     const down = buildServiceSummary([svc("arbiter", state, { adopted: true })]);
     assert.deepEqual(down.action, { label: "Start", path: "control/arbiter/start", confirm: null }, state);
     assert.notEqual(down.sentence, ADOPTED_SENTENCE, state);
+    assert.equal(down.sentenceParts, null, `${state}: a plain sentence has no parts`);
   }
   // Spawned here: Restart as before.
   assert.equal(buildServiceSummary([svc("arbiter", "running", { adopted: false })]).action?.label, "Restart");
@@ -110,6 +117,8 @@ test("every state's copy stays in the product vocabulary (no service ids or insp
       const s = buildServiceSummary(stack(main, helpers));
       const adopted = buildServiceSummary([svc("arbiter", main, { adopted: true }), svc("net-proxy", helpers)]);
       assert.doesNotMatch(adopted.sentence, FORBIDDEN, `${main}/${helpers} adopted: ${adopted.sentence}`);
+      for (const p of adopted.sentenceParts ?? []) assert.doesNotMatch(p.text, FORBIDDEN, `${main}/${helpers} adopted part: ${p.text}`);
+      assert.doesNotMatch(adopted.sentence, /admin channel|adopted|data socket/i, "nor the words of the refusal it explains");
       for (const words of [s.name, s.sentence, s.helperNote ?? "", s.action?.label ?? "", s.action?.confirm ?? ""]) {
         assert.doesNotMatch(words, FORBIDDEN, `${main}/${helpers}: ${words}`);
       }

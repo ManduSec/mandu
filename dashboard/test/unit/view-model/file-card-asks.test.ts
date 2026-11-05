@@ -49,3 +49,18 @@ test("a base symbol with no fileValues (a whole-file placeholder) and a lone key
   const odd = card(row({ fileValues: 1.5 } as Partial<VerdictEntry>));
   assert.equal(odd.fileValues, undefined);
 });
+
+test("a file's card says its Always allow and Block stand for the file's secrets at that host only (§4.34)", () => {
+  const c = card(row({ fileValues: 7 } as Partial<VerdictEntry>));
+  const words = c.words as { ifStanding?: string; ifStandingParts?: Array<{ kind: string; text: string }> };
+  assert.equal(words.ifStanding,
+    `Mandu remembers it for the secrets in ${STMT} and parktax.test only. Always allow: from now on, any agent's request that sends them to parktax.test goes with the real secrets filled in, without asking. Block: those requests are refused without asking. Your answer does not cover other secrets or other hosts. You can change it under Rules.`);
+  assert.equal(text(words.ifStandingParts!), words.ifStanding);
+  assert.deepEqual(words.ifStandingParts!.filter((p) => p.kind === "code").map((p) => p.text), [STMT, "parktax.test", "parktax.test"]);
+  // A lone key names its key; a whole-file placeholder is "this secret".
+  const lone = card(row({ symbol: `${BASE}.STRIPE_KEY`, source: { tool: "Read", origin: "/home/u/proj/.env" }, fileValues: 2 } as Partial<VerdictEntry>));
+  assert.match(String((lone.words as { ifStanding?: string }).ifStanding), /^Mandu remembers it for STRIPE_KEY and parktax\.test only\. /);
+  assert.match(String((card(row()).words as { ifStanding?: string }).ifStanding), /^Mandu remembers it for this secret and parktax\.test only\. /);
+  // An answered card carries only its sentence.
+  assert.equal((card(row({ status: "approved", resolvedAt: 30 } as Partial<VerdictEntry>)).words as { ifStanding?: string }).ifStanding, undefined);
+});

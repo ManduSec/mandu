@@ -16,7 +16,10 @@
  * each change names the mapping's version as the row was read, and one
  * refused because the mapping changed meanwhile says so on the row, keeps
  * the level picked and the name typed, reads the list again and saves
- * against the mapping as it is now (dashboard.md §4.25s);
+ * against the mapping as it is now (dashboard.md §4.25s); on a label that
+ * has a level, Save waits for a change: greyed (and sending nothing) while
+ * the picker shows the level saved, lit with "Not saved: press Save to use
+ * …" under the row once it differs (§4.25s *Save waits for a change*);
  * server text is text. In the Suggested view, a document's sensitivity
  * label is an ordinary row, "From the document's sensitivity label", its
  * mapped level's dot pressed as a change waiting and named in Changes to
@@ -44,6 +47,14 @@ const VM = labelSettingsVM(
 );
 const host = (doc: any) => doc.getElementById("settings-labels");
 const rowOf = (doc: any, id: string) => [...host(doc).querySelectorAll(".label-row")].find((r: any) => r.dataset.id === id) as any;
+/** A level picked as a person does: the value, then its `change`. */
+const pickLevel = (row: any, level: string) => {
+  const pick = row.querySelector("select.label-level");
+  pick.value = level;
+  pick.dispatchEvent(new pick.ownerDocument.defaultView.Event("change", { bubbles: true }));
+};
+const unsaved = (row: any) => row.querySelector(".label-unsaved")?.textContent ?? null;
+const greyed = (row: any) => row.querySelector(".label-save-btn").getAttribute("aria-disabled") === "true";
 
 test("Settings › Sensitivity labels: yours with Save and Remove, your administrator's read only, and the ones with no level to name and pick", async () => {
   const { doc, calls } = load({ url: URL, routes: { "GET policy/sensitivity-labels": { labels: VM } } });
@@ -86,9 +97,48 @@ test("Save on a label with no level sends map with the typed name and the picked
   assert.match(host(doc).textContent, /Every sensitivity label the last scan found has a level\./);
 });
 
-test("Remove asks first when the server says it lowers what Mandu suggests, then sends what was shown; a refusal is said on the row", async () => {
+test("Save waits for a change: greyed at the level saved and sending nothing, lit with 'Not saved' once another level is picked, greyed again when the saved one is picked back", async () => {
   const posts: any[] = [];
-  const asked: string[] = [];
+  const { doc } = load({ url: URL, routes: {
+    "GET policy/sensitivity-labels": { labels: VM },
+    "POST policy/sensitivity-labels/change": (b: any) => (posts.push(b), { applied: true, changeId: "pc-7", note: "" }),
+  } });
+  await tick();
+  const row = rowOf(doc, HC);
+  const save = row.querySelector(".label-save-btn");
+  assert.equal(greyed(row), true, "a mapped row opens with Save greyed");
+  assert.equal(save.disabled, false, "greyed, not disabled: it keeps the focus it is given back");
+  assert.equal(unsaved(row), null, "no 'Not saved' line");
+  save.click();
+  await tick();
+  assert.deepEqual(posts, [], "a Save at the level saved sends nothing");
+  assert.equal(doc.getElementById("labels-notice").hidden, true, "nothing reads as saved");
+
+  pickLevel(row, "any-model");
+  assert.equal(greyed(row), false, "another level lights Save");
+  assert.equal(unsaved(row), "Not saved: press Save to use Any AI, when it asks.", "in the picker's words");
+  assert.equal(row.querySelector(".label-unsaved").previousElementSibling, row.querySelector(".model-actions"), "under the row's controls");
+  pickLevel(row, "local-model");
+  assert.equal(unsaved(row), "Not saved: press Save to use Your own AI only.", "follows the pick");
+  assert.equal(row.querySelectorAll(".label-unsaved").length, 1, "one line");
+
+  pickLevel(row, "no-model");
+  assert.equal(greyed(row), true, "the saved level picked back greys it again");
+  assert.equal(unsaved(row), null, "and the line goes");
+
+  pickLevel(row, "any-model");
+  save.click();
+  await tick();
+  assert.deepEqual(posts, [{ action: "map", id: HC, name: "Highly <b>Confidential</b>", level: "any-model", version: V_HC }], "the same change as before");
+
+  const open = rowOf(doc, OTHER);
+  assert.equal(open.querySelector(".label-save-btn").hasAttribute("aria-disabled"), false, "a label with no level yet: Save is always on");
+  assert.equal(unsaved(open), null);
+  assert.equal(rowOf(doc, GEN).querySelector("button"), null, "your administrator's: no Save");
+});
+
+test("Remove asks first, under the row, when the server says it lowers what Mandu suggests, then sends what was shown; a refusal is said on the row", async () => {
+  const posts: any[] = [];
   const page = load({ url: URL, routes: {
     "GET policy/sensitivity-labels": { labels: VM },
     "POST policy/sensitivity-labels/change": (b: any) => {
@@ -98,15 +148,57 @@ test("Remove asks first when the server says it lowers what Mandu suggests, then
         : { applied: false, confirm: true, expected: ["k"], rows: [[{ kind: "text", text: "Stop suggesting a label for documents with the sensitivity label " }, { kind: "code", text: HC }]], wouldLet: [[{ kind: "text", text: "Mandu would suggest less" }]], warnings: [] };
     },
   } });
-  page.window.confirm = (q: string) => (asked.push(q), true);
   await tick();
   rowOf(page.doc, HC).querySelector(".label-remove-btn").click();
   await tick();
-  assert.equal(asked.length, 1);
-  assert.match(asked[0]!, /Stop suggesting a label for documents with the sensitivity label 9fbde396/);
-  assert.match(asked[0]!, /Mandu would suggest less/);
+  // The question's words, read from the box under the row (until
+  // 2026-10-26 from window.confirm, which now fails the test).
+  const box = rowOf(page.doc, HC).nextElementSibling;
+  assert.ok(box.classList.contains("ask-in-place"), "asked under the row");
+  assert.match(box.querySelector(".ask-in-place-words").textContent, /^Stop suggesting a label for documents with the sensitivity label 9fbde396.*\.$/);
+  assert.equal(box.querySelector(".ask-in-place-words code").textContent, HC);
+  assert.deepEqual([...box.querySelectorAll(".ask-in-place-list li")].map((li: any) => li.textContent), ["Mandu would suggest less"]);
+  assert.deepEqual([...box.querySelectorAll("button")].map((b: any) => b.textContent), ["Remove anyway", "Cancel"]);
+  assert.deepEqual(posts, [{ action: "unmap", id: HC, version: V_HC }], "nothing more until Remove anyway");
+  box.querySelector(".ask-in-place-yes").click();
+  await tick();
   assert.deepEqual(posts, [{ action: "unmap", id: HC, version: V_HC }, { action: "unmap", id: HC, version: V_HC, expected: ["k"] }]);
+  assert.equal(page.doc.querySelector("#settings-labels .ask-in-place"), null, "the question goes");
   assert.match(rowOf(page.doc, HC).textContent, /changed while you were deciding/);
+});
+
+test("a question asked under a row stays through a redraw of the list, with the level picked; Cancel keeps the row as you left it (dashboard.md §4.25n)", async () => {
+  const posts: any[] = [];
+  const page = load({ url: URL, routes: {
+    "GET policy/sensitivity-labels": { labels: VM },
+    "POST policy/sensitivity-labels/change": (b: any) => {
+      posts.push(b);
+      return b.id === HC && !b.expected
+        ? { applied: false, confirm: true, expected: ["k"], rows: [[{ kind: "text", text: "Suggest " }, { kind: "code", text: HC }, { kind: "text", text: " at Any AI" }]], wouldLet: [], warnings: [[{ kind: "text", text: "Mandu would suggest less" }]] }
+        : { applied: true, changeId: "pc-2", note: "" };
+    },
+  } });
+  await tick();
+  const pick = rowOf(page.doc, HC).querySelector("select.label-level");
+  pick.value = "any-model";
+  rowOf(page.doc, HC).querySelector(".label-save-btn").click();
+  await tick();
+  let box = rowOf(page.doc, HC).nextElementSibling;
+  assert.deepEqual([...box.querySelectorAll("button")].map((b: any) => b.textContent), ["Save anyway", "Cancel"]);
+  assert.equal(box.querySelector(".proposal-warn").textContent, "Warning: Mandu would suggest less");
+  // Another row's change reads the list again: the question is drawn again.
+  rowOf(page.doc, OTHER).querySelector(".label-save-btn").click();
+  await tick();
+  box = rowOf(page.doc, HC).nextElementSibling;
+  assert.ok(box && box.classList.contains("ask-in-place"), "still asked under its row");
+  assert.equal(rowOf(page.doc, HC).querySelector("select.label-level").value, "any-model", "the level asked about, not the one in force");
+  assert.equal(greyed(rowOf(page.doc, HC)), false, "Save stays lit on the row drawn again");
+  assert.equal(unsaved(rowOf(page.doc, HC)), "Not saved: press Save to use Any AI, when it asks.");
+  [...box.querySelectorAll("button")].find((b: any) => b.textContent === "Cancel").click();
+  await tick();
+  assert.equal(host(page.doc).querySelector(".ask-in-place"), null);
+  assert.equal(rowOf(page.doc, HC).querySelector("select.label-level").value, "any-model", "Cancel keeps the row as you left it");
+  assert.deepEqual(posts.map((b) => [b.id, b.expected ?? null]), [[HC, null], [OTHER, null]], "nothing sent by Cancel");
 });
 
 test("before any scan, the note links Keys Mandu found: a click opens Rules with it open and Scan for keys showing; a modifier click is the browser's", async () => {
@@ -252,6 +344,8 @@ test("a Save refused because the label's level changed meanwhile says so on the 
   const row = rowOf(doc, HC);
   assert.equal(row.querySelector(".name").textContent, "Highly Confidential", "the row as it is now");
   assert.equal(row.querySelector("select.label-level").value, "any-model", "the level picked is kept");
+  assert.equal(greyed(row), false, "Save stays lit: the level picked differs from the level read");
+  assert.equal(unsaved(row), "Not saved: press Save to use Any AI, when it asks.");
   assert.equal(row.querySelector(".ask-error").textContent, words, "said on the row, in the page's words");
   assert.equal(doc.getElementById("labels-notice").hidden, true, "nothing reads as saved");
 
@@ -294,7 +388,6 @@ test("a mapping removed somewhere else meanwhile: after the refusal the list say
     "GET policy/sensitivity-labels": () => (++reads === 1 ? { labels: VM } : { labels: gone }),
     "POST policy/sensitivity-labels/change": { status: 409, body: { error: words, stale: true, changed: [`sensitivity-labels ${HC}|`] } },
   } });
-  page.window.confirm = () => true;
   await tick();
   rowOf(page.doc, HC).querySelector(".label-remove-btn").click();
   await tick();

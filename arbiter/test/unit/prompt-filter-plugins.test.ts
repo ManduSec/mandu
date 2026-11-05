@@ -35,6 +35,7 @@ import { packToYaml, parsePackText, validatePack } from "../../prompt-filter/pac
 import { buildPluginRequest, parsePluginAnswer } from "../../prompt-filter/plugin-protocol.js";
 import { endpointAllowSpecs, NO_LEGS, planPluginArgv, pluginEnv, PLUGIN_READ_ROOTS, type ConfineLegs } from "../../prompt-filter/plugin-confine.js";
 import { PIN_CHUNK_BYTES, PluginPins } from "../../prompt-filter/plugin-pin.js";
+import { noGuardNote, probeConfinement } from "../../prompt-filter/plugin-probe.js";
 import { PluginFilter } from "../../prompt-filter/plugin-filter.js";
 import type { ModelEndpoint } from "../../policy/compiled-policy.js";
 import { checkPromptEndpoints, checkPromptFilters, comparePromptFilters, effectivePromptConfig, promptConfigDigest, promptLockProblems } from "../../prompt-filter/policy.js";
@@ -201,6 +202,17 @@ test("the confinement plan: guard outermost (inside bwrap when on), Landlock cle
   // The guard is required.
   assert.throws(() => planPluginArgv({ legs: NO_LEGS, tools: TOOLS, allow: [], readDirs: [], scratch: "/s", target: ["/p"] }), /network guard/);
   assert.throws(() => planPluginArgv({ legs: LEGS, tools: { ...TOOLS, netGuard: null }, allow: [], readDirs: [], scratch: "/s", target: ["/p"] }), /network guard/);
+});
+
+test("no network guard: on Linux the note says how to build it; elsewhere that plugins run on Linux only; the probe gives no legs", async () => {
+  assert.match(noGuardNote("linux"), /mandu-net-guard is not installed \(scripts\/build-native\.sh builds it\)/);
+  for (const p of ["darwin", "win32"] as const) {
+    assert.equal(noGuardNote(p), "prompt-filter plugins run on Linux only: their network guard, mandu-net-guard, is a Linux program");
+    assert.doesNotMatch(noGuardNote(p), /build-native/, "no build hint where the guard cannot exist");
+  }
+  const legs = await probeConfinement({ ...TOOLS, netGuard: null }, tmpdir());
+  assert.deepEqual({ ...legs, notes: [] }, { ...NO_LEGS, notes: [] });
+  assert.deepEqual(legs.notes, [noGuardNote()]);
 });
 
 test("the endpoint becomes an address-only allow list; a name outside the perimeter is refused", () => {

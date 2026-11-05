@@ -270,7 +270,10 @@ lock for many minutes.
   make its suite skip to green (`openclaw` needs a newer node than Mandu's
   floor, so it gets its own, `AGENT_NODE_VERSION`, under `/opt/agent-node`
   behind a wrapper; Mandu itself stays on `NODE_VERSION`, its documented
-  minimum), the `ci` user with rust at the pinned version plus the
+  minimum; the OpenClaw plugin lane's other versions,
+  `OPENCLAW_PLUGIN_LANE_VERSIONS`, sit beside it under
+  `/opt/openclaw/<version>` on the same node as `openclaw-<version>`,
+  each checked to run too, openclaw-plugin.md §9), the `ci` user with rust at the pinned version plus the
   `aarch64-unknown-linux-gnu` target, a system git identity, the guest unit,
   the sysctl, and a quiet boot (no getty on the serial console, no network
   wait, no apt/motd/fstrim timers, no snapd or unattended-upgrades,
@@ -426,6 +429,26 @@ the job catches the bug it was built for, which the per-push guest cannot.
 The guard's namespace tests that fail on a developer host without the
 AppArmor grant pass by name on 7.0 in the guest, whose lifted restrictions
 are what the grant gives a host.
+
+### 4.2 The live client lanes' servers, and the k3s fixture (2026-10-25)
+
+The image also holds what the live client suites run
+([`live-clients.md`](live-clients.md)): the distro's PostgreSQL and MySQL
+server and client (their own units disabled, the distro's cluster dropped,
+mysqld's AppArmor profile disabled the documented way so a suite's server can
+run from its own temp dir), and k3s with its air-gap images, kubectl and
+helm at their pins (`K3S_*`, `KUBECTL_*`, `HELM_*` in `pins.env`, each by
+sha256). Nothing of them runs at boot: `integration.live-db-clients` starts
+its own servers as the `ci` user, and the cluster is a **fixture**: `vm-run.sh
+--fixture k3s` puts `MANDU_CI_FIXTURES=k3s` in job.env, and boot.sh runs the
+image's `fixture-k3s.sh` as root before the pipeline (a network namespace at
+10.201.0.2, `k3s server` as a transient unit, ready when the node is Ready
+and the busybox image imported; its logs under `logs/fixtures/` of the
+results). Root, because the kubelet and containerd need what no user
+namespace gives them here; opt-in, because the cluster turns the cpu
+controller on above the suites (§3, "a cgroup delegated to ci"), which the
+drills' timing does not survive, so neither the per-push nor the nightly
+guest starts it. Cost: about 90 s more image build, about 1 GB of image.
 
 ## 5. The run inside the guest
 
@@ -1861,7 +1884,32 @@ scheduled `nightly-api-key` job runs `nightly.sh --lane api-key --weekly`:
 tonight's agent of the rotation (Monday OpenCode 1 and 2, Wednesday
 OpenClaw, Friday Goose, by the UTC weekday; `MANDU_CI_WEEKDAY` overrides it),
 its live-drill entries of the lane only (`--only`, from `suites.mjs list
---agents`); another night it exits 0 at once. The runner host holds the
+--agents --weekly`); another night it exits 0 at once.
+
+**OpenClaw's night moved to the ChatGPT sign-in (2026-10-26).** The
+Anthropic key had had no credit since 2026-10-19, and OpenClaw's built-in
+`openai` provider runs on a ChatGPT sign-in, so its live drills (the wrapper,
+`drill.<area>.openclaw`, and the plugin's two tiers,
+`drill.<area>.openclaw-plugin` and `drill.<area>.openclaw-plugin-sandbox`)
+ride the Codex sign-in the subscription lane already holds, taking only its
+access token (the drill runner's own rule, `drill-runner.md` §3.4). Their
+entries are `credential: "subscription"` and `weekly: "openclaw"`: a nightly
+kind run leaves a `weekly` entry out (`selectEntries`), and only the weekly
+list (`suites.mjs list --weekly`) or a name takes it. So `nightly.sh
+--weekly` on a Wednesday runs the **subscription** lane with the Codex
+sign-in alone (`--credential codex`, no Claude credential, no Ollama),
+whichever `--lane` the job gave; without a usable Codex sign-in on the host
+it refuses (exit 2) rather than run nothing quietly. Monday and Friday stay
+the api-key lane's. The API key stays a selectable alternative for OpenClaw
+by hand (`MANDU_OPENCLAW_AUTH` unset); it is no longer required. The
+GitLab schedule itself is unchanged (the maintainer's call). **One gap
+before the night could run in the guest** (closed 2026-10-26): OpenClaw
+zstd-compresses its built-in `openai` provider's ChatGPT requests, which
+Mandu's proxy reads only on Node 22.15 or later, and the guest ran Mandu on
+its floor, then 22.13, where every OpenClaw entry SKIPped with that reason.
+The floor, and with it the guest's `NODE_VERSION`, is 22.15.0 now
+(packaging.md, the floor's risk item). The live runs of 2026-10-26 ran on a
+developer host's Node 22.22. The runner host holds the
 Anthropic key in its api credential file (§13.4); without it the job fails
 in seconds with the setup steps. By hand, `nightly.sh --lane api-key` still
 runs the whole lane.
@@ -2683,9 +2731,11 @@ The public repository's workflows give a pull request the part of the
 per-push run that needs no privilege, no credential and no special hardware:
 the manifest's sealed kinds, `unit`, `component` and `stack`
 ([`test-organization.md`](./test-organization.md) §3). **GitHub does not run
-the `replay-drill` or `sandbox` kinds, the nightly kinds, the install matrix
-or anything on macOS** (§12.2); the first four run in the VM of §3 (the
-maintainers' CI, or `vm-run.sh` by hand), macOS on a maintainer's Mac.
+the `replay-drill` or `sandbox` kinds, the nightly kinds or the install
+matrix** (§12.2); they run in the VM of §3 (the maintainers' CI, or
+`vm-run.sh` by hand). It runs the darwin entries on its macOS images only in
+the release check and a manual run, never blocking (§12.6); master's
+day-to-day macOS check is the maintainers' self-hosted Mac (§12.6).
 
 ### When GitHub runs (decided 2026-10-09)
 
@@ -2702,7 +2752,8 @@ commit (§12.3).
 | a pull request, while the repository is private | skipped | never | every root job's `if` admits only a run that is not a pull request there |
 | a pull request, once public | yes, unless it changes documentation only | never | a newer push cancels the older run (`cancel-in-progress`) |
 
-**No macOS on GitHub (decided 2026-10-09).** A macOS runner's minutes count
+**No macOS on GitHub (decided 2026-10-09; superseded 2026-11-02 by §12.6).**
+A macOS runner's minutes count
 ten times against a private repository's quota (one run of the darwin
 entries, about 30 real minutes, was about 300 quota minutes), and the suite
 needs a Mac's judgment anyway (a Seatbelt or PTY failure is read on the
@@ -2711,8 +2762,11 @@ after a change to the darwin code
 ([`development.md`](../../development.md), "Developing and testing on macOS");
 since 2026-10-21 that run is not a release gate (a release neither runs nor
 waits for it; [`packaging.md §11.3`](../distribution/packaging.md)).
-The `macos-wrapper.yml` workflow and its path gate were removed;
-`scripts.suites-manifest` checks that no workflow job runs on a macOS runner.
+The `macos-wrapper.yml` workflow and its path gate were removed. Since
+2026-11-02 the repository is public (standard macOS runners draw no quota)
+and a self-hosted Mac reads its own failures, so both reasons are gone:
+§12.6. `scripts.suites-manifest` checks that only `ci.yml`'s `macos` job runs
+on a macOS runner.
 
 **Why only a manual run while private.** A private repository on the free
 plan draws its Actions minutes from a monthly quota of 2000: in October 2026
@@ -2788,7 +2842,7 @@ Choices worth stating:
   `node_modules`. The guest image (`scripts/ci/vm-image.sh`) bakes all of
   them in for the same reason. With the npm cache warm this costs a few
   seconds per package.
-- **Node 22.13.0, the engines floor.** The same pin as the guest image
+- **Node 22.15.0, the engines floor.** The same pin as the guest image
   (`scripts/ci/pins.env`): testing the floor catches a newer-Node API before
   a user on the floor does.
 - **No product environment variable in the matrix.** Each package's `npm test`
@@ -2890,7 +2944,7 @@ await their confirming run on a Mac (development.md lists the pitfalls).
 | The `live-drill`, `env` and `eval` kinds | A local model, a real model with a login and its quota, or the internet. The two dependency-audit entries are the exception: the `audit` job runs them by id (§14.2). | by hand; the nightly (§9) |
 | The `install` kind (the VM matrix) | Needs `/dev/kvm` and a VM image cache. | `v*` tags, or by hand ([`os-test-matrix.md`](./os-test-matrix.md)) |
 | `internet` entries (`wire-release-live`; `tls-compat` is an `env` entry) | They reach the public internet; the manifest runs them only when selected. | by hand (`--only <id>` or `--include-internet`) |
-| The darwin entries (macOS) | A macOS runner costs ten times a Linux one on a private repository, and a Seatbelt or PTY failure is read on the machine (above). | a maintainer's Mac, by hand ([`development.md`](../../development.md)) |
+| The darwin entries (macOS) in a pull request | A release check and a manual run take them (`macos`, both CPUs, never blocking); a pull request does not, to keep its run short. | the maintainers' Mac runner, hourly on master (§12.6); `ci.yml`'s `macos` at a release |
 | The frozen integrity lane | Runs only when the integrity axis is revived ([`protection-modes.md §10`](../architecture/protection-modes.md) §5). | by hand, on revival |
 
 ### 12.3 How the two relate
@@ -2953,6 +3007,66 @@ job, the approval, no `secrets.` reference and no npm token, the publish
 flags and their order, and the packages the pack installs against the
 launcher's bundle manifest; it also runs `release-pack.sh`'s refusals of a
 tree that is not the public one.
+
+### 12.6 The macOS check (2026-11-02)
+
+**Why.** macOS ran on no machine between the macOS branch's merge
+(2026-10-05) and 2026-10-30, when a hand run of master found 24 failures in
+7 of the 26 darwin entries: stale tests, tests that assume Linux, and two
+behaviours that are Linux only without saying so (prompt-filter plugins,
+connection attribution). None was a leak, but a platform that drifts unseen
+for three weeks cannot be called supported. The check is the unattended
+lane that calling macOS supported needs; it is **not a gate**: a
+release neither runs nor waits for it (packaging.md §11.3), and no MR waits
+on it.
+
+**Where.** Two places, for two questions:
+
+| | The Mac runner (GitLab) | GitHub's macOS images |
+|---|---|---|
+| Asks | does master's head still pass on a Mac? | does the release pass on a clean Mac of each CPU? |
+| When | a third pipeline schedule on `master`, hourly, `MANDU_SCHEDULE=macos` | the release check (`release.yml` calls `ci.yml`) and a manual run; never a pull request |
+| Job | `macos` in `.gitlab-ci.yml`, the only job of that pipeline | `macos` in `ci.yml`, matrix `macos-26` (arm64) and `macos-26-intel` |
+| Runs | `scripts/ci/macos-run.sh --out ci-out` | the same script |
+| A red | the `macos` pipeline fails (no `allow_failure`: in its own pipeline a red must show) | the job fails, `continue-on-error` keeps the release going |
+
+**The runner.** A self-hosted GitLab runner on a maintainer's Mac: tag
+`mandu-macos`, shell executor, **protected** (only protected refs reach it,
+so only master's schedules, never an MR's code), locked to the project,
+`concurrent = 1`, under its own account (not an admin, no logins, keys or
+agents), as a LaunchAgent (it needs that account's GUI session; after a
+reboot the account logs in once). Its `config.toml` sets `MANDU_CI_NODE_DIR`
+and `MANDU_CI_OPENSSL_PREFIX`, and a `pre_get_sources_script` and
+`pre_build_script` that refuse any job that is not this project's protected
+`master` from a schedule. Not a VM, unlike §3: macOS cannot nest Seatbelt,
+and the Seatbelt suites must run outside any profile; the boundary is the
+account, a scratch HOME (`macos-run.sh`), and the job's lack of any
+credential but its own token. The maintainers' setup notes hold the steps.
+
+**The pipeline.** The `workflow:` rule names it `macos` and sets
+`auto_cancel: on_new_commit: none` (no merge cancels it); `macos` is not
+interruptible. The agents' master status (§7.1) passes over it: only a
+schedule named `master-check` speaks for master's code there, and a
+`macos` pipeline says nothing about Linux. Every nightly job's rule excludes
+`macos` as it excludes `master-check`.
+
+**Skipping a tested head.** The hourly run costs the Mac a full run only
+when master moved: `master-check.mjs skip --schedule macos` ends the job when
+the Mac holds a finished run (pass or fail) of the head and renames the
+pipeline `macos: skipped, …`; `record --schedule macos` keeps each finished
+run, in `macos-tested.json` beside the master check's state (§7.1, the same
+rules).
+
+**What a run is.** `macos-run.sh` checks the host (macOS, node 22.15+, an
+OpenSSL 3, an unnested `sandbox-exec`: exit 2 otherwise), runs `npm ci` in
+every package as the guest does, then `run-suites.mjs --kind
+unit,component,stack,sandbox` (what `test-all.sh` selects on a Mac) with a
+scratch HOME and the run labelled like §3's (`gl-<pipeline>-<job>` and
+source `gitlab` in a GitLab job, `gh-<run>-<attempt>-<arch>` on GitHub).
+Never green by absence: both Seatbelt entries must pass and skip nothing
+(the git sandbox one at most its xcrun-cache test), or the run fails.
+`scripts.ci-macos-run` tests the script; `private.ci-workflow` and
+`scripts.suites-manifest` pin both jobs.
 
 ## 13. Test credentials: one secrets file
 
@@ -3084,6 +3198,9 @@ maintainers reopened the lane for them, narrowly: the scheduled
 `nightly-api-key` job runs `nightly.sh --lane api-key --weekly`, one agent a
 night (Monday OpenCode 1 and 2, Wednesday OpenClaw, Friday Goose; the other
 nights it exits at once), that agent's live-drill entries only, on Haiku 4.5.
+Since 2026-10-26 OpenClaw's Wednesday rides the ChatGPT sign-in instead
+(§9.8, "OpenClaw's night moved"), on the plan's smallest model, so the key
+serves OpenCode and Goose alone.
 The key is the runner host's api credential file (`credential.mjs install
 api`, §9.8), a key of its own made for CI with a limit on the vendor's
 side; until it is installed the job fails in seconds with the

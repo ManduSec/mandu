@@ -14,7 +14,9 @@
  *      `last-scan`, mode 0600;
  *   3. doctor's line reads it (`realDoctorDeps.lastScan`);
  *   4. a REAL DashboardServer reads it: /api/home's card leads with the two
- *      secrets that left, /api/scan tells both stories, and /api/suggestions
+ *      secrets that left, keyed to the kept scan's `ranAt` and never folded
+ *      (tone `bad`, `folded` null; §4.25ai *A card with nothing to act on
+ *      folds*), /api/scan tells both stories, and /api/suggestions
  *      (signed in) lists the CLI's config as a past-sessions row, which Save
  *      applies on the admin channel into policy.yaml;
  *   4b. each finding names its file for *Change it in Rules* (`file`,
@@ -169,6 +171,11 @@ test("mandu scan keeps its report; doctor, Home, the Scan page and a past-sessio
     assert.equal(homeVm.body.scan.headline, "2 of your secrets left this computer in your agents' requests");
     assert.deepEqual(homeVm.body.scan.top.map((t: { name: string; file: string }) => [t.name, t.file]).sort(), [["STRIPE_KEY", "~/shop/.env"], ["token", "~/.config/some-cli/config.yml"]]);
     assert.match(homeVm.body.scan.suggested, /^1 file that holds them has no rule yet/);
+    // The fold (§4.25ai *A card with nothing to act on folds*) is keyed to
+    // the kept scan's ranAt, and this card, with secrets left, never folds.
+    assert.equal(homeVm.body.scan.ranAt, (JSON.parse(keptText) as { ranAt: string }).ranAt);
+    assert.equal(homeVm.body.scan.tone, "bad");
+    assert.equal(homeVm.body.scan.folded, null);
     const page = await call("GET", "/api/scan");
     assert.equal(page.status, 200);
     const yours = page.body.scan.sections.find((s: { id: string }) => s.id === "yours");

@@ -34,10 +34,15 @@
  *   E1  /api/home's headline names the ended session, its sentence says no
  *       agent waits on it, and the verdict is still `waiting`, the question
  *       still counted;
- *   E2  the served page draws those words, the Approvals badge and Home's
- *       Approvals waiting (1) unchanged, and the card says the agent ended;
+ *   E2  the served page draws those words, the Approvals badge still "1"
+ *       and shown, now in its grey (class `ended`) with the link named for
+ *       the ended session (2026-10-28, §4.25 *The top bar's two marks*),
+ *       Home's Approvals waiting (1) unchanged, the tab's icon draws its count
+ *       on the same grey dot, ringed, and its title still reads "(1)
+ *       Mandu" (2026-10-31), and the card says the agent ended;
  *   E3  the oracle kept: the bound send still goes to its host, and no
- *       answer nor the page carries the value or a token.
+ *       answer nor the page, nor the badge link's name and title, carries
+ *       the value, a token, the key's name or the host.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -229,7 +234,21 @@ test("a question from a session that has ended: Home's headline says so, the ver
       const badge = doc.getElementById("nav-approvals-count");
       assert.equal(badge.textContent, "1", "the Approvals badge still counts the question");
       assert.equal(badge.hidden, false);
+      assert.equal(badge.classList.contains("ended"), true, "in grey: no agent is waiting on it");
+      const link = badge.parentElement;
+      const ENDED_NAME = "Approvals, 1 question from a session that has ended, no agent is waiting on it";
+      assert.deepEqual([link.getAttribute("aria-label"), link.getAttribute("title")], [ENDED_NAME, ENDED_NAME]);
+      for (const said of [link.getAttribute("aria-label"), link.getAttribute("title")]) {
+        assert.doesNotMatch(said, /\$MDU|STRIPE_KEY|evil\.example|api\.stripe\.com/, `the link's name says no token, key name or host: "${said}"`);
+        assert.ok(!said.includes(KEY_VALUE), "nor the value");
+      }
       assert.equal(doc.getElementById("home-waiting-title").textContent, "Approvals waiting (1)");
+      // The tab says the same (2026-10-31): its dot is the badge's grey,
+      // ringed apart from a grey shield, never the amber; "(1)" stays.
+      const icon = decodeURIComponent(doc.getElementById("favicon").href.replace(/^data:image\/svg\+xml,/, ""));
+      assert.match(icon, /<circle cx='23' cy='9' r='9' fill='#6c6c74' stroke='white' stroke-width='1\.5'\/><text[^>]*>1<\/text>/, `the tab's dot is the grey one: ${icon}`);
+      assert.doesNotMatch(icon, /#a35d00/, "not the amber");
+      assert.equal(doc.title, "(1) Mandu", "the tab's title still counts the question");
       assert.match(doc.getElementById("home-waiting").textContent, /The agent that asked has ended/, "the card says the same");
       const page = doc.body.textContent;
       assert.ok(page.includes(SENTENCE), "the hero's sentence is drawn");

@@ -24,6 +24,12 @@
  *     inline style, which computes that rule.
  * The layout itself is the run's Chromium probe (before: up to 435 px past
  * the card; after: none at 320 to 1280 px, a desktop unchanged).
+ *
+ * Also beside the answers: Home's short card of a send says which of them
+ * cover only the next such request and which are kept until changed under
+ * Rules (dashboard.md §4.34, *Home's card says which answers last*), the
+ * server's `answersShortParts` on a line of its own before *Details in
+ * Approvals*; the expanded card on Approvals says it in full instead.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -183,4 +189,58 @@ test("Rules: a suggested rule's Discard and Apply", async () => {
   doc.getElementById("describe-form").dispatchEvent(new window.Event("submit", { cancelable: true }));
   await tick();
   assert.deepEqual(answersOf(doc.getElementById("describe-result"), ".ask.suggestion"), [["Discard", "Apply"]]);
+});
+
+const LASTING = {
+  ...ASK, id: "egr-8",
+  sentence: [{ kind: "text", text: "Claude Code wants to send your secret " }, { kind: "code", text: "STRIPE_KEY" }, { kind: "text", text: " to " }, { kind: "code", text: "api.stripe.com" }],
+  actions: [{ approve: true, label: "Allow once", scope: "once" }, { approve: true, label: "Always allow" }, { approve: false, label: "Send without it", scope: "once", strip: true }, { approve: false, label: "Block" }],
+  ifStanding: "Mandu remembers it for STRIPE_KEY and api.stripe.com only. You can change it under Rules.",
+  ifStandingParts: [{ kind: "text", text: "Mandu remembers it for " }, { kind: "code", text: "STRIPE_KEY" }, { kind: "text", text: " and " }, { kind: "code", text: "api.stripe.com" }, { kind: "text", text: " only. You can change it under " }, { kind: "link", text: "Rules", to: "your-rules" }, { kind: "text", text: "." }],
+  answersShort: "Allow once and Send without it cover only the next such request. Always allow and Block are kept for STRIPE_KEY and api.stripe.com until you change them under Rules.",
+  answersShortParts: [
+    { kind: "text", text: "Allow once and Send without it cover only the next such request. Always allow and Block are kept for " }, { kind: "code", text: "STRIPE_KEY" },
+    { kind: "text", text: " and " }, { kind: "code", text: "api.stripe.com" }, { kind: "text", text: " until you change them under " }, { kind: "link", text: "Rules", to: "your-rules" }, { kind: "text", text: "." },
+  ],
+};
+
+test("Home: a send's short card says which answers last, on a line of its own before Details in Approvals, Rules a link", async () => {
+  const vm = home({ waiting: [LASTING, ASK], window: { ...home().window, waiting: 2 } });
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/", homeVm: vm, routes: HOLDS });
+  await tick();
+  const card = doc.querySelector('#home-waiting .ask[data-id="egr-8"]');
+  const line = card.querySelector(".ask-sub .ask-answers");
+  assert.ok(line, "the line is drawn in the card's sub line");
+  assert.equal(line.textContent, LASTING.answersShort);
+  assert.deepEqual([...line.querySelectorAll("code")].map((c: El) => c.textContent), ["STRIPE_KEY", "api.stripe.com"], "the names as code");
+  const details = card.querySelector(".ask-sub .ask-details");
+  assert.equal(details.textContent, "Details in Approvals");
+  assert.ok(line.compareDocumentPosition(details) & 4, "before Details in Approvals");
+  assert.equal(line.nextElementSibling, details, "the link right after it");
+  assert.match(card.querySelector(".ask-sub").textContent, /\. Allow once and Send without it cover .* under Rules\. Details in Approvals$/, "words apart from the moment and the link");
+  const rules = line.querySelector("a");
+  assert.equal(rules.textContent, "Rules");
+  assert.match(rules.getAttribute("href"), /\/rules#your-rules$/);
+  // It names only the buttons the card draws.
+  const buttons = [...card.querySelectorAll(".ask-actions button")].map((b: El) => b.textContent);
+  assert.deepEqual(buttons, ["Allow once", "Always allow", "Send without it", "Block"]);
+  const named = /^(.+?) cover only .*?\. (.+?) are kept/.exec(line.textContent)!;
+  for (const verb of [...named[1]!.split(" and "), ...named[2]!.split(" and ")]) assert.ok(buttons.includes(verb), `${verb} is a button of the card`);
+  // A card without the words (another family, an older server) has none,
+  // and its sub line reads as before.
+  const plain = doc.querySelector('#home-waiting .ask[data-id="egr-1"]');
+  assert.equal(plain.querySelector(".ask-answers"), null);
+  assert.match(plain.querySelector(".ask-sub").textContent, /\. Details in Approvals$/);
+  // The stylesheet puts it on a line of its own.
+  assert.equal(decl(".ask-sub .ask-answers", "display"), "block");
+});
+
+test("Approvals: the expanded card does not draw the short line; it says it in full", async () => {
+  const vm = home({ waiting: [LASTING], window: { ...home().window, waiting: 1 } });
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/approvals", homeVm: vm, routes: HOLDS });
+  await tick();
+  const card = doc.querySelector('#approvals-waiting .ask.expanded[data-id="egr-8"]');
+  assert.ok(card, "Approvals draws the card expanded");
+  assert.equal(card.querySelector(".ask-answers"), null);
+  assert.ok(card.querySelector(".ask-standing"), "#144's full line instead");
 });

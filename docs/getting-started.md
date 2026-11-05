@@ -11,7 +11,7 @@ You need:
   the same, except that a program the agent runs cannot read a credential file
   at all instead of seeing a placeholder (posture `read-blocked`, see
   [Using Mandu](usage.md#install)). Node from Homebrew works: `brew install node@22`.
-- **Node.js 22.13 or newer** and **git**. (No Node? Step 1 has an installer
+- **Node.js 22.15 or newer** and **git**. (No Node? Step 1 has an installer
   that brings its own.) Node programs the AI runs need Node 22.21 or newer
   (or 24.5 or newer) on your PATH to get your secrets on their web requests;
   `mandu doctor` checks it.
@@ -35,9 +35,32 @@ You need:
   removed it again) and names the upgrade
   ([Troubleshooting](usage.md#troubleshooting)).
 
+## Try it in a codespace (no install)
+
+To see Mandu work before you install it, open the repository in GitHub
+Codespaces:
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/mandusec/mandu?quickstart=1)
+
+It needs a GitHub account (Codespaces has a free monthly allowance). The
+container has Node and the released Mandu installed, and runs as an
+ordinary user with no extra privileges. In its terminal:
+
+```sh
+mandu demo      # step 3 below: offline, against a stand-in AI, no API key
+mandu doctor    # what this container supports
+```
+
+A container is not your machine: it shares its host's kernel, and its
+default security settings keep Mandu's file guard from starting there. So in
+the demo, Codex's first step shows `‹hidden› (the whole file)`, with a line
+saying why, instead of each key. The codespace is for the demo: to protect
+your own agent and your own files, install Mandu where they are (step 1).
+The container is defined in the repository's `.devcontainer/`, so VS Code's
+Dev Containers opens it locally too.
+
 ## 1. Install
 
-With Node 22.13 or newer:
+With Node 22.15 or newer:
 
 ```sh
 npm install -g @mandusec/mandu
@@ -60,13 +83,13 @@ gh release download -R ManduSec/mandu -p '*' --clobber && sh install.sh
 ```
 
 `install.sh` installs for your user only, with no `sudo`: it uses your Node when it is
-22.13 or newer and otherwise downloads one for Mandu alone (checksum-checked),
+22.15 or newer and otherwise downloads one for Mandu alone (checksum-checked),
 puts the package under `~/.local/share/mandu`, and `mandu` in `~/.local/bin`.
 The script names its release's package and that package's SHA-256, and
 installs nothing if the file does not match. To update, do the same with the
 newer release.
 
-Or by hand, with your own Node 22.13+, in the same folder:
+Or by hand, with your own Node 22.15+, in the same folder:
 
 ```sh
 sha256sum -c SHA256SUMS                 # prints "...tgz: OK"

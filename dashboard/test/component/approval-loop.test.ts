@@ -419,6 +419,13 @@ test("Home → Details opens the seeded question in Approvals, marked, through t
     const marked = [...doc.querySelectorAll("#page-approvals .focus")].map((x) => (x as HTMLElement).dataset.id);
     assert.deepEqual(marked, [SEED.id], "Approvals marks exactly the seeded question");
     assert.equal((doc.getElementById("approvals-focus-note") as HTMLElement).hidden, true, "it is still waiting: no note");
+    // This arbiter has no rule-change op, so that read fails: Rule changes
+    // says so in place of its rows (dashboard.md §4.25 *Rule changes says
+    // when it could not be read*). Waited for, so it lands before the window
+    // closes.
+    await waitWhile(() => !doc.querySelector("#approvals-rule-history .changes-unread"));
+    assert.match(doc.getElementById("approvals-rule-history")!.textContent!, /^Could not read your rule changes\. /);
+    assert.equal((doc.getElementById("approvals-rule-history-block") as HTMLElement).hidden, false);
   } finally {
     w.close();
   }

@@ -147,7 +147,7 @@ export function gooseLoginHowTo(keyVar: GooseKeyVar = "ANTHROPIC_API_KEY"): stri
   return `set ${keyVar}, or run \`GOOSE_DISABLE_KEYRING=1 goose configure\` once without mandu to save the key in Goose's secrets.yaml`;
 }
 export const GOOSE_LOGIN_HOWTO = gooseLoginHowTo();
-export type GooseKeyVar = "ANTHROPIC_API_KEY" | "OPENAI_API_KEY" | "LITELLM_API_KEY" | "OPENROUTER_API_KEY" | "XAI_API_KEY" | "TETRATE_API_KEY";
+export type GooseKeyVar = "ANTHROPIC_API_KEY" | "OPENAI_API_KEY" | "LITELLM_API_KEY" | "OPENROUTER_API_KEY" | "XAI_API_KEY" | "TETRATE_API_KEY" | "GOOGLE_API_KEY";
 
 /** The key variable of the provider this Goose launch routes (goose-route.ts
  *  `gooseRoutePlan`: `--provider`, then GOOSE_PROVIDER, then config.yaml;

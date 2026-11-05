@@ -42,6 +42,11 @@ import { homedir } from "node:os";
 import { EGRESS_HOLD_ENV, launcherEgressHold, type EgressHoldChoice } from "../egress-hold.js";
 import { MODEL_HOST_DENY_HOSTS, NET_PROXY_MODEL_HOST_DENY_ENV, modelHostDenyFor } from "../model-host-deny.js";
 import { PROVIDER_KEY_HOSTS } from "../agent-key-grant.js";
+import { javaTrustStore, pemCertificates } from "../java-trust.js";
+import {
+  NET_PROXY_DB_RELAYS_ENV, NET_PROXY_DB_RELAY_PORT_FILE_ENV, dbRelayTargets, parseDbRelayPorts, writeDbRootCert,
+  type DbRelayBound, type DbRelayTarget,
+} from "../db-relays.js";
 
 /** The net-proxy's model-services list (net-proxy server-main). */
 export const NET_PROXY_MODEL_SERVICES_ENV = "MANDU_NET_PROXY_MODEL_SERVICES";
@@ -91,11 +96,24 @@ export interface NetProxyResult {
   /** The user's own CA files merged with the session CA, by variable (see
    *  LaunchPlan.mitmUserTrust). */
   mitmUserTrust?: Record<string, string>;
+  /** A JVM's trust store of the same certificates, and the user's own
+   *  JAVA_TOOL_OPTIONS (see LaunchPlan.mitmJava). */
+  mitmJava?: { trustStore: string; userOptions?: string };
   /** Auto MITM asked for but no session CA appeared: the notice to print. */
   mitmDegraded?: string;
   /** The proxy carries the model-host deny (model-host-deny.ts); the manager
    *  puts it on the plan (`LaunchPlan.modelHostDeny`). */
   modelHostDeny: boolean;
+  /** The database login relays the proxy opened (db-relays.ts), each with
+   *  its loopback port; the manager puts them on the plan
+   *  (`LaunchPlan.dbRelays`) for the connect guard's redirects. */
+  dbRelays?: DbRelayBound[];
+  /** The file the agent's libpq trusts (`PGSSLROOTCERT`) for the relays'
+   *  TLS (db-relays.ts `writeDbRootCert`). */
+  dbRootCert?: string;
+  /** What the launch says about the relays (a cut list, a relay file that
+   *  never came), or undefined. */
+  dbNote?: string;
   stop: () => void;
 }
 
@@ -121,6 +139,17 @@ export function writeCaBundle(caDir: string, sessionCaPem: string): string | und
     return out;
   }
   return undefined;
+}
+
+/** A PKCS#12 trust store for JVMs (java-trust.ts) of the certificates in
+ *  `pemPath` (the combined bundle, else the session CA alone), beside it in
+ *  `caDir`; undefined when the file holds no certificate. */
+export function writeJavaTrustStore(caDir: string, pemPath: string): string | undefined {
+  const certs = pemCertificates(readFileSync(pemPath, "utf8"));
+  if (certs.length === 0) return undefined;
+  const out = join(caDir, "mandu-java-truststore.p12");
+  publishFile(out, javaTrustStore(certs), { mode: 0o644 });
+  return out;
 }
 
 /** The trust variables the session sets under TLS inspection (env-compose.ts
@@ -201,8 +230,11 @@ export class NetProxyConflictError extends Error {
  * started for a launch of another agent would exempt that agent's login
  * here and refuse this one's own.
  */
-export function netProxyIdentityMatches(id: ProxyIdentity | null, plan: LaunchPlan, logins?: SessionLogins): boolean {
+export function netProxyIdentityMatches(id: ProxyIdentity | null, plan: LaunchPlan, logins?: SessionLogins, dbTargets?: readonly DbRelayTarget[]): boolean {
   if (!id || id.mandu !== true) return false;
+  // The database relays (db-relays.ts): a proxy opened for other databases
+  // (or none) would leave this launch's logins unserved or serve another's.
+  if (dbTargets !== undefined && dbTargetsKey(identityDbRelays(id)) !== dbTargetsKey(dbTargets)) return false;
   if (id.service !== "net-proxy") return false;
   if (id.arbiterSock !== plan.arbiterSock) return false;
   // The logins exempt from the tripwire (secret-discovery.md §1.10): the
@@ -222,6 +254,19 @@ export function netProxyIdentityMatches(id: ProxyIdentity | null, plan: LaunchPl
  *  it (TLS inspection, the model-host deny). */
 function netProxyConfidentiality(plan: Pick<LaunchPlan, "effectiveAxes" | "confidentiality">): boolean {
   return (plan.effectiveAxes?.confidentiality ?? plan.confidentiality) === true;
+}
+
+/** The relays a proxy's identity publishes, as targets with their ports. */
+function identityDbRelays(id: ProxyIdentity): DbRelayBound[] {
+  if (!Array.isArray(id.dbRelays)) return [];
+  return id.dbRelays.filter((r): r is DbRelayBound => {
+    const o = r as Partial<DbRelayBound>;
+    return (o?.protocol === "postgres" || o?.protocol === "mysql") && typeof o.host === "string" && typeof o.port === "number" && typeof o.listen === "number";
+  });
+}
+
+function dbTargetsKey(ts: readonly DbRelayTarget[]): string {
+  return JSON.stringify([...new Set(ts.map((t) => `${t.protocol}:${t.host}:${t.port}`))].sort());
 }
 
 function denyKey(hosts: readonly string[]): string {
@@ -257,6 +302,13 @@ export async function startNetProxy(
   // not refuse this session's agent its own login (secret-discovery.md §1.10).
   // HOME: the launch's (`deps.home` is a test seam).
   const logins = sessionLogins(plan, process.env, deps.home ?? homedir());
+  // The database login release (db-relays.ts): with the confidentiality
+  // axis on, a relay per database the launch's password file and
+  // environment name.
+  const db = confidentialityOn ? dbRelayTargets(process.env, deps.home ?? homedir()) : { targets: [], cut: 0 };
+  let dbRelays: DbRelayBound[] = [];
+  const dbNotes: string[] = [];
+  if (db.cut > 0) dbNotes.push(`${db.cut} more database(s) in your password file get no login relay (at most ${db.targets.length})`);
   let stop = () => {};
   let boundPort = port;
   // Start-or-reuse: if something is already listening, adopt it ONLY when its
@@ -266,7 +318,7 @@ export async function startNetProxy(
   // to reuse OR to conflict on.
   if (port !== 0 && (await deps.probePort(host, port))) {
     const id = await deps.probeIdentity(host, port);
-    if (!netProxyIdentityMatches(id, plan, logins)) {
+    if (!netProxyIdentityMatches(id, plan, logins, db.targets)) {
       throw new NetProxyConflictError(
         `mandu: ${host}:${port} is occupied by ${describeOccupant(id)} — refusing to point this ` +
         `session's HTTP(S)_PROXY egress at it (its arbiter differs, so egress gating, approvals and ` +
@@ -275,6 +327,7 @@ export async function startNetProxy(
       );
     }
     // Safe reuse: same service + arbiter. We did not start it → never tear it down.
+    dbRelays = id ? identityDbRelays(id) : [];
   } else {
     // Ephemeral port (0): the kernel picks; the proxy publishes the bound port
     // into the port file (server-main's atomic tmp+rename), and we adopt it.
@@ -282,6 +335,8 @@ export async function startNetProxy(
     // (and possibly identity-match) a daemon this launch does not own.
     const portFile = port === 0 ? join(scopeRunDir, "net-proxy.port") : undefined;
     if (portFile) rmSync(portFile, { force: true });
+    const relayFile = db.targets.length > 0 ? join(scopeRunDir, "net-proxy-db-relays.json") : undefined;
+    if (relayFile) rmSync(relayFile, { force: true });
     const env: Record<string, string | undefined> = {
       ...process.env,
       MANDU_ARBITER_SOCK: plan.arbiterSock,
@@ -321,6 +376,13 @@ export async function startNetProxy(
       // not choose. A plan without one (built outside run.ts) is decided
       // as unattended: the user's value, else 0.
       [EGRESS_HOLD_ENV]: egressHoldOf(plan).ms,
+      // The database relays (db-relays.ts), always set, so an ambient value
+      // cannot open one this launch did not choose.
+      [NET_PROXY_DB_RELAYS_ENV]: JSON.stringify(db.targets),
+      [NET_PROXY_DB_RELAY_PORT_FILE_ENV]: relayFile,
+      // This launcher: a local database whose listening end descends from
+      // it is a program of the session, which the relays refuse.
+      MANDU_NET_PROXY_SESSION_ROOT: String(process.pid),
     };
     const log = join(scopeRunDir, "net-proxy.log");
     const spec = layout.daemon("net-proxy", join("interceptors", "net-proxy"));
@@ -339,6 +401,15 @@ export async function startNetProxy(
         throw new Error(`mandu: net-proxy published an unusable port ('${readFileSync(portFile, "utf8").trim()}' in ${portFile}) — refusing to compose HTTP(S)_PROXY from it`);
       }
     }
+    // The relays publish their ports after the proxy's own (server-main).
+    // None came: the launch runs without them (a login fails as before, no
+    // value is ever released), and says so.
+    if (relayFile) {
+      if (await deps.waitForFile(relayFile, budget.opts(100))) {
+        dbRelays = parseDbRelayPorts(readFileSync(relayFile, "utf8"), db.targets);
+      }
+      if (dbRelays.length < db.targets.length) dbNotes.push(`net-proxy: ${db.targets.length - dbRelays.length} database login relay(s) did not open (its log: ${log}); a login there fails as without Mandu's relay`);
+    }
     const up = await deps.waitFor(() => deps.probePort(host, boundPort), budget.opts(100));
     if (!up) { stop(); throw new Error(`mandu: net-proxy did not come up on ${host}:${boundPort} (${budget.note()}; its log: ${log})`); }
     // The port being UP is not enough: a concurrent launch (different arbiter)
@@ -347,6 +418,8 @@ export async function startNetProxy(
     // came up is actually ours before pointing egress at it — the same
     // guarantee the reuse branch enforces. Fail closed on a mismatch.
     const startedOk = await deps.waitFor(
+      // Not keyed on the database relays: ours may have opened fewer than
+      // asked (said above), and that is no reason to refuse our own proxy.
       async () => netProxyIdentityMatches(await deps.probeIdentity(host, boundPort), plan, logins),
       { tries: 20, delayMs: 100 },
     );
@@ -364,6 +437,7 @@ export async function startNetProxy(
   let mitmCaCert: string | undefined;
   let mitmCaBundle: string | undefined;
   let mitmUserTrust: Record<string, string> | undefined;
+  let mitmJava: { trustStore: string; userOptions?: string } | undefined;
   let mitmDegraded: string | undefined;
   if (mitm) {
     const ready = await deps.waitForFile(caCert, { tries: 100, delayMs: 50 });
@@ -382,12 +456,29 @@ export async function startNetProxy(
       try { mitmCaBundle = writeCaBundle(caDir, caCert); } catch { mitmCaBundle = undefined; }
       const userTrust = writeUserTrustFiles(caDir, caCert, process.env);
       if (Object.keys(userTrust).length > 0) mitmUserTrust = userTrust;
+      // JVMs read no CA variable (java-trust.ts): a trust store of the same
+      // certificates, unless MANDU_JAVA_TRUST=0.
+      if (process.env["MANDU_JAVA_TRUST"] !== "0") {
+        let trustStore: string | undefined;
+        try { trustStore = writeJavaTrustStore(caDir, mitmCaBundle ?? caCert); } catch { trustStore = undefined; }
+        const userOptions = process.env["JAVA_TOOL_OPTIONS"];
+        if (trustStore) mitmJava = { trustStore, ...(userOptions ? { userOptions } : {}) };
+      }
     }
   }
   // TLS inspection turned off by the user under the deny: the model hosts
   // are refused whole (no path can be read), so say what that costs.
   if (!mitm && modelHostDeny) mitmDegraded = `net-proxy: TLS inspection is off (--no-net-proxy-mitm). ${MODEL_HOSTS_UNREAD_NOTE}`;
-  return { netProxy: { host, port: boundPort }, mitmCaCert, mitmCaBundle, mitmUserTrust, mitmDegraded, modelHostDeny, stop };
+  // The relays answer a client's TLS with the session CA's leaf: the
+  // agent's libpq trusts it (PGSSLROOTCERT), after the user's own root.
+  const dbRootCert = dbRelays.some((r) => r.protocol === "postgres") && mitmCaCert ? writeDbRootCert(caDir, mitmCaCert, process.env, deps.home ?? homedir()) : undefined;
+  return {
+    netProxy: { host, port: boundPort }, mitmCaCert, mitmCaBundle, mitmUserTrust, mitmJava, mitmDegraded, modelHostDeny,
+    ...(dbRelays.length > 0 ? { dbRelays } : {}),
+    ...(dbRootCert ? { dbRootCert } : {}),
+    ...(dbNotes.length > 0 ? { dbNote: dbNotes.join("; ") } : {}),
+    stop,
+  };
 }
 
 /** What the model-host deny does where the egress proxy cannot read HTTPS

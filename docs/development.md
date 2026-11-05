@@ -18,7 +18,7 @@ Contents:
 
 ## 1. Build from source
 
-You need Node 22.13.0 or newer, git and, for the native pieces, a Rust
+You need Node 22.15.0 or newer, git and, for the native pieces, a Rust
 toolchain (stable).
 
 ```sh
@@ -90,14 +90,14 @@ context, network, filesystem, exec) and asks the arbiter over a Unix socket.
 | `interceptors/anthropic-proxy/` | TS | model context | Reverse proxy for the Anthropic Messages API (`ANTHROPIC_BASE_URL`), used by Claude Code, OpenCode, OpenClaw and Goose (`ANTHROPIC_HOST`). Replaces untrusted and secret spans in `tool_result`s with symbols, injects the handling prompt, records `tool_use` decisions, maps paths between the two views and gates sensitive paths. Fail-closed. |
 | `interceptors/openai-proxy/` | TS | model context | The same for Codex (OpenAI Responses API): symbolizes `function_call_output` spans, maps the shell command into the AgentView. Fail-closed. |
 | `interceptors/inspect-mcp/` | TS | model context | The quarantined model channel (paper: U-LLM): an MCP server exposing `inspect_symbol`, which resolves a symbol, asks a model that has no access to the agent's context, and returns the answer re-symbolized. |
-| `interceptors/openclaw-inspect-plugin/` | TS | model context | The same `inspect_symbol` and `declassify_symbol` mounted as OpenClaw plugin tools (OpenClaw has no MCP client). |
+| `interceptors/openclaw-inspect-plugin/` | TS | model context | The same `inspect_symbol` and `declassify_symbol` mounted as OpenClaw plugin tools (OpenClaw has no MCP client); in a resident Gateway attached to `mandu serve`, also the `before_tool_call` tamper policy and the `message_sending` reply check, and (`mandu openclaw install --sandbox`) the `mandu` sandbox backend: the box host and exec relay in `box/`, each command and file tool in a Mandu-confined launch (`docs/design/agents/openclaw-plugin.md` §10). |
 | `interceptors/policy-mcp/` | TS | (policy) | MCP server that lets the agent read and test the policy and propose changes. Tightening applies at once; loosening waits for the user on the dashboard's Approvals page. |
 | `interceptors/net-proxy/` | TS | network | Forward HTTP(S) proxy. Blocks or holds a request that carries an untrusted symbol to an untrusted destination, and puts a secret's real value back only on its way to a host it is bound to (TLS inspection with a per-session CA in `secrets` and `full`). Fail-closed. |
 | `interceptors/cdp-relay/` | TS | (browser) | Relay on the DevTools connection between a browser agent and Chrome. What Chrome sends the agent passes the prompt filter (secrets become placeholders); a placeholder the agent types is put back only into a page whose origin may have it. Screenshots refused. Fail-closed. Not yet started by `mandu` (devtools-relay.md). |
 | `interceptors/exec-wrap/` | TS | exec | `PATH` wrapper for high-risk commands (`curl`, `wget`, `nc`): refuses a command built from an untrusted symbol, otherwise runs the real binary with the resolved arguments. |
 | `interceptors/reply-filter/` | TS | (user replies) | Resolves symbols in what the agent shows you, so you see the real values. Interactive TUIs are relayed through a PTY. Utility only: on any failure it passes text through unchanged (symbols stay opaque, nothing leaks). |
 | `fs-sync/` | TS | filesystem | The two-view workspace: a git worktree the agent works in (AgentView) synced with your real folder (HumanView), with blame-based re-symbolization and revert. |
-| `dashboard/` | TS | (UI) | The product page at `/`: protection status, Approvals, Rules, Settings, and each session's page (what the AI saw beside what really happened). Also a localhost control plane that starts the stack. The maintainers' developer view is not part of this tree (it loads into the same server where a build carries it). |
+| `dashboard/` | TS | (UI) | The product page at `/`: protection status, Approvals, Rules, Settings, and each session's page (what the AI saw beside what really happened). Also a localhost control plane that starts the stack, and, as the main process of `mandu serve`, the pool of model proxies for attached OpenClaw Gateways (`src/supervisor/attachment-pool.ts`). The maintainers' developer view is not part of this tree (it loads into the same server where a build carries it). |
 | `interceptors/` (Cargo workspace) | Rust | fs, net, exec | `exec-supervisor` (the Bubblewrap command box + seccomp + Landlock), `net-supervisor` (the seccomp connect guard and secret-file twins), `fs-supervisor` (seccomp `openat` interposition + Landlock), the retired `fs-preload` rung (in-tree, wired to nothing), the `mandu-arbiter` client crate (Apache-2.0) and `mandu-paths`, the generated copy of the path table (`scripts/paths/mandu-paths.mjs`, on-disk-layout.md §5). Decision logic is privilege-free and unit-tested; kernel attachment sits behind each crate's `kernel` feature. |
 | `tests/` | TS | all | One npm package for the cross-package suites (`tests/package.json`): `tests/stack/` (the real arbiter, proxies, MCP servers and dashboard in one process, asserting the security invariant end to end), `tests/sandbox/` (the real sandbox, no agent), `tests/integrity/` (the frozen lane's copies), `tests/lib/` and `tests/fixtures/` (shared by them all: the scripted model endpoints, the launcher and child-process drivers, the agent provisioning and the confidentiality oracles), and `tests/env/` (suites that need something from the host: a local model, a login, the internet). The agent drills are the maintainers' and are not published ([drill-results.md](testing/drill-results.md)). |
 | `tests/conformance/` | TS | all | Declarative scenarios (`scenarios/*.yaml`) run against the real arbiter and proxy with a mock upstream. Deterministic: no key, no network. |
@@ -140,6 +140,14 @@ context, network, filesystem, exec) and asks the arbiter over a Unix socket.
   filter over it, and a standalone package holds a generated copy (`node scripts/agents/agent-copies.mjs
   generate`). `tests/stack/agent-registry.test.ts` fails on a hand-copied
   list ([`design/agents/supported-agents.md`](design/agents/supported-agents.md) §5.7).
+- **Every shared module has one source.** A module several packages ship
+  (the model proxies' TLS, reply-row and text-repack modules, `lifeline`,
+  `safe-file`, the secret posture's `confinement-posture`, ...) is copied
+  byte for byte, never imported across packages.
+  [`scripts/copies/module-copies.mjs`](../scripts/copies/module-copies.mjs)
+  names each one's source (its header says so too): change the source, then
+  run `node scripts/copies/module-copies.mjs generate`; `check` fails on a
+  copy that differs.
 - **No host root.** Every kernel mechanism Mandu uses attaches without host
   root (user namespaces, seccomp, Landlock, capability dropping), is on by
   default where the kernel supports it, and is skipped with a warning where it
@@ -566,13 +574,18 @@ macOS runs the wrapper layer: the launcher's posture there is `read-blocked`
 confined secret twins, and nothing in the kernel layer exists on a Mac
 ([`design/portable-wrapper-cross-platform.md`](design/distribution/portable-wrapper.md),
 [`design/confidentiality.md`](design/confidentiality/confidentiality.md) §7.3). The suites
-marked for darwin in the manifest inherit the macOS branch's historical green set; this integration needs a
-fresh Mac run
+marked for darwin in the manifest run on a Mac
 ([`design/test-organization.md`](design/testing/test-organization.md) §6.9):
+the maintainers' Mac runner runs them hourly on `master`, and GitHub's macOS
+images at a release, through `scripts/ci/macos-run.sh`
+([`design/continuous-integration.md`](design/testing/continuous-integration.md) §12.6).
+Neither blocks a merge or a release; a red there is fixed like any other.
+To run them yourself:
 
 ```sh
 node scripts/suites.mjs list --platform darwin --ids   # what runs here
 scripts/test-all.sh                                    # on a Mac, selects exactly those
+scripts/ci/macos-run.sh --out /tmp/mac-run             # the CI's run: npm ci, then the same entries
 ```
 
 That is the typecheck and whole `npm test` of launcher, reply-filter,

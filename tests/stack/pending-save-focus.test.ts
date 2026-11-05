@@ -27,8 +27,17 @@
  *       and the arbiter follows;
  *   F4  two changes chosen: Drop on one gives the focus to the bar's
  *       heading; Discard gives it to the Your rules heading; nothing saved;
- *   F5  Move them into policy.yaml: the focus on the Your rules heading,
- *       and the page rule is in policy.yaml;
+ *       two changes discarded, then Undo (nothing posted, the focus on the
+ *       bar's heading), then Save: the arbiter has both files at their new
+ *       levels; a Discard without Undo saves nothing (dashboard.md §4.25n
+ *       *Discard can be undone*); a level chosen, dropped, then Undo
+ *       (nothing posted), then Save: the arbiter has the file at that
+ *       level; a Drop without Undo, then Save, saves nothing for that file
+ *       (§4.25n *Drop can be undone*);
+ *   F5  Move them into policy.yaml asks in its own box (§4.25n *Rules
+ *       asks on the page, not in a browser dialog*): Cancel moves nothing;
+ *       Move them puts the focus on the Your rules heading, and the page
+ *       rule is in policy.yaml;
  *   F6  the oracle: neither the rendered pages nor the answers read here
  *       carry the key.
  *
@@ -108,6 +117,18 @@ const bar = (doc: Doc) => doc.getElementById("files-pending");
 const save = (doc: Doc) => doc.getElementById("files-save");
 const heading = (doc: Doc) => doc.getElementById("rules-title");
 const moveBtn = (doc: Doc) => doc.querySelector("#files-move button");
+/** Move them into policy.yaml asks first, in its own box (dashboard.md
+ *  §4.25n *Rules asks on the page, not in a browser dialog*): Enter on it,
+ *  the question's sentence focused; returns its Move them, which posts. */
+function askMove(doc: Doc): Doc {
+  const move = moveBtn(doc);
+  assert.equal(move.textContent, "Move them into policy.yaml");
+  move.focus();
+  move.click();
+  const ask = doc.querySelector("#files-move .ask-in-place");
+  assert.equal(doc.activeElement, ask.querySelector(".ask-in-place-words"), "the question's sentence, never Move them");
+  return [...ask.querySelectorAll("button")].find((b: Doc) => b.textContent === "Move them");
+}
 
 test("Changes to save over the real arbiter: Save, the weaker-change question, Drop, Discard and the move keep the focus; refusals give it back described; no key on the page", { timeout: 180_000 }, async () => {
   const tmp = mkdtempSync(join(tmpdir(), "mandu-pending-save-focus-"));
@@ -163,10 +184,10 @@ test("Changes to save over the real arbiter: Save, the weaker-change question, D
       await waitWhile(() => !rowFor(doc, "notes.txt") || !rowFor(doc, "notes.txt").querySelector("select.label-select"));
     };
     await servedProductPage(base, "/rules", (doc) => !!moveBtn(doc), async (doc) => {
-      doc.defaultView.confirm = () => true;
-      const move = moveBtn(doc);
-      await press(move);
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
+      await press(askMove(doc));
       await waitWhile(() => !doc.querySelector("#files-move .ask-error") && !text(doc, "#lock-error"));
+      const move = moveBtn(doc);
       const words = doc.querySelector("#files-move .ask-error");
       assert.ok(words, `the refusal is said in the move's own box, not only in the hidden Changes to save ("${text(doc, "#lock-error")}")`);
       assert.match(words.textContent, /^Sign in first/);
@@ -189,7 +210,7 @@ test("Changes to save over the real arbiter: Save, the weaker-change question, D
     assert.deepEqual(await level(notes), notesBefore);
 
     await servedProductPage(base, "/rules", (doc) => !!moveBtn(doc), async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       assert.equal(bar(doc).hidden, true, "a new window has nothing waiting");
       await browse(doc);
 
@@ -235,10 +256,106 @@ test("Changes to save over the real arbiter: Save, the weaker-change question, D
       assert.equal(bar(doc).hidden, true);
       assert.equal(doc.activeElement, heading(doc), "the Your rules heading, never the hidden bar");
       assert.equal(readFileSync(policyPath, "utf8"), policyNow, "nothing saved");
+      assert.equal(text(doc, "#rules-notice").startsWith("1 change discarded."), true);
 
-      // F5: the move.
-      const move = moveBtn(doc);
-      await press(move);
+      // F4b: two changes discarded, Undo, then Save: both saved.
+      await waitWhile(() => !rowFor(doc, "todo.txt")?.querySelector("select.label-select"));
+      choose(rowFor(doc, "todo.txt"), "no-model");
+      choose(rowFor(doc, "notes.txt"), "no-model");
+      const todo = join(proj, "todo.txt");
+      const todoBefore = JSON.stringify(await level(todo));
+      const notesLoose = JSON.stringify(await level(notes));
+      hit(doc.getElementById("files-discard"));
+      assert.equal(bar(doc).hidden, true);
+      assert.equal(doc.getElementById("rules-notice").firstChild.textContent, "2 changes discarded.");
+      const undo = doc.querySelector("#rules-notice button");
+      assert.equal(undo?.getAttribute("aria-label"), "Undo the discard in Your rules");
+      const posts: string[] = [];
+      const real = doc.defaultView.fetch;
+      doc.defaultView.fetch = (url: string, init: Doc = {}) => (init.method === "POST" && posts.push(url), real(url, init));
+      hit(undo);
+      assert.equal(bar(doc).hidden, false, "the changes wait again");
+      assert.equal(doc.querySelectorAll("#files-pending-list li").length, 2);
+      assert.equal(doc.activeElement, bar(doc).querySelector("h3"), "the bar's heading");
+      assert.equal(text(doc, "#rules-notice"), "Your changes are back. Nothing is saved until you press Save.");
+      doc.defaultView.fetch = real;
+      assert.deepEqual(posts.filter((u) => !u.endsWith("/files/impact")), [], "Undo posts nothing");
+      assert.equal(readFileSync(policyPath, "utf8"), policyNow, "nothing saved by Undo");
+      assert.equal(JSON.stringify(await level(todo)), todoBefore);
+      await press(save(doc));
+      await waitWhile(() => !bar(doc).hidden);
+      await landed(doc);
+      assert.equal(doc.activeElement, heading(doc));
+      assert.equal(doc.getElementById("rules-notice").firstChild.textContent, "2 changes saved.");
+      assert.match(readFileSync(policyPath, "utf8"), /todo\.txt/);
+      assert.notEqual(JSON.stringify(await level(todo)), todoBefore, "the arbiter has todo.txt at its new level");
+      assert.notEqual(JSON.stringify(await level(notes)), notesLoose, "and notes.txt");
+
+      // F4c: a Discard without Undo saves nothing.
+      await waitWhile(() => !rowFor(doc, "todo.txt")?.querySelector("select.label-select"));
+      choose(rowFor(doc, "todo.txt"), "public");
+      const policySaved = readFileSync(policyPath, "utf8");
+      const todoSaved = JSON.stringify(await level(todo));
+      hit(doc.getElementById("files-discard"));
+      assert.equal(bar(doc).hidden, true);
+      assert.equal(readFileSync(policyPath, "utf8"), policySaved, "policy.yaml unchanged");
+      assert.equal(JSON.stringify(await level(todo)), todoSaved, "the arbiter unchanged");
+
+      // F4d: a level chosen, dropped, Undo, then Save: saved at that level.
+      await waitWhile(() => !rowFor(doc, "todo.txt")?.querySelector("select.label-select"));
+      const todoTight = JSON.stringify(await level(todo));
+      choose(rowFor(doc, "todo.txt"), "any-model");
+      hit([...doc.querySelectorAll("#files-pending-list button")].find((b: Doc) => /todo\.txt$/.test(b.getAttribute("aria-label"))));
+      assert.equal(bar(doc).hidden, true);
+      assert.match(text(doc, "#rules-notice"), /^Your change to ~\/proj\/todo\.txt dropped\./);
+      const undoDrop = doc.querySelector("#rules-notice button");
+      assert.equal(undoDrop?.getAttribute("aria-label"), "Undo the drop in Your rules");
+      const dropPosts: string[] = [];
+      doc.defaultView.fetch = (url: string, init: Doc = {}) => (init.method === "POST" && dropPosts.push(url), real(url, init));
+      hit(undoDrop);
+      assert.equal(bar(doc).hidden, false, "the change waits again");
+      assert.equal(doc.querySelectorAll("#files-pending-list li").length, 1);
+      assert.equal(doc.activeElement, bar(doc).querySelector("h3"), "the bar's heading");
+      assert.equal(text(doc, "#rules-notice"), "Your change is back. Nothing is saved until you press Save.");
+      doc.defaultView.fetch = real;
+      assert.deepEqual(dropPosts.filter((u) => !u.endsWith("/files/impact")), [], "Undo posts nothing");
+      assert.equal(readFileSync(policyPath, "utf8"), policySaved, "nothing saved by Undo");
+      // Any AI is a loosening from No AI: Save asks, Save anyway saves.
+      await press(save(doc));
+      await waitWhile(() => doc.getElementById("files-confirm").hidden && !bar(doc).hidden);
+      if (!bar(doc).hidden) await press(save(doc));
+      await waitWhile(() => !bar(doc).hidden);
+      await landed(doc);
+      const todoAny = JSON.stringify(await level(todo));
+      assert.notEqual(todoAny, todoTight, "the arbiter has todo.txt at the level brought back");
+
+      // F4e: a Drop without Undo, then Save: nothing saved for that file.
+      await waitWhile(() => !rowFor(doc, "todo.txt")?.querySelector("select.label-select"));
+      choose(rowFor(doc, "todo.txt"), "no-model");
+      hit([...doc.querySelectorAll("#files-pending-list button")].find((b: Doc) => /todo\.txt$/.test(b.getAttribute("aria-label"))));
+      const notesNow = JSON.stringify(await level(notes));
+      choose(rowFor(doc, "notes.txt"), "any-model");
+      assert.equal(doc.querySelector("#rules-notice button"), null, "a new choice took the Undo");
+      await press(save(doc));
+      await waitWhile(() => doc.getElementById("files-confirm").hidden && !bar(doc).hidden);
+      if (!bar(doc).hidden) await press(save(doc));
+      await waitWhile(() => !bar(doc).hidden);
+      await landed(doc);
+      assert.equal(JSON.stringify(await level(todo)), todoAny, "todo.txt as it was: its dropped change was not saved");
+      assert.equal(doc.querySelectorAll("#files-pending-list li").length, 0);
+      assert.notEqual(JSON.stringify(await level(notes)), notesNow, "the other change was");
+
+      // F5: the move. Cancel moves nothing and gives the focus back to the
+      // button; Move them moves.
+      const policyBefore = readFileSync(policyPath, "utf8");
+      askMove(doc);
+      const cancel = [...doc.querySelectorAll("#files-move .ask-in-place button")].find((b: Doc) => b.textContent === "Cancel");
+      cancel.focus();
+      cancel.click();
+      assert.equal(doc.activeElement, moveBtn(doc), "Cancel: the focus back on Move them into policy.yaml");
+      await new Promise((r) => setTimeout(r, 200));
+      assert.equal(readFileSync(policyPath, "utf8"), policyBefore, "Cancel: nothing moved");
+      await press(askMove(doc));
       await waitWhile(() => !doc.getElementById("files-move").hidden);
       await landed(doc);
       assert.equal(doc.activeElement, heading(doc), "the Your rules heading, never <body>");

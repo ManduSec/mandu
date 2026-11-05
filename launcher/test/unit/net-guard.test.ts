@@ -167,7 +167,7 @@ function plan(over: Partial<LaunchPlan> = {}): LaunchPlan {
 test("applyNetGuard: off → no-op (no wrap, no log)", () => {
   const mut = emptyMutation();
   const logs: string[] = [];
-  const r = applyNetGuard(plan({ netGuard: false }), mut, { resolveBin: () => "/bin/g", log: (m) => logs.push(m) });
+  const r = applyNetGuard(plan({ netGuard: false }), mut, { resolveBin: () => "/bin/g", probe: () => true, log: (m) => logs.push(m) });
   assert.equal(r, null);
   assert.deepEqual(mut.launchPrefix, []);
   assert.equal(logs.length, 0);
@@ -182,14 +182,36 @@ test("applyNetGuard: bin missing → WARN + proceed WITHOUT (degrade, never thro
   assert.ok(logs.some((l) => /not built/.test(l) && /WITHOUT/.test(l)));
 });
 
+test("applyNetGuard (packaging.md §3.1): a bin that cannot start here → WARN + proceed WITHOUT it, never a wrap the agent would die in", () => {
+  const mut = emptyMutation();
+  const logs: string[] = [];
+  const asked: string[] = [];
+  const r = applyNetGuard(plan(), mut, { resolveBin: () => "/bin/g", probe: (b) => { asked.push(b); return false; }, log: (m) => logs.push(m) });
+  assert.equal(r, null);
+  assert.deepEqual(asked, ["/bin/g"], "the probe asks about the resolved bin");
+  assert.deepEqual(mut.launchPrefix, [], "no wrap prepended");
+  assert.equal(mut.env[NET_GUARD_BOX_SOCKETS_ENV], undefined, "no claim that the guard serves the box");
+  assert.ok(logs.some((l) => /cannot start on this machine/.test(l) && /pidfd_getfd/.test(l) && /WITHOUT/.test(l)), logs.join("\n"));
+  assert.ok(!logs.some((l) => /net-guard LIVE/.test(l)));
+});
+
+test("applyNetGuard: a launch that REQUIRES the guard keeps it even when the probe says no (it fails closed at the guard)", () => {
+  const mut = emptyMutation();
+  let asked = 0;
+  const r = applyNetGuard(plan({ ownServerExe: "/x/opencode", netGuardRequired: true } as Partial<LaunchPlan>), mut, { resolveBin: () => "/bin/g", probe: () => { asked++; return false; }, log: () => {} });
+  assert.ok(r, "the wrap stays");
+  assert.equal(mut.launchPrefix[0], "/bin/g");
+  assert.equal(asked, 0, "never consulted: a required guard has no degrade");
+});
+
 test("applyNetGuard: the guard serves the command box's socket allow-list (exec-routing §4.2)", () => {
   const mut = emptyMutation();
-  assert.ok(applyNetGuard(plan(), mut, { resolveBin: () => "/bin/g", log: () => {} }));
+  assert.ok(applyNetGuard(plan(), mut, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} }));
   assert.equal(mut.env[NET_GUARD_BOX_SOCKETS_ENV], "1", "one listener per chain: the guard serves the box");
   // No guard, no claim: a box then serves its own listener.
   for (const [p, bin] of [[plan({ netGuard: false }), "/bin/g"], [plan(), null]] as const) {
     const m = emptyMutation();
-    applyNetGuard(p, m, { resolveBin: () => bin, log: () => {} });
+    applyNetGuard(p, m, { resolveBin: () => bin, probe: () => true, log: () => {} });
     assert.equal(m.env[NET_GUARD_BOX_SOCKETS_ENV], undefined);
   }
 });
@@ -197,17 +219,17 @@ test("applyNetGuard: the guard serves the command box's socket allow-list (exec-
 test("applyNetGuard: the guard files its events under the launch's session (exec-routing.md §7.5, Whose session)", () => {
   assert.equal(NET_GUARD_SESSION_ENV, "MANDU_SESSION_ID", "the variable mandu-net-guard reads (events::guard_session_id)");
   const mut = emptyMutation();
-  assert.ok(applyNetGuard(plan({ scopeId: "1700000000-42" }), mut, { resolveBin: () => "/bin/g", log: () => {} }));
+  assert.ok(applyNetGuard(plan({ scopeId: "1700000000-42" }), mut, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} }));
   assert.equal(mut.env[NET_GUARD_SESSION_ENV], "1700000000-42", "the id the model proxy files the session's turns under");
   // An outer launch's value names that launch: this one's wins.
   const nested = emptyMutation();
   nested.env[NET_GUARD_SESSION_ENV] = "outer";
-  applyNetGuard(plan({ scopeId: "inner" }), nested, { resolveBin: () => "/bin/g", log: () => {} });
+  applyNetGuard(plan({ scopeId: "inner" }), nested, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
   assert.equal(nested.env[NET_GUARD_SESSION_ENV], "inner");
   // No guard (off, or not built): nothing to tell.
   for (const [p, bin] of [[plan({ netGuard: false }), "/bin/g"], [plan(), null]] as const) {
     const m = emptyMutation();
-    applyNetGuard(p, m, { resolveBin: () => bin, log: () => {} });
+    applyNetGuard(p, m, { resolveBin: () => bin, probe: () => true, log: () => {} });
     assert.equal(m.env[NET_GUARD_SESSION_ENV], undefined);
   }
 });
@@ -220,21 +242,21 @@ test("sessionProxyPorts: the net-proxy's port only, when it is live (exec-routin
 
 test("applyNetGuard: the guard learns the session-proxy ports a secret holder may reach; never the model proxy", () => {
   const withProxy = emptyMutation();
-  assert.ok(applyNetGuard(plan({ netProxy: { host: "127.0.0.1", port: 8790 } } as Partial<LaunchPlan>), withProxy, { resolveBin: () => "/bin/g", log: () => {} }));
+  assert.ok(applyNetGuard(plan({ netProxy: { host: "127.0.0.1", port: 8790 } } as Partial<LaunchPlan>), withProxy, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} }));
   assert.equal(withProxy.env[NET_GUARD_PROXY_PORTS_ENV], "8790");
   // No net-proxy: set, and empty (no exception at all; the guard's own
   // default is none too, so a missing variable cannot widen anything).
   const none = emptyMutation();
-  assert.ok(applyNetGuard(plan(), none, { resolveBin: () => "/bin/g", log: () => {} }));
+  assert.ok(applyNetGuard(plan(), none, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} }));
   assert.equal(none.env[NET_GUARD_PROXY_PORTS_ENV], "");
   // The model proxy (8788) and the U-LLM forwarder never: neither judges a
   // process's taint.
   const fwd = emptyMutation();
-  applyNetGuard(plan({ ullmForwarder: { host: "127.0.0.1", port: 8791 } } as Partial<LaunchPlan>), fwd, { resolveBin: () => "/bin/g", log: () => {} });
+  applyNetGuard(plan({ ullmForwarder: { host: "127.0.0.1", port: 8791 } } as Partial<LaunchPlan>), fwd, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
   assert.equal(fwd.env[NET_GUARD_PROXY_PORTS_ENV], "");
   // No guard: nothing set.
   const off = emptyMutation();
-  applyNetGuard(plan({ netGuard: false }), off, { resolveBin: () => "/bin/g", log: () => {} });
+  applyNetGuard(plan({ netGuard: false }), off, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
   assert.equal(off.env[NET_GUARD_PROXY_PORTS_ENV], undefined);
 });
 
@@ -242,33 +264,33 @@ test("applyNetGuard: an OpenCode 2 launch names its executable for the guard's p
   const exe = "/opt/oc/node_modules/@opencode/cli/bin/opencode.exe";
   const logs: string[] = [];
   const oc2 = emptyMutation();
-  assert.ok(applyNetGuard(plan({ ownServerExe: exe } as Partial<LaunchPlan>), oc2, { resolveBin: () => "/bin/g", log: (m) => logs.push(m) }));
+  assert.ok(applyNetGuard(plan({ ownServerExe: exe } as Partial<LaunchPlan>), oc2, { resolveBin: () => "/bin/g", probe: () => true, log: (m) => logs.push(m) }));
   assert.equal(oc2.env[NET_GUARD_OWN_SERVER_ENV], exe);
   assert.equal(NET_GUARD_OWN_SERVER_ENV, "MANDU_NET_GUARD_OWN_SERVER");
   assert.ok(logs.some((l) => l.includes("the agent's private server") && l.includes(exe)));
   for (const p of [plan(), plan({ target: "opencode" } as Partial<LaunchPlan>)]) {
     const m = emptyMutation();
-    applyNetGuard(p, m, { resolveBin: () => "/bin/g", log: () => {} });
+    applyNetGuard(p, m, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
     assert.equal(m.env[NET_GUARD_OWN_SERVER_ENV], undefined, "not set for any other launch");
   }
   const off = emptyMutation();
-  applyNetGuard(plan({ ownServerExe: exe, netGuard: false } as Partial<LaunchPlan>), off, { resolveBin: () => "/bin/g", log: () => {} });
+  applyNetGuard(plan({ ownServerExe: exe, netGuard: false } as Partial<LaunchPlan>), off, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
   assert.equal(off.env[NET_GUARD_OWN_SERVER_ENV], undefined, "no guard, nothing to tell it");
 });
 
 test("applyNetGuard: a launch that depends on the guard (plan.netGuardRequired) gets a wrap without --skip-unsupported; every other keeps the degrade", () => {
-  const req = applyNetGuard(plan({ ownServerExe: "/x/opencode", netGuardRequired: true } as Partial<LaunchPlan>), emptyMutation(), { resolveBin: () => "/bin/g", log: () => {} });
+  const req = applyNetGuard(plan({ ownServerExe: "/x/opencode", netGuardRequired: true } as Partial<LaunchPlan>), emptyMutation(), { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
   assert.ok(req);
   assert.ok(!req.wrapArgv.includes("--skip-unsupported"));
   assert.equal(req.wrapArgv.at(-1), "--");
-  const plainWrap = applyNetGuard(plan(), emptyMutation(), { resolveBin: () => "/bin/g", log: () => {} });
+  const plainWrap = applyNetGuard(plan(), emptyMutation(), { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
   assert.ok(plainWrap?.wrapArgv.includes("--skip-unsupported"));
 });
 
 test("applyNetGuard: a hosted clean box hands the guard its socket, session, box and environment, before `--` (§5.3)", () => {
   const mut = emptyMutation();
   const p = plan({ scopeId: "sid-7", cleanHost: { socket: "/run/sid-7/clean.sock", boxBin: "/usr/lib/mandu/mandu-exec-box", env: [["PATH", "/usr/bin"]] } });
-  const r = applyNetGuard(p, mut, { resolveBin: () => "/bin/g", log: () => {} });
+  const r = applyNetGuard(p, mut, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
   assert.ok(r);
   const argv = r.wrapArgv;
   const dash = argv.indexOf("--");
@@ -280,7 +302,7 @@ test("applyNetGuard: a hosted clean box hands the guard its socket, session, box
   const envs = argv.flatMap((a, i) => (a === "--clean-env" ? [argv[i + 1]] : []));
   assert.deepEqual(envs, ["PATH=/usr/bin", `${NET_GUARD_BOX_SOCKETS_ENV}=1`], "the hosted box knows the guard serves its sockets");
   // Nothing hosted: no clean arguments.
-  const plain = applyNetGuard(plan(), emptyMutation(), { resolveBin: () => "/bin/g", log: () => {} });
+  const plain = applyNetGuard(plan(), emptyMutation(), { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
   assert.ok(plain && !plain.wrapArgv.some((a) => a.startsWith("--clean-")));
 });
 
@@ -293,11 +315,11 @@ test("applyNetGuard: the guard records itself in the session's status file, clea
     assert.equal(file, join(dir, "net-guard.status"), "in the scope-run dir, next to launch.log");
     writeFileSync(file, "supervising 1 2\n"); // the last launch's record
     const mut = emptyMutation();
-    assert.ok(applyNetGuard(p, mut, { resolveBin: () => "/bin/g", log: () => {} }));
+    assert.ok(applyNetGuard(p, mut, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} }));
     assert.equal(mut.env[NET_GUARD_STATUS_ENV], file);
     assert.equal(existsSync(file), false, "a stale record cannot make this launch look like a dead guard");
     const off = emptyMutation();
-    applyNetGuard(plan({ netGuard: false }), off, { resolveBin: () => "/bin/g", log: () => {} });
+    applyNetGuard(plan({ netGuard: false }), off, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
     assert.equal(off.env[NET_GUARD_STATUS_ENV], undefined, "no guard, no status file");
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -306,7 +328,7 @@ test("applyNetGuard: the guard records itself in the session's status file, clea
 
 test("applyNetGuard: default-on (netGuard undefined) applies the wrap too", () => {
   const mut = emptyMutation();
-  const r = applyNetGuard(plan({ netGuard: undefined }), mut, { resolveBin: () => "/bin/g", log: () => {} });
+  const r = applyNetGuard(plan({ netGuard: undefined }), mut, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
   assert.ok(r, "undefined = default-on, not off");
   assert.equal(mut.launchPrefix[0], "/bin/g");
 });
@@ -315,7 +337,7 @@ test("applyNetGuard: PREPENDS the wrap outermost, ahead of an existing (landlock
   const mut = emptyMutation();
   // Stand-in for the landlock-net wrap already prepended by applyLandlockNet.
   mut.launchPrefix = ["/bin/landlock-apply", "--net-only", "--"];
-  const r = applyNetGuard(plan(), mut, { resolveBin: () => "/bin/g", log: () => {} });
+  const r = applyNetGuard(plan(), mut, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
   assert.ok(r);
   assert.equal(mut.launchPrefix[0], "/bin/g", "net-guard is now OUTERMOST (its supervisor is outside Landlock)");
   // The landlock-net wrap stays AFTER (inner).
@@ -325,7 +347,7 @@ test("applyNetGuard: PREPENDS the wrap outermost, ahead of an existing (landlock
 test("applyNetGuard: non-strict default banners the open *:443/*:22 trade-off", () => {
   const mut = emptyMutation();
   const logs: string[] = [];
-  const r = applyNetGuard(plan(), mut, { resolveBin: () => "/bin/g", log: (m) => logs.push(m) });
+  const r = applyNetGuard(plan(), mut, { resolveBin: () => "/bin/g", probe: () => true, log: (m) => logs.push(m) });
   assert.ok(r);
   assert.ok(specsAdmitAnyHttps(r!.specs));
   assert.ok(logs.some((l) => /net-guard LIVE/.test(l)));
@@ -335,7 +357,7 @@ test("applyNetGuard: non-strict default banners the open *:443/*:22 trade-off", 
 test("applyNetGuard: strict banners the precise posture (API host only on 443)", () => {
   const mut = emptyMutation();
   const logs: string[] = [];
-  const r = applyNetGuard(plan({ landlockNetStrict: true }), mut, { resolveBin: () => "/bin/g", log: (m) => logs.push(m) });
+  const r = applyNetGuard(plan({ landlockNetStrict: true }), mut, { resolveBin: () => "/bin/g", probe: () => true, log: (m) => logs.push(m) });
   assert.ok(r);
   assert.ok(!specsAdmitAnyHttps(r!.specs));
   assert.ok(logs.some((l) => /STRICT/.test(l) && /api\.anthropic\.com/.test(l)));
@@ -343,7 +365,7 @@ test("applyNetGuard: strict banners the precise posture (API host only on 443)",
 
 test("applyNetGuard: codex target admits api.openai.com on 443, not anthropic", () => {
   const mut = emptyMutation();
-  const r = applyNetGuard(plan({ target: "codex", landlockNetStrict: true }), mut, { resolveBin: () => "/bin/g", log: () => {} });
+  const r = applyNetGuard(plan({ target: "codex", landlockNetStrict: true }), mut, { resolveBin: () => "/bin/g", probe: () => true, log: () => {} });
   assert.ok(r!.specs.includes("tcp:api.openai.com:443"));
   assert.ok(!r!.specs.includes("tcp:api.anthropic.com:443"));
   // codex uses the openai-proxy port for the loopback service rule.
@@ -353,7 +375,7 @@ test("applyNetGuard: codex target admits api.openai.com on 443, not anthropic", 
 test("applyNetGuard: curated --net-allow banners CURATED + includes the user's specs", () => {
   const mut = emptyMutation();
   const logs: string[] = [];
-  const r = applyNetGuard(plan({ netGuardAllow: ["registry.npmjs.org:443"] }), mut, { resolveBin: () => "/bin/g", log: (m) => logs.push(m) });
+  const r = applyNetGuard(plan({ netGuardAllow: ["registry.npmjs.org:443"] }), mut, { resolveBin: () => "/bin/g", probe: () => true, log: (m) => logs.push(m) });
   assert.ok(r!.specs.includes("registry.npmjs.org:443"));
   assert.ok(!specsAdmitAnyHttps(r!.specs));
   assert.ok(logs.some((l) => /CURATED/.test(l)));
@@ -366,7 +388,7 @@ test("applyNetGuard: strict auto-allows workspace git remotes (injected reader) 
     plan({ landlockNetStrict: true }),
     mut,
     {
-      resolveBin: () => "/bin/g",
+      resolveBin: () => "/bin/g", probe: () => true,
       gitRemotes: () => ["https://github.com/o/r.git", "git@gitlab.example:o/r.git"],
       log: (m) => logs.push(m),
     },
@@ -385,7 +407,7 @@ test("applyNetGuard: the git remotes are read from the USER's workspace, not the
     plan({ landlockNetStrict: true, cwd: "/state/agentview", humanCwd: "/w" }),
     emptyMutation(),
     {
-      resolveBin: () => "/bin/g",
+      resolveBin: () => "/bin/g", probe: () => true,
       gitRemotes: (cwd) => { seen.push(cwd); return cwd === "/w" ? ["https://github.com/o/r.git"] : []; },
       log: () => {},
     },
@@ -399,7 +421,7 @@ test("applyNetGuard: --no-net-guard-git suppresses the git auto-allow even in st
   const r = applyNetGuard(
     plan({ landlockNetStrict: true, netGuardGitRemotes: false }),
     mut,
-    { resolveBin: () => "/bin/g", gitRemotes: () => ["https://github.com/o/r.git"], log: () => {} },
+    { resolveBin: () => "/bin/g", probe: () => true, gitRemotes: () => ["https://github.com/o/r.git"], log: () => {} },
   );
   assert.ok(!r!.specs.includes("tcp:github.com:443"));
 });
@@ -408,7 +430,7 @@ test("applyNetGuard: the permissive default does NOT invoke the git reader (fall
   const mut = emptyMutation();
   let called = false;
   applyNetGuard(plan(), mut, {
-    resolveBin: () => "/bin/g",
+    resolveBin: () => "/bin/g", probe: () => true,
     gitRemotes: () => { called = true; return ["https://github.com/o/r.git"]; },
     log: () => {},
   });
@@ -438,11 +460,11 @@ test("computeNetGuardSpecs: extraAllow rides strict AND curated launches (the po
 test("applyNetGuard: deps.lawAllow lands in the specs and is named in the banner; absent → no extra line", () => {
   const mut = emptyMutation();
   const logs: string[] = [];
-  const r = applyNetGuard(plan(), mut, { resolveBin: () => "/bin/g", log: (m) => logs.push(m), lawAllow: ["tcp:registry.npmjs.org:443"] });
+  const r = applyNetGuard(plan(), mut, { resolveBin: () => "/bin/g", probe: () => true, log: (m) => logs.push(m), lawAllow: ["tcp:registry.npmjs.org:443"] });
   assert.ok(r && r.specs.includes("tcp:registry.npmjs.org:443") && r.specs.includes("tcp:*:443"));
   assert.ok(logs.some((l) => /policy\.yaml allows 1 extra destination\(s\) \[tcp:registry\.npmjs\.org:443\]/.test(l)));
   const quiet: string[] = [];
-  applyNetGuard(plan(), emptyMutation(), { resolveBin: () => "/bin/g", log: (m) => quiet.push(m), lawAllow: [] });
+  applyNetGuard(plan(), emptyMutation(), { resolveBin: () => "/bin/g", probe: () => true, log: (m) => quiet.push(m), lawAllow: [] });
   assert.ok(!quiet.some((l) => /policy\.yaml allows/.test(l)));
 });
 
@@ -450,7 +472,7 @@ test("applyNetGuard: a STALE guard bin is WARNED about (attention line) and the 
   const mut = emptyMutation();
   const logs: string[] = [];
   const r = applyNetGuard(plan(), mut, {
-    resolveBin: () => "/bin/g",
+    resolveBin: () => "/bin/g", probe: () => true,
     staleNote: (name, path) => `mandu: WARNING — ${name} at ${path} is STALE`,
     log: (m) => logs.push(m),
   });
@@ -479,7 +501,7 @@ test("applyNetGuard: plan.modelEndpoints → the helper's entry pinned to its ho
       { name: "lan", url: "http://192.168.1.5:8000", wire: "openai-chat", local: true },
       { name: "cloud", url: "https://llm.example.com:8443", wire: "anthropic", local: false },
     ],
-  }), emptyMutation(), { resolveBin: () => "/bin/g", staleNote: () => null, log: (m) => logs.push(m) });
+  }), emptyMutation(), { resolveBin: () => "/bin/g", probe: () => true, staleNote: () => null, log: (m) => logs.push(m) });
   assert.ok(r);
   for (const s of ["tcp:127.0.0.0/8:11434", "tcp:[::1]:11434"]) assert.ok(r.specs.includes(s), s);
   assert.ok(!r.specs.some((s) => s.includes("192.168.1.5")), "a local entry that is not the helper is not admitted");

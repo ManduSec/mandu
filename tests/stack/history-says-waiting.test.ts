@@ -8,7 +8,8 @@
  * dot, where Home's Running now said it waited for your OK, and an ended
  * session's question still waiting was said nowhere on History. Here a real
  * ArbiterServer runs at the `secrets` axes; the REAL anthropic-proxy on its
- * production client carries two sessions, A and B; each asks the arbiter's
+ * production client carries two sessions, A and B (A also reads a .env whose
+ * key the proxy masks, so its row has two counts); each asks the arbiter's
  * egress gate (from the human socket, as the real proxies ask) to send a
  * registered key to a host no rule binds it to; B's launcher records its
  * REAL `session_exit`. A product-only DashboardServer reads them over a real
@@ -20,8 +21,9 @@
  *       Home's rows of the same sessions say the same, and the served Home
  *       draws them with History's first line (A keeps what you asked under
  *       Running now, B under Earlier);
- *   W2  the drawn page: A's row has the amber dot and "1 question waiting
- *       for you", B's says it and "ended";
+ *   W2  the drawn page: A's row has the amber dot and leads its counts
+ *       with "1 question waiting for you", as Running now does; B's says it
+ *       and "ended"; each row's counts read as its Home row's;
  *   W3  A's question answered (Block, over the real route): the page's poll
  *       draws A without it and with the green dot; B's is unchanged;
  *   W4  the oracle: the model never got the value, and neither History's
@@ -99,11 +101,11 @@ test("History says what waits for you on the real stack: a running agent's quest
   const proxyB = new AnthropicProxy({ arbiter: new ArbiterClientAdapter(data, human), upstream, sessionKey: B, log: () => {} });
   const portA = await proxyA.listen(0);
   const portB = await proxyB.listen(0);
-  const ask = async (port: number, session: string, prompt: string) => {
+  const ask = async (port: number, session: string, prompt: string, more: unknown[] = []) => {
     const res = await pageFetch(`http://127.0.0.1:${port}/v1/messages`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-mandu-session-id": session, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-opus-4", stream: true, max_tokens: 512, messages: [{ role: "user", content: prompt }] }),
+      body: JSON.stringify({ model: "claude-opus-4", stream: true, max_tokens: 512, tools: [{ name: "Read", input_schema: { type: "object" } }], messages: [{ role: "user", content: prompt }, ...more] }),
     });
     assert.equal(res.status, 200, await res.text());
   };
@@ -138,6 +140,13 @@ test("History says what waits for you on the real stack: a running agent's quest
     const reg = await data.registerSecret({ path: env, sessionKey: A });
     const keySym = /\$MDU:nomodel_Read\[[0-9a-f]+\]\.STRIPE_KEY/.exec(reg.twin ?? "")?.[0];
     assert.ok(keySym, `the key has its own symbol: ${JSON.stringify(reg)}`);
+    // A reads the .env: its proxy masks the key, so A's row has a second
+    // count for the question to lead (W2).
+    await ask(portA, A, "Deploy the billing service.", [
+      { role: "assistant", content: [{ type: "tool_use", id: "toolu_hw_env", name: "Read", input: { file_path: env } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_hw_env", content: `     1\tSTRIPE_KEY=${VALUE}\n` }] },
+    ]);
+    assert.ok(!seen.at(-1)!.includes(VALUE), "CONFIDENTIALITY VIOLATION: the model got the .env value");
     const send = (session: string, destination: string) => guard.desymbolizationDecision({ symbol: keySym!, boundary: "network", destination, sessionKey: session, scheme: "https" });
     const fromA = await send(A, "api.stripe.com");
     const fromB = await send(B, "hooks.example.com");
@@ -146,7 +155,7 @@ test("History says what waits for you on the real stack: a running agent's quest
     const askA = String((fromA as { approvalId?: string }).approvalId);
 
     // W1: the server's History, and Home's rows of the same sessions.
-    const w1 = await history((h) => rowIn(h, A)?.waiting === 1 && rowIn(h, B)?.waiting === 1 && rowIn(h, B)?.state === "idle");
+    const w1 = await history((h) => rowIn(h, A)?.waiting === 1 && rowIn(h, A)?.secrets.masked === 1 && rowIn(h, B)?.waiting === 1 && rowIn(h, B)?.state === "idle");
     assert.equal(rowIn(w1.h, A)!.state, "waiting", "A runs and waits for your OK");
     noValue(w1.text, "/api/home/history");
     const homeText = await (await pageFetch(`${base}/api/home`)).text();
@@ -159,6 +168,7 @@ test("History says what waits for you on the real stack: a running agent's quest
     // what you asked, its counts leading with the question; B is under
     // Earlier (dashboard.md §4.25 *Agents, not sessions*).
     const homeLine: Record<string, string> = {};
+    const homeCounts: Record<string, string> = {};
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const homeRow = (doc: any, host: string, id: string) => doc.querySelector(`#${host} .row.agent[data-session="${id}"]`);
     await servedProductPage(base, "/", (doc) => homeRow(doc, "home-agents", A) !== null && homeRow(doc, "home-earlier", B) !== null, async (doc) => {
@@ -167,6 +177,8 @@ test("History says what waits for you on the real stack: a running agent's quest
       assert.match(a.querySelector(".agent-counts").textContent, /^1 question waiting for you/);
       assert.doesNotMatch(a.textContent, /Waiting for your OK/, "the state is not put in the prompt's place");
       homeLine[A] = a.querySelector(".agent-what .sub").textContent;
+      homeCounts[A] = a.querySelector(".agent-counts").textContent;
+      homeCounts[B] = homeRow(doc, "home-earlier", B).querySelector(".agent-counts").textContent;
       homeLine[B] = homeRow(doc, "home-earlier", B).querySelector(".agent-what .sub").textContent;
       noValue(doc.body.textContent, "the rendered Home page");
     });
@@ -178,7 +190,10 @@ test("History says what waits for you on the real stack: a running agent's quest
       for (const id of [A, B]) assert.equal(rowOf(doc, id).querySelector(".agent-what .sub").textContent, homeLine[id], `Home and History describe ${id} alike`);
       assert.equal(doc.getElementById("page-history").hidden, false);
       assert.equal(rowOf(doc, A).querySelector(".dot").className, "dot warn", "Running now's dot for an agent waiting for your OK");
-      assert.match(rowOf(doc, A).querySelector(".agent-counts").textContent, /1 question waiting for you/);
+      // A runs, so its counts lead with the question, as Running now's do;
+      // B ended, so its counts read as Earlier's (§4.25ae).
+      assert.equal(rowOf(doc, A).querySelector(".agent-counts").textContent, "1 question waiting for you, 1 secret masked", "the running row leads with its question");
+      for (const id of [A, B]) assert.equal(rowOf(doc, id).querySelector(".agent-counts").textContent, homeCounts[id], `Home and History count ${id} alike`);
       assert.match(rowOf(doc, A).textContent, /Deploy the billing service\./, "the row keeps its prompt");
       assert.match(rowOf(doc, A).textContent, /running now, started/);
       assert.match(rowOf(doc, B).querySelector(".agent-counts").textContent, /1 question waiting for you/);

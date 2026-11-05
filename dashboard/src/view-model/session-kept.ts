@@ -118,22 +118,42 @@ function namesOf(secrets: readonly StorySecret[], saw: StorySecret["saw"]): stri
   return out;
 }
 
-/** The hosts the story's sends went to, in order, each once: a `sent`
- *  step's first code part (agent-page.ts `osWords`: "Sent a request to
- *  `host` with … filled in"). */
-export function sentHosts(turns: readonly StoryTurn[]): string[] {
+type ActionStep = Extract<StoryTurn["steps"][number], { kind: "action" }>;
+
+/** The hosts of the story's action steps `keep` accepts, in order, each
+ *  once: the step's first code part (agent-page.ts `osWords`: "Sent a
+ *  request to `host` with … filled in", "Mandu blocked a request to
+ *  `host` that carried …"). */
+function stepHosts(turns: readonly StoryTurn[], keep: (s: ActionStep, host: string) => boolean): string[] {
   const out: string[] = [];
   for (const turn of turns) {
     for (const s of turn.steps) {
-      if (s.kind !== "action" || s.outcome !== "sent") continue;
+      if (s.kind !== "action") continue;
       const host = s.sentence.find((p) => p.kind === "code")?.text;
-      if (host) {
+      if (host && keep(s, host)) {
         const h = plainName(host);
         if (!out.includes(h)) out.push(h);
       }
     }
   }
   return out;
+}
+
+/** The hosts the story's sends went to, in order, each once: a `sent`
+ *  step's first code part (agent-page.ts `osWords`: "Sent a request to
+ *  `host` with … filled in"). */
+export function sentHosts(turns: readonly StoryTurn[]): string[] {
+  return stepHosts(turns, (s) => s.outcome === "sent");
+}
+
+/** The hosts the story's sends went to or were stopped on their way to,
+ *  in order, each once: the `sent` steps' and the blocked web steps'
+ *  ("Mandu blocked a request to `host` …", "… a connection to `host`";
+ *  History's search, dashboard.md §4.25ae *By a secret or a host*). A
+ *  block that names no host ("the network") adds none. Hosts only, never
+ *  what a send carried. */
+export function sendHosts(turns: readonly StoryTurn[]): string[] {
+  return stepHosts(turns, (s, host) => s.outcome === "sent" || (s.outcome === "blocked" && s.icon === "web" && host !== "the network"));
 }
 
 /** The session's facts, from the SAME story and counts Home counts it by

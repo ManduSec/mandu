@@ -14,10 +14,11 @@
  * answer, more path-like strings than the bound, or a value nested past the
  * depth bound withholds the path.
  *
- * A COPY, kept byte-equal below the marker line with
- * interceptors/openai-proxy/src/unmapped-upload-core.ts (no cross-package
- * import; the openai-proxy's unit test pins the two equal). Its one import
- * is this package's arbiter-client.ts types, which both packages name alike.
+ * Each package's leg is its own unmapped-upload.ts (Codex's also runs for
+ * the code cells). ONE MODULE, TWO COPIES (no cross-package import): the
+ * source is interceptors/anthropic-proxy/src/unmapped-upload-core.ts; change
+ * it, then run `node scripts/copies/module-copies.mjs generate`. Its one
+ * import is the package's arbiter-client.ts types, which both name alike.
  *
  * Pure but for the arbiter call; never throws.
  */

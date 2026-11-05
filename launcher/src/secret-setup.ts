@@ -95,7 +95,9 @@ export function probeWindowsProfiles(): string[] {
 import {
   gapExplanation,
   gatedNotice,
+  isBindOnlyGap,
   onConfinementFailure,
+  resolveHostPosture,
   type ConfinementPosture,
   type HostGap,
 } from "./confinement-posture.js";
@@ -108,6 +110,7 @@ import { cachedProbe } from "./probe-cache.js";
 import { publishFile } from "./safe-file.js";
 import type { StepSpans } from "./launch-timings.js";
 import { gooseRoutedKeyVars } from "./goose-route.js";
+import { azureRoutedKeyVars, googleRoutedKeyVars, ollamaRoutedKeyVars } from "./agent-model-route.js";
 import { AGENT_LOGIN_NAMES, agentDisplayName, LOGIN_ENV, launchLoginKeying, loginEnvOf, otherAgentLoginsRaw } from "./agent-login.js";
 
 /** What `discoverSecrets` answers since 2026-09-24 (arbiter protocol
@@ -1182,35 +1185,54 @@ async function applySecretTwinsInner(
     `directly and send them anywhere (${docsUrl("docs/design/confidentiality/confidentiality.md")} §10.1).`;
 
   // ── Can the HOST confine at all? A known condition: degrade unless strict. ──
-  let hostGap: { gap: HostGap; why: string } | null = null;
-  if (deps.platform === "win32") {
-    hostGap = { gap: "unsupported-os", why: "Windows secret confinement is not implemented" };
-  } else if (deps.platform === "linux") {
+  // The launch probes its own facts (its bwrap lookup, which can refuse an
+  // administrator's copy; its sandbox-exec by path) and the DECISION is
+  // resolveHostPosture's, the one table `mandu doctor` reads too, so the two
+  // cannot disagree on a host's posture.
+  let wrapAvailable = false;
+  let bwrapRefused: string | undefined;
+  let userns = false;
+  let apparmorRestricted = false;
+  if (deps.platform === "linux") {
     // The bwrap the wrap would run (Mandu's own copy, else the distribution's
     // by absolute path, never one inside the workspace: bwrap-path.ts). None
     // is a host gap like a missing package. A test that names its own
     // `wrapBwrap` still answers presence through `commandExists`.
     const wrap = deps.wrapBwrap !== undefined ? deps.wrapBwrap : resolveWrapBwrap();
-    if (wrap === null || (wrap === "bwrap" && !deps.commandExists("bwrap"))) {
-      const refused = deps.wrapBwrap === undefined ? systemBwrap().refused : undefined;
-      hostGap = {
-        gap: "no-bwrap",
-        why: refused !== undefined
-          ? `your administrator's bubblewrap cannot be used (${refused})`
-          : "`bwrap` (bubblewrap) is not installed (none on PATH outside the working directory)",
-      };
-    } else if (!deps.usernsOk()) {
-      const restricted = (deps.apparmorRestricted ?? defaultApparmorRestricted)();
-      hostGap = {
-        gap: restricted ? "apparmor-userns" : "userns-off",
-        why: `unprivileged user namespaces are unavailable (${(deps.usernsHint ?? usernsGapHint)()})`,
-      };
-    }
-  } else if (!sandboxExecAvailable(deps.commandExists)) {
+    wrapAvailable = !(wrap === null || (wrap === "bwrap" && !deps.commandExists("bwrap")));
+    if (!wrapAvailable && deps.wrapBwrap === undefined) bwrapRefused = systemBwrap().refused;
+    userns = wrapAvailable && deps.usernsOk();
+    apparmorRestricted = wrapAvailable && !userns && (deps.apparmorRestricted ?? defaultApparmorRestricted)();
+  }
+  const host = resolveHostPosture({
+    platform: deps.platform,
+    bwrap: wrapAvailable,
+    userns,
+    apparmorRestricted,
     // /usr/bin/sandbox-exec by path: the binary the wrap runs, never a PATH
     // entry that could stand in for it (seatbelt-profile.ts SANDBOX_EXEC).
-    hostGap = { gap: "no-sandbox-exec", why: "`/usr/bin/sandbox-exec` is unavailable" };
-  }
+    sandboxExec: deps.platform === "darwin" && sandboxExecAvailable(deps.commandExists),
+    landlockReadBlock: false,
+    guard: deps.platform === "linux" && deps.guardServesTwins === true,
+    guardOff: plan.netGuard === false,
+  });
+  /** Why the host cannot bind, in the launch's words (the gap's detail). */
+  const gapWhy = (gap: HostGap): string => {
+    switch (gap) {
+      case "unsupported-os": return "Windows secret confinement is not implemented";
+      case "no-sandbox-exec": return "`/usr/bin/sandbox-exec` is unavailable";
+      case "no-bwrap": return bwrapRefused !== undefined
+        ? `your administrator's bubblewrap cannot be used (${bwrapRefused})`
+        : "`bwrap` (bubblewrap) is not installed (none on PATH outside the working directory)";
+      default: return `unprivileged user namespaces are unavailable (${(deps.usernsHint ?? usernsGapHint)()})`;
+    }
+  };
+  // The host's own gap below the guard: resolveHostPosture's `gap` when the
+  // launch is gated for it, its `bindGap` when the guard alone confines.
+  const hostLevel = host.gap !== undefined && !isBindOnlyGap(host.gap) ? host.gap : host.bindGap;
+  let hostGap: { gap: HostGap; why: string } | null = hostLevel === undefined ? null : { gap: hostLevel, why: gapWhy(hostLevel) };
+  // --require-confinement refuses a host that cannot bind, before the guard
+  // is asked (as it always has: the strict launch wants both layers).
   if (hostGap !== null && onConfinementFailure("host", strict) === "refuse") {
     const { fix } = gapExplanation(hostGap.gap);
     throw new SecretConfinementError(
@@ -1223,7 +1245,7 @@ async function applySecretTwinsInner(
   // that is only "no bind possible" is closed by the guard's descriptor
   // injection; the twins are still written (the guard opens them), no bwrap.
   let guardOnly = false;
-  if (hostGap !== null && deps.platform === "linux" && deps.guardServesTwins === true && hostGap.gap !== "unsupported-os") {
+  if (hostGap !== null && host.posture === "confined") {
     deps.log(
       `mandu: confidentiality — ${hostGap.why}; the whole-agent guard serves the secret twins by descriptor instead ` +
       "(no bind mount; plan 10 §11.7). Posture: confined.",
@@ -1231,7 +1253,7 @@ async function applySecretTwinsInner(
     guardOnly = true;
     hostGap = null;
   }
-  if (hostGap !== null) deps.log(gatedNotice(hostGap.gap).join("\n"));
+  if (hostGap !== null) deps.log(gatedNotice(hostGap.gap, { egressGateOff: plan.requested?.netProxy === false }).join("\n"));
   const gated = hostGap !== null;
   /** The wrap's bwrap, for a step that runs the wrap. The host check above
    *  found one whenever such a step is reached; if it is gone by then the
@@ -1253,9 +1275,8 @@ async function applySecretTwinsInner(
   // agent runs detaches it and the new real file is readable; only the
   // guard's by-path open catches that. So the posture is `gated`, and
   // --require-confinement refuses. Everything below runs as before.
-  let bindOnly: HostGap | null = null;
-  if (!gated && !guardOnly && deps.platform === "linux" && deps.guardServesTwins !== true) {
-    bindOnly = plan.netGuard === false ? "guard-off" : "no-guard";
+  const bindOnly: HostGap | null = host.posture === "gated" && isBindOnlyGap(host.gap) ? host.gap! : null;
+  if (bindOnly !== null) {
     if (onConfinementFailure("host", strict) === "refuse") {
       throw new SecretConfinementError(
         `mandu: --require-confinement is set, but ${plan.netGuard === false ? "the whole-agent guard is turned off for this launch" : "the whole-agent guard (mandu-net-guard) is not available"}. ` +
@@ -1265,7 +1286,7 @@ async function applySecretTwinsInner(
         "or drop --require-confinement to launch GATED, or turn secret protection off for this launch (--mode off).",
       );
     }
-    deps.log(gatedNotice(bindOnly).join("\n"));
+    deps.log(gatedNotice(bindOnly, { egressGateOff: plan.requested?.netProxy === false }).join("\n"));
   }
   /** The posture every later return reports (bind-only is `gated`). */
   const settled = (ok: ConfinementPosture): { posture: ConfinementPosture; gap?: HostGap } =>
@@ -2271,7 +2292,18 @@ export async function applyEnvSecrets(
   // ANTHROPIC_API_KEY and OPENAI_API_KEY: Goose sends it to the model proxy.
   // Unless the launch granted it (`agentKeys`, agent-sign-in.md §3.10): then
   // it is masked and the model proxy puts the key back.
-  const ownKeys = new Set((plan.target === "goose" ? gooseRoutedKeyVars(plan.gooseRouting) : []).filter((k) => !agentKeys.has(k)));
+  // The same for a Gemini provider an OpenClaw or OpenCode launch routes
+  // (model-wires.md §5): the key variable that agent's Google client reads;
+  // and for an Azure OpenAI provider an OpenClaw launch routes (§8), its
+  // AZURE_OPENAI_API_KEY.
+  const ownKeys = new Set([
+    ...(plan.target === "goose" ? gooseRoutedKeyVars(plan.gooseRouting) : []),
+    ...googleRoutedKeyVars(plan.target, plan.openaiRoutes),
+    // And for an Ollama provider an OpenClaw launch routes (model-wires.md,
+    // "The Ollama wire"): OLLAMA_API_KEY.
+    ...ollamaRoutedKeyVars(plan.target, plan.openaiRoutes),
+    ...azureRoutedKeyVars(plan.target, plan.openaiRoutes),
+  ].filter((k) => !agentKeys.has(k)));
   for (const [name, value] of Object.entries(env)) {
     if (value === undefined || value === "" || name in mut.env || sourced.has(name) || ownKeys.has(name)) continue;
     vars.push(agentKeys.has(name) ? { name, value, agentKey: true } : { name, value });

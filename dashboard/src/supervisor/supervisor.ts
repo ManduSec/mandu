@@ -616,6 +616,29 @@ export class Supervisor {
     return this.services[id].def;
   }
 
+  /** How this supervisor would spawn `id` NOW (the checkout's bundle while
+   *  its build record says it is fresh, else the source; an install's
+   *  bundle): command, args, cwd and the definition's env. `mandu serve`'s
+   *  proxy pool (attachment-pool.ts) starts its proxies through this, so
+   *  they run exactly the code this supervisor's own would. Never spawns. */
+  async serviceSpawn(id: ServiceId): Promise<{ command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }> {
+    if (this.closed) throw new Error(`${id}: not started: the dashboard is shutting down`);
+    const def = await this.spawnForm(id);
+    return { command: def.command, args: [...def.args], cwd: def.cwd, env: { ...def.env } };
+  }
+
+  /** The supervised arbiter's human-plane socket, as its `hello` names it
+   *  now (null: no answer, or an arbiter without one). */
+  async arbiterHumanSock(): Promise<string | null> {
+    const who = await helloProbe(this.opts.arbiterSock);
+    return typeof who?.humanSock === "string" && who.humanSock !== "" ? who.humanSock : null;
+  }
+
+  /** The directory the supervised services' logs go to. */
+  get serviceLogDir(): string {
+    return this.logDir;
+  }
+
   /** Synchronous snapshot of all services. Doubles as the retry heartbeat for
    *  adopted identity-less daemons: each snapshot kicks a throttled background
    *  re-probe (hello, then /proc socket-owner), so the panel's 3s poll is what

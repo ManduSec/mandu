@@ -6,11 +6,12 @@
  */
 
 import type { SessionFlowStats } from "./lineage.js";
-import type { AgentPreview, HomeAnswered, HomeAsk, HomeTextPart, SecretsPostureNote } from "./home.js";
+import type { AgentPreview, HomeAnswered, HomeAsk, HomeNoticePart, HomeTextPart, SecretsPostureNote } from "./home.js";
 import type { PromptNote } from "./prompt-notes.js";
 import type { SecretsStory } from "./secret-story.js";
 import type { BrowserStory } from "./browser-story.js";
 import type { LaunchTimeVM } from "./launch-time.js";
+import type { DiscardedWrites } from "./discarded-writes.js";
 
 export type StoryOutcome =
   | "unmasked" // untrusted content reached the AI without a mask (a violation)
@@ -64,8 +65,8 @@ export interface StoryPart {
    *  names the trace (§4.25ad). */
   trace?: "trace" | "secrets";
   /** A "text" part the page draws as a link that opens in a new tab: only
-   *  a fixed address the server itself names (`ISSUES_URL`, the leak
-   *  check's *Report a problem*), never one read from an event. */
+   *  a fixed address the server itself names (`SECURITY_REPORT_URL`, the
+   *  leak check's *Report it privately*), never one read from an event. */
   href?: string;
   /** A "text" part the page draws as a link to that card of Rules
    *  (`/rules#built-in`, Built-in protections): a sent step to a company's
@@ -236,6 +237,18 @@ export interface StoryTurn {
   promptNote: PromptNote | null;
 }
 
+/** A session History lists next to this one (`AgentPageVM.neighbours`),
+ *  named as its History row: metadata only, as /api/home/history serves. */
+export interface SessionNeighbour {
+  id: string;
+  /** The agent's name (home.ts `agentName`). */
+  agent: string;
+  /** What you asked (`promptLabel`, one line); null for a fallback label. */
+  title: string | null;
+  /** Its last moment (ISO), the one History orders by; null when unknown. */
+  at: string | null;
+}
+
 export interface AgentPageVM {
   found: boolean;
   id: string;
@@ -250,11 +263,20 @@ export interface AgentPageVM {
    *  tools Mandu does not know where the level masks their output. null
    *  otherwise. */
   notice: string | null;
-  /** The same words as parts, each command as code; null with no notice. */
-  noticeParts: HomeTextPart[] | null;
-  /** The session could not do its job (its health `broken`): the page also
-   *  writes the notice out under its header, not only behind the mark. */
+  /** The same words as parts, each command as code and the moment the AI
+   *  plan's limit resets as a `time` part; null with no notice. */
+  noticeParts: HomeNoticePart[] | null;
+  /** The session could not do its job (its health `broken`), or one of
+   *  Mandu's protections did not start in it (`droppedProtections`): the
+   *  page also writes the notice out under its header, not only behind the
+   *  mark. */
   noticeShown: boolean;
+  /** The title over that line, naming the trouble: "This session did not
+   *  work as it should." for a broken session (with or without a dropped
+   *  protection), "This session ran with less protection than usual." for
+   *  one where only a protection did not start. null when `noticeShown` is
+   *  false. */
+  noticeTitle: string | null;
   /** The session's launch left the agent's programs able to read the
    *  credential files (its posture `gated`, dashboard.md §4.23 *Product
    *  page*): a line under the header with the fix. null for `confined`,
@@ -266,6 +288,10 @@ export interface AgentPageVM {
   lastAt: string | null;
   running: boolean;
   holds: boolean;
+  /** The session recorded that it ran with protection off (`paired.mode`,
+   *  never today's setting): the page says so at its top (dashboard.md
+   *  §4.25b). False for a session that recorded no mode. */
+  protectionOff: boolean;
   violations: number;
   stats: SessionFlowStats;
   /** Steps Mandu blocked, across the whole session (the tile). */
@@ -291,6 +317,10 @@ export interface AgentPageVM {
   /** "Mandu took 1.7 s to start this session: …" (dashboard.md §4.25ag),
    *  from the launcher's step timings; null when the launch recorded none. */
   launchTime: LaunchTimeVM | null;
+  /** "Changes Mandu did not apply to your files" (§4.25b): the secret files
+   *  whose masked copy the agent changed, from the session's last BELIEVED
+   *  `session_exit`; null while it runs, or when its exit names none. */
+  discardedWrites: DiscardedWrites | null;
   /** Plan 15 §13.7: notes for messages no turn shows (a message Mandu
    *  blocked never reached the AI), oldest first; the page places each in
    *  the story by its time. */
@@ -301,6 +331,11 @@ export interface AgentPageVM {
   /** The page asked for every secret (`?secrets=all`): a `secrets.more`
    *  left is past SECRET_ALL_CAP. */
   allSecrets?: true;
+  /** "Files the AI read as they were" under *Your secrets* (§4.25b): each
+   *  file the agent's read tool opened whose result reached the AI with
+   *  nothing masked, once, in the order first read; null when there is none
+   *  or protection was off. */
+  readAsIs: ReadAsIs | null;
   /** What the leak check found (§4.25ae): null when it never fired. */
   finding: LeakFinding | null;
   /** "On web pages" (§4.25af): a browser agent's run through Mandu's
@@ -311,10 +346,35 @@ export interface AgentPageVM {
    *  `GET /api/home/original`), never on the page's own read. null: that
    *  step has no original to show. */
   original?: StoryHidden | null;
+  /** The sessions just above (`newer`) and just below (`older`) this one in
+   *  History's full list, newest first by last moment, none of its filters
+   *  applied (dashboard.md §4.25b *Newer and older sessions*). Absent for a
+   *  session History does not list (a drill or test run) or one not found. */
+  neighbours?: { newer: SessionNeighbour | null; older: SessionNeighbour | null };
   /** Whether the page carries originals (dashboard.md §6): false for a
    *  viewer without the admin session, whose page is built from what the AI
    *  saw only; the page then says "Sign in to see real values". */
   valuesShown: boolean;
+}
+
+/** One file the AI read as it was (`AgentPageVM.readAsIs`). Paths and
+ *  times only, never a byte of the file. */
+export interface ReadAsIsFile {
+  /** `~/…` under the home folder, else absolute: the page's `?file=`. */
+  path: string;
+  /** Its first such read (ISO). */
+  at: string;
+  /** That read's step id, when the story below draws it: the time opens
+   *  it. Absent: the step is not on the page. */
+  step?: string;
+}
+
+/** The files the AI read as they were, at most READ_AS_IS_CAP (the page
+ *  draws the first 30, the rest after "Show them"). */
+export interface ReadAsIs {
+  files: ReadAsIsFile[];
+  /** Files past the cap. */
+  more: number;
 }
 
 /** Where an ask was raised in this session's story (§4.25h). */

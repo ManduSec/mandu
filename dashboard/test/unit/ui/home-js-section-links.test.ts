@@ -30,7 +30,14 @@
  * empty has no link and gets one when it shows, the row changed in place
  * (the focus stays on a link); a click writes the key; `/approvals#answered`
  * lands there; a hidden list's address, or an address naming one item
- * (`/approvals/<id>`), opens the top. Axes: none (display only).
+ * (`/approvals/<id>`), opens the top.
+ *
+ * Settings' Dashboard account since 2026-11-04: the card with Sign out,
+ * shown only to a browser signed in on the sign-in page, had no link and no
+ * address. Pins: its link sits between Appearance and About while the card
+ * shows and hides with it, a poll changing the row in place;
+ * `/settings#account` lands there once Home's first read shows the card,
+ * else opens the top. Axes: none (display only).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -49,6 +56,7 @@ const RULES_LINKS = [
   ["Describe", "describe", "describe-block"],
   ["Your rules", "your-rules", "rules-block"],
   ["Who may get your secrets", "who", "by-who-block"],
+  ["Files made from your secrets", "made-from", "made-from-block"],
   ["Keys Mandu found", "keys-found", "suggested-block"],
   ["Built-in protections", "built-in", "builtin-block"],
 ];
@@ -59,6 +67,8 @@ const SETTINGS_LINKS = [
   ["Prompt filters", "prompt-filters", "settings-prompt-block"],
   ["Notifications", "notifications", "settings-notify-block"],
   ["Appearance", "appearance", "settings-appearance-block"],
+  // Shown only to a browser signed in on the sign-in page (2026-11-04).
+  ["Dashboard account", "account", "settings-account-block"],
   ["About", "about", "settings-about-block"],
 ];
 
@@ -90,11 +100,89 @@ test("under each title, a link per card, in the page's order: each names an exis
   }
 });
 
+/** The words of the links shown, as the row reads (the "·" between them
+ *  is the stylesheet's). */
+const rowWords = (doc: any, page: string) => links(doc, page).filter((a) => !a.closest("li").hidden).map((a) => a.textContent).join(" · ");
+/** Home's read with the dashboard account's state (/api/home `signIn`). */
+const SIGNED_IN = { signIn: { signOut: true, accountChangedAt: null } };
+
 test("Settings' row reads Protection · Models · Sensitivity labels · Prompt filters · Notifications · Appearance · About", async () => {
   const { doc } = load({ url: `${BASE}/settings`, routes: ROUTES });
   await tick();
-  // The "·" between them is the stylesheet's.
-  assert.equal(links(doc, "settings").map((a) => a.textContent).join(" · "), "Protection · Models · Sensitivity labels · Prompt filters · Notifications · Appearance · About");
+  assert.equal(rowWords(doc, "settings"), "Protection · Models · Sensitivity labels · Prompt filters · Notifications · Appearance · About");
+});
+
+// ── Dashboard account (2026-11-04) ──────────────────────────────────────────
+// The card with Sign out, shown only to a browser signed in on the sign-in
+// page, had no link and no address: the row skipped it, and Sign out was the
+// one control on Settings with no one-click way to it.
+test("Dashboard account: signed in on the sign-in page, the row names it between Appearance and About; a click lands on Sign out's card", async () => {
+  const { doc, window } = load({ url: `${BASE}/settings`, routes: ROUTES, homeVm: home(SIGNED_IN) });
+  await tick();
+  assert.equal(doc.getElementById("settings-account-block").hidden, false, "the card shows");
+  assert.equal(rowWords(doc, "settings"), "Protection · Models · Sensitivity labels · Prompt filters · Notifications · Appearance · Dashboard account · About");
+  assert.equal(link(doc, "settings", "account").getAttribute("href"), "/mandu/settings#account");
+  assert.equal(doc.querySelector("#page-settings nav.section-links li.end a").dataset.section, "about", "About still ends the row");
+  const scrolled = recordScrolls(window);
+  const entries = window.history.length;
+  link(doc, "settings", "account").click();
+  assert.deepEqual(scrolled, ["settings-account-block"]);
+  assert.equal(doc.activeElement, doc.getElementById("settings-account-title"), "the card's heading has the focus");
+  assert.equal(window.location.pathname + window.location.hash, "/mandu/settings#account");
+  assert.equal(window.history.length, entries, "no new history entry");
+});
+
+test("Dashboard account: no sign-in (the admin link, an older server, signOut false) hides its link too; a poll that signs in shows it, the row changed in place", async () => {
+  for (const over of [{}, { signIn: { signOut: false, accountChangedAt: null } }, { signIn: null }]) {
+    const { doc } = load({ url: `${BASE}/settings`, routes: ROUTES, homeVm: home(over) });
+    await tick();
+    const what = JSON.stringify(over);
+    assert.equal(doc.getElementById("settings-account-block").hidden, true, `${what}: the card is hidden`);
+    assert.equal(link(doc, "settings", "account").closest("li").hidden, true, `${what}: so is its link`);
+    assert.equal(doc.querySelector("#page-settings nav.section-links li.end a").dataset.section, "about", `${what}: About keeps the row's end`);
+  }
+  let signIn: unknown = null;
+  const { doc } = load({ url: `${BASE}/settings`, routes: { ...ROUTES, "GET home": () => home({ signIn }) } });
+  await tick();
+  assert.equal(rowWords(doc, "settings"), "Protection · Models · Sensitivity labels · Prompt filters · Notifications · Appearance · About");
+  const lis = [...row(doc, "settings").querySelectorAll("li")];
+  const about = link(doc, "settings", "about");
+  about.focus();
+  signIn = SIGNED_IN.signIn;
+  await poll(doc);
+  assert.equal(doc.getElementById("settings-account-block").hidden, false, "signed in: the card shows");
+  assert.equal(rowWords(doc, "settings"), "Protection · Models · Sensitivity labels · Prompt filters · Notifications · Appearance · Dashboard account · About");
+  assert.deepEqual([...row(doc, "settings").querySelectorAll("li")], lis, "the row was not drawn again");
+  assert.equal(doc.activeElement, about, "the focus stays on the link");
+  signIn = { signOut: false, accountChangedAt: null };
+  await poll(doc);
+  assert.equal(link(doc, "settings", "account").closest("li").hidden, true, "and hides again with its card");
+});
+
+test("Dashboard account: /settings#account lands on Sign out's card once Home's first read shows it; with the card hidden the page opens at its top", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const scrolled: string[] = [];
+  const before = (w: any) => { w.HTMLElement.prototype.scrollIntoView = function (this: any) { scrolled.push(this.id); }; };
+  const url = `${BASE}/settings#account`;
+  const { doc, window } = load({ url, routes: { ...ROUTES, "GET home": () => gate.then(() => home(SIGNED_IN)) }, before });
+  await tick();
+  assert.equal(doc.getElementById("settings-account-block").hidden, true, "hidden until Home's first read");
+  assert.deepEqual(scrolled, [], "no scroll before it");
+  release();
+  await tick();
+  assert.deepEqual(scrolled, ["settings-account-block"], "then one scroll, to its card");
+  assert.equal(doc.activeElement, doc.getElementById("settings-account-title"));
+  assert.equal(window.location.href, url, "the address keeps its hash");
+
+  // Not signed in: the card stays hidden, so the address opens the top, as
+  // a hidden list's does on Approvals.
+  scrolled.length = 0;
+  const off = load({ url, routes: ROUTES, before });
+  await tick();
+  assert.equal(off.doc.getElementById("settings-account-block").hidden, true);
+  assert.deepEqual(scrolled, [], "no scroll");
+  assert.notEqual(off.doc.activeElement?.tagName, "H2", "no card's heading took the focus");
 });
 
 test("a click scrolls its card to the top, gives the card's heading the focus and puts its key in the address, replaced", async () => {
@@ -215,10 +303,12 @@ test("a link that opens a card from another page writes that card's address; a n
 });
 
 // ── Approvals (2026-10-23) ──────────────────────────────────────────────────
+// The questions an agent waits on before Keys Mandu found, which is advice
+// (2026-10-26, §4.25 *Section links*).
 const APPROVALS_LINKS = [
-  ["Keys Mandu found", "keys-found", "approvals-suggestions-block"],
   ["Rule changes asked for", "asked-for", "approvals-proposals-block"],
   ["Waiting", "waiting", "approvals-waiting-block"],
+  ["Keys Mandu found", "keys-found", "approvals-suggestions-block"],
   ["Answered earlier", "answered", "approvals-answered-block"],
   ["Rule changes", "rule-changes", "approvals-rule-history-block"],
 ];
@@ -260,7 +350,11 @@ test("Approvals: a link per list under the title, in the page's order, each nami
     assert.equal(card.closest("section[data-page]").dataset.page, "approvals", `${words}: on Approvals`);
     assert.equal(card.hidden, false, `${words}: shown here`);
   }
-  assert.deepEqual(shown(doc), ["keys-found", "asked-for", "waiting", "answered", "rule-changes"], "every list shows: every link does");
+  assert.deepEqual(shown(doc), ["asked-for", "waiting", "keys-found", "answered", "rule-changes"], "every list shows: every link does");
+  assert.equal(links(doc, "approvals").map((a) => a.textContent).join(" · "), "Rule changes asked for · Waiting · Keys Mandu found · Answered earlier · Rule changes");
+  // The lists themselves run in the links' order: the questions before the keys.
+  const cards = APPROVALS_LINKS.map(([, , id]) => doc.getElementById(id));
+  for (let i = 1; i < cards.length; i++) assert.ok(cards[i - 1].compareDocumentPosition(cards[i]) & 4, `${APPROVALS_LINKS[i - 1][0]} comes before ${APPROVALS_LINKS[i][0]}`);
   assert.equal(doc.querySelectorAll("#page-approvals nav.section-links li.end").length, 1, "one link ends the row");
   assert.equal(doc.querySelector("#page-approvals nav.section-links li.end a").dataset.section, "rule-changes");
 });
@@ -285,8 +379,11 @@ test("Approvals: a list hidden while empty has no link; it gets one when it show
   proposals = [];
   await poll(doc);
   assert.deepEqual(shown(doc), ["waiting", "answered"]);
-  // Rules and Settings keep every link (their cards do not hide while empty).
-  assert.equal(links(doc, "rules").filter((a) => a.closest("li").hidden).length, 0);
+  // Rules and Settings keep every link (their cards do not hide while empty),
+  // but Files made from your secrets, which hides while there are none
+  // (§4.25aa), and Dashboard account, shown only to a signed-in browser.
+  assert.deepEqual(links(doc, "rules").filter((a) => a.closest("li").hidden).map((a) => a.dataset.section), ["made-from"]);
+  assert.deepEqual(links(doc, "settings").filter((a) => a.closest("li").hidden).map((a) => a.dataset.section), ["account"]);
 });
 
 test("Approvals: a click scrolls its list to the top, focuses its heading and puts its key in the address, replaced", async () => {
@@ -330,6 +427,18 @@ test("Approvals: an address with a list's key lands there once Rule changes and 
     assert.equal(p.doc.activeElement, p.doc.querySelector("#approvals-answered-block h2"), url);
     assert.equal(p.window.location.href, url, `${url}: the address keeps its hash`);
   }
+
+  // Keys Mandu found, now under the questions (2026-10-26), keeps its address.
+  scrolled.length = 0;
+  const keys = load({
+    url: `${BASE}/approvals#keys-found`,
+    routes: { ...ROUTES, [CHANGES]: { changes: [] }, "GET suggestions": { suggestions: [{ id: "g1", rule: "stripe", path: "/home/u/ws/.env", repo: "ws", source: "workspace", line: 1 }], count: 1, scan: null } }, before,
+  });
+  await tick(40);
+  assert.equal(keys.doc.getElementById("approvals-suggestions-block").hidden, false);
+  assert.deepEqual(scrolled, ["approvals-suggestions-block"], "#keys-found: one scroll, to its card");
+  assert.equal(keys.doc.activeElement, keys.doc.querySelector("#approvals-suggestions-block h2"));
+  assert.equal(keys.window.location.pathname + keys.window.location.hash, "/mandu/approvals#keys-found", "the address keeps its hash");
 
   // No rule change: Rule changes is hidden, so its address opens the top.
   scrolled.length = 0;

@@ -189,7 +189,11 @@ test("Show in policy.yaml that cannot be read says the cause in the page's words
     ["the failed dial", { status: 502, body: { error: "connect ENOENT /run/user/1000/mandu/arbiter.sock" } }, WORDS.downLinked],
     ["no answer", noAnswer, WORDS.gone],
     ["no service behind the route", { status: 404, body: { error: "arbiter not connected" } }, "The protection service is not connected."],
-    ["another error", { status: 503, body: { error: "admin channel unavailable: connect ECONNREFUSED 127.0.0.1:1 (adopted instance)" } }, WORDS.error(503)],
+    // A dashboard with no admin channel (dashboard.md §4.25 *An answer this
+    // dashboard cannot pass on*, 2026-10-25): its own sentence, not the
+    // server's words; until then this was "another error".
+    ["no admin channel", { status: 503, body: { error: "admin channel unavailable: connect ECONNREFUSED 127.0.0.1:1 (adopted instance)" } }, "This dashboard cannot pass on your answers: the protection service was already running when the dashboard started. Nothing was changed. To fix it, run mandu stop when no agent is running with mandu, then start your agent again."],
+    ["another error", { status: 503, body: { error: "the policy file is being written: connect ECONNREFUSED 127.0.0.1:1" } }, WORDS.error(503)],
   ];
   for (const [why, answer, words] of cases) {
     const { doc } = rulesPage({ [ROUTE]: answer });

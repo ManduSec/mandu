@@ -28,6 +28,7 @@
  */
 
 import { getSymbolPattern } from "./arbiter-client.js";
+import type { UpstreamLimit } from "./rate-limit.js";
 
 // ── Mirror of dashboard/src/event-model.ts (§2). Kept local on purpose. ───────
 
@@ -261,6 +262,9 @@ export interface ManduEvent {
   /** Structural request shape, present only on kind "tllm_call" — the
    *  dashboard's side-call detection seam (dashboard.md §4.2c). */
   callShape?: TllmCallShape;
+  /** Present only on a "tllm_call" whose upstream throttled (429 / 529):
+   *  mirrors dashboard/src/event-model.ts `UpstreamLimit` (rate-limit.ts). */
+  upstreamLimit?: UpstreamLimit;
 }
 
 // ── Builders ──────────────────────────────────────────────────────────────────
@@ -443,6 +447,9 @@ export interface TllmCallArgs {
   responseId?: string;
   /** The agent's session id the request carried ({@link agentSessionIdOf}). */
   agentSessionId?: string;
+  /** The upstream's throttle (a relayed 429 / 529), parsed off its headers
+   *  (rate-limit.ts). */
+  upstreamLimit?: UpstreamLimit;
 }
 
 export function makeTllmCall(a: TllmCallArgs): ManduEvent {
@@ -460,6 +467,7 @@ export function makeTllmCall(a: TllmCallArgs): ManduEvent {
     invariant: inv,
     ...(a.fullInput ? { fullInput: a.fullInput } : {}),
     ...(a.callShape ? { callShape: a.callShape } : {}),
+    ...(a.upstreamLimit ? { upstreamLimit: a.upstreamLimit } : {}),
   });
 }
 

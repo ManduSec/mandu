@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { KEEP, SKIPPED_PREFIX, addTested, ago, isMasterCheck, isMasterRun, readState, record, skip, skippedName, statePath, testedEntry } from "../ci/master-check.mjs";
+import { KEEP, SCHEDULES, SKIPPED_PREFIX, addTested, ago, isMasterCheck, isMasterRun, readState, record, skip, skippedName, skippedPrefix, statePath, testedEntry } from "../ci/master-check.mjs";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "ci", "master-check.mjs");
 const SHA = "b3a6b3fe1e50368f458cda3a4fda19a4b3f2b246";
@@ -181,4 +181,53 @@ test("cli: record then skip, the PUT reaching GitLab with the job token; usage e
     assert.equal((await cli(["record"], env)).code, 2);
     assert.equal((await cli(["nope"], env)).code, 2);
   } finally { srv.close(); t.done(); }
+});
+
+// ── the macOS check (continuous-integration.md §12.6): the same steps, its own schedule ──
+const MAC = { ...BASE, CI_PIPELINE_SOURCE: "schedule", MANDU_SCHEDULE: "macos" };
+
+test("the macOS check: its own schedule, state file and skipped name; the master check's pipeline is not it, nor it the master check's", async () => {
+  assert.deepEqual(SCHEDULES, ["master-check", "macos"]);
+  assert.equal(isMasterCheck(MAC, "macos"), true);
+  assert.equal(isMasterCheck(MAC), false, "the default is the master check");
+  assert.equal(isMasterCheck(CHECK, "macos"), false);
+  assert.equal(isMasterCheck({ ...MAC, CI_COMMIT_BRANCH: "feat/x" }, "macos"), false, "a schedule on another branch");
+  assert.equal(isMasterRun(MAC, "macos"), true);
+  assert.equal(isMasterRun(MAC), false, "a macOS pipeline is no master check's run");
+  assert.match(statePath({ HOME: "/h" }, "macos"), /^\/h\/.+\/macos-tested\.json$/);
+  assert.equal(statePath({ HOME: "/h" }, "macos").replace("macos-tested", "master-tested"), statePath({ HOME: "/h" }), "beside the master check's");
+  assert.equal(skippedPrefix("macos"), "macos: skipped");
+  assert.equal(skippedPrefix(), SKIPPED_PREFIX);
+  assert.equal(skippedName(SHA, { pipeline: 9, result: "fail" }, "macos"), "macos: skipped, b3a6b3fe already tested in #9 (fail)");
+  // record then skip, in its own state: a master check's record does not skip it
+  const t = tmp();
+  try {
+    const macState = join(t.d, "mac.json");
+    const seen = [];
+    const fetchImpl = async (url, init) => { seen.push(JSON.parse(init.body).name); return { ok: true, status: 200 }; };
+    assert.equal(await skip({ ...MAC, MANDU_CI_MASTER_STATE: macState }, { schedule: "macos", fetchImpl, log: quiet }), 1, "not tested yet");
+    record({ ...MAC, MANDU_CI_MASTER_STATE: macState }, { schedule: "macos", rc: 1, summary: summary(t.d, { commit: SHA, result: "fail" }), log: quiet });
+    assert.equal(readState(macState).tested[0].result, "fail");
+    const env = { ...MAC, MANDU_CI_MASTER_STATE: macState, CI_API_V4_URL: "http://gl/api/v4", CI_PROJECT_ID: "1", CI_JOB_TOKEN: "t" };
+    assert.equal(await skip(env, { schedule: "macos", fetchImpl, log: quiet }), 0);
+    assert.deepEqual(seen, ["macos: skipped, b3a6b3fe already tested in #11800 (fail)"]);
+    assert.equal(await skip({ ...env, MANDU_SCHEDULE: "master-check" }, { schedule: "macos", fetchImpl, log: quiet }), 1, "the master check's pipeline is not the macOS check");
+  } finally { t.done(); }
+});
+
+test("cli: --schedule macos reaches skip and record; an unknown schedule exits 2", async () => {
+  const t = tmp();
+  try {
+    const env = { ...MAC, MANDU_CI_MASTER_STATE: t.state };
+    let r = await cli(["record", "--schedule", "macos", "--rc", "0", "--summary", summary(t.d, { commit: SHA, result: "pass" })], env);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /recorded b3a6b3fe \(pass\)/);
+    // the job token is absent here: the rename fails, so the check tests anyway (fail-safe)
+    r = await cli(["skip", "--schedule", "macos"], env);
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /could not be marked skipped/);
+    assert.equal((await cli(["skip", "--schedule", "nightly"], env)).code, 2);
+    assert.equal((await cli(["skip", "--schedule"], env)).code, 2);
+    assert.equal((await cli(["record", "--schedule", "macos"], env)).code, 2, "record still needs --rc and --summary");
+  } finally { t.done(); }
 });

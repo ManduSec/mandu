@@ -10,7 +10,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { structuredTwinExecOutputPath, wholeFileTwinExecOutputPath, EXEC_TWIN_OUTPUT_MAX, encodedTwinTokens } from "../../policy/claude-code-inbound.js";
+import { structuredTwinExecOutputPath, wholeFileTwinExecOutputPath, EXEC_TWIN_OUTPUT_MAX, encodedTwinTokens, escapedTwinTokens } from "../../policy/claude-code-inbound.js";
 import { stateAxes } from "../axes.js";
 
 stateAxes("secrets"); // the rule serves the confidentiality axis
@@ -118,6 +118,20 @@ test("plan 10 §11.13.1: a token the twin holds ENCODED (pip.conf percent, npm _
   // Base64 that is not exactly one token is not a token.
   assert.deepEqual(encodedTwinTokens(Buffer.from(`${TN} and more`).toString("base64")), []);
   assert.deepEqual(encodedTwinTokens("aGVsbG8gd29ybGQgaGVsbG8gd29ybGQ="), []);
+});
+
+test("db-login-release.md: a .pgpass twin's escaped token ($MDU\\:…) is a token; cat ~/.pgpass is the file's twin, and the substring test still decides", () => {
+  const PG = "/home/u/.pgpass";
+  const TG = "$MDU:nomodel_Read[d0b1].app.password";
+  const esc = TG.replace(/[\\:]/g, (c) => `\\${c}`);
+  const PG_TWIN = `db.internal:5432:app:app:${esc}\n`;
+  const look = (t: string) => (t === TG ? { path: PG, text: PG_TWIN } : twins.get(t) ?? null);
+  assert.deepEqual(escapedTwinTokens(PG_TWIN), [TG]);
+  assert.deepEqual(encodedTwinTokens(PG_TWIN), [TG]);
+  assert.equal(structuredTwinExecOutputPath(PG_TWIN, look), PG, "cat ~/.pgpass");
+  assert.equal(structuredTwinExecOutputPath(`${PG_TWIN}db.internal:5432:app:app:hunter2hunter2\n`, look), null, "a raw password beside it");
+  assert.deepEqual(escapedTwinTokens("$MDU\\:nomodel_Read[d0b1].app.password\\:tail"), [], "an escaped token with more after it is no token");
+  assert.deepEqual(escapedTwinTokens("$MDU:plain[d0b1].x"), [], "a plain token is the other finder's");
 });
 
 // ── "A document's own twin" (plan 10 §11.8, 2026-10-12) ──────────────────────

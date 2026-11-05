@@ -29,6 +29,10 @@
  *   fail-closed with the arbiter unreachable, the secret never reaches any
  *               provider raw.
  *
+ * Goose's `google` provider (the Gemini wire, model-wires.md §4) is pinned at
+ * /_mandu/google/google and has its own ingress case; the switch and its
+ * refusals cover it with the rest.
+ *
  * The real goose binary against a scripted upstream is
  * launcher/test/component/goose-compat-real.test.ts.
  */
@@ -48,6 +52,7 @@ import { ArbiterClientAdapter } from "../../interceptors/anthropic-proxy/src/arb
 import { MockUpstream } from "../../interceptors/anthropic-proxy/test/helpers/mock-upstream.js";
 import { composeLaunch } from "../../launcher/src/env-compose.js";
 import { GOOSE_COMPAT_PROVIDERS, gooseOpenAiRoutes, gooseRoutePlan, type GooseCompatSpec } from "../../launcher/src/goose-route.js";
+import { routeUpstreamsEnv } from "../../launcher/src/agent-model-route.js";
 import type { LaunchPlan } from "../../launcher/src/types.js";
 import { stateAxes } from "../lib/axes.js";
 
@@ -228,13 +233,16 @@ async function withStack(name: string, fn: (s: Stack) => Promise<void>): Promise
         const plan = gooseRoutePlan(["goose", "session"], userEnv, null);
         assert.equal(plan.refusal, null, plan.refusal ?? "");
         const routes = gooseOpenAiRoutes(plan.routing);
-        // what services/context-proxy.ts hands the proxy (MANDU_OPENAI_UPSTREAMS, MANDU_OPENAI_TEXT_CALLS)
+        // what services/context-proxy.ts hands the proxy (MANDU_OPENAI_UPSTREAMS,
+        // MANDU_GOOGLE_UPSTREAMS, MANDU_OPENAI_TEXT_CALLS)
+        const tables = routeUpstreamsEnv(routes);
         const proxy = new AnthropicProxy({
           arbiter: new ArbiterClientAdapter(real), // PRODUCTION wiring
           upstream: new MockUpstream().fetcher,
           sessionKey,
           log: () => {},
-          openaiUpstreams: Object.fromEntries(routes.map((r) => [r.id, r.upstream])),
+          openaiUpstreams: JSON.parse(tables.MANDU_OPENAI_UPSTREAMS ?? "{}") as Record<string, string>,
+          googleUpstreams: JSON.parse(tables.MANDU_GOOGLE_UPSTREAMS ?? "{}") as Record<string, string>,
           openaiTextCalls: routes.filter((r) => r.textCalls).map((r) => r.id),
         });
         proxies.push(proxy);
@@ -252,7 +260,10 @@ async function withStack(name: string, fn: (s: Stack) => Promise<void>): Promise
   }
 }
 
-for (const spec of GOOSE_COMPAT_PROVIDERS) {
+/** The Chat Completions ones (google speaks the Gemini wire: its own test below). */
+const CHAT_PROVIDERS = GOOSE_COMPAT_PROVIDERS.filter((c) => c.api === undefined);
+
+for (const spec of CHAT_PROVIDERS) {
   test(`ingress, ${spec.provider}: a shell result carrying a registered secret and a labelled file reaches the provider only as symbols, on Goose's own path`, { timeout: 60_000 }, async () => {
     await withStack(`in-${spec.provider}`, async (s) => {
       const up = await provider();
@@ -285,6 +296,44 @@ for (const spec of GOOSE_COMPAT_PROVIDERS) {
     });
   });
 }
+
+test("ingress, google (model-wires.md §4): a shell result carrying a registered secret and a labelled file reaches the Gemini provider only as symbols, on Goose's own path", { timeout: 60_000 }, async () => {
+  await withStack("in-google", async (s) => {
+    const up = await provider();
+    try {
+      const spec = GOOSE_COMPAT_PROVIDERS.find((c) => c.provider === "google")!;
+      const env = await s.launch("google", { google: up.url });
+      const base = env["GOOGLE_HOST"]!;
+      assert.match(base, /\/_mandu\/google\/google$/, "GOOGLE_HOST is the proxy's Gemini route");
+      const output = `ACME_TOKEN=${s.key}
+internal: ${LABELLED_CANARY}
+`;
+      // Goose's Gemini body (formats/google.rs): the result as {content: {text}}
+      const body = {
+        systemInstruction: { parts: [{ text: "You are a general-purpose AI agent called goose." }] },
+        contents: [
+          { role: "user", parts: [{ text: "check the credentials" }] },
+          { role: "model", parts: [{ functionCall: { id: "call_cat", name: "shell", args: { command: `cat ${s.credFile} ${s.vaultFile}` } }, thoughtSignature: "skip_thought_signature_validator" }] },
+          { role: "user", parts: [{ functionResponse: { id: "call_cat", name: "shell", response: { content: { text: output } } } }] },
+        ],
+        // ONE Tool object, as goose 1.53.0 sends it (captured from the binary)
+        tools: { functionDeclarations: [{ name: "shell", description: "run a command", parametersJsonSchema: { type: "object", properties: { command: { type: "string" } } } }] },
+      };
+      const r = await send(gooseUrl(base, spec.path.replace("{model}", "gemini-2.5-flash")), "POST", JSON.stringify(body));
+      assert.equal(r.status, 200, r.body);
+      assert.equal(up.seen.length, 1, "one request reached the provider");
+      const q = up.seen[0]!;
+      assert.equal(q.path, "/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse", "Goose's own path under the user's host");
+      assert.ok(!q.body.includes(s.key), "INVARIANT: the registered secret never reaches the provider un-symbolized");
+      assert.ok(!q.body.includes(LABELLED_CANARY), "INVARIANT: the labelled file's content never reaches the provider un-symbolized");
+      const fr = ((((JSON.parse(q.body) as Json)["contents"] as Json[])[2]!["parts"]) as Json[])[0]!["functionResponse"] as Json;
+      const text = String(((fr["response"] as Json)["content"] as Json)["text"]);
+      assert.match(text, NOMODEL_RE, `the result went as symbols, in Goose's own field: ${text.slice(0, 200)}`);
+    } finally {
+      up.server.close();
+    }
+  });
+});
 
 test("switch: on a launch that routes one provider, every OTHER provider's pinned key (a mid-session `/model --provider <other>`) is refused 403 and its upstream sees nothing", { timeout: 60_000 }, async () => {
   await withStack("switch", async (s) => {
@@ -376,13 +425,13 @@ test("reads: OpenRouter's model listing is relayed; Ollama's api/show POST is re
 
 test("FAIL-CLOSED: with the arbiter unreachable, no provider receives the registered secret raw", { timeout: 60_000 }, async () => {
   await withStack("down", async (s) => {
-    const ups = await Promise.all(GOOSE_COMPAT_PROVIDERS.map(() => provider()));
+    const ups = await Promise.all(CHAT_PROVIDERS.map(() => provider()));
     try {
       const envs: Array<Record<string, string | undefined>> = [];
-      for (const [i, c] of GOOSE_COMPAT_PROVIDERS.entries()) envs.push(await s.launch(c.provider, { [c.provider]: userHost(c, ups[i]!.url) }));
+      for (const [i, c] of CHAT_PROVIDERS.entries()) envs.push(await s.launch(c.provider, { [c.provider]: userHost(c, ups[i]!.url) }));
       s.real.close();
       await s.server.close();
-      for (const [i, c] of GOOSE_COMPAT_PROVIDERS.entries()) {
+      for (const [i, c] of CHAT_PROVIDERS.entries()) {
         const path = c.provider === "litellm" ? envs[i]!["LITELLM_BASE_PATH"]! : c.path;
         const r = await send(gooseUrl(envs[i]![c.hostKey]!, path), "POST", JSON.stringify(gooseTurn(c, `cat ${s.credFile}`, `ACME_TOKEN=${s.key}\n`)));
         assert.ok(r.status === 200 || r.status >= 500, `${c.provider}: answered or refused (status ${r.status})`);

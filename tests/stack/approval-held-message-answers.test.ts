@@ -30,6 +30,13 @@
  *       masked, announced once (`role="status"`);
  *   H7  the model got the message masked, never the code name.
  *
+ * And a kind Mandu has words for (dashboard.md §4.34 *A held message names
+ * its kind in words*), a pack pattern of category `pii.email` set to ask:
+ *
+ *   H8  `/api/home` and the served Approvals card read "… It holds an
+ *       email address." with no code, as Settings names the kind;
+ *   H9  the found address is on neither, and the model got it masked.
+ *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON).
  */
 import { test, after } from "node:test";
@@ -62,6 +69,7 @@ after(() => {
 });
 
 const CODENAME = "heronvaleproject";
+const ADDRESS = "dana.heronvale@corp.example";
 
 function post(port: number, body: unknown, session: string): Promise<{ status: number; body: string }> {
   const data = Buffer.from(JSON.stringify(body));
@@ -102,7 +110,7 @@ async function rig(holdMs: number) {
   const humanSock = humanSockIn(dir);
   const packs = join(dir, "prompt-filters");
   mkdirSync(packs);
-  writeFileSync(join(packs, "acme.yaml"), `pack: acme-dlp\nversion: 1\nkeywords:\n  - category: acme.codename\n    words: [${CODENAME}]\n    level: local-model\n`);
+  writeFileSync(join(packs, "acme.yaml"), `pack: acme-dlp\nversion: 1\npatterns:\n  - id: email\n    category: pii.email\n    regex: '[a-z.]+@corp\\.example'\n    level: local-model\nkeywords:\n  - category: acme.codename\n    words: [${CODENAME}]\n    level: local-model\n`);
   const policyPath = join(dir, "policy.yaml");
   writeFileSync(policyPath, "version: 1\nprompt_filters:\n  filters:\n    acme-dlp: on\n");
   const arbiter = new ArbiterServer({
@@ -145,8 +153,8 @@ async function rig(holdMs: number) {
     seen.add(hold.approvalId);
     return { pending, id: hold.approvalId };
   };
-  const up = async () => {
-    const r = await call("POST", "policy/prompt-filters/change", { edit: { op: "set-prompt-action", category: "acme.codename", action: "ask" } });
+  const up = async (category = "acme.codename") => {
+    const r = await call("POST", "policy/prompt-filters/change", { edit: { op: "set-prompt-action", category, action: "ask" } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
   };
   const close = async () => {
@@ -235,6 +243,40 @@ test("a held message's Approvals card counts down its deadline, then says the me
     }, { headers: { Cookie: ADMIN_COOKIE } });
     assert.ok(sent().length > 0, "the request reached the model");
     assert.ok(!sent().at(-1)!.includes(CODENAME), "CONFIDENTIALITY VIOLATION: the held message reached the model unmasked");
+  } finally {
+    await close();
+  }
+});
+
+test("a held message names a kind Mandu has words for as Settings does: \"It holds an email address.\", no code; the address on no route, the model got it masked (secrets axes)", { timeout: 90_000 }, async () => {
+  const { base, call, held, sent, up, close } = await rig(20_000);
+  try {
+    await up("pii.email");
+    await servedProductPage(base, "/approvals", (doc: any) => !!doc.querySelector('#approvals-waiting [data-empty="questions"], #approvals-waiting .empty'), async (doc: any) => {
+      const h8 = await held(`mail ${ADDRESS} the plan`);
+      // H8: the open route's words, then the served card's.
+      const home = (await call("GET", "home", undefined, {})).body as unknown as HomeVM;
+      const ask = home.waiting.find((a) => a.id === h8.id);
+      assert.ok(ask, `the held message waits: ${JSON.stringify(home.waiting)}`);
+      // The agent is named as Home knows the session ("The agent" in this rig).
+      assert.equal(ask!.sentence.length, 1, `one text part: ${JSON.stringify(ask!.sentence)}`);
+      assert.equal(ask!.sentence[0]!.kind, "text", "the kind in Settings' words, no code");
+      assert.match(ask!.sentence[0]!.text, /^(The agent|Claude Code) wants to send your message to the AI\. It holds an email address\.$/);
+      assert.ok(!JSON.stringify(home).includes(ADDRESS), "H9: /api/home never carries the found address");
+      Object.defineProperty(doc, "visibilityState", { value: "visible", configurable: true });
+      doc.dispatchEvent(new doc.defaultView.Event("visibilitychange"));
+      const card = () => doc.querySelector(`#approvals-waiting .ask[data-id="${h8.id}"]`);
+      await waitFor("the card", async () => card() ?? undefined);
+      const sentence = card().querySelector(".ask-sentence");
+      assert.equal(String(sentence.textContent).replace(/\s+/g, " ").trim(), ask!.sentence[0]!.text, "the card draws the server's words");
+      assert.equal(sentence.querySelector("code"), null, "no chip for a kind Mandu has words for");
+      assert.ok(!String(sentence.textContent).includes("pii.email"), "never the id");
+      assert.equal((await call("POST", "prompt-filters/holds/answer", { approvalId: h8.id, answer: "mask", scope: "once" })).status, 200);
+      assert.equal((await h8.pending).status, 200);
+    }, { headers: { Cookie: ADMIN_COOKIE } });
+    // H9: the oracle, unchanged.
+    assert.ok(sent().length > 0, "the request reached the model");
+    assert.ok(!sent().at(-1)!.includes(ADDRESS), "CONFIDENTIALITY VIOLATION: the held message reached the model unmasked");
   } finally {
     await close();
   }

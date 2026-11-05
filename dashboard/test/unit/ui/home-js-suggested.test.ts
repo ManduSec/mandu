@@ -10,7 +10,9 @@
  * under the file; each suggestion waits in Changes to save, ticked, its label
  * shown as a chip (no menu: a suggestion only ever hides); unticking skips it (kept in this
  * browser), and Save applies the ticked ones (POST suggestions/apply) with
- * no weaker-change question, before any other waiting change; one that
+ * no weaker-change question, before any other waiting change (several
+ * saved, the notice links the newest change in Approvals; with file choices
+ * too, it keeps their Undo, named "Undo the 4 changes"); one that
  * cannot be applied cannot be ticked and says why; the opened row: what the
  * scan found, when, what Save changes, the advice to replace the key, the
  * policy.yaml lines and Not a secret; Scan, with a typed folder, and the
@@ -27,12 +29,15 @@
  * whether any wait*): where they were found; with none, that a scan runs,
  * when this dashboard's last scan looked and what it found, or how to look;
  * neither before the first read or while the list cannot be read; and it
- * follows the 3 s poll as a scan ends.
+ * follows the 3 s poll as a scan ends. Under the advice, one line per
+ * company says where to replace the key, its page a link in a new tab with
+ * `rel="noopener noreferrer"`; a row with no advice has none (§4.25r *The
+ * advice says where to replace the key*).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { load, tick, FILES_URL, FILES_ROUTES, CLOCK, HTML, choose } from "./home-js-fixtures.js";
+import { load, tick, FILES_URL, FILES_ROUTES, CLOCK, HTML, choose, fileRows } from "./home-js-fixtures.js";
 import { scanSummary, scanSummaryParts, suggestionRows, type SuggestionWire, type SuggestPolicyWire } from "../../../src/view-model/suggestions.js";
 
 const REPO = "/home/u/proj";
@@ -192,7 +197,70 @@ test("Save with a suggestion and a label chosen elsewhere: the suggestions first
   await tick(20);
   assert.deepEqual(order, ["suggestions", "labels"]);
   assert.match(doc.getElementById("lock-error").textContent, /1 suggestion was not saved: It is no longer waiting\./);
-  assert.match(doc.getElementById("rules-notice").textContent, /1 change saved, and 1 suggestion\./);
+  // Undo takes back the file change, and says so; the suggestion, its own
+  // change, is linked in Approvals (dashboard.md §4.25m).
+  const notice = doc.getElementById("rules-notice");
+  assert.equal(notice.querySelector("span").textContent, "1 change saved, and 1 suggestion, its own change in Approvals, under Rule changes.");
+  const undo = notice.querySelector("button");
+  assert.equal(undo.textContent, "Undo the 1 change");
+  assert.equal(undo.getAttribute("aria-label"), "Undo the 1 change in Your rules");
+  const link = notice.querySelector("a.change-link");
+  assert.equal(link.textContent, "in Approvals, under Rule changes");
+  assert.equal(link.getAttribute("href"), "/mandu/approvals/pc-000001");
+});
+
+test("Save of several suggestions: the notice links the newest of their changes in Approvals; a mixed Save keeps Undo for its file changes, named for them", async () => {
+  const PEM = wire("pp-000005", {
+    edits: [{ op: "lock-path", path: `${REPO}/deploy/server.pem`, level: "no-model" }],
+    sentence: "Make ~/proj/deploy/server.pem a secret no AI may read (only in git history)",
+    evidence: { ...KEY.evidence, paths: ["deploy/server.pem"] },
+  });
+  const three = [{ id: "pp-000001", changeId: "pc-000040" }, { id: "pp-000003", changeId: "pc-000041" }, { id: "pp-000005", changeId: "pc-000042" }];
+  const undone: string[] = [];
+  const { doc, window } = await openSuggestedView({
+    "GET suggestions": listing([KEY, ENV, PEM]),
+    "POST suggestions/apply": { applied: three, refused: [], ...listing([]) },
+  });
+  doc.getElementById("files-save").click();
+  await tick(20);
+  const notice = doc.getElementById("rules-notice");
+  assert.equal(notice.querySelector("span").textContent, "3 suggestions saved. Each is its own change in Approvals, under Rule changes.", "the words of before");
+  assert.equal(notice.querySelector("button"), null, "no Undo: three changes");
+  const link = notice.querySelector("a.change-link");
+  assert.equal(link.textContent, "in Approvals, under Rule changes");
+  assert.equal(link.getAttribute("href"), "/mandu/approvals/pc-000042", "the newest");
+  link.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await tick();
+  assert.equal(doc.getElementById("page-approvals").hidden, false);
+  assert.equal(window.location.pathname, "/mandu/approvals/pc-000042");
+
+  // Two suggestions and four file changes in one Save.
+  const mixed = await openSuggestedView({
+    "GET suggestions": listing([KEY, ENV]),
+    "POST suggestions/apply": { applied: three.slice(0, 2), refused: [], ...listing([]) },
+    "POST files/labels": { applied: true, changeId: "pc-000044", page: 0 },
+    "POST files/impact": { impact: null, page: 0 },
+    "POST policy/changes/pc-000044/undo": () => (undone.push("pc-000044"), { undone: true }),
+  });
+  const d = mixed.doc;
+  d.getElementById("rules-add").click();
+  await tick();
+  const files = fileRows(d);
+  assert.equal(files.length, 4, "four files to label");
+  for (const f of files) choose(f, "local-model");
+  await tick();
+  assert.equal(d.getElementById("files-pending-count").textContent, "6", "four changes and two suggestions wait");
+  d.getElementById("files-save").click();
+  await tick(20);
+  const said = d.getElementById("rules-notice");
+  assert.equal(said.querySelector("span").textContent, "4 changes saved, and 2 suggestions, each its own change in Approvals, under Rule changes.");
+  assert.equal(said.querySelector("a.change-link").getAttribute("href"), "/mandu/approvals/pc-000041");
+  const undo = said.querySelector("button");
+  assert.equal(undo.textContent, "Undo the 4 changes", "Undo says which part it takes back");
+  undo.click();
+  await tick(20);
+  assert.deepEqual(undone, ["pc-000044"], "the file changes' own change");
+  assert.equal(said.textContent, "Undone.");
 });
 
 test("the opened row: what the scan found, when, what Save changes, the advice to replace the key, the policy.yaml lines, and Not a secret", async () => {
@@ -217,6 +285,7 @@ test("the opened row: what the scan found, when, what Save changes, the advice t
   assert.equal(detail.querySelector(".suggestion-yaml").textContent, "paths:\n  - path: /home/u/proj/deploy/id_rsa\n    level: no-model");
   const not = [...detail.querySelectorAll("button")].find((b: any) => b.textContent === "Not a secret") as any;
   not.click();
+  [...doc.querySelectorAll("#files-suggested-list .file-detail .ask-in-place button")].find((b: any) => b.textContent === "Mark as not a secret").click();
   await tick();
   assert.deepEqual(dismissed, [{ id: "pp-000001" }]);
   assert.equal(rowById(doc, "pp-000001"), undefined);
@@ -226,12 +295,20 @@ test("the opened row: what the scan found, when, what Save changes, the advice t
   assert.match(doc.querySelector("#files-suggested-list .file-detail").textContent, /cannot hide old versions of a file yet/);
 });
 
-test("Not a secret asks first; No leaves it waiting", async () => {
+test("Not a secret asks first, in the opened row; Cancel leaves it waiting", async () => {
   const { doc, window, calls } = await openSuggestedView();
-  window.confirm = () => false;
+  window.confirm = () => { throw new Error("window.confirm called"); };
   rowById(doc, "pp-000001").querySelector(".file-more").click();
   ([...doc.querySelectorAll("#files-suggested-list .file-detail button")].find((b: any) => b.textContent === "Not a secret") as any).click();
   await tick();
+  const ask = doc.querySelector("#files-suggested-list .file-detail .ask-in-place");
+  assert.equal(ask.querySelector(".ask-in-place-words").textContent, "Mark id_rsa as not a secret? Mandu will not suggest it again, and the AI can still read it.");
+  assert.deepEqual([...ask.querySelectorAll("button")].map((b: any) => b.textContent), ["Mark as not a secret", "Cancel"]);
+  assert.equal(calls.filter((c) => c.url.endsWith("/suggestions/dismiss")).length, 0, "asked: nothing sent");
+  ([...ask.querySelectorAll("button")].find((b: any) => b.textContent === "Cancel") as any).click();
+  await tick();
+  assert.equal(doc.querySelector("#files-suggested-list .ask-in-place"), null);
+  assert.ok(rowById(doc, "pp-000001"), "still waiting");
   assert.equal(calls.filter((c) => c.url.endsWith("/suggestions/dismiss")).length, 0);
 });
 
@@ -358,6 +435,7 @@ test("a file found as it is now: an ordinary row (not greyed, no tag), no commit
   });
   rowById(again.doc, "pp-000004").querySelector(".file-more").click();
   ([...again.doc.querySelectorAll("#files-suggested-list .file-detail button")].find((b: any) => b.textContent === "Not a secret") as any).click();
+  ([...again.doc.querySelectorAll("#files-suggested-list .file-detail button")].find((b: any) => b.textContent === "Mark as not a secret") as any).click();
   await tick();
   assert.deepEqual(dismissed, [{ id: "pp-000004" }]);
   assert.match(again.doc.getElementById("rules-notice").textContent, /staging\.conf is marked as not a secret/);
@@ -497,6 +575,9 @@ test("a scan line without parts (an older server) is its text; a place the page 
 
 const line = (doc: any) => doc.getElementById("suggested-line");
 const PRESS = "None waiting. Press Review, then Scan for keys, to look through the projects your agents worked in.";
+/** Opened, the Review button reads Close: the line names only Scan for keys. */
+const PRESS_OPEN = "None waiting. Press Scan for keys to look through the projects your agents worked in.";
+const emptyRow = (doc: any) => doc.querySelector("#files-suggested-list .empty-row");
 const NEUTRAL = "Mandu looks for keys in your projects that no rule covers yet.";
 const NOTHING = "Scanned the git history of ~/proj and 4 files. Nothing new to review.";
 const finished = (over: Record<string, unknown> = {}) => ({ running: false, roots: ["~/proj"], finishedAt: Date.now() - 1000, summary: NOTHING, summaryParts: null, error: null, ...over });
@@ -575,11 +656,99 @@ test("Scan for keys' own POST: the card's line says a scan runs while it waits, 
     "GET suggestions": listing([]),
     "POST suggestions/scan": () => new Promise((r) => { answer = r; }),
   });
-  assert.equal(line(doc).textContent, PRESS);
+  assert.equal(line(doc).textContent, PRESS_OPEN, "the card is open");
   doc.getElementById("suggest-form").dispatchEvent(new doc.defaultView.Event("submit", { cancelable: true }));
   await tick();
   assert.equal(line(doc).textContent, "Scanning now… This can take a minute.");
   answer({ status: 400, body: { error: "No project is known yet.", needsRoot: true } });
   await tick();
+  assert.equal(line(doc).textContent, PRESS_OPEN);
+});
+
+test("opened, the card's line names only the button in sight and the empty list does not repeat it; closed again, the line is back", async () => {
+  const page = await closedCard(listing([]));
+  const { doc } = page;
+  const review = doc.getElementById("suggest-open");
+  assert.equal(review.textContent, "Review");
   assert.equal(line(doc).textContent, PRESS);
+  review.click();
+  await tick();
+  assert.equal(doc.getElementById("files-suggested-view").hidden, false, "opened");
+  assert.equal(review.textContent, "Close");
+  assert.equal(review.getAttribute("aria-expanded"), "true");
+  assert.equal(line(doc).textContent, PRESS_OPEN);
+  assert.doesNotMatch(line(doc).textContent, /Review/, "no button that is gone");
+  assert.equal(emptyRow(doc).textContent, "No keys waiting.");
+  assert.doesNotMatch(doc.getElementById("files-suggested-list").textContent, /Press/, "the instruction is said once, in the line");
+  review.click();
+  await tick();
+  assert.equal(doc.getElementById("files-suggested-view").hidden, true, "closed again");
+  assert.equal(review.getAttribute("aria-expanded"), "false");
+  assert.equal(line(doc).textContent, PRESS);
+});
+
+test("opened after a finished scan: the line says when Mandu last looked, and the empty list holds no instruction", async () => {
+  const page = await closedCard(listing([], finished()));
+  const { doc } = page;
+  doc.getElementById("suggest-open").click();
+  await tick();
+  assert.equal(doc.getElementById("files-suggested-view").hidden, false);
+  assert.match(line(doc).textContent, /^None waiting\. Mandu last looked at /);
+  assert.equal(emptyRow(doc).textContent, "No keys waiting.");
+  assert.doesNotMatch(doc.getElementById("files-suggested-list").textContent, /Press/);
+});
+
+test("a card opened from the last visit, before the first read, keeps the markup's line: it claims neither keys nor none", async () => {
+  const page = load({ url: FILES_URL, storage: { "mandu.files.suggested": "1" }, routes: { ...FILES_ROUTES, "GET suggestions": () => new Promise(() => {}) } });
+  await tick();
+  assert.equal(page.doc.getElementById("files-suggested-view").hidden, false, "opened as it was left");
+  assert.equal(line(page.doc).textContent, NEUTRAL);
+  assert.equal(emptyRow(page.doc).textContent, "Reading the suggestions…");
+});
+
+// ── The advice says where to replace the key (§4.25r) ───────────────────────
+
+const TWO = wire("pp-000005", {
+  findingKey: "k-two",
+  edits: [{ op: "lock-path", path: `${REPO}/deploy/keys.env`, level: "no-model" }],
+  sentence: "Make ~/proj/deploy/keys.env a secret no AI may read (only in git history)",
+  evidence: { paths: ["deploy/keys.env"], blobs: ["e".repeat(40)], historyOnly: true,
+    findings: [{ blob: "e".repeat(40), paths: ["deploy/keys.env"], firstCommit: "5555555", lastCommit: "6666666", inHead: false, inIndex: false, stillPresent: false,
+      detectors: [
+        { kind: "content-shape", rule: "stripe-key", mask: "sk_live_…", words: "Stripe live key", line: 1 },
+        { kind: "content-shape", rule: "github-token", mask: "ghp_…", words: "GitHub token", line: 2 },
+      ] }] },
+});
+// The arbiter gives no advice (`rotate: false` on a history row): no line.
+const QUIET = wire("pp-000006", { ...TWO, id: "pp-000006", findingKey: "k-quiet",
+  edits: [{ op: "lock-path", path: `${REPO}/deploy/quiet.env`, level: "no-model" }], rotate: false });
+
+test("the opened row says where to replace the key: one line per company after the advice, its own page in a new tab with no referrer; none without advice", async () => {
+  const { doc, window } = await openSuggestedView({ "GET suggestions": listing([TWO, QUIET, KEY]) });
+  rowById(doc, "pp-000005").querySelector(".file-name").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  const detail = doc.querySelector("#files-suggested-list .file-detail");
+  const ps = [...detail.querySelectorAll("p")] as any[];
+  const advice = ps.findIndex((p) => /^This key was exposed\. Replace it with a new one/.test(p.textContent));
+  assert.ok(advice >= 0, "the advice");
+  const lines = [...detail.querySelectorAll("p.suggestion-replace")] as any[];
+  assert.deepEqual(lines.map((p) => p.textContent), [
+    "Replace it on Stripe: API keys",
+    "Replace it on GitHub: Personal access tokens",
+  ], "in detector order, one per company");
+  assert.deepEqual(lines, ps.slice(advice + 1, advice + 3), "right after the advice");
+  const links = lines.map((p) => p.querySelector("a"));
+  assert.deepEqual(links.map((a) => [a.getAttribute("href"), a.getAttribute("target"), a.getAttribute("rel"), a.textContent]), [
+    ["https://dashboard.stripe.com/apikeys", "_blank", "noopener noreferrer", "API keys"],
+    ["https://github.com/settings/tokens", "_blank", "noopener noreferrer", "Personal access tokens"],
+  ]);
+  // A row with no advice has no line, though its key is a GitHub token.
+  rowById(doc, "pp-000006").querySelector(".file-name").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  const quiet = doc.querySelector("#files-suggested-list .file-detail");
+  assert.doesNotMatch(quiet.textContent, /This key was exposed/);
+  assert.equal(quiet.querySelectorAll(".suggestion-replace").length, 0);
+  // A private key names no company: the advice, no line.
+  rowById(doc, "pp-000001").querySelector(".file-name").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  const key = doc.querySelector("#files-suggested-list .file-detail");
+  assert.match(key.textContent, /This key was exposed/);
+  assert.equal(key.querySelectorAll(".suggestion-replace").length, 0);
 });

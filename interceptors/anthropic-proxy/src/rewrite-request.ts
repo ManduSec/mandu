@@ -45,6 +45,8 @@ import { gateNoticeResult } from "./exec-gate.js";
 import { applyPromptFilter, PromptBlocked, PromptFilterRefusal, PromptHoldAbandoned, segmentAgentFor, type PromptBlockLedger, type PromptFilterReport } from "./prompt-filter.js";
 import { ALL_NOTICE_KINDS, extractBackgroundNotices, movedOutputPath, noticeTexts, restoreBackgroundNotices, type ExtractedNotices, type NoticeKind } from "./opencode-background.js";
 import { isOpenclawSurface, type ForwardedResultMemory } from "./openclaw-redaction.js";
+import { twinWriteLine, twinWriteTokens } from "./twin-write-note.js";
+import { LOCKED_NOTE_MARKER, lockedObjectNote, protectedCopyNote } from "./locked-object-note.js";
 // The !292 side-call note moved with its scan into the prompt filter (plan 15 §3.1).
 export { SIDE_CALL_SECRET_NOTE } from "./prompt-filter.js";
 import type {
@@ -281,6 +283,9 @@ export interface RewriteAudit {
   valueOnly?: Array<{ symbol: string; value: string }>;
   /** The `[mandu:secret]` note appended after the forwarded body (§11.8). */
   secretNote?: string;
+  /** The `[mandu:locked]` note appended after a public result (confidentiality.md
+   *  §7.1, "git's report on a history rewrite"). */
+  lockedNote?: string;
   /** The note carries the `masked after the fact` line (confidentiality.md
    *  §7.1): the request then also carries Mandu's system note. */
   afterTheFact?: boolean;
@@ -1145,6 +1150,11 @@ export interface SecretTaintInfo {
    *  path-derived note's place: the call names no secret path. Explains
    *  only. */
   valueBackstop?: true;
+  /** Plan 10 §4.1, "The model is told at the call" (2026-10-27): the paths
+   *  of the call's own input that it writes and that are protected files'
+   *  placeholder copies (`twinWriteTokens` over the arbiter's
+   *  `twinWrites`); the `copy:` line names them. Explains only. */
+  twinWrites?: string[];
   why: string;
 }
 
@@ -1470,14 +1480,14 @@ function mayBeKeyListing(value: string): boolean {
 }
 
 /** Worth sending to `callTaint` for the folder-names test (plan 10 §11.8,
- *  "A folder's names", 2026-10-17): the command starts with the word `ls`
- *  and the output is a token-free text of at most 16 KiB (the arbiter's
- *  bound, claude-code-inbound.ts KEY_LISTING_OUTPUT_MAX). A traffic screen
- *  only, like `mayBeKeyListing`: the arbiter parses the command, reads the
- *  folders and decides, on the guard's evidence. Byte-identical in both
- *  proxies. */
+ *  "A folder's names", 2026-10-17; "Paths only", 2026-10-26): the command
+ *  starts with the word `ls` or `find` and the output is a token-free text
+ *  of at most 16 KiB (the arbiter's bound, claude-code-inbound.ts
+ *  KEY_LISTING_OUTPUT_MAX). A traffic screen only, like `mayBeKeyListing`:
+ *  the arbiter parses the command, reads the folders and decides, on the
+ *  guard's evidence. Byte-identical in both proxies. */
 function mayBeDirListing(command: string, value: string): boolean {
-  return /^\s*ls(?:\s|$)/.test(command) && value !== "" && value.length <= KEY_LISTING_OUTPUT_MAX && !value.includes("$MDU:");
+  return /^\s*(?:ls|find)(?:\s|$)/.test(command) && value !== "" && value.length <= KEY_LISTING_OUTPUT_MAX && !value.includes("$MDU:");
 }
 
 /** Worth sending to `callTaint` for the own-text test (plan 10 §11.13, "A
@@ -1563,7 +1573,8 @@ export function callCommandText(toolName: string, input: Record<string, unknown>
  * with an unknown level (no-model); an arbiter without the op reports no
  * taint (nothing to mask). A rule (ii)/(iii) result is released only when the
  * verbatim-value backstop finds nothing and no mask regex matches; a backstop
- * that cannot run keeps the result masked.
+ * that cannot run keeps the result masked, and a rule other than `clear` or
+ * `mask` (one this proxy does not recognise included) masks whole.
  */
 /** Claude Code's polls of a background task's output (plan 10 §11.12): they
  *  name a task, not a command. */
@@ -1794,8 +1805,12 @@ async function secretTaintFor(
     return { level: "public", files: [], apps: [], rule: "secret", maskWhole: false, denied, deniedOnly: hit === null, why: hit === null ? "every open of a secret in the tree was refused and no registered value appears in the output" : `a refused tree, but ${hit}` };
   }
   const who = `${t.apps.join(", ") || "a program"} read ${t.files.map((f) => f.split("/").pop()).join(", ")}`;
-  if (t.rule === "secret") {
-    return { level: t.level, files: t.files, apps: t.apps, rule: t.rule, maskWhole: true, denied, deniedOnly: false, why: `plan 10 rule (i): ${who}; the whole output is secret` };
+  if (t.rule !== "clear" && t.rule !== "mask") {
+    // Rule (i), and fail-closed (finding F-C, 2026-10-27): only `clear` and
+    // `mask` may release, so a rule this proxy does not recognise (a typo, a
+    // newer arbiter's rule, a malformed answer) masks whole like `secret`.
+    const rule: unknown = t.rule;
+    return { level: t.level, files: t.files, apps: t.apps, rule: "secret", maskWhole: true, denied, deniedOnly: false, why: rule === "secret" ? `plan 10 rule (i): ${who}; the whole output is secret` : `plan 10: ${who}, and the output rule the arbiter sent (${JSON.stringify(rule) ?? "none"}) is not one Mandu recognises; the whole output is secret (fail-closed)` };
   }
   // rule (ii)/(iii): the value backstop, then the mask regexes
   let hit = await backstop();
@@ -1883,6 +1898,7 @@ export function buildSecretNote(t: SecretTaintInfo): string | null {
   } else if (t.files.length > 0 && !t.pathDerived && !t.valueBackstop) {
     lines.push(`note: ${t.apps.join(", ")} read ${t.files.join(", ")} (a listed reader); the output is released by the program's rule.`);
   }
+  if (t.twinWrites && t.twinWrites.length > 0) lines.push(twinWriteLine(t.twinWrites));
   if (t.twinOnly && t.twinOf && t.twinOf.length > 0 && t.dirListing) {
     // "A folder's names" (plan 10 §11.8), and beside another command
     // (folder-listing-compound.md). Byte-identical in both proxies.
@@ -1932,6 +1948,63 @@ function appendAfterTheFactNote(tr: ToolResultBlock, audit: RewriteAudit, line: 
   audit.forwardedText = forwarded;
   audit.secretNote = audit.secretNote ? `${audit.secretNote}\n${own}` : own;
   audit.afterTheFact = true;
+}
+
+/** The `[mandu:locked]` note's text lives in locked-object-note.ts, one
+ *  module copied byte for byte into the openai-proxy (confidentiality.md
+ *  §7.1, "git's report on a history rewrite"); re-exported for the tests
+ *  and the stack suites that import it from here. */
+export { LOCKED_NOTE_MARKER, lockedObjectNote, protectedCopyNote };
+
+function appendLockedObjectNote(tr: ToolResultBlock, audit: RewriteAudit, ids: readonly string[] | undefined, paths?: readonly string[]): void {
+  const notes = [ids ? lockedObjectNote(ids) : null, paths ? protectedCopyNote(paths) : null].filter((n): n is string => n !== null);
+  if (notes.length === 0) return;
+  const note = notes.join("\n");
+  const current = audit.forwardedText ?? (audit.symbolized ? audit.symbol ?? "" : audit.value);
+  const forwarded = `${current}\n\n${note}`;
+  if (typeof tr.content === "string" || tr.content == null) {
+    tr.content = forwarded;
+  } else {
+    tr.content = [{ type: "text", text: forwarded } as ToolResultContentBlock];
+  }
+  audit.forwardedText = forwarded;
+  audit.lockedNote = note;
+}
+
+/** The note on a file READ masked whole because the file is `no-model`
+ *  (confidentiality.md §7, "A protected file read whole"), where no other
+ *  note says what the symbol is: a read the proxy alone sees (the OpenClaw
+ *  plugin's Route 1, whose `read` runs in the Gateway with no file twin).
+ *  Live 2026-10-26 (demo-notion-token): the bare symbol came with no word of
+ *  what it was, so the model showed it and waited for the user to check a
+ *  token it could not see. Static text and the path the model named. */
+export function protectedReadNote(path: string): string {
+  return `${SECRET_NOTE_MARKER} masked: ${path} is a protected file that no AI model may read, so you see the whole file as this one symbol. You cannot show its content or check its values; the user can open the file themselves. A program you run that reads the file itself (a script, the app) still gets its real content, so a task that only needs a program to use the file can go on.`;
+}
+
+function appendProtectedReadNote(
+  tr: ToolResultBlock,
+  audit: RewriteAudit,
+  toolName: string,
+  level: string | undefined,
+  path: string | undefined,
+  surface: GateSurface = CLAUDE_CODE_GATE_SURFACE,
+): void {
+  if (audit.secretNote || audit.lockedNote || level !== "no-model" || !path) return;
+  // The lower-case `read` (OpenClaw's, OpenCode's): Claude Code's Read
+  // never runs without the file twin under Mandu, and its bare symbol is
+  // pinned by the after-the-fact and path-derived notes' tests.
+  if (toolName !== "read" || surface.paths[toolName]?.mode !== "read") return;
+  const note = protectedReadNote(path);
+  const current = audit.forwardedText ?? (audit.symbolized ? audit.symbol ?? "" : audit.value);
+  const forwarded = `${current}\n\n${note}`;
+  if (typeof tr.content === "string" || tr.content == null) {
+    tr.content = forwarded;
+  } else {
+    tr.content = [{ type: "text", text: forwarded } as ToolResultContentBlock];
+  }
+  audit.forwardedText = forwarded;
+  audit.secretNote = note;
 }
 
 function appendSecretNote(tr: ToolResultBlock, audit: RewriteAudit, t: SecretTaintInfo | null): void {
@@ -2044,7 +2117,7 @@ export function crossResultSpans(r: RewriteAudit): string[] {
  */
 export function ownForwardedText(r: RewriteAudit): string {
   let text = r.forwardedText ?? (r.symbolized ? r.symbol ?? "" : r.value);
-  for (const note of [r.twinNote, r.secretNote]) {
+  for (const note of [r.twinNote, r.secretNote, r.lockedNote]) {
     if (note) text = text.replace(`\n\n${note}`, "");
   }
   return r.keptVerbatim ? text.replace(r.keptVerbatim, "") : text;
@@ -2060,6 +2133,7 @@ export function oracleHaystack(req: MessagesRequest, rewrites: readonly RewriteA
   let text = forwardedToolResultText(req);
   for (const r of rewrites) {
     if (r.twinNote) text = text.replace(`\n\n${r.twinNote}`, "");
+    if (r.lockedNote) text = text.replace(`\n\n${r.lockedNote}`, "");
   }
   return text;
 }
@@ -2499,6 +2573,18 @@ export async function rewriteRequest(
           ? { ...secretTaint, blockedExec: egress.blocked }
           : { level: "public", files: [], apps: [], rule: "secret", maskWhole: false, denied: [], deniedOnly: false, blockedExec: egress.blocked, why: "a command was blocked before it ran" };
       }
+      // The exec gate blocked this call (its notice is recorded above, but
+      // the result is not exactly the sentinel's output): nothing it ran
+      // printed this, so whatever more it holds is masked whole, whatever
+      // the classify read in the sentinel's text (2026-10-26: it no longer
+      // reads the quoted notice's words as paths, confidentiality.md §7.1,
+      // "A word in a message is not a path").
+      if (gateNotice !== undefined) {
+        const why = "the exec gate blocked this command, so nothing it ran printed this; anything beyond the gate's own notice is masked whole";
+        secretTaint = secretTaint
+          ? { ...secretTaint, maskWhole: true, level: stricterLevel(secretTaint.level, "no-model"), why: `${secretTaint.why}; ${why}` }
+          : { level: "no-model", files: [], apps: [], rule: "secret", maskWhole: true, denied: [], deniedOnly: false, why };
+      }
       if (secretTaint?.maskWhole) {
         verdict = { ...verdict, confidentiality: stricterLevel(verdict.confidentiality, secretTaint.level), reason: `${verdict.reason}; ${secretTaint.why}` };
       } else if ((secretTaint?.deniedOnly || secretTaint?.twinOnly) && isSecretLevel(verdict.confidentiality)) {
@@ -2646,6 +2732,20 @@ export async function rewriteRequest(
             harnessRead: toolName === "Read" && (opts.surface ?? CLAUDE_CODE_GATE_SURFACE).spec === "claude-code",
           })
         : null;
+      // Plan 10 §4.1, "The model is told at the call" (2026-10-27): the call
+      // writes a protected file (a redirection into it, `sed -i`, Edit's
+      // refused save), whose change stays in the placeholder copy and never
+      // reaches the real file. The `copy:` line says so, on a masked result
+      // and a released one alike; the paths are the model's own tokens.
+      // The arbiter answers it only for a session the file guard confines,
+      // where the copies are Mandu's. Explains only: no mask is raised or
+      // lowered by it.
+      const twinWrites = twinWriteTokens(classified.twinWrites, input);
+      if (twinWrites.length > 0) {
+        secretTaint = secretTaint
+          ? { ...secretTaint, twinWrites }
+          : { level: "public", files: [], apps: [], rule: "secret", maskWhole: false, denied: [], deniedOnly: false, twinWrites, why: "the call writes a protected file's placeholder copy" };
+      }
 
       if (untrusted || secret) {
         // Companion to the arbiter's fail-closed shape rules (e.g. the inspect
@@ -2967,6 +3067,8 @@ export async function rewriteRequest(
         });
         await appendTwinNote(tr, rewrites[rewrites.length - 1]!, input, agentViewRoots, toHumanView, arbiter, twinHintCache, opts.log, opts.surface);
         appendSecretNote(tr, rewrites[rewrites.length - 1]!, secretTaint);
+        // not on a result masked after the fact: the model did see that one
+        if (!afterFactLine) appendProtectedReadNote(tr, rewrites[rewrites.length - 1]!, toolName, verdict.confidentiality, origin, opts.surface);
         if (afterFactLine) appendAfterTheFactNote(tr, rewrites[rewrites.length - 1]!, afterFactLine);
       } else {
         // TRUSTED → pass through unchanged.
@@ -2984,6 +3086,7 @@ export async function rewriteRequest(
           reason: verdict.reason,
         });
         appendSecretNote(tr, rewrites[rewrites.length - 1]!, secretTaint);
+        if (!pathReleased && !nonText) appendLockedObjectNote(tr, rewrites[rewrites.length - 1]!, verdict.lockedObjects, verdict.protectedCopies);
       }
     }
   }

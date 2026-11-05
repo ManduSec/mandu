@@ -17,15 +17,25 @@ export interface BrowserTyped {
   /** The secret's short name ("a secret" when it has none; for `unknown`,
    *  UNKNOWN_SECRET: a placeholder that names nothing names no secret). */
   secret: string;
-  /** The page's host, when the relay knows it (a filled value). */
+  /** The page's host, when the relay names it: a filled value's page, or a
+   *  refusal's host read from its reason (`not-allowed`, `needs-approval`). */
   site: string | null;
   /** `unknown`: the agent typed a placeholder the arbiter does not know (a
    *  mistyped or made-up one); nothing was typed and the agent was told
    *  (devtools-relay.md §3.2, the relay's reason `unknown placeholder`). */
   outcome: "filled" | "refused" | "unknown";
+  /** A refusal's cause (`refusalCause`), null for a filled or unknown one
+   *  and for a reason the page does not know (an older relay's). */
+  why: RefusalWhy | null;
   /** How many times. */
   count: number;
 }
+
+/** Why the relay typed nothing, its notice kinds (devtools-relay.md §3.4):
+ *  `not-allowed` the site may not have it; `needs-approval` it may with the
+ *  person's OK, and a question is open; `declined` the person answered Send
+ *  without it; `failed` Mandu could not check (fail-closed). */
+export type RefusalWhy = "not-allowed" | "needs-approval" | "declined" | "failed";
 
 export interface BrowserService {
   host: string;
@@ -66,6 +76,42 @@ export const UNKNOWN_SECRET = "an unknown masked value";
  *  (cdp-relay release.ts UNKNOWN_PLACEHOLDER). */
 const UNKNOWN_REASON = "unknown placeholder";
 
+/** The relay's refusal reasons (cdp-relay release.ts `release`,
+ *  `checkTyped`): a fixed prefix, then the cause in fixed words. */
+const REFUSED_PREFIX = "Mandu: the placeholder was not typed: ";
+const NOT_ALLOWED = /^\S+ may not go to (.*?) \(/;
+const NEEDS_APPROVAL = /^(.*?) may not have \S+ without the person's approval in Mandu;/;
+const DECLINED = "you chose to go on without ";
+/** Mandu could not check: the gate, the value or the page could not be
+ *  read, or the page has no origin (`frameOrigin`'s words, whole). */
+const FAILED = [
+  /^the release gate could not be asked \(/,
+  /^the value could not be read \(/,
+  /^it could not be looked up \(/,
+  /^Chrome did not name the page \(/,
+  /^Chrome named no main frame$/,
+  /^(the|an? \S+) page has no origin a secret can be released to$/,
+];
+/** A host name only: letters, digits, `-`, `.`, an optional port. */
+const HOST = /^[A-Za-z0-9.-]+(:\d{1,5})?$/;
+
+/** A refusal's cause and site, read from the relay's stored reason (each
+ *  cause anchored after the prefix, so a host cannot spell another). Only
+ *  the cause and a host name are kept, never the text or its placeholder;
+ *  an unknown reason is `why: null` (the page's older sentence). Pure. */
+export function refusalCause(reason: unknown): { why: RefusalWhy | null; site: string | null } {
+  if (typeof reason !== "string" || !reason.startsWith(REFUSED_PREFIX)) return { why: null, site: null };
+  const text = reason.slice(REFUSED_PREFIX.length);
+  const host = (h: string | undefined): string | null => (h !== undefined && HOST.test(h) ? h : null);
+  const denied = NOT_ALLOWED.exec(text);
+  if (denied) return { why: "not-allowed", site: host(denied[1]) };
+  const ask = NEEDS_APPROVAL.exec(text);
+  if (ask) return { why: "needs-approval", site: host(ask[1]) };
+  if (text.startsWith(DECLINED)) return { why: "declined", site: null };
+  if (FAILED.some((re) => re.test(text))) return { why: "failed", site: null };
+  return { why: null, site: null };
+}
+
 /** A secret's short name, from its placeholder's name. */
 function nameOf(symbol: unknown): string {
   return (typeof symbol === "string" ? secretShortName(symbol, null) : null) ?? "a secret";
@@ -94,16 +140,18 @@ export function browserStory(events: readonly ManduEvent[]): BrowserStory | null
     } else if (action === "refused" && (field(e, "reason") === UNKNOWN_REASON || strings(field(e, "unknown")).length > 0)) {
       // Names nothing: one line however it was spelled, never its name.
       const k = "unknown";
-      const t = typed.get(k) ?? { secret: UNKNOWN_SECRET, site: null, outcome: "unknown" as const, count: 0 };
+      const t = typed.get(k) ?? { secret: UNKNOWN_SECRET, site: null, outcome: "unknown" as const, why: null, count: 0 };
       t.count++;
       typed.set(k, t);
     } else if (action === "released" || action === "refused") {
       const outcome = action === "released" ? "filled" : "refused";
-      const site = outcome === "filled" && typeof field(e, "page") === "string" ? String(field(e, "page")) : null;
+      // A refusal's event has no page: its host is in the reason, if at all.
+      const cause = outcome === "refused" ? refusalCause(field(e, "reason")) : { why: null, site: null };
+      const site = outcome === "filled" ? (typeof field(e, "page") === "string" ? String(field(e, "page")) : null) : cause.site;
       for (const s of symbols.length ? symbols : [null]) {
         const secret = nameOf(s);
-        const k = `${outcome}\u0000${site ?? ""}\u0000${secret}`;
-        const t = typed.get(k) ?? { secret, site, outcome, count: 0 };
+        const k = `${outcome}\u0000${cause.why ?? ""}\u0000${site ?? ""}\u0000${secret}`;
+        const t = typed.get(k) ?? { secret, site, outcome, why: cause.why, count: 0 };
         t.count++;
         typed.set(k, t);
       }

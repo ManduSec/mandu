@@ -15,7 +15,13 @@
  *       the line's Show it / Show them button takes the focus, never the
  *       hidden card; with that run opened, the card does;
  *   L4  a poll redraw with one more turn rewrites its time, keeps the same
- *       button and leaves the focus on it.
+ *       button and leaves the focus on it;
+ *   L5  `/agents/<id>?go=latest` (a Running now row's "last step") focuses
+ *       the newest turn after the first draw, once, its button shown or
+ *       not, and drops `go`; a later poll's redraw does not move the focus;
+ *   L6  with the switch on, it focuses the folded turn's line button, as a
+ *       press does; with no turn drawn, the page stays as a plain link
+ *       opens it.
  */
 
 import { test } from "node:test";
@@ -127,4 +133,51 @@ test("L4: a poll redraw with one more turn rewrites the time on the same button 
   assert.equal(nameOf(b), `Latest turn, ${lastTime(doc)}`, "its words follow the newest turn");
   assert.equal(doc.activeElement, b, "the focus stays where it was");
   assert.equal(doc.defaultView.scrollY, 0, "the page did not move");
+});
+
+test("L5: ?go=latest focuses the newest turn once the page is first drawn, drops `go`; a poll does not land again", async () => {
+  let story = [turn("t:a", 1), turn("t:b", 2), turn("t:c", 3), turn("t:d", 4), turn("t:e", 5)];
+  const { doc, window } = load({ url: `${URL1}?go=latest`, routes: { "GET home/agent?session=s1": () => page(story) } });
+  const scrolled: string[] = [];
+  window.HTMLElement.prototype.scrollIntoView = function (this: El) { scrolled.push(this.dataset.turnId ?? this.className); };
+  await tick();
+  assert.equal(window.location.pathname + window.location.search, "/mandu/agents/s1", "used once: a reload or Back does not jump again");
+  const last = turns(doc).at(-1);
+  assert.equal(doc.activeElement, last, "the newest turn has the focus");
+  assert.deepEqual(scrolled, ["t:e"], "scrolled to");
+  // The person moves on; the agent does more and the page is drawn again: no second landing.
+  latest(doc).focus();
+  story = [...story, turn("t:f", 6)];
+  await poll(doc);
+  assert.equal(turns(doc).length, 6, "drawn again");
+  assert.equal(doc.activeElement, latest(doc), "the focus stays where the person put it");
+  assert.deepEqual(scrolled, ["t:e"], "nothing scrolled again");
+
+  // Fewer than three turns: Latest turn is hidden, the newest turn is still where the link goes.
+  const two = load({ url: `${URL1}?go=latest`, routes: { "GET home/agent?session=s1": page([turn("t:a", 1), turn("t:b", 2)]) } });
+  two.window.HTMLElement.prototype.scrollIntoView = function () {};
+  await tick();
+  assert.equal(latest(two.doc).hidden, true);
+  assert.equal(two.doc.activeElement, turns(two.doc).at(-1));
+});
+
+test("L6: ?go=latest with the switch on focuses the folded turn's line button; with no turn drawn, the page opens as a plain link does", async () => {
+  const { doc, window } = load({ url: `${URL1}?only=stepped-in&go=latest`, routes: { "GET home/agent?session=s1": page([turn("t:a", 1), turn("t:b", 2, "blocked"), turn("t:c", 3), turn("t:d", 4)]) } });
+  window.HTMLElement.prototype.scrollIntoView = function () {};
+  await tick();
+  const last = turns(doc).at(-1);
+  assert.equal(last.hidden, true, "the newest turn is folded");
+  const btn = ([...doc.querySelectorAll("#agent-story .story-quiet")].at(-1) as El).querySelector("button.quiet-toggle");
+  assert.equal(doc.activeElement, btn, "the line's Show them, never the hidden card");
+  assert.equal(last.hidden, true, "nothing opened by itself");
+  assert.equal(window.location.search, "?only=stepped-in", "the switch stays in the address, `go` goes");
+
+  const none = load({ url: `${URL1}?go=latest`, routes: { "GET home/agent?session=s1": page([]) } });
+  const scrolled: unknown[] = [];
+  none.window.HTMLElement.prototype.scrollIntoView = function (this: El) { scrolled.push(this); };
+  await tick();
+  assert.equal(turns(none.doc).length, 0);
+  assert.equal(none.doc.activeElement.closest?.("#agent-story"), null, "nothing in the story has the focus");
+  assert.deepEqual(scrolled, []);
+  assert.equal(none.window.location.search, "");
 });

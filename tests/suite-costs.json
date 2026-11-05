@@ -103,6 +103,7 @@
   "scripts.drill-tree": 0.3,
   "scripts.fresh-agents-fake-model": 1,
   "scripts.fresh-agents-host": 1,
+  "scripts.fresh-openclaw-plugin-host": 1,
   "scripts.github-rules": 0.2,
   "scripts.guest-registry": 1,
   "scripts.install-deps": 1.8,

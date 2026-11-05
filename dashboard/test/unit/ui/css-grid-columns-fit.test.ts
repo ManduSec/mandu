@@ -172,7 +172,7 @@ test("no script draws a grid's columns inline: the stylesheet decides for every 
 test("the agent page as a 320 px phone: the facts' tiles and the Your secrets cards are never wider than their box", async () => {
   const card = (file: string, ref: string) => ({
     what: [T("The file "), { kind: "code", text: file }], level: "No AI", saw: "masked", ref,
-    lines: [{ tone: "good", parts: [T("The AI got only a placeholder, never the real value.")] }],
+    lines: [{ tone: "good", parts: [T("The AI got only its masked version, never the real value.")] }],
   });
   const page = JSON.parse(JSON.stringify(AGENT));
   page.secrets = { mode: "secrets", flagged: false, more: 0, counts: { masked: 2, early: 0 }, secrets: [card("~/ws/.env", "bbbbbbbbbbbbbbbbbbbbbbb1"), card("~/ws/creds.json", "bbbbbbbbbbbbbbbbbbbbbbb2")] };

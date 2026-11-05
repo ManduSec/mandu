@@ -15,11 +15,15 @@
 
 import type { QueueRowVM } from "./policy-panel-types.js";
 import { tildePath } from "./file-browser.js";
+import { categoryWords } from "./prompt-settings.js";
 
 /** A sentence fragment: plain text, or a value the page renders as code. */
 export interface HomeTextPart {
   kind: "text" | "code";
   text: string;
+  /** A code part that is a command Mandu asks you to run: the page draws a
+   *  Copy beside it (dashboard.md §4.25b). Only Mandu's own commands. */
+  run?: true;
 }
 
 export type HomeAskFamily = "send" | "run" | "read" | "show" | "prompt" | "other";
@@ -59,7 +63,30 @@ export interface AskWords {
    *  `api.stripe.com`"), for that line ("Allowed once: …"); the whole
    *  sentence when it does not start with "<agent> wants to ". */
   whatParts: HomeTextPart[];
+  /** What the answers that last keep doing, on a send of a secret to a host
+   *  (dashboard.md §4.34, *A send question says what its standing answers
+   *  keep doing*): kept for this secret and this host only, from any agent,
+   *  until changed under Rules. Only the halves the card offers (`actions`:
+   *  Always allow, Block); absent when it offers neither, and on every
+   *  other family. `ifStandingParts` joined is exactly `ifStanding`; its
+   *  closing "Rules" is a link part to Your rules on Rules. */
+  ifStanding?: string;
+  ifStandingParts?: StandingPart[];
+  /** The short form of `ifStanding` for Home's compact card (dashboard.md
+   *  §4.34, *Home's card says which answers last*): which of the card's
+   *  answers cover only the next such request and which are kept for this
+   *  secret and host until changed under Rules, each named as `actions`
+   *  labels it. Only beside `ifStanding`, and only when `actions` offers a
+   *  one-time answer and a standing one. `answersShortParts` joined is
+   *  exactly `answersShort`; its "Rules" is a link part. */
+  answersShort?: string;
+  answersShortParts?: StandingPart[];
 }
+
+/** A part of `AskWords.ifStandingParts`: a name as code, or the link to
+ *  Your rules on Rules, where a remembered answer is kept (home.js
+ *  `placeLink`). */
+export type StandingPart = HomeTextPart | { kind: "link"; text: string; to: "your-rules" };
 
 /** What the person does after answering a stopped action (dashboard.md
  *  §4.34 "After you answer"): the gates refuse the attempt and tell the
@@ -67,6 +94,28 @@ export interface AskWords {
  *  not retry before they answer"), and the agent cannot see the answer, so
  *  nothing tries again until the person says so. */
 export const TELL_AGENT = "After you answer, tell the agent to try again.";
+
+/** The words of a card whose asking session has ended (`HomeAsk.askerEnded`,
+ *  dashboard.md §4.34 "After you answer"): that agent is gone, and the card
+ *  says nothing waits, so its *If you click Allow* leaves out `TELL_AGENT`,
+ *  wherever the cell has it (a held program's cell goes on after it), and
+ *  the try-again `afterAllow` goes with it. Code parts are kept as they
+ *  are, so `ifAllowedParts` joined stays `ifAllowed`. Words without the
+ *  sentence come back as they are. */
+export function endedAskWords<T extends AskWords>(words: T): T {
+  const cut = ` ${TELL_AGENT}`;
+  if (!words.ifAllowed.includes(cut)) return words;
+  const { afterAllow: _after, ...rest } = words;
+  return {
+    ...rest,
+    ifAllowed: words.ifAllowed.split(cut).join(""),
+    // Neighbouring text joined first (`w` does so already), so the sentence
+    // is never split across two parts.
+    ifAllowedParts: w`${words.ifAllowedParts}`
+      .map((p) => (p.kind === "text" ? t(p.text.split(cut).join("")) : p))
+      .filter((p) => p.text !== ""),
+  } as T;
+}
 
 /** Why a held message takes an answer for this message only (plan 15 §12,
  *  2026-10-04), in the product's words; both front ends show it. */
@@ -89,7 +138,7 @@ type After = "try-again" | "goes-on";
 /** An ask as the families build it: `AskWords` with each cell a `Cell`,
  *  and what is left after an Allow as a kind (`after`), worded with the
  *  agent's name by describeAsk. */
-type AskCells = Omit<AskWords, "why" | "aiNow" | "ifAllowed" | "whyParts" | "aiNowParts" | "ifAllowedParts" | "afterAllow" | "whatParts"> & {
+type AskCells = Omit<AskWords, "why" | "aiNow" | "ifAllowed" | "whyParts" | "aiNowParts" | "ifAllowedParts" | "afterAllow" | "whatParts" | "ifStanding" | "answersShort"> & {
   why: Cell;
   aiNow: Cell;
   ifAllowed: Cell;
@@ -139,6 +188,8 @@ function withParts(cells: AskCells, who: string): AskWords {
   const ifAllowed = cellOf(a.ifAllowed);
   return {
     ...a,
+    ...(a.ifStandingParts !== undefined ? { ifStanding: a.ifStandingParts.map((p) => p.text).join("") } : {}),
+    ...(a.answersShortParts !== undefined ? { answersShort: a.answersShortParts.map((p) => p.text).join("") } : {}),
     ...(after !== undefined ? { afterAllow: afterWords(after, who) } : {}),
     whatParts: whatOf(a.sentence, who),
     why: why.text,
@@ -568,13 +619,68 @@ function sessionAsk(
 }
 
 /** The queue row describeAsk words. */
-type AskRow = Pick<QueueRowVM, "where" | "subject" | "target" | "reason"> & Partial<Pick<QueueRowVM, "onceOnly" | "origin" | "readFirst" | "sessionReads" | "sessionReadsMore" | "sessionConfined" | "sessionBindings" | "sessionHeld" | "holderSources" | "fileValues">> & {
+type AskRow = Pick<QueueRowVM, "where" | "subject" | "target" | "reason"> & Partial<Pick<QueueRowVM, "onceOnly" | "origin" | "readFirst" | "sessionReads" | "sessionReadsMore" | "sessionConfined" | "sessionBindings" | "sessionHeld" | "holderSources" | "fileValues" | "actions">> & {
   /** A held open or change (`open:`, `trust:`, `write:`): whether the
    *  program is still waiting for the answer (the guard asks again every
    *  half second while it holds; home.ts `heldNow`). Absent: not known,
    *  and the words claim neither. */
   held?: boolean;
+  /** The product card's own answers (home.ts `sendWithoutActions`: the
+   *  panel's, with *Send without it*), which Home's short line names
+   *  (`AskWords.answersShort`). Absent (the developer view, a row as the
+   *  panel holds it): no short line. */
+  cardActions?: QueueRowVM["actions"];
 };
+
+/** `AskWords.ifStandingParts` for a send of `covers` (a secret's name, a
+ *  file's secrets, "this secret") to `host` (dashboard.md §4.34, *A send
+ *  question says what its standing answers keep doing*). The arbiter keeps
+ *  a standing answer per {secret, host} (egress-approvals.ts, the UNIQUE
+ *  index on (symbol, destination); a file's card's answer stands for the
+ *  file at that host, egress-hold.md "One card per file") and consults it
+ *  before any rule for every asker alike (server.ts `consultPriorVerdict`:
+ *  "A standing (*always*) answer is the same to every asker"), so the words
+ *  say this secret, this host, any agent. They never say other secrets or
+ *  hosts "still ask" (a rule or a built-in protection may decide those),
+ *  only that the answer does not cover them, and "filled in", never where
+ *  in the request. Only the halves `actions` offers as standing answers
+ *  (an approve or a plain deny not scoped `once`); no list (the developer
+ *  view's words) is the send's usual both. */
+function standingOf(covers: Cell, many: boolean, host: string, actions: QueueRowVM["actions"] | undefined): { ifStandingParts: StandingPart[] } | {} {
+  const allow = actions === undefined || actions.some((a) => a.approve && a.scope !== "once" && a.prompt === undefined);
+  const block = actions === undefined || actions.some((a) => !a.approve && a.scope !== "once" && a.strip !== true && a.prompt === undefined);
+  if (!allow && !block) return {};
+  const sends = w`any agent's request that sends ${many ? "them" : "it"} to ${c(host)}`;
+  const parts = w`Mandu remembers it for ${covers} and ${c(host)} only. ${allow ? w`Always allow: from now on, ${sends} goes with ${many ? "the real secrets" : "the real secret"} filled in, without asking. ` : ""}${block ? allow ? "Block: those requests are refused without asking. " : w`Block: from now on, ${sends} is refused without asking. ` : ""}Your answer does not cover other secrets or other hosts. You can change it under `;
+  return { ifStandingParts: [...parts, { kind: "link", text: "Rules", to: "your-rules" }, t(".")] };
+}
+
+/** A send's words about its answers that last: standingOf's line, and its
+ *  short form beside it (never without it). */
+function standingWords(covers: Cell, many: boolean, host: string, v: AskRow): { ifStandingParts?: StandingPart[]; answersShortParts?: StandingPart[] } {
+  const standing = standingOf(covers, many, host, v.actions);
+  return "ifStandingParts" in standing ? { ...standing, ...answersShortOf(covers, host, v.cardActions) } : {};
+}
+
+/** `AskWords.answersShortParts`, the short form of standingOf's line for
+ *  Home's compact card (dashboard.md §4.34, *Home's card says which
+ *  answers last*): the one-time answers `actions` offers (Allow once, Send
+ *  without it) cover only the next such request (a once verdict satisfies
+ *  one later decision, egress-approvals.ts VERDICT SCOPE: the gate refused
+ *  this one), and the standing ones (Always allow, Block, as standingOf
+ *  reads them) are kept for `covers` and `host` until changed under Rules.
+ *  Each verb as `actions` (the card's own, `AskRow.cardActions`) labels
+ *  it. Nothing without them (the developer view) or without both kinds. */
+function answersShortOf(covers: Cell, host: string, actions: QueueRowVM["actions"] | undefined): { answersShortParts: StandingPart[] } | {} {
+  if (actions === undefined) return {};
+  const pick = (f: (a: QueueRowVM["actions"][number]) => boolean): string[] => actions.filter((a) => a.prompt === undefined && f(a)).map((a) => a.label);
+  const once = [...pick((a) => a.approve && a.scope === "once"), ...pick((a) => a.strip === true)];
+  const kept = [...pick((a) => a.approve && a.scope !== "once"), ...pick((a) => !a.approve && a.scope !== "once" && a.strip !== true)];
+  if (once.length === 0 || kept.length === 0) return {};
+  const names = (xs: string[]): string => xs.length === 1 ? xs[0]! : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`;
+  const parts = w`${names(once)} ${once.length === 1 ? "covers" : "cover"} only the next such request. ${names(kept)} ${kept.length === 1 ? "is" : "are"} kept for ${covers} and ${c(host)} until you change ${kept.length === 1 ? "it" : "them"} under `;
+  return { answersShortParts: [...parts, { kind: "link", text: "Rules", to: "your-rules" }, t(".")] };
+}
 
 /** Classify a queue row and build its plain sentence + the three cells the
  *  Approvals card shows (dashboard.md §4.25u): why it stopped, what the AI
@@ -651,6 +757,7 @@ function askCells(
       // sent, and only a new try goes with the value (§4.34 "After you answer").
       ifAllowed: w`The AI's next request goes to ${place} with ${real} filled in. Mandu refused this one, so nothing was sent. ${TELL_AGENT}`,
       after: "try-again",
+      ...(item === "a secret" && target !== "" ? standingWords(secret.name !== null ? [c(secret.name)] : fileCard !== null ? w`the secrets in ${c(from!)}` : "this secret", fileCard !== null, target, v) : {}),
     };
   }
   if (subject.startsWith("prompt:")) {
@@ -658,10 +765,16 @@ function askCells(
     // rules ask about (a code name, a card number, a key); the agent's
     // request waits until they answer. The found text itself is not in the
     // row (the page fetches it on the human plane, prompt-filters/holds).
+    // A kind Mandu has words for is named as Settings names it ("a card
+    // number", prompt-settings.ts `categoryWords`); an organization's own
+    // category stays as written, a code (dashboard.md §4.34).
     const category = /^prompt:([^#]+)#/.exec(subject)?.[1] ?? "something your rules ask about";
+    const words = categoryWords(category);
     return {
       family: "prompt",
-      sentence: [t(`${who} wants to send your message to the AI. It holds `), c(category), t(".")],
+      sentence: words !== null
+        ? [t(`${who} wants to send your message to the AI. It holds ${words}.`)]
+        : [t(`${who} wants to send your message to the AI. It holds `), c(category), t(".")],
       why: "Your rules ask before a message with this goes to the AI. The AI's request waits until you answer, and goes masked if you do not answer in time.",
       // The proxy holds the request until a deadline from the row's first
       // sighting (30 s by default), then sends the default; an answer given

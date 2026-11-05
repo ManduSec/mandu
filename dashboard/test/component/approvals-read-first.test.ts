@@ -132,9 +132,13 @@ async function until(check: () => boolean, what: string): Promise<void> {
 
 const squash = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
 
-/** A card's detail cells by their labels. */
+/** A card's detail cells by their labels. A short card under From sessions
+ *  that have ended opens them first, as a press of What each answer does
+ *  would (dashboard.md §4.25 *An ended question is short on Approvals*). */
 function cells(card: Element): Record<string, string> {
   const out: Record<string, string> = {};
+  const more = card.querySelector<HTMLButtonElement>(".ask-more");
+  if (more && more.getAttribute("aria-expanded") !== "true") more.click();
   // The label is the cell's first text (a help button may follow it).
   for (const k of card.querySelectorAll(".ask-detail .k")) out[squash(k.firstChild?.textContent)] = squash(k.nextElementSibling?.textContent);
   return out;

@@ -50,7 +50,11 @@ test("manifest: config schema is closed and matches what the code reads", () => 
   assert.equal(schema.additionalProperties, false);
   const props = Object.keys(schema.properties as Record<string, unknown>).sort();
   assert.deepEqual(props, [
+    "agentId",
     "arbiterSock",
+    "attachment",
+    "manduPaths",
+    "sandbox",
     "scopeId",
     "ullmApiKey",
     "ullmBaseUrl",
@@ -59,6 +63,10 @@ test("manifest: config schema is closed and matches what the code reads", () => 
     "ullmMode",
     "ullmModel",
   ]);
+  // The confined-commands tier's block (openclaw-plugin.md §10) is closed too.
+  const sandbox = (schema.properties as Record<string, { additionalProperties?: unknown; properties?: Record<string, unknown> }>)["sandbox"]!;
+  assert.equal(sandbox.additionalProperties, false);
+  assert.deepEqual(Object.keys(sandbox.properties ?? {}).sort(), ["launcher", "statusFile", "writeProtect"]);
 });
 
 test("manifest: contracts.tools declares every tool the plugin registers (OpenClaw >= 2026.6 drops undeclared ones)", () => {
@@ -73,6 +81,32 @@ test("package.json: main + openclaw.extensions point at the entry", () => {
   assert.equal(pkg.main, "index.ts");
   const openclaw = pkg.openclaw as { extensions?: string[] };
   assert.deepEqual(openclaw.extensions, ["./index.ts"]);
+});
+
+test("package.json: compat.pluginApi and install.minHostVersion are the tested range's floor", () => {
+  // OpenClaw checks compat.pluginApi at install (install-shared) and at
+  // discovery (discovery-availability, 2026.9.9 on: an unsatisfied range skips
+  // the plugin) against the host version; minHostVersion likewise. The floor
+  // is the oldest release in supported-agents.md's tested range.
+  const pkg = readJson("package.json");
+  const openclaw = pkg.openclaw as { compat?: { pluginApi?: string }; install?: { minHostVersion?: string } };
+  assert.equal(openclaw.compat?.pluginApi, ">=2026.3.12");
+  assert.equal(openclaw.install?.minHostVersion, ">=2026.3.12");
+});
+
+test("manifest: activation.onStartup is set (hooks need the plugin loaded at Gateway start)", () => {
+  const manifest = readJson("openclaw.plugin.json");
+  const activation = manifest.activation as { onStartup?: unknown } | undefined;
+  assert.equal(activation?.onStartup, true);
+});
+
+test("manifest: no tool-result middleware contract and nothing that needs conversation access", () => {
+  // openclaw-plugin.md §3.1: symbolization stays at the model proxy. The
+  // middleware needs `contracts.agentToolResultMiddleware`; the plugin must
+  // not declare it, nor any contract beyond its two tools.
+  const manifest = readJson("openclaw.plugin.json");
+  assert.deepEqual(Object.keys(manifest.contracts as object), ["tools"]);
+  assert.ok(!JSON.stringify(manifest).includes("agentToolResultMiddleware"));
 });
 
 test("default export: definition object with a SYNCHRONOUS register, id matching the manifest", () => {

@@ -992,6 +992,13 @@ a fake live launch.
   { op: "endLaunch", token }                    -> { ended, rotated, epoch }
   ```
 
+  Since 2026-10-25 an ATTACHMENT (Mandu attached to an agent it does not
+  run, openclaw-plugin.md §3.3) is an unconfined period too: `beginAttachment`
+  (human plane, no pid, a 60 s lease that `renewAttachment` extends) holds
+  every seal void while it is live, and its end (`endAttachment`, or the
+  lease running out) rotates the epoch as an unconfined launch's does. Its
+  rows are the `attachments` table (arbiter-human-plane.md §10.1.2).
+
 - **Classification** (`launchConfinedForCaches`), fail closed: confined only
   when the arbiter's confidentiality axis is on, the mode is `secrets` or
   `full`, the posture is `confined` (which needs the Linux guard) or

@@ -201,7 +201,10 @@ test("in a real Chromium at 390 px: the cut-off command's Copy puts the whole co
         maskedButtons: masked.filter((p) => p.parentElement.querySelector("button.code-copy")).length,
         secrets: document.querySelectorAll("#agent-secrets button.code-copy").length,
         besideHidden: [...document.querySelectorAll("pre.hidden-text")].filter((p) => p.parentElement.querySelector("button.code-copy")).length,
-        notBlock: [...document.querySelectorAll("button.code-copy")].filter((b) => !b.parentElement.querySelector(":scope > pre.code-block")).length,
+        // Else a command Mandu itself asks you to run (dashboard.md §4.25b,
+        // product-command-copy.test.ts): a .run-code holding a mandu command.
+        notBlock: [...document.querySelectorAll("button.code-copy")].filter((b) => !b.parentElement.querySelector(":scope > pre.code-block")
+          && !(b.parentElement.classList.contains("run-code") && /^mandu [a-z]/.test(b.parentElement.querySelector(":scope > code").textContent))).length,
         buttons: document.querySelectorAll("button.code-copy").length,
       };
     })()`);
@@ -209,7 +212,7 @@ test("in a real Chromium at 390 px: the cut-off command's Copy puts the whole co
     assert.equal(o.maskedButtons, 0, "a block holding a chip has no Copy");
     assert.equal(o.secrets, 0, "no Copy in Your secrets");
     assert.equal(o.besideHidden, 0, "no Copy beside a revealed box");
-    assert.equal(o.notBlock, 0, "every Copy is a code block's");
+    assert.equal(o.notBlock, 0, "every Copy is a code block's or a Mandu command's");
     for (let i = 0; i < o.buttons; i++) {
       await evaluate(`document.querySelectorAll("button.code-copy")[${i}].click(), true`);
       await new Promise((r) => setTimeout(r, 100));

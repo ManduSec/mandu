@@ -12,6 +12,7 @@ import { inspectCallBoundMs } from "./ullm-timeout.js";
 import { hostRuntimeOf, type ComposedLaunch, type LaunchPlan } from "./types.js";
 import { MANDU_POLICY_SERVER, POLICY_PREALLOWED_TOOLS } from "./services/mcp.js";
 import { sessionNoProxy } from "./services/net-proxy.js";
+import { javaToolOptions } from "./java-trust.js";
 import { browserCdpAgentEnv } from "./browser-cdp.js";
 import { CODEX_CONNECTORS_OFF, CODEX_NO_DAEMON, CODEX_UPLOADS_OFF_OVERRIDES, codexOverridesReach, codexTakesNoDaemon, isCodexBinary } from "./codex-argv.js";
 import { gooseExtensionArg, isGooseBinary } from "./goose-argv.js";
@@ -255,6 +256,15 @@ export function composeLaunch(plan: LaunchPlan): ComposedLaunch {
   // the relay, never Chrome's own port. Loopback, so NO_PROXY above covers it.
   if (plan.cdpRelay) Object.assign(env, browserCdpAgentEnv(plan.cdpRelay.url));
   if (plan.mitmCaCert) Object.assign(env, mitmTrustEnv(plan.mitmCaCert, plan.mitmCaBundle, plan.mitmUserTrust));
+  // JVMs read no proxy or CA variable (java-trust.ts): JAVA_TOOL_OPTIONS
+  // names the session trust store and the proxy, the user's own options last.
+  if (plan.mitmCaCert && plan.mitmJava && plan.netProxy) {
+    const opts = javaToolOptions({ trustStore: plan.mitmJava.trustStore, proxy: plan.netProxy, noProxy: sessionNoProxy(plan)!, ...(plan.mitmJava.userOptions ? { user: plan.mitmJava.userOptions } : {}) });
+    if (opts !== null) env["JAVA_TOOL_OPTIONS"] = opts;
+  }
+  // The database login relays (db-relays.ts): libpq trusts the session CA's
+  // leaf they answer its TLS with (the user's own root certificate kept).
+  if (plan.dbRootCert) env["PGSSLROOTCERT"] = plan.dbRootCert;
   // Node ignores HTTP(S)_PROXY for fetch and https unless told to. Node's docs
   // date NODE_USE_ENV_PROXY v24.0.0 / v22.21.0 for fetch and v24.5.0 /
   // v22.21.0 for http/https; an older runtime (Mandu's floor, 22.13, among

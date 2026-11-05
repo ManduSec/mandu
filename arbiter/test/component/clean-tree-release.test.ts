@@ -88,9 +88,15 @@ const LOG_P = "cd storefront && git log --all -p --format='commit %h %s' -- src 
 test("offered: git's own output naming .env, released as it is (the .env labelled)", async () => {
   const k = await stack();
   try {
+    // filter-branch's fixed refusal is git's own report, public by its shape
+    // alone (confidentiality.md §7.1, "git's report on a history rewrite",
+    // 2026-10-26): no offer is needed, the verdict is not secret
+    const refused = await k.call(FILTER, "Cannot rewrite branches: You have unstaged changes.\n");
+    assert.equal(refused.confidentiality, "public", JSON.stringify(refused));
+    assert.equal(refused.pathRelease, undefined);
     for (const [command, out] of [
       [UNTRACK, "!! .env\n"],
-      [FILTER, "Cannot rewrite branches: You have unstaged changes.\n"],
+      [FILTER, "Cannot rewrite branches: You have unstaged changes.\nHEAD is now at ea68b4a Move the Stripe key to .env\n"],
       ["cd storefront && git log --all --oneline -- .env", "ea68b4a Move the Stripe key to .env\n"],
     ] as const) {
       const v = await k.call(command, out);
@@ -171,6 +177,7 @@ test("not offered (R4): a document named beside the .env, a .env changed since i
     // the token scan and called every command public
     const unregistered = join(k.ws, "memo", ".env");
     writeFileSync(unregistered, "OTHER_TOKEN=tok_UnregisteredOther0123456789\n");
+    const offered: string[] = [];
     for (const command of [
       "cat memo/plan.md", "/bin/cat memo/plan.md", "cat storefront/.env memo/plan.md", "git show HEAD:memo/plan.md",
       `cat ${unregistered}`, "cd memo && cat .env", "cd storefront && cat ../memo/.env",
@@ -186,10 +193,14 @@ test("not offered (R4): a document named beside the .env, a .env changed since i
       // with exclusion-flags.md: a grep exclusion blanked must not make the
       // whole command read as one empty place
       "grep --exclude-dir=x memo/plan.md", "grep -n KEY --exclude-dir=x storefront/.env memo/plan.md",
+      // and an rg negated glob or a grep --exclude= (2026-10-27), blanked
+      // alone or in a segment of a compound
+      "rg KEY -g '!x' memo/plan.md", "rg -n KEY --glob='!x' storefront/.env memo/plan.md", "rg KEY --iglob '!x' memo/plan.md | sort",
+      "cd storefront && rg -n KEY -g '!x' ../memo/plan.md", "grep --exclude=x memo/plan.md", "grep -n KEY --exclude='*.md' storefront/.env memo/plan.md",
     ]) {
       const v = await k.call(command, "x\n");
-      assert.equal(v.pathRelease, undefined, `${command}: ${JSON.stringify(v)}`);
-    }
+      if (v.pathRelease !== undefined) offered.push(`${command}: ${JSON.stringify(v)}`);    }
+    assert.deepEqual(offered, [], "none offered (each listed, not only the first)");
     const both = await k.call("git rm -q --cached storefront/.env memo/plan.md && git status --short", "D  memo/plan.md\n");
     assert.equal(both.confidentiality, "no-model");
     assert.equal(both.pathRelease, undefined, "a document named");

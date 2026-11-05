@@ -98,12 +98,40 @@ test("INI (aws credentials): secret-looking keys per section, region stays raw",
   assert.ok(!text.includes("wJalrXUtnFEMI"));
 });
 
-test("pgpass: the last field, escaped colons respected", () => {
-  const raw = "# comment\ndb.internal:5432:prod:app:pa\\:ss\nlocalhost:*:*:me:xyz\n";
+test("pgpass: the password field to the line's end, read as libpq reads it (escapes removed, up to an unescaped colon)", () => {
+  const raw = "# comment\ndb.internal:5432:prod:app:pa\\:ss\nlocalhost:*:*:me:xyz\nh:1:d:u:a\\\\b:tail\n";
   const { x, text } = twin("/home/u/.pgpass", raw);
   assert.equal(x.shape, "pgpass");
-  assert.deepEqual(x.spans.map((s) => [s.key, s.value]), [["app.password", "pa\\:ss"], ["me.password", "xyz"]]);
-  assert.equal(text, "# comment\ndb.internal:5432:prod:app:<app.password>\nlocalhost:*:*:me:<me.password>\n");
+  assert.deepEqual(x.spans.map((s) => [s.key, s.value, s.encoded]), [["app.password", "pa:ss", "pgpass"], ["me.password", "xyz", "pgpass"], ["u.password", "a\\b", "pgpass"]]);
+  assert.equal(text, "# comment\ndb.internal:5432:prod:app:<app.password>\nlocalhost:*:*:me:<me.password>\nh:1:d:u:<u.password>\n");
+});
+
+test("pgpass (db-login-release.md): a line naming one database marks its password for the wire; the twin escapes the token so libpq reads it whole", () => {
+  const raw = "db.internal:5432:*:app:pw1\nLocalHost:*:*:me:pw2\n*:5432:*:any:pw3\n/var/run/postgresql:5432:*:sock:pw4\n2001\\:DB8\\:\\:7:6432:*:v6:pw5\n";
+  const x = extractSecretSpans("/home/u/.pgpass", raw);
+  assert.deepEqual(x.spans.map((s) => [s.key, s.wire?.host ?? null, s.wire?.scheme ?? null]), [
+    ["app.password", "db.internal:5432", "postgres"],
+    ["me.password", "localhost:5432", "postgres"],
+    ["any.password", null, null],
+    ["sock.password", null, null],
+    ["v6.password", "[2001:db8::7]:6432", "postgres"],
+  ]);
+  const token = "$MDU:nomodel_Read[ab12].app.password";
+  const text = renderStructuredTwin("db.internal:5432:*:app:pw1\n", [x.spans[0]!], () => token);
+  assert.equal(text, "db.internal:5432:*:app:$MDU\\:nomodel_Read[ab12].app.password\n");
+  assert.equal(encodeToken(token, "pgpass"), "$MDU\\:nomodel_Read[ab12].app.password");
+});
+
+test("~/.my.cnf (db-login-release.md §8): a section's password marked for the wire with the database it (or [client]) names; localhost and no host name none", () => {
+  const raw = "[client]\nuser=alice\npassword=pwA\nhost=mysql.internal\n\n[mysqldump]\npassword=pwB\nport=3307\n\n[mysql_other]\nhost=localhost\npassword=pwC\n";
+  const x = extractSecretSpans("/home/u/.my.cnf", raw);
+  assert.deepEqual(x.spans.map((s) => [s.key, s.wire?.host ?? null, s.wire?.scheme ?? null]), [
+    ["client.password", "mysql.internal:3306", "mysql"],
+    ["mysqldump.password", "mysql.internal:3307", "mysql"],
+    ["mysql_other.password", null, null],
+  ]);
+  assert.ok(extractSecretSpans("/home/u/.my.cnf", "[client]\npassword=pw\n").spans.every((s) => s.wire === undefined), "no host: the socket");
+  assert.ok(extractSecretSpans("/home/u/other.ini", raw).spans.every((s) => s.wire === undefined), "only a .my.cnf");
 });
 
 test("netrc and npmrc", () => {

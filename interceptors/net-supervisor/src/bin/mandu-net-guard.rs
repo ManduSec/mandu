@@ -16,6 +16,9 @@
 //! everything else gets `-EACCES`. A `--deny <spec>` (same syntax, repeatable)
 //! refuses its destinations before any `--allow` is consulted, so a deny beats
 //! the `tcp:*:443` fallback (an agent's upload hosts, launcher upload-deny.ts).
+//! A `--redirect tcp:<host>:<port>=<loopback>:<port>` (repeatable) performs a
+//! connect to that database on the session egress proxy's relay instead, the
+//! database login release (docs/design/confidentiality/db-login-release.md).
 //! Non-INET connects (the arbiter's AF_UNIX
 //! socket) and connects from a nested different-netns box pass through untouched.
 //!
@@ -56,7 +59,7 @@ use std::os::unix::io::RawFd;
 use std::process::exit;
 use std::sync::Arc;
 
-use net_supervisor::guard::{parse_rules, GuardPolicy};
+use net_supervisor::guard::{parse_redirects, parse_rules, GuardPolicy};
 use net_supervisor::guard_kernel::{
     hand_listener, install_guard_filter_self, receive_listener, run_guard_supervisor, CachingResolver, FilterTraps,
     GuardConfig,
@@ -74,7 +77,7 @@ const CHILD_SETUP_FAIL: i32 = 92;
 fn die_usage(msg: &str) -> ! {
     eprintln!("mandu-net-guard: {msg}");
     eprintln!(
-        "usage: mandu-net-guard [--allow <[proto:]host:port>]... [--deny <[proto:]host:port>]... [--skip-unsupported] -- <argv...>"
+        "usage: mandu-net-guard [--allow <[proto:]host:port>]... [--deny <[proto:]host:port>]... [--redirect <tcp:host:port>=<loopback:port>]... [--skip-unsupported] -- <argv...>"
     );
     exit(EXIT_USAGE);
 }
@@ -87,6 +90,7 @@ fn die_setup(msg: &str) -> ! {
 fn main() {
     let mut specs: Vec<String> = Vec::new();
     let mut deny_specs: Vec<String> = Vec::new();
+    let mut redirect_specs: Vec<String> = Vec::new();
     let mut skip_unsupported = false;
     let mut target: Option<Vec<String>> = None;
     let mut clean = net_supervisor::clean_host::CleanHostArgs::default();
@@ -107,6 +111,10 @@ fn main() {
                 Some(s) => deny_specs.push(s),
                 None => die_usage("--deny needs a spec"),
             },
+            "--redirect" => match it.next() {
+                Some(s) => redirect_specs.push(s),
+                None => die_usage("--redirect needs <from>=<to>"),
+            },
             "--skip-unsupported" => skip_unsupported = true,
             "--" => {
                 target = Some(it.collect());
@@ -117,6 +125,9 @@ fn main() {
             }
             other if other.starts_with("--deny=") => {
                 deny_specs.push(other["--deny=".len()..].to_string());
+            }
+            other if other.starts_with("--redirect=") => {
+                redirect_specs.push(other["--redirect=".len()..].to_string());
             }
             other => die_usage(&format!("unknown argument {other:?}")),
         }
@@ -146,7 +157,12 @@ fn main() {
         Ok(r) => r,
         Err(e) => die_setup(&format!("bad --deny spec: {e}")),
     };
-    let policy = Arc::new(GuardPolicy::new(rules).with_deny(deny).with_metadata_allowed(allow_metadata));
+    // The database relays (db-login-release.md): a bad one fails closed too.
+    let redirects = match parse_redirects(&redirect_specs) {
+        Ok(r) => r,
+        Err(e) => die_setup(&format!("bad --redirect spec: {e}")),
+    };
+    let policy = Arc::new(GuardPolicy::new(rules).with_deny(deny).with_metadata_allowed(allow_metadata).with_redirects(redirects));
 
     // ── fork: child installs the trap + execs the target; parent supervises. ──
     let (sup_sock, child_sock) = socketpair();
@@ -212,11 +228,18 @@ fn main() {
     close_fd(child_sock);
     let listener = match receive_listener(sup_sock) {
         Ok((fd, _)) => fd,
-        Err(_) => {
+        Err(e) => {
             // The child could not install seccomp / hand off the fd. Reap it and
             // decide: degrade (re-exec the target unguarded) or fail-closed.
-            let code = reap(pid);
+            // Close our end FIRST: a child that did hand its listener over
+            // waits in `hand_listener` for our one-byte ack, and only EOF
+            // ends that wait. Reaping it with the socket open was a deadlock
+            // whenever the copy failed here: a container whose seccomp
+            // profile refuses `pidfd_getfd` (Docker's default, without
+            // CAP_SYS_PTRACE) hung the guard, and whatever it wraps, forever
+            // (packaging.md §3.1, 2026-10-24).
             close_fd(sup_sock);
+            let code = reap(pid);
             if code == Some(CHILD_NO_SECCOMP) {
                 if skip_unsupported {
                     eprintln!(
@@ -232,7 +255,10 @@ fn main() {
                      (needs no_new_privs + kernel >= 5.0 with CONFIG_SECCOMP_USER_NOTIFICATION)",
                 );
             }
-            die_setup(&format!("child failed to hand off the listener fd (exit {code:?})"));
+            die_setup(&format!(
+                "could not take over the seccomp listener ({e}; child exit {code:?}): a container's seccomp \
+                 profile can refuse pidfd_getfd, which the guard needs"
+            ));
         }
     };
     harden_guard(pid);

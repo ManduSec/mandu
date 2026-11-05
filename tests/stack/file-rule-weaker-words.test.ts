@@ -146,7 +146,7 @@ test("Rules over the real arbiter: the question before a weaker Save words a rul
 
     const ready = (doc: Doc) => !!menuIn(treeRow(doc, staging)) && !!menuIn(treeRow(doc, inspector)) && !!menuIn(treeRow(doc, folder));
     await servedProductPage(base, "/rules", ready, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       // Q2: a weaker level for the two file rules and the folder rule.
       for (const p of [staging, inspector, folder]) choose(menuIn(treeRow(doc, p)), "any-model");
       assert.equal(doc.querySelectorAll("#files-pending-list li").length, 3, "three changes wait");

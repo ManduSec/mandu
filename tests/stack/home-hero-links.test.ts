@@ -26,6 +26,16 @@
  *       and L3's "Not connected.") draws a column with the 40 px icon, its
  *       glyph, the 28 px headline, the sentence and its link. jsdom has no
  *       layout: the widths were measured in headless Chromium.
+ *
+ * A second case: still off, but the person saved On (`mode = "secrets"`,
+ * which applies when the protection service next starts). Until 2026-10-27
+ * the hero still said "Turn it back on in Settings", the step just done.
+ *
+ *   L6  /api/home and the served page say what is left to do ("On is saved
+ *       and starts when the protection service restarts."), the link names
+ *       `protection` and opens Settings at its Protection card, the switch
+ *       saved as On; Rules › Built-in protections says the same; L4's
+ *       oracle holds on every answer and page.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -103,8 +113,9 @@ test("protection off: Home's hero says Settings and links there, where the switc
     assert.equal(vm.protection.configured, "off");
     assert.equal(vm.verdict, "off");
     assert.equal(vm.headline, "Protection is off.");
-    assert.equal(vm.sentence, "The AI can read untrusted content as-is, and your secrets are not guarded. Turn it back on in Settings.");
+    assert.equal(vm.sentence, "Your keys and secret files reach the AI as they are, and nothing stops them leaving this computer. Turn it back on in Settings.");
     assert.doesNotMatch(vm.sentence, /Rules/);
+    assert.doesNotMatch(vm.sentence, /untrusted/i, "what off costs, not what Secrets does not do either");
     assert.deepEqual(vm.sentenceParts.filter((p) => p.kind === "link"), [{ kind: "link", text: "Turn it back on in Settings", to: "settings" }]);
     // L4 on the answer.
     assert.ok(!body.includes(KEY_VALUE), "/api/home carries no secret value");
@@ -167,6 +178,90 @@ test("protection off: Home's hero says Settings and links there, where the switc
   } finally {
     await dashboard.close();
     if (arbiterOpen) { admin.close(); await arbiter.close(); }
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("protection off with On saved for the next start: Home's hero and Rules' built-ins say what is left to do and link Settings › Protection", { timeout: 60_000 }, async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "mandu-home-hero-saved-on-"));
+  const home = join(tmp, "home");
+  mkdirSync(join(home, "proj"), { recursive: true });
+  const manduHome = join(tmp, "mandu-home");
+  mkdirSync(manduHome, { recursive: true });
+  // The person turned protection back on: saved, not yet running.
+  writeFileSync(join(manduHome, "config.toml"), `mode = "secrets"\n`);
+  const socketPath = join(tmp, "arbiter.sock");
+  const humanPath = humanSockIn(tmp);
+  const arbiter = new ArbiterServer({
+    socketPath, adminSocketPath: join(tmp, "admin.sock"), humanSocketPath: humanPath,
+    dbPath: join(tmp, "symbols.sqlite"), eventDir: join(tmp, "events"), log: () => {},
+    confidentiality: false, integrity: false, // the `off` axes still run, stated
+  });
+  await arbiter.listen();
+  const admin = new ArbiterClient(join(tmp, "admin.sock")); await admin.connect();
+  const dashboard = new DashboardServer({
+    source: new ArbiterEventSource({ socketPath, humanSocketPath: humanPath }),
+    fileBrowserHome: home,
+    configEnv: { MANDU_HOME: manduHome },
+    log: () => {},
+  });
+  const base = `http://127.0.0.1:${await dashboard.listen(0)}`;
+  const WORDS = "Your keys and secret files reach the AI as they are, and nothing stops them leaving this computer. On is saved and starts when the protection service restarts. Open Settings › Protection.";
+  const BUILT_IN = "Mandu only watches: nothing is masked, and your secrets are not guarded. On is saved and starts when the protection service restarts. Open Settings › Protection.";
+  try {
+    const env = join(home, "proj", ".env");
+    writeFileSync(env, `STRIPE_KEY=${KEY_VALUE}\n`);
+    await admin.setPathLabel({ path: env, confidentiality: "no-model", bindings: [], recursive: false });
+
+    // L6 on the answer: running off, saved on, the place named.
+    const body = await (await pageFetch(`${base}/api/home`)).text();
+    const vm = JSON.parse(body) as HomeVM;
+    assert.equal(vm.protection.level, "off");
+    assert.equal(vm.protection.configured, "secrets");
+    assert.equal(vm.verdict, "off");
+    assert.equal(vm.headline, "Protection is off.");
+    assert.equal(vm.sentence, WORDS);
+    assert.doesNotMatch(vm.sentence, /Turn it back on/);
+    assert.deepEqual(vm.sentenceParts.filter((p) => p.kind === "link"), [{ kind: "link", text: "Open Settings › Protection", to: "protection" }]);
+    assert.deepEqual(vm.builtIn.items, [BUILT_IN]);
+    assert.ok(!body.includes(KEY_VALUE), "/api/home carries no secret value");
+    assert.doesNotMatch(body, /\$MDU/, "nor a token");
+
+    // L6 on the served page: the hero's link opens Settings at Protection.
+    await servedProductPage(base, "/", (doc) => doc.getElementById("hero").dataset.verdict === "off", async (doc) => {
+      const win = doc.defaultView;
+      assert.equal(doc.getElementById("hero-sentence").textContent, WORDS);
+      const links = [...doc.querySelectorAll("#hero-sentence a")];
+      assert.deepEqual(links.map((a: Element) => [a.textContent, a.getAttribute("href")]), [["Open Settings › Protection", "/settings#protection"]]);
+      const seen: string[] = [];
+      win.HTMLElement.prototype.scrollIntoView = function (this: Element) { seen.push(this.id || this.className); };
+      (links[0] as HTMLElement).click();
+      const t0 = Date.now();
+      // The card is scrolled to once Settings' reads have drawn (landAtCard).
+      while ((doc.getElementById("settings-protect-text").textContent === "Checking…" || !seen.includes("settings-protection-block")) && Date.now() - t0 < 10_000) await new Promise((r) => setTimeout(r, 20));
+      assert.equal(win.location.pathname, "/settings");
+      assert.equal(doc.getElementById("page-settings").hidden, false, "Settings is shown");
+      assert.ok(seen.includes("settings-protection-block"), `the Protection card is scrolled to: ${JSON.stringify(seen)}`);
+      const sw = doc.getElementById("switch-protection");
+      assert.equal(sw.getAttribute("aria-checked"), "true", "saved as on");
+      assert.match(doc.getElementById("settings-protect-text").textContent, /Still off until the protection service restarts/);
+      const page = doc.body.textContent;
+      assert.ok(!page.includes(KEY_VALUE), "the rendered page carries no secret value");
+      assert.doesNotMatch(page, /\$MDU/, "nor a token");
+    });
+
+    // L6 on Rules: Built-in protections says the same.
+    await servedProductPage(base, "/rules", (doc) => doc.querySelectorAll("#builtin-list li").length > 0, (doc) => {
+      const items = [...doc.querySelectorAll("#builtin-list li")];
+      assert.deepEqual(items.map((li: Element) => li.textContent), [BUILT_IN]);
+      assert.deepEqual([...items[0].querySelectorAll("a")].map((a: Element) => [a.textContent, a.getAttribute("href")]), [["Open Settings › Protection", "/settings#protection"]]);
+      const page = doc.body.textContent;
+      assert.ok(!page.includes(KEY_VALUE), "Rules carries no secret value");
+      assert.doesNotMatch(page, /\$MDU/, "nor a token");
+    });
+  } finally {
+    await dashboard.close();
+    admin.close(); await arbiter.close();
     rmSync(tmp, { recursive: true, force: true });
   }
 });

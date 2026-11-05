@@ -78,6 +78,15 @@ if [[ -n "$head" ]]; then
   [[ "$g" == "$head" && "$n" == 1 && "$t" == "$(git -C "$HERE/../.." rev-parse 'HEAD^{tree}')" && ! -d "$WORK/g.git/hooks" ]] \
     && pass "qemu_git_dir: a one-commit copy at HEAD, its index HEAD's tree, no hooks" || fail "qemu_git_dir: head=$g count=$n tree=$t"
   grep -q 'cp -a /mnt/artifacts/.mandu-git "$WORK/.git"' "$d/guest-runner.sh" && pass "the guest's copy gets that .git" || fail "guest .git copy missing"
+  # Run from a git worktree, the share's `.git` is a file the copy lets
+  # through; the runner's own lines must still put the repository there.
+  wt="$(mktemp -d "${TMPDIR:-/tmp}/matrix-wt.XXXXXX")"
+  mkdir -p "$wt/work" "$wt/art/.mandu-git" && echo "gitdir: /host/repo/.git/worktrees/x" > "$wt/work/.git" && : > "$wt/art/.mandu-git/HEAD"
+  lines="$(grep -E '^rm -rf "\$WORK/\.git"$|^\[\[ -d /mnt/artifacts/\.mandu-git \]\] && cp -a' "$d/guest-runner.sh" | sed "s|/mnt/artifacts|$wt/art|g")"
+  WORK="$wt/work" bash -c "$lines" 2>/dev/null
+  [[ -d "$wt/work/.git" && -e "$wt/work/.git/HEAD" ]] && pass "a worktree's .git file is replaced by the one-commit repository" \
+    || fail "the guest copy kept a worktree's .git file (lines: $lines)"
+  rm -rf "$wt"
 else
   pass "qemu_git_dir: not a git checkout here (skipped)"
 fi
@@ -126,6 +135,55 @@ grep -q 'Acquire::Retries=5' "$WORK/apt-recovers.log" && pass "apt runs with Acq
 scenario unreachable "curl rsync git python3" fail
 [[ "$OUT" == *"FINISH fail: provisioning: packages missing after retries: make g++"* && "$OUT" != *"all declared packages present"* && "$APT_CALLS" == 4 ]] \
   && pass "mirror down: 4 attempts, then a NAMED provisioning failure (suite never runs)" || fail "unreachable: calls=$APT_CALLS out=$OUT"
+
+# ── 2b. Ubuntu's background apt, and a refused poweroff ────────────────────────
+# ubuntu-2604, 0.2.0-beta.9's tag run: unattended-upgrades, started at boot on
+# the week-old layer, held the dpkg lock past a suite's apt wait and blocked
+# the guest's poweroff until the 90-minute hard timeout.
+R="$WORK/n/guest-runner.sh"
+q_line="$(grep -n '^quiet_background_apt$' "$R" | cut -d: -f1)"
+p_line="$(grep -n '^if \[\[ \$RESUME -eq 0 \]\]; then' "$R" | cut -d: -f1)"
+[[ -n "$q_line" && -n "$p_line" && "$q_line" -lt "$p_line" ]] \
+  && pass "background apt is quieted on every boot, before the provisioning gate" || fail "quiet order: quiet=$q_line first-boot block=$p_line"
+quiet() {  # quiet <name> <checks that find apt running> ; sets OUT, LOG
+  LOG="$WORK/quiet-$1.log"; : > "$LOG"; echo 0 > "$WORK/quiet-$1.n"
+  { echo "systemctl() { echo \"systemctl \$*\" >> '$LOG'; }"
+    echo "pkill() { echo \"pkill \$*\" >> '$LOG'; return 1; }"
+    echo "sleep() { echo sleep >> '$LOG'; }"
+    # pgrep -f: running for the first <checks> checks; pgrep -x (apt-get, dpkg): never.
+    echo "pgrep() { [[ \$1 == -x ]] && return 1; local n=\$(( \$(cat '$WORK/quiet-$1.n') + 1 )); echo \$n > '$WORK/quiet-$1.n'; (( n <= $2 )); }"
+    sed -n '/^quiet_background_apt() {$/,/^}$/p' "$R"
+    echo quiet_background_apt
+  } > "$WORK/quiet-$1.sh"
+  OUT="$(bash "$WORK/quiet-$1.sh" 2>&1)"
+}
+quiet idle 0
+[[ -z "$OUT" ]] && grep -q 'systemctl stop apt-daily.timer apt-daily-upgrade.timer' "$LOG" && ! grep -q '^sleep' "$LOG" \
+  && pass "no background apt: the timers stop, no wait, nothing printed" || fail "idle: out=$OUT log=$(tr '\n' ' ' < "$LOG")"
+quiet busy 3
+[[ "$OUT" == *"ended after 15s"* && "$(grep -c '^sleep' "$LOG")" == 3 ]] && grep -q 'pkill -TERM -f .*/usr/bin/unattended-upgrade' "$LOG" \
+  && pass "a running unattended-upgrade gets SIGTERM and is waited for" || fail "busy: out=$OUT log=$(tr '\n' ' ' < "$LOG")"
+quiet stuck 100000
+[[ "$OUT" == *"still running after 15 min"* && "$(grep -c '^sleep' "$LOG")" == 180 ]] \
+  && pass "one that never ends: the wait gives up after 15 minutes and says so" || fail "stuck: out=$OUT sleeps=$(grep -c '^sleep' "$LOG")"
+off() {  # off <suite> <poweroff rc> ; sets OUT, LOG
+  LOG="$WORK/off-$1-$2.log"; : > "$LOG"
+  { echo "SUITE='$1'; RESULT_FILE='$WORK/off-result'"
+    echo "poweroff() { echo poweroff >> '$LOG'; return $2; }"
+    echo "systemctl() { echo \"systemctl \$*\" >> '$LOG'; }"
+    echo "sync() { :; }"
+    sed -n '/^finish() {$/,/^}$/p' "$R"
+    echo 'finish pass'
+  } > "$WORK/off.sh"
+  OUT="$(bash "$WORK/off.sh" 2>&1)"
+}
+off s 0
+[[ "$(cat "$WORK/off-result")" == pass && "$(cat "$LOG")" == poweroff ]] && pass "finish: RESULT written, a plain poweroff" || fail "poweroff ok: $(cat "$LOG")"
+off s 1
+grep -q 'systemctl poweroff --ignore-inhibitors' "$LOG" && [[ "$OUT" == *"poweroff refused"* ]] \
+  && pass "a run's refused poweroff (an inhibitor) is forced" || fail "run refused: out=$OUT log=$(cat "$LOG")"
+off __provision__ 1
+! grep -q 'ignore-inhibitors' "$LOG" && pass "the provisioning boot never forces one (its disk becomes the layer)" || fail "provision forced: $(cat "$LOG")"
 
 # ── 3. the provisioned snapshot layer (os-test-matrix.md §10.5 item 2) ────
 lib() { ( source "$MATRIX/lib/common.sh"; source "$MATRIX/lib/qemu.sh"; "$@" ); }

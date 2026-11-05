@@ -64,6 +64,7 @@ import { locateBareSecretTokens } from "./egress-fingerprint.js";
 import { passwordKind } from "./credential-names.js";
 import { DOCUMENT_TWIN_EXTRACT, documentLineLabel, documentNameField } from "./personal-documents.js";
 import { isIP } from "node:net";
+import { decodedPem, isKubeconfigPath, kubeTokenWire, parseKubeconfig } from "./kubeconfig.js";
 import { codexTomlReading, mcpConfigKindOf, mcpReference, mcpServerEntries, mcpUrlHost, mcpWholeReference, type McpServerEntry } from "./mcp-config.js";
 
 export interface SecretSpan {
@@ -97,8 +98,13 @@ export interface SecretSpan {
    *  `httpsOnly` (2026-10-03, maintainer decision): the credential's own
    *  declared URL is not `http://`, so it is put back only in an HTTPS
    *  request; plain HTTP to the same host gets nothing (registry.ts
-   *  `wireReleaseScheme`, the arbiter's egress gate). */
-  wire?: { host: string; scheme: "bearer" | "basic"; httpsOnly: boolean };
+   *  `wireReleaseScheme`, the arbiter's egress gate). `postgres` (`.pgpass`,
+   *  2026-10-24, db-login-release.md): the password of a line naming one
+   *  database, which the egress proxy's database relay answers that
+   *  server's login with; `host` is the line's `host:port` (`host` alone
+   *  for a `*` port). `mysql` (`~/.my.cnf`): a section's password, which
+   *  the relay answers that section's `host:port` with (`withMycnfWire`). */
+  wire?: { host: string; scheme: "bearer" | "basic" | "postgres" | "mysql"; httpsOnly: boolean };
   /** The file holds an ENCODING of `value` (plan 10 §11.13.1, 2026-10-03):
    *  `base64` (npm's `_password`, which npm base64-decodes before use) or
    *  `percent` (a URL's user or password in `pip.conf`, which pip
@@ -106,8 +112,12 @@ export interface SecretSpan {
    *  program sends, and `[start, end)` the encoded text in the file. The
    *  twin writes the same encoding of the token, so the program decodes it
    *  back into the token, and a URL keeps parsing (a raw token's `[`, `]`
-   *  and `:` break Python's URL parser in the user-information part). */
-  encoded?: "base64" | "percent";
+   *  and `:` break Python's URL parser in the user-information part).
+   *  `pgpass` (2026-10-24, db-login-release.md): a `.pgpass` password, which
+   *  libpq reads up to the first unescaped `:` with `\` escapes removed; the
+   *  twin writes the token with its `:` and `\` escaped, or libpq would send
+   *  `$MDU` alone. */
+  encoded?: "base64" | "percent" | "pgpass";
   /** `ssh-config` only (plan 10 §11.13.3): a command ssh would run that the
    *  twin withholds. The twin writes, in place of the whole command, a
    *  command of Mandu's own that prints `withheldCommandMessage` (which
@@ -725,7 +735,40 @@ function extractXmlKeys(content: string): SecretExtraction {
   return finish("xml-keys", spans);
 }
 
-/** `.pgpass`: `host:port:db:user:password`, `\:` escapes a colon. */
+/** A `.pgpass` password field as libpq reads it (fe-connect.c
+ *  `passwordFromFile`): up to the first unescaped `:`, each `\x` read as
+ *  `x`. Pure. */
+export function pgpassPassword(field: string): string {
+  let out = "";
+  for (let i = 0; i < field.length; i++) {
+    const c = field[i]!;
+    if (c === ":") break;
+    if (c === "\\" && i + 1 < field.length) { out += field[i + 1]; i++; continue; }
+    out += c;
+  }
+  return out;
+}
+
+/** A `.pgpass` line's database as a wire host (db-login-release.md):
+ *  `host:port`, a `*` port read as 5432 (the port the relay serves for it;
+ *  a bare host would admit every port of it and every host under it,
+ *  security review 2026-10-24), an IPv6 address bracketed and canonical.
+ *  Null for a `*` host (no one database), a socket directory (`/…`, no TCP
+ *  login) or anything else. Pure. */
+export function pgpassWireHost(hostField: string, portField: string): string | null {
+  const host = hostField.replace(/\\(.)/g, "$1").trim();
+  const port = portField.replace(/\\(.)/g, "$1").trim();
+  if (host === "" || host === "*" || host.startsWith("/")) return null;
+  if (port !== "*" && !/^[0-9]{1,5}$/.test(port)) return null;
+  const suffix = port === "*" ? ":5432" : `:${port}`;
+  if (isIP(host) === 6) return indexWireHost(`[${host}]${suffix}`);
+  if (Number(suffix.slice(1)) < 1 || Number(suffix.slice(1)) > 65535) return null;
+  return npmrcRegistryHost(`${host}${suffix}`);
+}
+
+/** `.pgpass`: `host:port:db:user:password`, `\:` escapes a colon. A line
+ *  naming one database marks its password `wire` (`postgres`): the launch
+ *  HOME's file binds it to that database (registry.ts `HOME_WIRE_FILES`). */
 function extractPgpass(content: string): SecretExtraction {
   const spans: SecretSpan[] = [];
   for (const { line, at } of lines(content)) {
@@ -741,10 +784,19 @@ function extractPgpass(content: string): SecretExtraction {
     }
     fields.push({ at: curAt, text: cur });
     if (fields.length < 5) continue;
-    const pw = fields[fields.length - 1]!;
-    if (pw.text === "") continue;
+    // The password field to the end of the line (an unescaped `:` in it is
+    // masked too), and the password as libpq reads it: up to the first
+    // unescaped `:`, escapes removed.
+    const pw = fields[4]!;
+    const region = line.slice(pw.at).replace(/\r$/, "");
+    const value = pgpassPassword(region);
+    if (value === "") continue;
     const user = fields[3]!.text || "user";
-    spans.push({ key: `${user}.password`, start: at + pw.at, end: at + pw.at + pw.text.length, value: pw.text });
+    const wireHost = pgpassWireHost(fields[0]!.text, fields[1]!.text);
+    spans.push({
+      key: `${user}.password`, start: at + pw.at, end: at + pw.at + region.length, value, encoded: "pgpass",
+      ...(wireHost !== null ? { wire: { host: wireHost, scheme: "postgres" as const, httpsOnly: false } } : {}),
+    });
   }
   return finish("pgpass", spans);
 }
@@ -3621,7 +3673,47 @@ export function extractSecretSpans(
   }
   const shape = secretFileShape(path);
   const x = withCredentialBelt(withSettledParts(extractShape(path, content), content), content, shape === null ? null : COMMENT_GRAMMARS[shape] ?? null);
+  if (/(^|[/\\])\.my\.cnf$/.test(path)) return withMycnfWire(content, x);
   return mcpConfigKindOf(path, content) === null ? x : withMcpWire(path, content, x);
+}
+
+/**
+ * `~/.my.cnf` (db-login-release.md §8): a section's `password` marked for
+ * the wire (`mysql`) with the database the same section names, or
+ * `[client]`'s (every client reads it): `host:port`, 3306 when no port is
+ * given. No host, or `localhost` (the client's socket, no TCP), names no
+ * database. Pure.
+ */
+export function withMycnfWire(content: string, x: SecretExtraction): SecretExtraction {
+  if (x.shape !== "ini" || x.spans.length === 0) return x;
+  const vals = new Map<string, Map<string, string>>();
+  let section = "";
+  for (const raw of content.split(/\r?\n/)) {
+    const line = raw.trim();
+    const sec = /^\[([^\]]+)\]$/.exec(line);
+    if (sec) { section = sec[1]!.trim().toLowerCase(); continue; }
+    const kv = /^([A-Za-z_-]+)\s*=\s*(.*)$/.exec(line);
+    if (!kv) continue;
+    const key = kv[1]!.toLowerCase().replace(/_/g, "-");
+    if (key !== "host" && key !== "port") continue;
+    const v = kv[2]!.trim().replace(/^(['"])(.*)\1$/, "$2");
+    if (!vals.has(section)) vals.set(section, new Map());
+    vals.get(section)!.set(key, v);
+  }
+  let any = false;
+  const spans = x.spans.map((s) => {
+    const m = /^(.+)\.password$/i.exec(s.key);
+    if (!m || s.comment) return s;
+    const sec = m[1]!.toLowerCase();
+    const host = vals.get(sec)?.get("host") ?? vals.get("client")?.get("host");
+    const port = vals.get(sec)?.get("port") ?? vals.get("client")?.get("port") ?? "3306";
+    if (!host || host.toLowerCase() === "localhost" || !/^[0-9]{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) return s;
+    const wireHost = isIP(host) === 6 ? indexWireHost(`[${host}]:${port}`) : npmrcRegistryHost(`${host}:${port}`);
+    if (wireHost === null) return s;
+    any = true;
+    return { ...s, wire: { host: wireHost, scheme: "mysql" as const, httpsOnly: false } };
+  });
+  return any ? { ...x, spans } : x;
 }
 
 /** A personal document's twin (DOCUMENT_TWIN_EXTRACT) with each span that
@@ -3980,13 +4072,44 @@ function extractShape(path: string, content: string): SecretExtraction {
     case "pgpass": return extractPgpass(content);
     case "netrc": return extractNetrc(content);
     case "npmrc": return extractNpmrc(content);
-    case "yaml-keys": return extractYamlKeys(content);
+    case "yaml-keys": return isKubeconfigPath(path) ? kubeconfigSpans(extractYamlKeys(content), content) : extractYamlKeys(content);
     case "json-keys": return extractJsonKeys(content);
     case "ssh-config": return extractSshConfig(content, path);
     case "pip-conf": return extractPipConf(content);
     case "git-credentials": return extractGitCredentials(content);
     default: return NONE;
   }
+}
+
+/**
+ * A kubeconfig's spans as kubectl needs them in its twin
+ * (kube-wire-release.md): a `*-data` field holding a base64 PEM block is an
+ * ENCODED span (its value the PEM, the twin the base64 of the placeholder, so
+ * client-go still loads the file), and a user's `token` is a wire credential
+ * to the one https server its contexts name (`kubeTokenWire`), put back in
+ * the Authorization header there. A document that does not parse keeps the
+ * YAML reading as it is. Pure.
+ */
+function kubeconfigSpans(x: SecretExtraction, content: string): SecretExtraction {
+  const cfg = parseKubeconfig(content);
+  if (cfg === null) return x;
+  const wire = kubeTokenWire(cfg);
+  const tokens = new Set(cfg.users.flatMap((u) => (u.token !== undefined ? [u.token] : [])));
+  const spans = x.spans.map((s): SecretSpan => {
+    if (s.parts || s.comment || s.encoded || s.wrap) return s;
+    // The key's last name, without the `__N` a repeated key gets.
+    const field = s.key.slice(s.key.lastIndexOf(".") + 1).replace(/__\d+$/, "");
+    if (/-data$/.test(field)) {
+      const pem = decodedPem(s.value);
+      return pem === null ? s : { ...s, value: pem, encoded: "base64" };
+    }
+    if (field === "token" && tokens.has(s.value)) {
+      const host = wire.get(s.value) ?? null;
+      return host === null ? s : { ...s, wire: { host, scheme: "bearer", httpsOnly: true } };
+    }
+    return s;
+  });
+  return { ...x, spans };
 }
 
 /**
@@ -4104,6 +4227,7 @@ function repeatedSecretsMasked(gap: string, needles: readonly TwinNeedle[]): str
 export function encodeToken(token: string, encoded: SecretSpan["encoded"]): string {
   if (encoded === "base64") return Buffer.from(token, "utf8").toString("base64");
   if (encoded === "percent") return encodeURIComponent(token);
+  if (encoded === "pgpass") return token.replace(/[\\:]/g, (c) => `\\${c}`);
   return token;
 }
 
@@ -4403,8 +4527,63 @@ const EMBEDDED_URL_PASSWORD_RE = /[a-z][a-z0-9+.-]*:\/\/[^:/@\s]+:[^@\s]+@/i;
  * literal (`indexWireHost`), marked `wire` to it,
  * `httpsOnly` unless the URL is `http://` (whose field is then
  * `<NAME>.password_http`).
+ *
+ * libpq's `PGPASSWORD` and the MySQL client's `MYSQL_PWD` (2026-10-25,
+ * db-login-release.md §3.3): masked whole as before, and, when `launchEnv`
+ * (the other variables of the same launch environment) names one database
+ * for them, marked `wire` (`postgres` / `mysql`) to that `host:port`
+ * ({@link dbEnvWireHost}), the database relay's login only.
  */
-export function envSecretSpan(name: string, value: string, rules: EnvSecretRules = {}): SecretSpan | null {
+export function envSecretSpan(
+  name: string,
+  value: string,
+  rules: EnvSecretRules = {},
+  launchEnv?: Readonly<Record<string, string | undefined>>,
+): SecretSpan | null {
+  const span = envSecretSpanOf(name, value, rules);
+  if (span === null || launchEnv === undefined) return span;
+  const scheme = DB_PASSWORD_ENV[name];
+  // Only the variable's own whole, plain value: a URL's password, a merged
+  // or encoded span is not what the client sends as its login password.
+  if (scheme === undefined || span.wire || span.encoded || span.parts || span.key !== name || span.start !== 0 || span.end !== value.length || span.value !== value) return span;
+  const host = dbEnvWireHost(name, launchEnv);
+  return host === null ? span : { ...span, wire: { host, scheme, httpsOnly: false } };
+}
+
+/** The password variables a database client reads, and the login their
+ *  value is put back in (db-login-release.md §3.3, §8.3). */
+const DB_PASSWORD_ENV: Readonly<Record<string, "postgres" | "mysql">> = { PGPASSWORD: "postgres", MYSQL_PWD: "mysql" };
+
+/**
+ * The one database a password variable of the launch environment is sent
+ * to, as a wire host (`host:port`), or null (2026-10-25, maintainer
+ * decision; db-login-release.md §3.3):
+ *   - `PGPASSWORD`: `PGHOST`, at `PGPORT` (5432 when unset or empty). No
+ *     host (libpq's socket), a socket directory (`/…`), an abstract socket
+ *     (`@…`), several hosts (libpq's comma list) or several ports, a `*`,
+ *     whitespace, or a host or port that does not parse: null. `localhost`
+ *     and loopback addresses are bound like any host (libpq connects there
+ *     over TCP; the relay checks who listens there, §3.7), as a `.pgpass`
+ *     line's are.
+ *   - `MYSQL_PWD`: `MYSQL_HOST`, at `MYSQL_TCP_PORT` (3306 when unset or
+ *     empty). `localhost` is the client's socket, no TCP: null, as for a
+ *     `~/.my.cnf` section (§8.3); the rest as for Postgres.
+ * An IPv6 address is bracketed and canonical (`pgpassWireHost`). Anything
+ * else (another name): null. Pure.
+ */
+export function dbEnvWireHost(name: string, launchEnv: Readonly<Record<string, string | undefined>>): string | null {
+  const scheme = DB_PASSWORD_ENV[name];
+  if (scheme === undefined) return null;
+  const host = launchEnv[scheme === "postgres" ? "PGHOST" : "MYSQL_HOST"] ?? "";
+  const rawPort = launchEnv[scheme === "postgres" ? "PGPORT" : "MYSQL_TCP_PORT"] ?? "";
+  const port = rawPort === "" ? (scheme === "postgres" ? "5432" : "3306") : rawPort;
+  if (host === "" || /[\s,*\\]/.test(host) || host.startsWith("/") || host.startsWith("@")) return null;
+  if (scheme === "mysql" && host.toLowerCase() === "localhost") return null;
+  if (!/^[0-9]{1,5}$/.test(port)) return null;
+  return pgpassWireHost(host, port);
+}
+
+function envSecretSpanOf(name: string, value: string, rules: EnvSecretRules): SecretSpan | null {
   if (value === "") return null;
   // An agent key variable the launch granted (§3.8): its whole value, before
   // the exemption that otherwise keeps the agent's own key raw.

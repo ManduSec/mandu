@@ -63,6 +63,20 @@
  *                              inspected and plain legs); with TLS inspection
  *                              off such a CONNECT is refused whole. Set by the
  *                              launcher whenever the confidentiality axis is on.
+ *   MANDU_NET_PROXY_DB_RELAYS  JSON list of `{ protocol: "postgres", host, port }`:
+ *                              one loopback relay per database the launch's
+ *                              secrets name (db-relay.ts; db-login-release.md).
+ *   MANDU_DB_RELAY_PORT_FILE where each relay's bound port is published (JSON
+ *                              list of `{ protocol, host, port, listen }`,
+ *                              atomic, after the proxy's own port file)
+ *   PGSSLROOTCERT            the CA a Postgres server's certificate must chain
+ *                              to (else ~/.postgresql/root.crt, as libpq reads
+ *                              it); none: the server's TLS is not verified. A
+ *                              MySQL server's: the `ssl-ca` of ~/.my.cnf
+ *   PGSSLMODE, PGREQUIREAUTH, PGCHANNELBINDING  the user's own libpq settings
+ *                              the database relay holds itself to
+ *   MANDU_NET_PROXY_SESSION_ROOT  the launcher's pid: a local database whose
+ *                              listening end descends from it is refused
  *   MANDU_EGRESS_HOLD_MS     how long (ms) a request whose only obstacle is an
  *                              unanswered card on the Approvals page waits for
  *                              the human's answer (confidentiality.md §4, "A
@@ -74,7 +88,8 @@
  */
 
 import { publishFile } from "./safe-file.js";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { NetProxy } from "./proxy.js";
@@ -92,6 +107,7 @@ import { SESSION_LOGINS_ENV, parseSessionLogins } from "./session-logins.js";
 import { egressHoldMs } from "./egress.js";
 import { MODEL_HOST_DENY_ENV } from "./model-host-paths.js";
 import { MODEL_NOTE_ENV, modelNoteFromEnv } from "./model-note.js";
+import { DB_RELAYS_ENV, DB_RELAY_PORT_FILE_ENV, parseDbRelays } from "./db-relay.js";
 
 // Canonical process title (runtime-instances.md §7): ps/pgrep-visible identity.
 process.title = "mandu-net-proxy";
@@ -233,6 +249,27 @@ async function main(): Promise<void> {
   if (modelHostDeny) console.error(`[net-proxy] model hosts take only their listed account and sign-in paths (${MODEL_HOST_DENY_ENV})`);
   if (holdMs > 0) console.error(`[net-proxy] a request waiting on an unanswered card is held up to ${Math.round(holdMs / 1000)} s for the answer (MANDU_EGRESS_HOLD_MS)`);
 
+  // The database login release (db-relay.ts): the launch's database targets,
+  // and the CA their servers' certificates must chain to, read as the user's
+  // own psql reads it (PGSSLROOTCERT, else ~/.postgresql/root.crt).
+  const db = parseDbRelays(process.env[DB_RELAYS_ENV]);
+  if (db.dropped.length > 0) console.error(`[net-proxy] WARNING: ${DB_RELAYS_ENV}: ${db.dropped.length} entr(y/ies) ignored (not a postgres host and port)`);
+  const dbUpstreamCa = db.targets.some((t) => t.protocol === "postgres") ? readDbRootCert(process.env) : undefined;
+  const dbMysqlUpstreamCa = db.targets.some((t) => t.protocol === "mysql") ? readMysqlCa() : undefined;
+  // The user's own libpq settings the relay holds itself to, and the
+  // launcher's pid (a local database that descends from it is the session's).
+  const pgSettings = {
+    ...(process.env["PGSSLMODE"] ? { sslmode: process.env["PGSSLMODE"] } : {}),
+    ...(process.env["PGREQUIREAUTH"] ? { requireAuth: process.env["PGREQUIREAUTH"] } : {}),
+    ...(process.env["PGCHANNELBINDING"] ? { channelBinding: process.env["PGCHANNELBINDING"] } : {}),
+  };
+  const sessionRoot = Number(process.env["MANDU_NET_PROXY_SESSION_ROOT"] ?? "");
+  const dbOpts = db.targets.length > 0 ? {
+    dbRelays: db.targets, ...(dbUpstreamCa !== undefined ? { dbUpstreamCa } : {}), dbPgSettings: pgSettings,
+    ...(dbMysqlUpstreamCa !== undefined ? { dbMysqlUpstreamCa } : {}),
+    ...(Number.isInteger(sessionRoot) && sessionRoot > 1 ? { dbSessionRoot: sessionRoot } : {}),
+  } : {};
+
   let proxy: NetProxy;
   try {
     proxy = new NetProxy({
@@ -250,6 +287,7 @@ async function main(): Promise<void> {
       ...(sessionLogins ? { sessionLogins } : {}),
       egressHoldMs: holdMs,
       modelHostDeny,
+      ...dbOpts,
     });
   } catch (err) {
     // MITM CA setup failed (e.g. openssl threw / unwritable CA dir) → degrade to
@@ -272,6 +310,7 @@ async function main(): Promise<void> {
       ...(sessionLogins ? { sessionLogins } : {}),
       egressHoldMs: holdMs,
       modelHostDeny,
+      ...dbOpts,
     });
     mitm = undefined;
   }
@@ -288,6 +327,19 @@ async function main(): Promise<void> {
   // a real directory of this user's, renamed into place. A refused directory
   // stops the proxy (the launcher, waiting for the port, fails closed).
   if (portFile) publishFile(portFile, String(bound));
+  // The database relays, each on a kernel-assigned loopback port, published
+  // after the proxy's own port (the launcher reads both before it builds the
+  // connect guard's redirects).
+  if (db.targets.length > 0) {
+    const relays = await proxy.listenDbRelays(host);
+    const relayFile = process.env[DB_RELAY_PORT_FILE_ENV];
+    if (relayFile) publishFile(relayFile, JSON.stringify(relays));
+    console.error(
+      `[net-proxy] database login release for ${relays.map((r) => `${r.host}:${r.port}`).join(", ")}` +
+        (relays.some((r) => r.protocol === "postgres") ? (dbUpstreamCa !== undefined ? " (Postgres servers' TLS verified against your root certificate)" : " (no Postgres root certificate: servers' TLS is not verified)") : "") +
+        (relays.some((r) => r.protocol === "mysql") ? (dbMysqlUpstreamCa !== undefined ? " (MySQL servers' TLS verified against your ssl-ca)" : " (no ssl-ca in ~/.my.cnf: MySQL servers' TLS is not verified, and their full authentication is refused)") : ""),
+    );
+  }
   console.error(
     `[net-proxy] ready — set HTTP_PROXY=HTTPS_PROXY=http://${host}:${bound} ; arbiter=${sock}` +
       (modelHosts.length ? ` ; extra model hosts: ${modelHosts.join(", ")}` : ""),
@@ -313,6 +365,45 @@ async function main(): Promise<void> {
   // SIGKILL), so shut down instead of orphaning + squatting the port.
   if (armLifeline(() => void shutdown())) {
     console.error("[net-proxy] lifeline armed — exits when the launcher dies");
+  }
+}
+
+/** The Postgres root certificate the user's own libpq would read
+ *  (`PGSSLROOTCERT`, else `~/.postgresql/root.crt`), as PEM, or undefined
+ *  when there is none; `system` (libpq's word for the system store) as
+ *  itself: Node's default store then verifies. */
+function readDbRootCert(env: NodeJS.ProcessEnv): string | undefined {
+  const named = env["PGSSLROOTCERT"];
+  // The system store, verified as such (db-relay.ts `upstreamCa`).
+  if (named === "system") return "system";
+  const path = named && named !== "" ? named : join(homedir(), ".postgresql", "root.crt");
+  try {
+    return existsSync(path) ? readFileSync(path, "utf8") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `ssl-ca` the user's own MySQL client reads (`[client]` or `[mysql]`
+ *  of `~/.my.cnf`), as PEM, or undefined. */
+function readMysqlCa(): string | undefined {
+  try {
+    const text = readFileSync(join(homedir(), ".my.cnf"), "utf8");
+    let section = "";
+    let path: string | undefined;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      const sec = /^\[([^\]]+)\]$/.exec(line);
+      if (sec) { section = sec[1]!.trim().toLowerCase(); continue; }
+      if (section !== "client" && section !== "mysql") continue;
+      const m = /^ssl[-_]ca\s*=\s*(.+)$/i.exec(line);
+      if (m) path = m[1]!.trim().replace(/^(['"])(.*)\1$/, "$2");
+    }
+    if (!path) return undefined;
+    const full = path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+    return existsSync(full) ? readFileSync(full, "utf8") : undefined;
+  } catch {
+    return undefined;
   }
 }
 

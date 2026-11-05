@@ -3,7 +3,8 @@
  * fake-claude-cli — a stand-in `claude` executable for the suites that run a
  * launch headless (`mandu claude -p …`) where no real Claude Code is
  * installed (GitHub's runners, a contributor's machine): the GitHub Action's
- * end-to-end test (tests/stack/github-action.test.ts).
+ * end-to-end test (tests/stack/github-action.test.ts), and the live client
+ * suites (tests/lib/live-clients.ts).
  *
  * It speaks the one thing of Claude Code's that Mandu's model proxy reads: the
  * Anthropic Messages wire, streamed, to `$ANTHROPIC_BASE_URL/v1/messages`,
@@ -16,6 +17,9 @@
  *   --version     prints a version inside Mandu's tested range
  *   -p <prompt>   the prompt (every other argument is ignored, as the
  *                 launcher adds its own: --permission-mode, --mcp-config, …)
+ *
+ * MDU_FAKE_CLAUDE_MAX_TURNS (default 16) caps the turns, and
+ * MDU_FAKE_CLAUDE_CMD_TIMEOUT_MS (default 60000) each command's run.
  *
  * No dependency, no network but the base URL. Mandu-new (no reference origin).
  */
@@ -51,7 +55,7 @@ const messages = [{ role: "user", content: [{ type: "text", text: prompt }] }];
 /** One streamed /v1/messages turn: its text and its tool calls. */
 async function turn() {
   trace(`turn: ${messages.length} message(s)`);
-  const res = await fetch(`${base}/v1/messages`, {
+  const send = () => fetch(`${base}/v1/messages`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -61,6 +65,16 @@ async function turn() {
     },
     body: JSON.stringify({ model: "claude-fake", max_tokens: 1024, stream: true, tools, messages }),
   });
+  // A kept-alive connection the proxy closed while a long command ran fails
+  // the next request before it is sent ("other side closed"): sent again on
+  // a fresh one, as Claude Code's own client retries.
+  let res;
+  for (let attempt = 1; ; attempt++) {
+    try { res = await send(); break; } catch (err) {
+      trace(`fetch failed (attempt ${attempt}): ${err?.cause?.code ?? err?.message ?? err}`);
+      if (attempt >= 3) throw err;
+    }
+  }
   if (!res.ok) throw new Error(`model answered ${res.status}: ${await res.text()}`);
   const text = await res.text();
   const blocks = [];
@@ -80,7 +94,12 @@ async function turn() {
     : { type: "text", text: b.text ?? "" }));
 }
 
-for (let i = 0; i < 16; i++) {
+// At most this many model turns (MDU_FAKE_CLAUDE_MAX_TURNS, default 16): a
+// scripted model that never stops ends here.
+const maxTurns = Number(process.env.MDU_FAKE_CLAUDE_MAX_TURNS) > 0 ? Number(process.env.MDU_FAKE_CLAUDE_MAX_TURNS) : 16;
+// Each command's time limit (MDU_FAKE_CLAUDE_CMD_TIMEOUT_MS, default 60 s).
+const cmdTimeoutMs = Number(process.env.MDU_FAKE_CLAUDE_CMD_TIMEOUT_MS) > 0 ? Number(process.env.MDU_FAKE_CLAUDE_CMD_TIMEOUT_MS) : 60_000;
+for (let i = 0; i < maxTurns; i++) {
   const content = await turn();
   messages.push({ role: "assistant", content });
   const calls = content.filter((b) => b.type === "tool_use");
@@ -90,7 +109,7 @@ for (let i = 0; i < 16; i++) {
   }
   const results = calls.map((c) => {
     trace(`run: ${String(c.input.command ?? "")}`);
-    const r = spawnSync("sh", ["-c", String(c.input.command ?? "")], { encoding: "utf8", timeout: 60_000 });
+    const r = spawnSync("sh", ["-c", String(c.input.command ?? "")], { encoding: "utf8", timeout: cmdTimeoutMs });
     trace(`exit: ${r.status} ${r.error ? r.error.message : ""}`);
     return { type: "tool_result", tool_use_id: c.id, content: `${r.stdout ?? ""}${r.stderr ?? ""}`.trimEnd() || "(no output)" };
   });

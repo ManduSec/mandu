@@ -6,7 +6,9 @@
  * imports `node:sqlite` unguarded (arbiter/db/sqlite.ts), and Node removed
  * the `--experimental-sqlite` flag in 22.13.0. A major-only check (`>= 22`)
  * admitted 22.0–22.12, where the arbiter dies at import with a flag error the
- * user cannot read as "upgrade Node". Four gates state the floor — `engines`
+ * user cannot read as "upgrade Node". 22.15.0 since 2026-10-26: `node:zlib`
+ * has zstd from 22.15, which OpenClaw's ChatGPT requests and its stored
+ * transcript events use (model-wires.md §9.3; packaging.md). Four gates state the floor — `engines`
  * in package.json, bin/mandu.mjs (runs before the bundle, so it cannot
  * import this), scripts/bootstrap.sh (bash), and `mandu doctor` (here) —
  * and test/unit/node-floor.test.ts pins the other three to this constant so
@@ -18,7 +20,7 @@
  */
 
 /** The lowest Node release Mandu runs on. */
-export const NODE_FLOOR = "22.13.0";
+export const NODE_FLOOR = "22.15.0";
 
 /** Parse "22.13.0" (or "v22.13.0") into numbers; null when unparseable. */
 export function parseNodeVersion(version: string): [number, number, number] | null {
@@ -55,7 +57,7 @@ export function nodeMeetsFloor(version: string, floor: string = NODE_FLOOR): boo
  * (confidentiality-plan-13-reader-set-labels.md §10.2; its test lib
  * re-exports these). Below it the program goes around the proxy: nothing
  * leaks (it only ever held the placeholder), but its logins fail. This is
- * NOT Mandu's own floor above: Mandu runs on 22.13, and `mandu doctor` and
+ * NOT Mandu's own floor above: Mandu runs on 22.15, and `mandu doctor` and
  * the launch only warn (nodeEnvProxyGap).
  */
 export type NodeProxyApi = "fetch" | "https";

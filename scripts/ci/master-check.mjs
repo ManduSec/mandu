@@ -3,9 +3,12 @@
 // runner host (docs/design/testing/continuous-integration.md §7.1). The `test`
 // job in .gitlab-ci.yml calls it before and after vm-run.sh; it runs nothing
 // from the commit's tests and reads no credential but the job's own token.
+// The macOS check (§12.6) is the same two steps for the `macos` job on the
+// Mac runner, in its own schedule (MANDU_SCHEDULE=macos): `--schedule macos`,
+// its own state file and pipeline name.
 //
-//   node scripts/ci/master-check.mjs skip
-//       In the master check's scheduled pipeline (MANDU_SCHEDULE=master-check):
+//   node scripts/ci/master-check.mjs skip [--schedule master-check|macos]
+//       In the check's scheduled pipeline (MANDU_SCHEDULE=master-check):
 //       exit 0 when this host already holds a finished test (pass or fail) of
 //       the commit under test, after renaming the pipeline
 //       "master-check: skipped, …" (PUT pipelines/:id/metadata, which the job
@@ -13,7 +16,7 @@
 //       "run the test": a commit not tested here, no state, a rename GitLab
 //       refused. Fail-safe: it never skips a commit it cannot show was tested.
 //
-//   node scripts/ci/master-check.mjs record --rc N --summary FILE
+//   node scripts/ci/master-check.mjs record [--schedule …] --rc N --summary FILE
 //       After vm-run.sh in a master pipeline (a push to the default branch, or
 //       the master check): remember that the commit's full test finished, when
 //       vm-run.sh exited 0 (pass) or 1 (fail) and the run's summary agrees
@@ -26,8 +29,9 @@
 // the hourly check is the run nothing cancels, and it costs a guest only when
 // master has moved since the last finished test.
 //
-// The state is one JSON file per runner host, MANDU_CI_MASTER_STATE or the
-// path table's `ci-cache` dir + master-tested.json (regenerable: losing it
+// The state is one JSON file per runner host and schedule,
+// MANDU_CI_MASTER_STATE or the path table's `ci-cache` dir + master-tested.json
+// (macos-tested.json for the macOS check) (regenerable: losing it
 // costs one redundant run). Another host's tests are not in it, so with
 // several runner hosts a check can test a commit another host already tested;
 // it never skips one no host tested.
@@ -40,15 +44,20 @@ import { resolvePath } from "../paths/mandu-paths.mjs";
 
 /** The schedule variable that marks the master check's pipeline schedule. */
 export const SCHEDULE = "master-check";
-/** The name a skipped check's pipeline gets; a reader of master's pipelines passes over it (§7.1). */
-export const SKIPPED_PREFIX = "master-check: skipped";
+/** The checks this script serves: the master check (§7.1) and the macOS check (§12.6). */
+export const SCHEDULES = [SCHEDULE, "macos"];
+/** The name a skipped check's pipeline starts with. Pure. */
+export const skippedPrefix = (schedule = SCHEDULE) => `${schedule}: skipped`;
+/** The name a skipped master check's pipeline gets; a reader of master's pipelines passes over it (§7.1). */
+export const SKIPPED_PREFIX = skippedPrefix(SCHEDULE);
 /** How many tested commits the state keeps. */
 export const KEEP = 50;
 const SHA_RE = /^[0-9a-f]{40}$/;
 
-export function statePath(env = process.env) {
+export function statePath(env = process.env, schedule = SCHEDULE) {
   if (env.MANDU_CI_MASTER_STATE) return env.MANDU_CI_MASTER_STATE;
-  return path.join(resolvePath("ci-cache", env, env.HOME || os.homedir()), "master-tested.json");
+  const file = schedule === SCHEDULE ? "master-tested.json" : `${schedule}-tested.json`;
+  return path.join(resolvePath("ci-cache", env, env.HOME || os.homedir()), file);
 }
 
 /** The state's tested commits, newest first; an absent or broken file is none. */
@@ -73,15 +82,15 @@ export function addTested(state, entry, keep = KEEP) {
   return { schema: 1, tested: [entry, ...state.tested.filter((e) => e.sha !== entry.sha)].slice(0, keep) };
 }
 
-/** Is this the master check's scheduled pipeline, on the default branch? */
-export function isMasterCheck(env) {
-  return env.GITLAB_CI === "true" && env.CI_PIPELINE_SOURCE === "schedule" && env.MANDU_SCHEDULE === SCHEDULE &&
+/** Is this the check's scheduled pipeline (the master check's by default), on the default branch? */
+export function isMasterCheck(env, schedule = SCHEDULE) {
+  return env.GITLAB_CI === "true" && env.CI_PIPELINE_SOURCE === "schedule" && env.MANDU_SCHEDULE === schedule &&
     !!env.CI_DEFAULT_BRANCH && env.CI_COMMIT_BRANCH === env.CI_DEFAULT_BRANCH && !env.CI_COMMIT_TAG;
 }
 
 /** Is this a master pipeline whose `test` runs the full per-push selection (a push to the default branch, or the check)? */
-export function isMasterRun(env) {
-  if (isMasterCheck(env)) return true;
+export function isMasterRun(env, schedule = SCHEDULE) {
+  if (isMasterCheck(env, schedule)) return true;
   return env.GITLAB_CI === "true" && env.CI_PIPELINE_SOURCE === "push" && !!env.CI_DEFAULT_BRANCH &&
     env.CI_COMMIT_BRANCH === env.CI_DEFAULT_BRANCH && !env.CI_COMMIT_TAG && !env.CI_MERGE_REQUEST_IID;
 }
@@ -102,8 +111,8 @@ export function ago(iso, now = Date.now()) {
 }
 
 /** The skipped pipeline's name. Pure. */
-export function skippedName(sha, entry) {
-  return `${SKIPPED_PREFIX}, ${sha.slice(0, 8)} already tested in #${entry.pipeline} (${entry.result})`;
+export function skippedName(sha, entry, schedule = SCHEDULE) {
+  return `${skippedPrefix(schedule)}, ${sha.slice(0, 8)} already tested in #${entry.pipeline} (${entry.result})`;
 }
 
 /** Rename this pipeline through the job token; true on a 2xx. */
@@ -122,29 +131,29 @@ async function renamePipeline(env, name, fetchImpl) {
 }
 
 /** `skip`: 0 = skipped (the job ends), 1 = test. */
-export async function skip(env = process.env, { fetchImpl = fetch, now = Date.now(), log = (s) => process.stdout.write(`master-check: ${s}\n`) } = {}) {
-  if (!isMasterCheck(env)) { log("not the master check's scheduled pipeline: testing"); return 1; }
+export async function skip(env = process.env, { schedule = SCHEDULE, fetchImpl = fetch, now = Date.now(), log = (s) => process.stdout.write(`master-check: ${s}\n`) } = {}) {
+  if (!isMasterCheck(env, schedule)) { log(`not the ${schedule} scheduled pipeline: testing`); return 1; }
   const sha = env.CI_COMMIT_SHA ?? "";
   if (!SHA_RE.test(sha)) { log(`no commit id in CI_COMMIT_SHA: testing`); return 1; }
-  const state = readState(statePath(env));
+  const state = readState(statePath(env, schedule));
   const hit = testedEntry(state, sha);
   if (!hit) {
     const last = state.tested[0];
     log(`${sha.slice(0, 8)} has no finished test on this host${last ? ` (the newest: ${last.sha.slice(0, 8)} in #${last.pipeline}, ${last.result}, ${ago(last.at, now)})` : ""}: testing it`);
     return 1;
   }
-  const r = await renamePipeline(env, skippedName(sha, hit), fetchImpl);
+  const r = await renamePipeline(env, skippedName(sha, hit, schedule), fetchImpl);
   if (!r.ok) { log(`master has not moved since #${hit.pipeline}, but the pipeline could not be marked skipped (${r.why}): testing anyway`); return 1; }
   log(`master has not moved since #${hit.pipeline} tested ${sha.slice(0, 8)} (${hit.result}, ${ago(hit.at, now)}): skipped`);
   return 0;
 }
 
 /** `record`: always 0. */
-export function record(env = process.env, { rc, summary, now = Date.now(), log = (s) => process.stdout.write(`master-check: ${s}\n`) } = {}) {
-  if (!isMasterRun(env)) return 0; // an MR or a tag: nothing to remember
+export function record(env = process.env, { rc, summary, schedule = SCHEDULE, now = Date.now(), log = (s) => process.stdout.write(`master-check: ${s}\n`) } = {}) {
+  if (!isMasterRun(env, schedule)) return 0; // an MR or a tag: nothing to remember
   const sha = env.CI_COMMIT_SHA ?? "";
   const result = rc === 0 ? "pass" : rc === 1 ? "fail" : null;
-  if (!SHA_RE.test(sha) || !result) { log(`vm-run.sh exited ${rc}: no finished test to record`); return 0; }
+  if (!SHA_RE.test(sha) || !result) { log(`the test run exited ${rc}: no finished test to record`); return 0; }
   let s = null;
   try { s = JSON.parse(fs.readFileSync(summary, "utf8")); } catch { /* checked below */ }
   const commit = typeof s?.commit === "string" ? s.commit : "";
@@ -152,7 +161,7 @@ export function record(env = process.env, { rc, summary, now = Date.now(), log =
     log(`the run's summary does not show a ${result} of ${sha.slice(0, 8)}: nothing recorded`);
     return 0;
   }
-  const file = statePath(env);
+  const file = statePath(env, schedule);
   try {
     writeState(file, addTested(readState(file), {
       sha, result, pipeline: Number(env.CI_PIPELINE_ID) || null, job: Number(env.CI_JOB_ID) || null,
@@ -164,10 +173,17 @@ export function record(env = process.env, { rc, summary, now = Date.now(), log =
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
-  const [cmd, ...rest] = argv;
-  if (cmd === "skip" && rest.length === 0) return skip(env);
+  const [cmd, ...args] = argv;
+  let schedule = SCHEDULE;
+  let rest = args;
+  if (rest[0] === "--schedule") {
+    if (!SCHEDULES.includes(rest[1])) { process.stderr.write(`master-check: --schedule takes ${SCHEDULES.join(" or ")}\n`); return 2; }
+    schedule = rest[1];
+    rest = rest.slice(2);
+  }
+  if (cmd === "skip" && rest.length === 0) return skip(env, { schedule });
   if (cmd === "record") {
-    const opt = {};
+    const opt = { schedule };
     for (let i = 0; i < rest.length; i += 2) {
       if (rest[i] === "--rc" && /^\d+$/.test(rest[i + 1] ?? "")) opt.rc = Number(rest[i + 1]);
       else if (rest[i] === "--summary" && rest[i + 1]) opt.summary = rest[i + 1];
@@ -176,7 +192,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     if (opt.rc === undefined || !opt.summary) { process.stderr.write("master-check: record needs --rc N --summary FILE\n"); return 2; }
     return record(env, opt);
   }
-  process.stderr.write("usage: master-check.mjs skip | record --rc N --summary FILE\n");
+  process.stderr.write("usage: master-check.mjs skip [--schedule S] | record [--schedule S] --rc N --summary FILE\n");
   return 2;
 }
 

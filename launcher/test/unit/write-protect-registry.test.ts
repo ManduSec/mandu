@@ -34,7 +34,7 @@ test("every runtime registry entry, in the guard's form, under each base once; t
 test("writeProtectList: the registry rides the Linux list as Mandu's own files (policy.yaml cannot drop it); not the macOS one", () => {
   const logs: string[] = [];
   const linux = writeProtectList({ HOME: "/h" }, "/w", NOFS, undefined, { deny: [], ask: [], unprotect: ["/rt/instances", "/rt/current", "/rt/dashboard-1.port"] }, (m) => logs.push(m), [], "linux", undefined, ["/rt"]);
-  for (const p of ["/rt/instances", "/rt/current", "/rt/.current.tmp-", "/rt/dashboard-", "/rt/vm-guests", "/rt/human", "/rt"]) {
+  for (const p of ["/rt/attachments", "/rt/instances", "/rt/current", "/rt/.current.tmp-", "/rt/dashboard-", "/rt/vm-guests", "/rt/human", "/rt"]) {
     assert.ok(linux.some((x) => x.path === p && x.answer === "deny"), p);
   }
   assert.equal(logs.filter((l) => /one of Mandu's own files; it stays protected/.test(l)).length, 3, logs.join("\n"));

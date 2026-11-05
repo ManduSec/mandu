@@ -40,6 +40,9 @@ export interface ServiceSummary {
   name: string;
   /** One plain sentence after the name, or "" when the name says it all. */
   sentence: string;
+  /** The same sentence in parts when it names a command (the page draws a
+   *  `code` part as code, as the hero's `sentenceParts`); null otherwise. */
+  sentenceParts: ServiceSentencePart[] | null;
   /** For the "Since …" suffix while running; null otherwise, and for an
    *  adopted service (its `since` is when this dashboard found it). */
   since: number | null;
@@ -54,6 +57,8 @@ export interface ServiceSummary {
   /** Set only when a helper crashed. */
   helperNote: string | null;
 }
+
+export interface ServiceSentencePart { kind: "text" | "code"; text: string }
 
 const WORDS: Record<ServiceState, { name: string; sentence: string }> = {
   running: { name: "Running", sentence: "" },
@@ -70,9 +75,19 @@ export const RESTART_CONFIRM =
 
 /** A main service this dashboard ADOPTED (already running when it started,
  *  supervisor-defs.ts `adopted`) is not its to stop: the supervisor refuses
- *  its restart every time, so the row offers none and says why. */
-export const ADOPTED_SENTENCE =
-  "It was already running when this dashboard started, so this page cannot restart it.";
+ *  its restart every time, so the row offers none and says why. It holds no
+ *  admin channel either, so every answer and change from the page is
+ *  refused (home.js ADMIN_CHANNEL_WORDS says the same where it happens):
+ *  the sentence says so, and the way out. `mandu stop` stops this dashboard
+ *  and the service; the next start (an agent's launch, or a systemd service
+ *  bringing the dashboard back) starts the service under its dashboard
+ *  (dashboard.md §4.25 *An answer this dashboard cannot pass on*). */
+export const ADOPTED_PARTS: readonly ServiceSentencePart[] = [
+  { kind: "text", text: "It was already running when this dashboard started, so this page cannot restart it or pass on your answers. Run " },
+  { kind: "code", text: "mandu stop" },
+  { kind: "text", text: " when no agent is running with mandu, then start your agent again." },
+];
+export const ADOPTED_SENTENCE = ADOPTED_PARTS.map((p) => p.text).join("");
 
 export const HELPER_NOTE =
   "A helper the dashboard runs for the developer view stopped unexpectedly. Your agents are not affected. The developer view has the details.";
@@ -89,7 +104,7 @@ export function buildServiceSummary(services: readonly ServiceStatus[], opts: { 
   const helperNote = services.some((s) => s.id !== MAIN_SERVICE && s.state === "crashed") ? (dev ? HELPER_NOTE : HELPER_NOTE_PRODUCT) : null;
   if (!main) {
     return {
-      available: false, state: null, name: "", since: null, action: null, helperNote,
+      available: false, state: null, name: "", sentenceParts: null, since: null, action: null, helperNote,
       sentence: dev ? NO_SERVICE + " The developer view lists what it does run." : NO_SERVICE,
     };
   }
@@ -102,6 +117,7 @@ export function buildServiceSummary(services: readonly ServiceStatus[], opts: { 
     state: main.state,
     name: words.name,
     sentence: adopted ? ADOPTED_SENTENCE : words.sentence,
+    sentenceParts: adopted ? ADOPTED_PARTS.map((p) => ({ ...p })) : null,
     since: running && !adopted ? main.since : null,
     action: adopted || starting ? null : {
       label: running ? "Restart" : "Start",

@@ -6,7 +6,9 @@
  * served one).
  *
  * jsdom lays out nothing, so the room the links need is computed here. At
- * 719 px and narrower (640 until Scan joined, 2026-10-21) the nav is a row
+ * 829 px and narrower (799 until the Rules link's mark, 2026-10-25; 719
+ * until Plugins joined, 2026-10-25; 640 until Scan joined, 2026-10-21) the
+ * nav is a row
  * of its own under the brand and the status (`order: 3; flex-basis:
  * 100%`), as wide as the top bar's content box: the window less
  * `.top-inner`'s side padding. Each link is its word and its side padding;
@@ -14,7 +16,7 @@
  * pill's side padding). In a flex row the links sit `#nav`'s gap apart. A
  * link never shrinks below its word (a flex item's automatic minimum), so
  * what does not fit runs past the row, which then scrolls. In a grid of
- * `repeat(N, auto)` columns (narrower than 500 px) each column is as wide
+ * `repeat(N, auto)` columns (narrower than 540 px) each column is as wide
  * as its widest link, the columns `#nav`'s gap apart, and `rows` counts
  * the rows. A link the stylesheet hides (`display: none`) takes no room,
  * and a `min-width` makes a short link as wide as it says.
@@ -22,6 +24,15 @@
  * Wider than that the links share one bar with the brand and the status
  * (`bar`): the bar's content box less the brand, the status and the two
  * gaps between them is what the links have.
+ *
+ * The Rules link carries its own mark while changes on Rules wait to be
+ * saved (2026-10-25, dashboard.md §4.25n *The top bar says when Rules has
+ * changes not saved*): its link's own gap, the digits, and the ring's side
+ * padding and edges. The same Chromium measured it as the model reads it:
+ * 17 px with one digit, 24 with two, the Rules link 73 px at 830 px with
+ * one; and with 99 waiting and 99 not saved, the nav 2 px past its row at
+ * 320 px, as the model says, and nothing past it at 326, 375, 539, 540,
+ * 829, 830, 969, 970 and 1280 px beside "Protection unknown".
  *
  * The words' widths are what a headless Chromium measured with the bundled
  * IBM Plex Sans: each word at 15 px, at 400 and at the current page's 500,
@@ -43,7 +54,12 @@
  * 413 of its 460; in the bar at 720 px (each link at least 50 px),
  * 409.67, 416, 416 (5.31 to spare beside "Protection unknown") and 379; at
  * 840 px, 511.67, 518, 518 (6.53 to spare beside "Protection unknown") and
- * 481.
+ * 481. With Plugins (2026-10-25; its word 50 px at both weights) and the
+ * Home word hidden up to 799 px: 255, 261, 262 and 225 as two rows of three
+ * below 520 px; one row at 520 px: 453, 460, 460 and 423 of its 478.4; all
+ * seven in the bar at 800 px, 482 with 99 waiting (Chromium: 470 px of
+ * links, 12 of gaps, the nav 490 px wide beside "Protection unknown"), and
+ * at 940 px, 602 (566 and 36).
  */
 import { fileNameRoom, px, sidePadding } from "./files-name-room.js";
 
@@ -55,6 +71,9 @@ export const WORD_PX: Readonly<Record<string, readonly [number, number]>> = {
   Settings: [55, 55],
   History: [48, 49],
   Scan: [34, 34],
+  // 2026-10-25, the same Chromium and font, which measured the six above
+  // as written (dashboard.md §4.25 *Plugins joins the links*).
+  Plugins: [50, 50],
 };
 /** The brand "Mandu" at 21 px, 700, its letters 0.02em closer. */
 export const BRAND_PX = 66;
@@ -64,6 +83,9 @@ export const STATUS_PX: Readonly<Record<string, number>> = {
   "Protection off": 95,
   "Not connected": 102,
   "Protection unknown": 132,
+  // 2026-10-23, the same Chromium and font (dashboard.md §4.25 *The top bar
+  // says on or off*), which measured the four above as written.
+  "Protection failed": 113,
 };
 /** A digit of the count at 12 px, 600 (IBM Plex Sans's digits are all as wide). */
 export const DIGIT_PX = 7;
@@ -73,8 +95,9 @@ export const MARGIN = 4;
 
 /** The links as the page draws them: their words in order, the page each
  *  opens (its `data-page-link`), the current page's place among them (-1:
- *  none), and the count's text ("" when it is hidden). */
-export interface DrawnNav { words: string[]; pages: string[]; current: number; count: string }
+ *  none), the count's text ("" when it is hidden), and the Rules link's
+ *  mark's (absent or "": hidden; "!" while policy.yaml is refused). */
+export interface DrawnNav { words: string[]; pages: string[]; current: number; count: string; unsaved?: string }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type El = any;
@@ -83,11 +106,13 @@ type El = any;
 export function drawnNav(doc: El): DrawnNav {
   const links = [...doc.querySelectorAll("#nav a")] as El[];
   const count = doc.getElementById("nav-approvals-count");
+  const unsaved = doc.getElementById("nav-rules-unsaved");
   return {
     words: links.map((a) => String(a.firstChild?.textContent ?? "").trim()),
     pages: links.map((a) => String(a.getAttribute("data-page-link"))),
     current: links.findIndex((a) => a.getAttribute("aria-current") === "page"),
     count: count && !count.hidden ? String(count.textContent) : "",
+    unsaved: unsaved && !unsaved.hidden ? String(unsaved.textContent) : "",
   };
 }
 
@@ -131,16 +156,32 @@ export function navRow(css: string) {
       expect(w, ".count", "font-weight", "600");
       pill = px(at(w, "#nav a", "gap"), w) + nav.count.length * DIGIT_PX + sidePadding(at(w, ".count", "padding"), w);
     }
+    let mark = 0;
+    if (nav.unsaved) {
+      // Digits (levels not saved), or "!" while Mandu refuses policy.yaml:
+      // one glyph narrower than a digit, so modelled as one (an upper
+      // bound), in a ring at least `min-width` wide.
+      const refused = nav.unsaved === "!";
+      if (!refused && !/^\d+$/.test(nav.unsaved)) throw new Error(`nav-row: the Rules mark "${nav.unsaved}" is neither digits nor "!"`);
+      expect(w, ".unsaved-mark", "font-size", "12px");
+      expect(w, ".unsaved-mark", "font-weight", "600");
+      const edge = /^(\d+)px solid$/.exec(at(w, ".unsaved-mark", "border"));
+      if (!edge) throw new Error(`nav-row: the Rules mark's edge is ${at(w, ".unsaved-mark", "border")}`);
+      if (refused && declares(w, ".unsaved-mark.refused", "padding") !== null) throw new Error("nav-row: the refused mark's padding is its own");
+      const ring = nav.unsaved.length * DIGIT_PX + sidePadding(at(w, ".unsaved-mark", "padding"), w) + 2 * Number(edge[1]);
+      const least = refused ? declares(w, ".unsaved-mark.refused", "min-width") : null;
+      mark = px(at(w, '#nav a[data-page-link="rules"]', "gap"), w) + Math.max(ring, least === null ? 0 : px(least, w));
+    }
     // Each shown link's width: its word, its padding, the count in Approvals.
     const widths: number[] = [];
     nav.words.forEach((word, i) => {
       const width = WORD_PX[word];
       if (!width) throw new Error(`nav-row: no width measured for the link "${word}"`);
       if (hidden(w, nav.pages[i]!)) {
-        if (nav.pages[i] === "approvals") throw new Error("nav-row: the link that carries the count is hidden");
+        if (nav.pages[i] === "approvals" || nav.pages[i] === "rules") throw new Error("nav-row: a link that carries a mark is hidden");
         return;
       }
-      widths.push(Math.max(min, width[i === nav.current ? 1 : 0] + pad + (nav.pages[i] === "approvals" ? pill : 0)));
+      widths.push(Math.max(min, width[i === nav.current ? 1 : 0] + pad + (nav.pages[i] === "approvals" ? pill : nav.pages[i] === "rules" ? mark : 0)));
     });
     const gap = px(at(w, "#nav", "gap"), w);
     const cols = columns(w);
@@ -167,7 +208,7 @@ export function navRow(css: string) {
   };
   /** What the row has to spare (negative: the links run past it). */
   const spare = (w: number, nav: DrawnNav): number => row(w) - need(w, nav);
-  /** Wider than 640 px, what the bar has to spare in a window `w` px wide
+  /** Wider than 829 px, what the bar has to spare in a window `w` px wide
    *  with the brand, the links as `nav` draws them and the status saying
    *  `status` (negative: the status runs past its room). */
   const bar = (w: number, nav: DrawnNav, status: string): number => {

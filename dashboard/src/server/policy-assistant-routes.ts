@@ -8,6 +8,11 @@
  *        "Try it" on one row: the arbiter's Test a flow for that row's website or
  *        release, against the law in force and against the law WITH the whole
  *        suggestion (`testFlow` `withEdits`, nothing written).
+ *   GET  /api/policy/assistant/channel                     → { ready: true, via } | { ready: false, reason }
+ *        Which AI Suggest rules would send the words to, read before anything
+ *        is written (dashboard.md, *Describe says which AI reads your
+ *        words*): the enum only, never a key, an address, a binary path or
+ *        a model name. It builds no client and calls no model.
  *
  * Both are behind the server's global mutating gate (CSRF + admin session):
  * the first spends the person's model budget, the second changes the law.
@@ -47,7 +52,9 @@ import {
   tryLine,
   tryProbe,
   SENTENCE_MAX,
+  channelOnly,
   type AssistantArbiter,
+  type AssistantChannel,
   type AssistantModel,
 } from "../policy-assistant.js";
 import type { PolicyProposalArbiter } from "./policy-proposal-routes.js";
@@ -107,6 +114,20 @@ export async function postSuggest(
     if (err instanceof AssistantAnswerError) return json(res, 422, { error: err.message, problems: err.problems });
     json(res, isAdminBoundaryError(err) ? 503 : 502, { error: String((err as Error)?.message ?? err) });
   }
+}
+
+/** GET /api/policy/assistant/channel: 501 where Suggest rules answers 501;
+ *  else the channel, re-projected to its enum (`channelOnly`), so nothing
+ *  else the selection saw can reach the answer. */
+export async function getChannel(arbiter: PolicyAssistantArbiter, channel: () => Promise<AssistantChannel>, res: ServerResponse): Promise<void> {
+  if (!hasReads(arbiter)) return json(res, 501, { error: UNSUPPORTED });
+  let answer: unknown;
+  try {
+    answer = await channel();
+  } catch {
+    answer = null;
+  }
+  json(res, 200, channelOnly(answer));
 }
 
 export async function postApply(arbiter: PolicyAssistantArbiter, req: IncomingMessage, res: ServerResponse): Promise<void> {

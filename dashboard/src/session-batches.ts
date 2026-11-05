@@ -57,7 +57,9 @@ const WATCH_ID_PREFIX = "watch-";
  *  as RUNNING (SessionRef.status). A live agent session just stops emitting, so
  *  recency is the signal when nothing else says; sized to survive a long tool
  *  call between model turns. A recorded exit (SessionRef.exited, the launcher's
- *  `session_exit`) outranks it: an ended session is never RUNNING by recency. */
+ *  `session_exit`) outranks it: an ended session is never RUNNING by recency.
+ *  A live launch (SessionRef.live) keeps a session RUNNING past it: an agent
+ *  waiting on its person emits nothing. */
 export const RUNNING_WINDOW_MS = 5 * 60_000;
 
 /** The per-session 🎬 annotation (SessionRef.watch) for a session a watch run
@@ -286,6 +288,9 @@ function sessionStatus(
     if (w === "running") return "running";
   }
   if (runState === "running") return "running";
+  // Its `mandu` launch alive (SessionRef.live): running however long it has
+  // been quiet; a recorded exit still ends it (§4.10.4).
+  if (s.live && !s.exited) return "running";
   if (nowMs !== undefined && s.lastTs && !s.exited) {
     const t = Date.parse(s.lastTs);
     if (!Number.isNaN(t) && nowMs - t < RUNNING_WINDOW_MS) return "running";

@@ -16,7 +16,10 @@
  *     forged release-check marker (`pending-<pid>`, which would take a live
  *     session out of a launch's session scan; runtime-instances.md §4.1), an
  *     owner file in a lock dir the agent made, the gate swapped for a link,
- *     and a rename of the base itself;
+ *     `mandu serve`'s attachment port file rewritten to another port or
+ *     removed, a forged port file for a new session, a forged pool record
+ *     (openclaw-plugin.md §3.2: a forged port file would route the Gateway to
+ *     a proxy of the agent's choosing), and a rename of the base itself;
  *   - performed (the controls): a new file in the base (where the session's
  *     own folder lives), a file whose name only looks like a registry entry
  *     (`current2`).
@@ -63,6 +66,12 @@ test("the agent tree cannot change Mandu's runtime registries; the rest of the r
   mkdirSync(join(base, "logs"));
   mkdirSync(join(base, "release-check"));
   writeFileSync(join(base, "dashboard.log"), "log\n");
+  // What the service's proxy pool leaves (attachment-contract.ts).
+  const att = join(base, "attachments", "openclaw:main");
+  mkdirSync(att, { recursive: true, mode: 0o700 });
+  writeFileSync(join(att, "anthropic-proxy.port"), "41234\n", { mode: 0o600 });
+  writeFileSync(join(att, "pool.json"), `{"pid":1,"proxyPid":2}`, { mode: 0o600 });
+  writeFileSync(join(base, "attachments", "pool.json"), `{"pid":1}`, { mode: 0o600 });
   const out = join(dir, "out");
   const sock = join(dir, "arbiter.sock");
   const server = new ArbiterServer({ socketPath: sock, dbPath: join(dir, "sym.db"), eventDir: join(dir, "events"), log: () => {}, confidentiality: true, integrity: false });
@@ -95,6 +104,12 @@ test("the agent tree cannot change Mandu's runtime registries; the rest of the r
       `mkdir ${B}/release-check/lock 2>/dev/null; ` +
       step("lockowner", `echo 4242 > ${B}/release-check/lock/owner`) +
       step("gatelink", `rm -rf ${B}/release-check && ln -s /tmp ${B}/release-check`) +
+      step("attport", `echo 6666 > ${B}/attachments/openclaw:main/anthropic-proxy.port`) +
+      step("attrec", `echo '{"pid":3}' > ${B}/attachments/openclaw:main/pool.json`) +
+      `mkdir ${B}/attachments/openclaw:evil 2>/dev/null; ` +
+      step("attnew", `echo 6666 > ${B}/attachments/openclaw:evil/anthropic-proxy.port`) +
+      step("attpool", `echo '{"pid":3}' > ${B}/attachments/pool.json`) +
+      step("attrm", `rm ${B}/attachments/openclaw:main/anthropic-proxy.port`) +
       step("base", `mv ${B} ${B}.away`) +
       step("free", `echo ok > ${B}/free.txt`) +
       step("lookalike", `echo ok > ${B}/current2`) +
@@ -114,7 +129,7 @@ test("the agent tree cannot change Mandu's runtime registries; the rest of the r
     const got = Object.fromEntries(readFileSync(out, "utf8").trim().split("\n").map((l) => l.split("=") as [string, string]));
     const said = `\nlauncher said:\n${lines.join("\n")}\nagent got: ${JSON.stringify(got)}`;
     assert.equal(code, 0, said);
-    for (const k of ["manifest", "newinst", "current", "rmcurrent", "tmplink", "port", "dlog", "dash", "guest", "log", "marker", "lockowner", "gatelink", "base"]) {
+    for (const k of ["manifest", "newinst", "current", "rmcurrent", "tmplink", "port", "dlog", "dash", "guest", "log", "marker", "lockowner", "gatelink", "attport", "attrec", "attnew", "attpool", "attrm", "base"]) {
       assert.notEqual(got[k], "0", `${k}: the agent changed a runtime registry entry${said}`);
     }
     assert.equal(readFileSync(manifest, "utf8"), `{"pid":1}`, "the manifest is unchanged");
@@ -129,6 +144,10 @@ test("the agent tree cannot change Mandu's runtime registries; the rest of the r
     assert.ok(!existsSync(join(base, "release-check", "pending-4242")), "no forged release-check marker");
     assert.ok(!existsSync(join(base, "release-check", "lock", "owner")), "no owner in the agent's lock dir");
     assert.ok(lstatSync(join(base, "release-check")).isDirectory(), "the gate is still a real directory");
+    assert.equal(readFileSync(join(att, "anthropic-proxy.port"), "utf8"), "41234\n", "the attachment's port file is unchanged");
+    assert.equal(readFileSync(join(att, "pool.json"), "utf8"), `{"pid":1,"proxyPid":2}`, "its pool record is unchanged");
+    assert.ok(!existsSync(join(base, "attachments", "openclaw:evil", "anthropic-proxy.port")), "no forged port file for a new session");
+    assert.equal(readFileSync(join(base, "attachments", "pool.json"), "utf8"), `{"pid":1}`, "the pool's record is unchanged");
     assert.ok(!existsSync(`${base}.away`) && existsSync(base), "the base was not renamed");
     // The controls: the rest of the runtime folder stays writable.
     assert.equal(got["link"], "0", `a new link in the base${said}`);

@@ -14,12 +14,13 @@ import { json, jsonConditional, requireCsrf } from "./http-util.js";
 import { type EventSource, type SessionRef } from "../event-source.js";
 import { toSessionViewModel, revealDeliveredReply, revealPairedOriginals } from "../view-model.js";
 import { buildSidebarSections, type SessionBatch, type SidebarSections, type SidebarTestRun, type SidebarWatchRun } from "../session-batches.js";
-import { type ManduEvent } from "../event-model.js";
+import { recordUnchecked, type ManduEvent } from "../event-model.js";
+import { lineageNotes, type FlowNote, type LineageFacts } from "../view-model/secret-path.js";
 import { type DrillShortIndex } from "../drill-shorts.js";
 import { sessionCwd, sessionViewRoots } from "../session-paths.js";
 import { toPolicyPanelViewModel, type PolicyPanelVM } from "../view-model/policy-panel.js";
 import { toHumanPlaneVM } from "../view-model/human-plane.js";
-import { filePaths } from "./path-kinds.js";
+import { pathKinds } from "./path-kinds.js";
 import { type HumanPlaneStatus } from "../event-source/contract.js";
 import { type PolicySnapshot, type VerdictEntry } from "../policy-model.js";
 import { type ApprovalsArbiter } from "./approval-routes.js";
@@ -181,10 +182,11 @@ export async function loadPolicyPanel(
   } catch {
     humanPlane = null;
   }
-  // Which rules reaching everything inside name a file (path-kinds.ts):
-  // display only, so they read as that file.
-  const files = await filePaths((snapshot?.document?.paths ?? []).filter((p) => p.recursive).map((p) => p.path));
-  return { ...toPolicyPanelViewModel(snapshot, early, home, files), humanPlane: toHumanPlaneVM(humanPlane) };
+  // Which rule paths name a file, and which have nothing there
+  // (path-kinds.ts): display only, so a rule reaching everything inside a
+  // file reads as that file, and a rule on nothing says so.
+  const { files, missing } = await pathKinds((snapshot?.document?.paths ?? []).map((p) => p.path));
+  return { ...toPolicyPanelViewModel(snapshot, early, home, files, missing), humanPlane: toHumanPlaneVM(humanPlane) };
 }
 
 /** The live policy snapshot (null when there is none), its `verdicts`
@@ -251,6 +253,7 @@ export async function apiEvents(
   res: ServerResponse,
   values = false,
   extra?: EventsExtra,
+  facts?: () => Promise<LineageFacts | null>,
 ): Promise<void> {
   const params = new URLSearchParams(url.split("?")[1] ?? "");
   const sessionId = params.get("session");
@@ -320,6 +323,21 @@ export async function apiEvents(
   // What the caller adds (the developer view: an e2e TEST session's setup
   // panel, dashboard.md §4.11); null adds nothing.
   const added = extra?.(sessionId, events) ?? null;
+  // *Where each went*'s notes (symbol-lineage.md §5.6): the file each
+  // registered placeholder stands for and an earlier leak the kept scan
+  // found, and whether Mandu could check the record at all (event-model.ts
+  // `recordUnchecked`). Display only: no facts, or a failed read, adds none.
+  let flowNotes: Record<string, FlowNote> = {};
+  if (facts && viewModel.lineage.flows.length) {
+    try {
+      const f = await facts();
+      if (f) flowNotes = lineageNotes(viewModel.lineage.flows.map((x) => x.root), f);
+    } catch (err) {
+      log(`lineage notes skipped: ${(err as Error).message}`);
+    }
+  }
+  // Over the whole log only: a `sinceSeq` tail cannot tell.
+  const unchecked = sinceSeq === undefined && recordUnchecked(all);
   // For EVERY session, ship the recorded run paths (session-paths.ts — the same
   // event-sourced facts testSetup embeds for test sessions) so the client's
   // session-wide short↔full path display works on live sessions too. Absent
@@ -330,6 +348,8 @@ export async function apiEvents(
     sessionId, events, viewModel, total, returned: events.length, truncated, valuesShown: values,
     ...(counts ? { counts } : {}),
     ...(anyPath ? { sessionPaths } : {}),
+    ...(Object.keys(flowNotes).length ? { flowNotes } : {}),
+    ...(unchecked ? { recordUnchecked: true } : {}),
     ...(added ?? {}),
   });
 }

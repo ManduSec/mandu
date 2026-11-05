@@ -21,6 +21,7 @@
  *       (`white-space: nowrap`), the headline's too; the words read as the
  *       strings;
  *   A3  the served Home page: the short card's why line names the same;
+ *       its line on which answers last, the key and the host;
  *   A4  the oracle: no page or answer read here carries the key's value,
  *       and none a token (`$MDU`).
  *
@@ -143,7 +144,12 @@ test("an Approvals card's cells name the key, its file and the host as code, kep
     await servedProductPage(base, "/", (doc: any) => !!doc.querySelector("#home-waiting .ask .ask-sub code"), (doc) => {
       const sub = doc.querySelector("#home-waiting .ask .ask-sub");
       assert.ok(sub.textContent.startsWith(`${ask.why} `), sub.textContent);
-      assert.deepEqual([...sub.querySelectorAll("code.code-whole")].map((c) => c.textContent), NAMES, "the same names, kept whole");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const whole = [...sub.querySelectorAll("code.code-whole")] as any[];
+      assert.deepEqual(whole.filter((c) => !c.closest(".ask-answers")).map((c) => c.textContent), NAMES, "the same names, kept whole");
+      // Its line on which answers last (dashboard.md §4.34 *Home's card says
+      // which answers last*) names the key and the host, kept whole too.
+      assert.deepEqual(whole.filter((c) => c.closest(".ask-answers")).map((c) => c.textContent), ["STRIPE_KEY", HOST]);
       noValue(doc.body.textContent, "the rendered Home page");
       assert.doesNotMatch(doc.body.textContent, /\$MDU/, "the rendered page carries no token");
     }, { css: resolveCssVars(stylesAt(sheets, 320)) });

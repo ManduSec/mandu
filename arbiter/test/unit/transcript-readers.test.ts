@@ -651,9 +651,10 @@ for (const [id, kind, version] of [["openclaw", "openclaw-jsonl", "2026.7.1-2"],
   test(`real OpenClaw ${version} store: its own mask on key-shaped output, the rest as read, never details; the provider's ids`, async () => {
     const r = await readReal(id, kind);
     assert.equal(r.sessions, 1);
-    // OpenClaw masks a key-shaped value in every tool result before the
-    // model sees it, and keeps only the mask: the planted keys never reached
-    // the model, their masks did.
+    // OpenClaw keeps a key-shaped value only as its mask. 2026.9.9 masked it
+    // before the model too; 2026.7.1-2 masked only what it saved, the model
+    // got the key (the scan then ties the mask to a known value:
+    // transcript-scan.ts `savedMasked`). The reader yields the record as kept.
     assert.deepEqual(r.how(REAL_CMD), []);
     assert.deepEqual(r.how(REAL_FILE), []);
     assert.deepEqual(r.how(`${"sk-ant"}…Nb4C`), ["command-output:exec"]);

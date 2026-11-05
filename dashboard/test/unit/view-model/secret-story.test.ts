@@ -44,12 +44,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { buildAgentPage } from "../../../src/view-model/agent-page.js";
-import { aiSaw, FINDING_POINTER, releaseWhere, RELEASES_SHOWN, secretFile, secretsStory, secretShortName, secretWhat, SECRET_ALL_CAP, SECRET_CAP, type SecretsStory } from "../../../src/view-model/secret-story.js";
+import { aiSaw, FINDING_POINTER, releaseWhere, RELEASES_SHOWN, secretFile, secretsStory, secretShortName, secretWhat, SECRET_ALL_CAP, SECRET_CAP, SECRET_STEPS_CAP, type SecretsStory } from "../../../src/view-model/secret-story.js";
 import { believedEvents, type ManduEvent } from "../../../src/event-model.js";
 import { toSessionViewModel } from "../../../src/view-model.js";
 import type { SymbolLineage } from "../../../src/view-model/lineage.js";
 import type { DualStep } from "../../../src/view-model/dual-lanes.js";
-import { walkthroughEvents, SESSION } from "./walkthrough-fixture.js";
+import { walkthroughEvents, SESSION, PK } from "./walkthrough-fixture.js";
+import { RETIRED, THIS_MACHINE } from "./retired-words.js";
 
 const words = (parts: { text: string }[]) => parts.map((p) => p.text).join("");
 const linesOf = (story: SecretsStory, i: number) => story.secrets[i]!.lines.map((l) => `${l.tone}: ${words(l.parts)}`);
@@ -79,11 +80,11 @@ test("each secret by name, with where its real value went and what Mandu blocked
   assert.equal(words(gh!.what), "The environment variable GITHUB_TOKEN");
   assert.equal(gh!.level, "No AI");
   assert.deepEqual(linesOf(secrets, 0), [
-    "good: The AI got only a placeholder, never the real value. It went to the AI that way in 5 requests.",
+    "good: The AI got only its masked version, never the real value. It went to the AI that way in 5 requests.",
     // Each says when (a time part, the page draws the clock), in the order
     // they happened: the bound send, then the blocked exfiltration.
     "plain: Mandu sent its real value only to api.github.com (1 request, at 2026-10-04T13:10:06.000Z), where it was allowed to go.",
-    "good: Mandu blocked 1 attempt to send it to collector.evil.example, at 2026-10-04T13:10:22.500Z. The request never left this machine.",
+    "good: Mandu blocked 1 attempt to send it to collector.evil.example, at 2026-10-04T13:10:22.500Z. The request never left this computer.",
   ]);
   assert.deepEqual(gh!.lines[1]!.parts.filter((p) => p.kind === "time").map((p) => p.text), ["2026-10-04T13:10:06.000Z"]);
   assert.equal(words(pk!.what), "PASTE_KEY in /home/dev/app/.env");
@@ -102,8 +103,8 @@ test("never a token or a value in the page's data", () => {
 test("a secret Mandu never filled in says so; the reply that showed it to you is named", () => {
   const { secrets } = pageOf(walkthroughEvents({ noNetwork: true, replyReveal: true }));
   const gh = linesOf(secrets, 0);
-  assert.ok(gh.includes("good: Mandu did not fill in its real value for any request off this machine."), gh.join("\n"));
-  assert.ok(gh.includes("plain: You saw its real value in the agent's reply. The AI kept the placeholder."), gh.join("\n"));
+  assert.ok(gh.includes("good: Mandu did not fill in its real value for any request off this computer."), gh.join("\n"));
+  assert.ok(gh.includes("plain: You saw its real value in the agent's reply. The AI kept the masked version."), gh.join("\n"));
   assert.ok(!gh.some((l) => /blocked/.test(l)));
 });
 
@@ -270,29 +271,29 @@ const OWN_WORDS = "warn: Anything the AI wrote from its real value went back to 
 const CHANGE_FILE = "warn: If it holds a key or a password, change it: the AI saw it as it was.";
 const CHANGE_KEY = "warn: Change this key: the AI saw its real value, and marking it a secret does not take that back.";
 
-test("a secret the AI read before its label: a placeholder in its place after, never \"only\", and the AI's own words are not masked (§4.25b)", () => {
+test("a secret the AI read before its label: masked after, never \"only\", and the AI's own words are not masked (§4.25b)", () => {
   // The proxies forward the AI's own replies as written (confidentiality.md
   // §7.1, the residual): the tour's 10:41 reply quoted the file, and every
   // later request carried that reply beside the placeholder.
   assert.deepEqual(linesOf(earlyStory(2), 0), [
-    `warn: The AI read its real value at ${DELIVERED}, before it was marked a secret. From ${MASKED} on it got a placeholder in its place, in 2 requests.`,
+    `warn: The AI read its real value at ${DELIVERED}, before it was marked a secret. From ${MASKED} on the AI got it masked, in 2 requests.`,
     OWN_WORDS,
     CHANGE_FILE,
-    "good: Mandu did not fill in its real value for any request off this machine.",
+    "good: Mandu did not fill in its real value for any request off this computer.",
   ]);
   assert.deepEqual(earlyStory(2).counts, { masked: 0, early: 1 }, "the tiles count it as read before its label");
   // No later request carried it: nothing went back to the AI, and the advice
   // follows the first line.
   assert.deepEqual(linesOf(earlyStory(0), 0).slice(0, 3), [
-    `warn: The AI read its real value at ${DELIVERED}, before it was marked a secret. From ${MASKED} on it got a placeholder in its place.`,
+    `warn: The AI read its real value at ${DELIVERED}, before it was marked a secret. From ${MASKED} on the AI got it masked.`,
     CHANGE_FILE,
-    "good: Mandu did not fill in its real value for any request off this machine.",
+    "good: Mandu did not fill in its real value for any request off this computer.",
   ]);
   // Your own model's level: its line after the advice.
   assert.deepEqual(linesOf(earlyStory(1, { prefix: "localmodel" }), 0).slice(1, 4), [
     OWN_WORDS,
     CHANGE_FILE,
-    "plain: Its level lets only your own model read it. An outside AI gets a placeholder.",
+    "plain: Its level lets only your own model read it. An outside AI gets it masked.",
   ]);
 });
 
@@ -418,8 +419,8 @@ test("a block and a later send to the same place read in the order they happened
     { host: "api.stripe.com", verdict: "blocked", ts: "2026-10-05T01:38:07.123Z" },
   ]);
   assert.deepEqual(linesOf(story, 0), [
-    "good: The AI got only a placeholder, never the real value.",
-    "good: Mandu blocked 1 attempt to send it to api.stripe.com, at 2026-10-05T01:38:07.123Z. The request never left this machine.",
+    "good: The AI got only its masked version, never the real value.",
+    "good: Mandu blocked 1 attempt to send it to api.stripe.com, at 2026-10-05T01:38:07.123Z. The request never left this computer.",
     "plain: Mandu sent its real value only to api.stripe.com (1 request, at 2026-10-05T01:39:24.292Z), where it was allowed to go.",
   ]);
   // The moments are time parts (the page draws the viewer's clock), the
@@ -438,7 +439,7 @@ test("more than one send or block: the first time, and \"None of them left\"", (
     { host: "a.example", verdict: "allowed", ts: "2026-10-05T01:04:00.000Z" },
   ]);
   assert.deepEqual(linesOf(story, 0).slice(1), [
-    "good: Mandu blocked 2 attempts to send it to x.example, the first at 2026-10-05T01:01:00.000Z. None of them left this machine.",
+    "good: Mandu blocked 2 attempts to send it to x.example, the first at 2026-10-05T01:01:00.000Z. None of them left this computer.",
     "plain: Mandu sent its real value only to a.example and b.example (3 requests, the first at 2026-10-05T01:02:00.000Z), where it was allowed to go.",
   ]);
   // Blocks only: after "did not fill in", as before, in their own order.
@@ -447,9 +448,9 @@ test("more than one send or block: the first time, and \"None of them left\"", (
     { host: "early.example", verdict: "blocked", ts: "2026-10-05T01:01:00.000Z" },
   ]);
   assert.deepEqual(linesOf(blocks, 0).slice(1), [
-    "good: Mandu did not fill in its real value for any request off this machine.",
-    "good: Mandu blocked 1 attempt to send it to early.example, at 2026-10-05T01:01:00.000Z. The request never left this machine.",
-    "good: Mandu blocked 1 attempt to send it to late.example, at 2026-10-05T01:09:00.000Z. The request never left this machine.",
+    "good: Mandu did not fill in its real value for any request off this computer.",
+    "good: Mandu blocked 1 attempt to send it to early.example, at 2026-10-05T01:01:00.000Z. The request never left this computer.",
+    "good: Mandu blocked 1 attempt to send it to late.example, at 2026-10-05T01:09:00.000Z. The request never left this computer.",
   ]);
 });
 
@@ -462,7 +463,7 @@ test("a time the record does not hold is not said, and no order is guessed", () 
   ]);
   assert.deepEqual(linesOf(story, 0).slice(1), [
     "plain: Mandu sent its real value only to api.stripe.com (1 request, at 2026-10-05T01:39:24.292Z), where it was allowed to go.",
-    "good: Mandu blocked 1 attempt to send it to api.stripe.com. The request never left this machine.",
+    "good: Mandu blocked 1 attempt to send it to api.stripe.com. The request never left this computer.",
   ]);
   // One send of two without a time: "the first at" would guess, so no time.
   const sends = egressStory([
@@ -472,7 +473,7 @@ test("a time the record does not hold is not said, and no order is guessed", () 
   assert.equal(linesOf(sends, 0)[1], "plain: Mandu sent its real value only to a.example (2 requests), where it was allowed to go.");
   // An unreadable time is no time.
   const bad = egressStory([{ host: "a.example", verdict: "blocked", ts: "not a time" }]);
-  assert.equal(linesOf(bad, 0).at(-1), "good: Mandu blocked 1 attempt to send it to a.example. The request never left this machine.");
+  assert.equal(linesOf(bad, 0).at(-1), "good: Mandu blocked 1 attempt to send it to a.example. The request never left this computer.");
 });
 
 test("a block whose event names the Approvals row it filed says Mandu asked for your OK, linking that row; a send never does (§4.25b)", () => {
@@ -483,7 +484,7 @@ test("a block whose event names the Approvals row it filed says Mandu asked for 
     { host: "api.stripe.com", verdict: "allowed", ts: "2026-10-05T01:39:24.292Z", ask: "egr-2" },
   ]);
   assert.deepEqual(linesOf(story, 0).slice(1), [
-    "good: Mandu blocked 1 attempt to send it to api.stripe.com, at 2026-10-05T01:38:07.123Z, and asked for your OK in Approvals. The request never left this machine.",
+    "good: Mandu blocked 1 attempt to send it to api.stripe.com, at 2026-10-05T01:38:07.123Z, and asked for your OK in Approvals. The request never left this computer.",
     "plain: Mandu sent its real value only to api.stripe.com (1 request, at 2026-10-05T01:39:24.292Z), where it was allowed to go.",
   ]);
   const [, block, send] = story.secrets[0]!.lines;
@@ -513,7 +514,7 @@ test("several blocks: \"asked\" when each filed a row, \"for N of them\" when so
     { host: "x.example", verdict: "blocked", ts: "2026-10-05T01:05:00.000Z", ask: "egr-2" },
     { host: "x.example", verdict: "blocked", ts: "2026-10-05T01:01:00.000Z", ask: "egr-1" },
   ]);
-  assert.equal(linesOf(all, 0).at(-1), "good: Mandu blocked 2 attempts to send it to x.example, the first at 2026-10-05T01:01:00.000Z, and asked for your OK in Approvals. None of them left this machine.");
+  assert.equal(linesOf(all, 0).at(-1), "good: Mandu blocked 2 attempts to send it to x.example, the first at 2026-10-05T01:01:00.000Z, and asked for your OK in Approvals. None of them left this computer.");
   assert.deepEqual(all.secrets[0]!.lines.at(-1)!.parts.flatMap((p) => (p.ask ? [p.ask] : [])), ["egr-1"], "the earliest row");
   const some = egressStory([
     { host: "x.example", verdict: "blocked", ts: "2026-10-05T01:01:00.000Z" },
@@ -522,8 +523,8 @@ test("several blocks: \"asked\" when each filed a row, \"for N of them\" when so
     { host: "y.example", verdict: "blocked", ts: "2026-10-05T01:07:00.000Z" },
   ]);
   assert.deepEqual(linesOf(some, 0).slice(2), [
-    "good: Mandu blocked 3 attempts to send it to x.example, the first at 2026-10-05T01:01:00.000Z, and asked for your OK in Approvals for 2 of them. None of them left this machine.",
-    "good: Mandu blocked 1 attempt to send it to y.example, at 2026-10-05T01:07:00.000Z. The request never left this machine.",
+    "good: Mandu blocked 3 attempts to send it to x.example, the first at 2026-10-05T01:01:00.000Z, and asked for your OK in Approvals for 2 of them. None of them left this computer.",
+    "good: Mandu blocked 1 attempt to send it to y.example, at 2026-10-05T01:07:00.000Z. The request never left this computer.",
   ], "each host by its own blocks");
   assert.deepEqual(some.secrets[0]!.lines[2]!.parts.flatMap((p) => (p.ask ? [p.ask] : [])), ["egr-3"]);
   // No time can be read: the first recorded row, and no time said.
@@ -531,18 +532,18 @@ test("several blocks: \"asked\" when each filed a row, \"for N of them\" when so
     { host: "z.example", verdict: "blocked", ts: "not a time", ask: "egr-5" },
     { host: "z.example", verdict: "blocked", ts: "nor this", ask: "egr-6" },
   ]);
-  assert.equal(linesOf(untimed, 0).at(-1), "good: Mandu blocked 2 attempts to send it to z.example, and asked for your OK in Approvals. None of them left this machine.");
+  assert.equal(linesOf(untimed, 0).at(-1), "good: Mandu blocked 2 attempts to send it to z.example, and asked for your OK in Approvals. None of them left this computer.");
   assert.deepEqual(untimed.secrets[0]!.lines.at(-1)!.parts.flatMap((p) => (p.ask ? [p.ask] : [])), ["egr-5"]);
 });
 
 test("no ask is said without a row of the queue's shape on the block's own recorded event", () => {
   for (const ask of ["egr 1; x", "", 42, null, "a".repeat(65), { id: "egr-1" }]) {
     const story = egressStory([{ host: "a.example", verdict: "blocked", ts: "2026-10-05T01:01:00.000Z", ask }]);
-    assert.equal(linesOf(story, 0).at(-1), "good: Mandu blocked 1 attempt to send it to a.example, at 2026-10-05T01:01:00.000Z. The request never left this machine.", JSON.stringify(ask));
+    assert.equal(linesOf(story, 0).at(-1), "good: Mandu blocked 1 attempt to send it to a.example, at 2026-10-05T01:01:00.000Z. The request never left this computer.", JSON.stringify(ask));
   }
   // The block's event is not in the record: no time, and no ask.
   const gone = egressStory([{ host: "a.example", verdict: "blocked", ask: "egr-1" }]);
-  assert.equal(linesOf(gone, 0).at(-1), "good: Mandu blocked 1 attempt to send it to a.example. The request never left this machine.");
+  assert.equal(linesOf(gone, 0).at(-1), "good: Mandu blocked 1 attempt to send it to a.example. The request never left this computer.");
 });
 
 test("an OS gate that stopped an action using it and filed a row says Mandu asked too", () => {
@@ -562,11 +563,12 @@ test("through the session's own lineage: the block's net_action names its row, s
   const withAsk = (events: ManduEvent[]) => events.map((e) =>
     e.kind === "net_action" && (e as unknown as { action?: string }).action === "blocked" ? ({ ...e, policy: { ...e.policy!, approvalId: "egr-3" } }) : e);
   const { secrets } = pageOf(withAsk(walkthroughEvents()));
-  assert.equal(linesOf(secrets, 0).at(-1), "good: Mandu blocked 1 attempt to send it to collector.evil.example, at 2026-10-04T13:10:22.500Z, and asked for your OK in Approvals. The request never left this machine.");
+  assert.equal(linesOf(secrets, 0).at(-1), "good: Mandu blocked 1 attempt to send it to collector.evil.example, at 2026-10-04T13:10:22.500Z, and asked for your OK in Approvals. The request never left this computer.");
   assert.deepEqual(secrets.secrets.flatMap((s) => s.lines.flatMap((l) => l.parts.flatMap((p) => (p.ask ? [p.ask] : [])))), ["egr-3"]);
   // A claimed block (arbiter-human-plane.md §10.2) is no line, so no ask.
   const claimed = pageOf(withAsk(walkthroughEvents({ claimedBlock: true }))).secrets;
-  assert.doesNotMatch(linesOf(claimed, 0).join("\n"), /blocked|asked/);
+  // Whole words: "masked" (the card's first line) is not "asked".
+  assert.doesNotMatch(linesOf(claimed, 0).join("\n"), /\bblocked\b|\basked\b/);
 });
 
 test("a time opens its step: the send's and each block's time carry the page's step that shows the event they come from (§4.25b)", () => {
@@ -672,7 +674,7 @@ test("names: a command's output masked whole says why, from its note's reason; a
   assert.equal(words(secretWhat(bash, home, { kind: "read", apps: ["/usr/bin/psql"], files: ["/home/user/.pgpass"] })), "Output of a Bash step in which psql read your secret file ~/.pgpass");
   assert.equal(words(secretWhat(bash, home, { kind: "read", apps: ["sh", "node"], files: ["/srv/a.env", "/home/bob/.env"] })), "Output of a Bash step in which sh and node read your secret files /srv/a.env and /home/bob/.env");
   assert.equal(words(secretWhat(bash, home, { kind: "read", apps: [], files: ["/srv/a.env"] })), "Output of a Bash step in which a program read your secret file /srv/a.env");
-  assert.equal(words(secretWhat(f("$MDU:nomodel_exec_command[aaaa]", "cat .env"), "", { kind: "names", paths: [".env"] })), "Output of a exec_command step whose command named your secret file .env");
+  assert.equal(words(secretWhat(f("$MDU:nomodel_exec_command[aaaa]", "cat .env"), "", { kind: "names", paths: [".env"] })), "Output of an exec_command step whose command named your secret file .env");
   // No reason: the words of before.
   assert.equal(words(secretWhat(bash, home, null)), "Output of a Bash step that held a secret");
   // A twin or a variable is named by itself, whatever the note says.
@@ -859,6 +861,22 @@ test("Your secrets: a card that names a file carries it, a minted read's too; a 
   assert.equal("file" in outputs.secrets[0]!, false, "a command's output names no file of its own");
 });
 
+test("Your secrets: a key's card that names no file carries its name as `key`; a file's card, an output's and a nameless variable's carry none (§4.25b *A card finds its other sessions*, #250)", () => {
+  const home = "/home/user";
+  const key = "$MDU:nomodel_Read[d005].STRIPE_KEY";
+  const unplaced = mintedStory([{ tool: "Read", args: { file_path: "app/.env" }, result: key }], [{ root: key }], null, home);
+  assert.equal(unplaced.secrets[0]!.key, "STRIPE_KEY", "a key in a file the page could not place: its name");
+  const minted = mintedStory([{ tool: "Read", args: { file_path: "/home/user/mandu-try/.env" }, result: key }], [{ root: key }], null, home);
+  assert.equal(minted.secrets[0]!.file, "~/mandu-try/.env");
+  assert.equal("key" in minted.secrets[0]!, false, "a card with a file is searched by its file: no key");
+  const { secrets } = pageOf(walkthroughEvents(), "/home/dev");
+  const byName = new Map(secrets.secrets.map((s) => [words(s.what), s]));
+  assert.equal(byName.get("The environment variable GITHUB_TOKEN")!.key, "GITHUB_TOKEN", "a variable: its name");
+  assert.equal("key" in byName.get("PASTE_KEY in ~/app/.env")!, false);
+  const outputs = causeStory([{ token: "$MDU:nomodel_Bash[a001]", note: namesNote("a secret file (./.env)") }], home);
+  assert.equal("key" in outputs.secrets[0]!, false, "a command's output: never the tool's name");
+});
+
 test("short names: a variable, a file's key, a file; never a piece of a command or a web address (§4.25b)", () => {
   // The names the page's sentences use, as Your secrets names the same items.
   assert.equal(secretShortName("$MDU:nomodel_Env[aaaa].NPM_TOKEN", null), "NPM_TOKEN");
@@ -952,4 +970,105 @@ test("aiSaw: the card's first line, weighed in order", () => {
   assert.equal(aiSaw("local-model", false, false, "secrets"), "own-model");
   assert.equal(aiSaw("no-model", false, false, "secrets"), "masked");
   assert.equal(aiSaw("no-model", true, false, null), "early");
+});
+
+test("each card shape says \"masked\" and \"this computer\": masked, masked later, sent, blocked, your own model (dashboard.md §4.25u)", () => {
+  const { secrets } = pageOf(walkthroughEvents({ replyReveal: true }));
+  const [gh, pk] = [linesOf(secrets, 0), linesOf(secrets, 1)];
+  const shapes: [string, string[]][] = [
+    ["masked", gh.filter((l) => /^good: The AI got only its masked version, never the real value\./.test(l))],
+    ["masked later", linesOf(earlyStory(2), 0)],
+    ["your own model, masked later", linesOf(earlyStory(1, { prefix: "localmodel" }), 0)],
+    ["sent", pk.filter((l) => /^plain: Mandu sent its real value only to /.test(l))],
+    ["blocked", gh.filter((l) => /^good: Mandu blocked 1 attempt to send it to .*\. The request never left this computer\.$/.test(l))],
+    ["shown to you", gh.filter((l) => /The AI kept the masked version\.$/.test(l))],
+  ];
+  for (const [shape, lines] of shapes) {
+    assert.ok(lines.length > 0, `${shape}: ${[...gh, ...pk].join("\n")}`);
+    for (const line of lines) {
+      assert.doesNotMatch(line, RETIRED, `${shape}: ${line}`);
+      assert.doesNotMatch(line, THIS_MACHINE, `${shape}: ${line}`);
+    }
+  }
+  assert.match(linesOf(earlyStory(2), 0)[0]!, /on the AI got it masked, in 2 requests\.$/);
+  assert.ok(linesOf(earlyStory(1, { prefix: "localmodel" }), 0).includes("plain: Its level lets only your own model read it. An outside AI gets it masked."));
+});
+
+// ── A card shows its steps (dashboard.md §4.25b) ─────────────────────────────
+
+/** The walkthrough's steps spread over four turns, T1 not drawn: GITHUB_TOKEN
+ *  sent in T1 and blocked in T4; PASTE_KEY read in T2, then written into a
+ *  command and sent in T3. `extra`: more step ids, each to its turn. */
+function stepsStory(events = walkthroughEvents(), extra: Array<[string, string]> = []): SecretsStory {
+  const vm = toSessionViewModel(SESSION, events);
+  const turnOf = new Map<string, string>([
+    ["tool:c1", "T1"], ["os:walk-1-004", "T1"],
+    ["tool:c2", "T2"],
+    ["tool:c3", "T3"], ["os:walk-1-011", "T3"],
+    ["tool:c4", "T4"], ["os:walk-1-015", "T4"],
+    ...extra,
+  ]);
+  return secretsStory(vm, events, false, "secrets", "", undefined, undefined, { turnOf, drawn: new Set(["T2", "T3", "T4", "T5", "T6"]) });
+}
+const cardNamed = (story: SecretsStory, name: RegExp) => story.secrets.find((s) => name.test(words(s.what)))!;
+
+test("a card's steps: where it came in masked, where the AI wrote it into a call, each send and block, in story order; its drawn turns and the earlier ones counted (§4.25b A card shows its steps)", () => {
+  const story = stepsStory();
+  const gh = cardNamed(story, /GITHUB_TOKEN/);
+  const pk = cardNamed(story, /PASTE_KEY/);
+  // A command that names $GITHUB_TOKEN by its variable holds no placeholder:
+  // only the sends the net gate checked are its steps.
+  assert.deepEqual(gh.steps, ["os:walk-1-004", "os:walk-1-015"], "the allowed send and the blocked one");
+  assert.deepEqual(gh.turns, ["T4"], "the drawn turn with its block");
+  assert.equal(gh.earlierTurns, 1, "the send's turn is not drawn: counted, by turns");
+  assert.deepEqual(pk.steps, ["tool:c2", "tool:c3", "os:walk-1-011"], "the read that masked it, the command the AI wrote it into, the send");
+  assert.deepEqual(pk.turns, ["T2", "T3"]);
+  assert.equal("earlierTurns" in pk, false);
+  assert.ok(!pk.steps!.some((id) => gh.steps!.includes(id)), "another secret's steps are not in it");
+  assert.equal("stepsMore" in pk, false);
+});
+
+test("a card's steps never hold a model request that only carried the placeholder, nor the reply filter's reveal; a fill of its real value is one (§4.25b)", () => {
+  const base = walkthroughEvents({ replyReveal: true });
+  const tllm = base.filter((e) => e.kind === "tllm_call" && JSON.stringify(e.input).includes("3fa9")).map((e) => e.id);
+  assert.ok(tllm.length > 0, "the fixture's later requests carry PASTE_KEY's placeholder");
+  const at = (i: number) => new Date(Date.parse(base.at(-1)!.ts) + (i + 1) * 1000).toISOString();
+  const fill = (id: string, emitter: string, i: number): ManduEvent => ({
+    ...base.at(-1)!, id, seq: base.length + i, ts: at(i), kind: "desymbolize", emitter, boundary: emitter === "reply-filter" ? "shell" : "filesystem",
+    callId: null, input: { symbolized: `token: ${PK}`, original: null, differs: false, symbols: [] }, output: null,
+  } as ManduEvent);
+  const events = [...base, fill("fill-1", "fs-sync", 0), fill("reply-1", "reply-filter", 1)];
+  const story = stepsStory(events, [...tllm.map((id): [string, string] => [`os:${id}`, "T5"]), ["os:fill-1", "T5"], ["os:reply-1", "T5"]]);
+  const pk = cardNamed(story, /PASTE_KEY/);
+  assert.deepEqual(pk.steps, ["tool:c2", "tool:c3", "os:walk-1-011", "os:fill-1"], "the fill counts; the model requests and the reply filter's reveal do not");
+  assert.deepEqual(pk.turns, ["T2", "T3", "T5"]);
+});
+
+test("a card's steps are capped at SECRET_STEPS_CAP, the rest counted; every turn they are in still counts (§4.25b)", () => {
+  const base = walkthroughEvents();
+  const n = SECRET_STEPS_CAP + 7;
+  const fills = Array.from({ length: n }, (_, i) => ({
+    ...base.at(-1)!, id: `fill-${i}`, seq: base.length + i, ts: new Date(Date.parse(base.at(-1)!.ts) + (i + 1) * 1000).toISOString(),
+    kind: "desymbolize", emitter: "fs-sync", boundary: "filesystem", callId: null,
+    input: { symbolized: `token: ${PK}`, original: null, differs: false, symbols: [] }, output: null,
+  }) as ManduEvent);
+  // The last fill is in a turn of its own.
+  const story = stepsStory([...base, ...fills], fills.map((f, i): [string, string] => [`os:${f.id}`, i === n - 1 ? "T6" : "T5"]));
+  const pk = cardNamed(story, /PASTE_KEY/);
+  assert.equal(pk.steps!.length, SECRET_STEPS_CAP);
+  assert.equal(pk.stepsMore, n + 3 - SECRET_STEPS_CAP, "its three steps and the fills, past the cap");
+  assert.deepEqual(pk.turns, ["T2", "T3", "T5", "T6"], "a turn past the cap's steps still counts");
+  assert.equal(pk.earlierTurns, undefined);
+});
+
+test("a card's steps: ids only, never a token or a value; none without the page's turns (Home) or with no step found (§4.25b)", () => {
+  const story = stepsStory(walkthroughEvents({ replyReveal: true }));
+  const json = JSON.stringify(story.secrets.map((s) => ({ steps: s.steps, turns: s.turns })));
+  assert.doesNotMatch(json, /\$MDU:|3fa9|f8d2/, "never a token, nor its hash");
+  assert.doesNotMatch(JSON.stringify(story), /ghp_|sk_live/, "never a value");
+  const vm = toSessionViewModel(SESSION, walkthroughEvents());
+  const home = secretsStory(vm, walkthroughEvents(), false, "secrets");
+  assert.ok(home.secrets.every((s) => !("steps" in s) && !("turns" in s)), "Home's call, without the page's turns");
+  const none = secretsStory(vm, walkthroughEvents(), false, "secrets", "", undefined, undefined, { turnOf: new Map([["tool:other", "T1"]]) });
+  assert.ok(none.secrets.every((s) => !("steps" in s) && !("turns" in s)), "a card with no step found has none");
 });

@@ -22,6 +22,10 @@
  *  (`refused:`), a program's open of a secret file refused (`denied:`), or
  *  held for the person's OK until nobody answered in time (`held:`). */
 const REFUSED_NOTE_RE = /^\[mandu:secret\] (?:refused|denied|held): /;
+/** Lines that only explain the call and mask nothing either: the call
+ *  wrote a protected file, whose change stays in its placeholder copy
+ *  (`copy:`, plan 10 §4.1 "The model is told at the call"). */
+const EXPLAINS_ONLY_RE = /^\[mandu:secret\] copy: /;
 const READ_REFUSED_RE = /^\[mandu:secret\] denied: /;
 const READ_HELD_RE = /^\[mandu:secret\] held: /;
 
@@ -29,12 +33,13 @@ function noteLines(note: string | null | undefined): string[] {
   return (note ?? "").split("\n").map((l) => l.trim()).filter((l) => l !== "");
 }
 
-/** The note says something was masked: any line of it but a refusal. A note
- *  of refusals only is not a mask (a blocked curl's result, a program refused
- *  a secret file: its own output, released); any other form keeps the masked
+/** The note says something was masked: any line of it but a refusal or a
+ *  `copy:` line. A note of those only is not a mask (a blocked curl's
+ *  result, a program refused a secret file: its own output, released; an
+ *  Edit's refused save of a protected file); any other form keeps the masked
  *  reading. */
 export function noteMasks(note: string | null | undefined): boolean {
-  return noteLines(note).some((l) => !REFUSED_NOTE_RE.test(l));
+  return noteLines(note).some((l) => !REFUSED_NOTE_RE.test(l) && !EXPLAINS_ONLY_RE.test(l));
 }
 
 /** A step's refused reads of secret files: `denied` refused outright,

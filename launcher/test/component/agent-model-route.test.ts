@@ -108,11 +108,11 @@ test("openclaw: an unrouted model in the config, on --model, or none at all is R
 
     writeFileSync(cfg, JSON.stringify({ agents: { defaults: { model: { primary: "deepseek/deepseek-chat" } } } }));
     await withProcessEnv({ OPENCLAW_CONFIG_PATH: cfg }, () =>
-      expectRefused(launch, /refusing to launch openclaw with model deepseek\/deepseek-chat \(agents\.defaults\.model\.primary\): Mandu routes an OpenAI-compatible provider only when models\.providers\.deepseek names its baseUrl and api/));
+      expectRefused(launch, /refusing to launch openclaw with model deepseek\/deepseek-chat \(agents\.defaults\.model\.primary\): Mandu routes an OpenAI-compatible[^.]* provider only when models\.providers\.deepseek names its baseUrl and api/));
 
-    writeFileSync(cfg, JSON.stringify({ agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["google/gemini-3.1-pro"] } } } }));
+    writeFileSync(cfg, JSON.stringify({ agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["mistral/mistral-3.1-pro"] } } } }));
     await withProcessEnv({ OPENCLAW_CONFIG_PATH: cfg }, () =>
-      expectRefused(launch, /google\/gemini-3\.1-pro \(agents\.defaults\.model\.fallbacks\[0\]\)/));
+      expectRefused(launch, /mistral\/mistral-3\.1-pro \(agents\.defaults\.model\.fallbacks\[0\]\)/));
 
     writeFileSync(cfg, JSON.stringify({ agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } } }));
     await withProcessEnv({ OPENCLAW_CONFIG_PATH: cfg }, () =>
@@ -122,9 +122,9 @@ test("openclaw: an unrouted model in the config, on --model, or none at all is R
       expectRefused(launch, /refusing to launch openclaw with no model configured/));
 
     // JSON5, as OpenClaw writes it: read, and its unrouted model refused by name.
-    writeFileSync(cfg, "// hand-edited\n{ agents: { defaults: { model: { primary: 'google/gemini-3.1-pro', }, }, }, }\n");
+    writeFileSync(cfg, "// hand-edited\n{ agents: { defaults: { model: { primary: 'mistral/mistral-3.1-pro', }, }, }, }\n");
     await withProcessEnv({ OPENCLAW_CONFIG_PATH: cfg }, () =>
-      expectRefused(launch, /google\/gemini-3\.1-pro \(agents\.defaults\.model\.primary\)/));
+      expectRefused(launch, /mistral\/mistral-3\.1-pro \(agents\.defaults\.model\.primary\)/));
 
     writeFileSync(cfg, "{ // not even JSON5\n agents: {");
     await withProcessEnv({ OPENCLAW_CONFIG_PATH: cfg }, () => expectRefused(launch, /could not read/));
@@ -132,10 +132,10 @@ test("openclaw: an unrouted model in the config, on --model, or none at all is R
     // A split config: the included file is read as OpenClaw reads it, so its
     // unrouted model is refused by name, and an include OpenClaw would refuse
     // (a missing file, one outside the config directory) is refused too.
-    writeFileSync(join(r.dir, "agents.json5"), "{ defaults: { model: 'google/gemini-3.1-pro' } }");
+    writeFileSync(join(r.dir, "agents.json5"), "{ defaults: { model: 'mistral/mistral-3.1-pro' } }");
     writeFileSync(cfg, JSON.stringify({ agents: { $include: "./agents.json5" } }));
     await withProcessEnv({ OPENCLAW_CONFIG_PATH: cfg }, () =>
-      expectRefused(launch, /google\/gemini-3\.1-pro \(agents\.defaults\.model\)/));
+      expectRefused(launch, /mistral\/mistral-3\.1-pro \(agents\.defaults\.model\)/));
     writeFileSync(cfg, JSON.stringify({ agents: { $include: "./missing.json5" } }));
     await withProcessEnv({ OPENCLAW_CONFIG_PATH: cfg }, () =>
       expectRefused(launch, /could not read .*\$include "\.\/missing\.json5": the file does not exist/));
@@ -154,7 +154,7 @@ test("openclaw: an anthropic model launches, and the run config fences /model to
     const cfg = join(r.dir, "openclaw.json");
     writeFileSync(cfg, JSON.stringify({ agents: { defaults: {
       model: { primary: "anthropic/claude-sonnet-4-6" },
-      models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" }, "google/gemini-3.1-pro": { alias: "gem" } },
+      models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" }, "mistral/mistral-3.1-pro": { alias: "gem" } },
     } } }));
     await withProcessEnv({ OPENCLAW_CONFIG_PATH: cfg }, async () => {
       const code = await main(["--target", "openclaw", "--no-scope", "--", bin, "agent", "--local", "--model", "sonnet", "-m", "hi"], env(r));
@@ -163,7 +163,7 @@ test("openclaw: an anthropic model launches, and the run config fences /model to
     const got = JSON.parse(readFileSync(report, "utf8"));
     assert.equal(got.config.models.providers.anthropic.api, "anthropic-messages");
     assert.deepEqual(got.config.agents.defaults.models, { "anthropic/*": {}, "anthropic/claude-sonnet-4-6": { alias: "sonnet" } },
-      "the allowlist admits the anthropic provider only; the user's google entry is gone");
+      "the allowlist admits the anthropic provider only; the user's mistral entry is gone");
   });
 });
 
@@ -195,8 +195,8 @@ test("opencode: an unrouted model on -m or in the config is REFUSED; nothing sta
     const cfg = join(r.dir, "opencode.json");
     writeFileSync(cfg, JSON.stringify({}));
     await withProcessEnv({ OPENCODE_CONFIG: cfg }, () =>
-      expectRefused(() => main(["--target", "opencode", "--no-scope", "--", bin, "run", "-m", "google/gemini-3", "hi"], env(r)),
-        /refusing to launch opencode with model google\/gemini-3 \(--model\)/));
+      expectRefused(() => main(["--target", "opencode", "--no-scope", "--", bin, "run", "-m", "mistral/mistral-3", "hi"], env(r)),
+        /refusing to launch opencode with model mistral\/mistral-3 \(--model\)/));
     // OpenAI through a ChatGPT sign-in: that login re-points requests itself.
     mkdirSync(join(r.dir, ".local", "share", "opencode"), { recursive: true });
     writeFileSync(join(r.dir, ".local", "share", "opencode", "auth.json"), JSON.stringify({ openai: { type: "oauth", refresh: "r", access: "a", expires: 0 } }));
@@ -237,7 +237,7 @@ test("openclaw: openai/… and a declared OpenAI-compatible provider launch ROUT
     const { bin, report } = standIn(r.dir, "openclaw", "OPENCLAW_CONFIG_PATH");
     const cfg = join(r.dir, "openclaw.json");
     writeFileSync(cfg, JSON.stringify({
-      agents: { defaults: { model: { primary: "openai/gpt-5.5", fallbacks: ["deepseek/deepseek-chat"] }, models: { "openai/gpt-5.5": { alias: "g" }, "google/x": {} } }, list: [{ id: "ops", tools: { exec: { host: "node" } } }] },
+      agents: { defaults: { model: { primary: "openai/gpt-5.5", fallbacks: ["deepseek/deepseek-chat"] }, models: { "openai/gpt-5.5": { alias: "g" }, "mistral/x": {} } }, list: [{ id: "ops", tools: { exec: { host: "node" } } }] },
       models: { providers: { deepseek: { baseUrl: "https://api.deepseek.com/v1", api: "openai-completions", apiKey: "DEEPSEEK_KEY_REF", models: [{ id: "deepseek-chat", baseUrl: "https://elsewhere.example/v1" }] } } },
       tools: { exec: { host: "node", ask: "off" } },
     }));

@@ -19,7 +19,7 @@ import { join } from "node:path";
 const gatherFacts = hermetic(gatherFactsIn, 0);
 
 const base = (o: Partial<DoctorDeps>): DoctorDeps => ({
-  nodeVersion: () => "22.13.0",
+  nodeVersion: () => "22.15.0",
   gitVersion: () => "2.43.0",
   commandExists: () => true,
   socketReachable: async () => false,

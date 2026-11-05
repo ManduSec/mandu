@@ -35,7 +35,13 @@
  *       `plain.effect` and the page say "Sent as written", the session's
  *       menu offers "Sent masked", and neither row says *Always allowed* /
  *       *Always blocked* (§4.25u *A held message's answer says what was
- *       sent*).
+ *       sent*);
+ *   P5  a kind Mandu has words for (a pack pattern of category
+ *       `pii.email`, set to ask) answered for the session: the panel's
+ *       subject and the served row read "An email address in your message
+ *       to the AI" in words, no code; the tooltip keeps `pii.email`; the
+ *       found address is on no route (§4.25u *A held message's answer
+ *       names its kind in words*).
  *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON).
  */
@@ -66,13 +72,14 @@ stateAxes("secrets"); // the confidentiality axis the prompt filter serves; inte
 
 const CODENAME = "kestrelmoorproject";
 const CATEGORY = "acme.codename";
+const ADDRESS = "robin.kestrelmoor@corp.example";
 /** home.js `ICON.eye`'s first path: the icon Approvals draws for a held
  *  message (`FAMILY_ICON.prompt`). */
 const PROMPT_ICON = "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z";
 
 type Part = { kind: string; text: string };
-type Plain = { subject: string; subjectParts?: Part[]; reach: string | null; effect: string };
-type QueueRow = { id: string; where: string; status: string; scope: string; target: string; plain: Plain };
+type Plain = { subject: string; subjectParts?: Part[]; category?: string; reach: string | null; effect: string };
+type QueueRow = { id: string; where: string; status: string; scope: string; subject: string; target: string; plain: Plain };
 const shown = (parts: Part[] | undefined) => parts?.map((p) => (p.kind === "code" ? `[${p.text}]` : p.text)).join("") ?? null;
 
 function post(port: number, body: unknown, session: string): Promise<{ status: number; body: string }> {
@@ -111,7 +118,7 @@ test("Rules over the real arbiter: a session's answer to a held message reads as
   const humanSock = humanSockIn(tmp);
   const packs = join(tmp, "prompt-filters");
   mkdirSync(packs);
-  writeFileSync(join(packs, "acme.yaml"), `pack: acme-dlp\nversion: 1\nkeywords:\n  - category: ${CATEGORY}\n    words: [${CODENAME}]\n    level: local-model\n`);
+  writeFileSync(join(packs, "acme.yaml"), `pack: acme-dlp\nversion: 1\npatterns:\n  - id: email\n    category: pii.email\n    regex: '[a-z.]+@corp\\.example'\n    level: local-model\nkeywords:\n  - category: ${CATEGORY}\n    words: [${CODENAME}]\n    level: local-model\n`);
   const policyPath = join(tmp, "policy.yaml");
   writeFileSync(policyPath, "version: 1\nprompt_filters:\n  filters:\n    acme-dlp: on\n");
   const arbiter = new ArbiterServer({
@@ -178,7 +185,7 @@ test("Rules over the real arbiter: a session's answer to a held message reads as
       assert.equal(r.status, 200, `${who}: ${body}`);
       noFound(body, `the panel ${who}`);
       const queue = (JSON.parse(body) as { panel: { queue: QueueRow[] } }).panel.queue;
-      const kept = queue.filter((q) => q.where === "prompt" && q.scope === "always" && q.status === "approved");
+      const kept = queue.filter((q) => q.where === "prompt" && q.scope === "always" && q.status === "approved" && q.subject.startsWith(`prompt:${CATEGORY}#`));
       const sessionRow = kept.find((q) => q.target === `model:${session}`);
       const messageRow = kept.find((q) => q.target.startsWith(`model:${session}#turn:`));
       assert.ok(sessionRow && messageRow, `${who}: the session's and the message's answers are listed: ${JSON.stringify(queue)}`);
@@ -249,6 +256,39 @@ test("Rules over the real arbiter: a session's answer to a held message reads as
       const body = await r.text();
       assert.equal(r.status, 200, `${route}: ${body}`);
       noFound(body, `${route} signed out`);
+    }
+
+    // ── P5: a kind Mandu has words for, as Settings names it ──
+    const upEmail = await call("POST", "policy/prompt-filters/change", { edit: { op: "set-prompt-action", category: "pii.email", action: "ask" } });
+    assert.equal(upEmail.status, 200, JSON.stringify(upEmail.body));
+    const withCode = [...first, { role: "user", content: [{ type: "text", text: `plan for ${CODENAME}` }] }, { role: "assistant", content: [{ type: "text", text: "ok" }] }];
+    const seen = new Set([hold.approvalId]);
+    const pendingEmail = ask([...withCode, { role: "user", content: [{ type: "text", text: `mail ${ADDRESS} the plan` }] }]);
+    const emailHold = await waitFor("the address's hold", async () => {
+      const h = await call("GET", "prompt-filters/holds");
+      return (h.body["holds"] as Array<{ approvalId: string }> | undefined)?.find((x) => !seen.has(x.approvalId));
+    });
+    const answeredEmail = await call("POST", "prompt-filters/holds/answer", { approvalId: emailHold.approvalId, answer: "send", scope: "session" });
+    assert.equal(answeredEmail.status, 200, JSON.stringify(answeredEmail.body));
+    assert.equal((await pendingEmail).status, 200);
+    const noAddress = (body: string, where: string) => assert.ok(!body.includes(ADDRESS), `${where} carries the found address`);
+    const panel = await pageFetch(`${base}/api/policy/panel`, { headers: CSRF_ADMIN });
+    const panelBody = await panel.text();
+    noAddress(panelBody, "the panel");
+    const emailRow = (JSON.parse(panelBody) as { panel: { queue: QueueRow[] } }).panel.queue
+      .find((q) => q.where === "prompt" && q.scope === "always" && q.status === "approved" && q.target === `model:${session}` && q.subject.startsWith("prompt:pii.email#"));
+    assert.ok(emailRow, "the session's answer about the address is listed");
+    assert.equal(emailRow!.plain.subject, "An email address in your message to the AI", "the kind as Settings names it");
+    assert.equal(shown(emailRow!.plain.subjectParts), "An email address in your message to the AI", "words, no code");
+    assert.equal(emailRow!.plain.category, "pii.email", "the id kept for the tooltip and Find");
+    await servedProductPage(base, "/rules", (doc: Doc) => promptRow(doc, emailRow!.id) !== undefined, async (doc: Doc) => {
+      const text = promptRow(doc, emailRow!.id).querySelector(".rule-text");
+      assert.equal(drawn(text.firstElementChild), "An email address in your message to the AI", "drawn in words, no chip");
+      assert.equal(text.title, "An email address in your message to the AI (pii.email)", "the tooltip keeps the id");
+      noAddress(doc.body.textContent ?? "", "the Rules page");
+    }, { headers: { Cookie: ADMIN_COOKIE, "X-Mandu-Control": "1" }, css: styles });
+    for (const route of ["/api/policy/panel", "/api/home", "/rules"]) {
+      noAddress(await (await pageFetch(base + route)).text(), `${route} signed out`);
     }
   } finally {
     await dashboard.close();

@@ -104,7 +104,10 @@ test("a request you allowed never comes back as waiting from a poll asked before
   await tick(30);
   assert.equal(cards(doc).length, 0, "never drawn as waiting again");
   assert.equal(liveAnswers(doc).length, 0, "no live Allow or Not now");
-  assert.equal(doc.getElementById("approvals-proposals-block").hidden, true);
+  // Shown for the line the answer left alone (dashboard.md §4.25 *An answer
+  // says what it did*, since 2026-10-25; before, hidden).
+  assert.equal(doc.getElementById("approvals-proposals-block").hidden, false);
+  assert.match(doc.querySelector("#approvals-proposals .answer-line").textContent, /^Allowed:/);
   assert.equal(badge(doc), "1", "the badge never counts it again");
   assert.equal(doc.activeElement, focused, "the focus stays");
   // The next poll still draws what it reads: the page did not stop taking answers.
@@ -112,7 +115,7 @@ test("a request you allowed never comes back as waiting from a poll asked before
   assert.equal(cards(doc).length, 0);
 });
 
-test("Not now: the request that took its place keeps the focus when an older read lists the answered one", async () => {
+test("Not now: the line it leaves keeps the focus, and the request that took its place stays, when an older read lists the answered one", async () => {
   const before = held();
   const { doc } = load({ url: APPROVALS, routes: {
     [PENDING]: inTurn([{ proposals: [P1, P2] }, before.answer, { proposals: [P2] }]),
@@ -123,12 +126,15 @@ test("Not now: the request that took its place keeps the focus when an older rea
   await press(button(cardOf(doc, P1.id), "Not now"));
   assert.deepEqual(cards(doc).map((c) => c.dataset.id), [P2.id]);
   const next = cardOf(doc, P2.id);
-  assert.equal(doc.activeElement, next, "the next request has the focus");
+  // Since 2026-10-25 the line where the card was takes the focus (before,
+  // the next request).
+  const line = doc.querySelector("#approvals-proposals .answer-line");
+  assert.equal(doc.activeElement, line, "the line has the focus");
   before.send({ proposals: [P1, P2] });
   await tick(30);
   assert.deepEqual(cards(doc).map((c) => c.dataset.id), [P2.id], "the answered request is never drawn again");
   assert.equal(cardOf(doc, P2.id), next, "nor the other drawn anew");
-  assert.equal(doc.activeElement, next, "the focus stays on it");
+  assert.equal(doc.activeElement, line, "the focus stays on it");
   assert.equal(badge(doc), "2", "one question and one request");
 });
 

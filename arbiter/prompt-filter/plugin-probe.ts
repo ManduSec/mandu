@@ -49,9 +49,20 @@ function runArgv(argv: readonly string[], env: NodeJS.ProcessEnv, cwd: string): 
   });
 }
 
+/**
+ * Why no plugin runs when there is no network guard. The guard is a Linux
+ * program (seccomp user notification), so on another system the answer is
+ * that plugins run on Linux only, never a build hint. Pure.
+ */
+export function noGuardNote(platform: NodeJS.Platform = process.platform): string {
+  return platform === "linux"
+    ? "mandu-net-guard is not installed (scripts/build-native.sh builds it)"
+    : "prompt-filter plugins run on Linux only: their network guard, mandu-net-guard, is a Linux program";
+}
+
 /** Probe the legs with the real tools. Never throws. */
 export async function probeConfinement(tools: ConfineTools, scratchRoot: string): Promise<ConfineLegs> {
-  if (tools.netGuard === null) return { ...NO_LEGS, notes: ["mandu-net-guard is not installed (scripts/build-native.sh builds it)"] };
+  if (tools.netGuard === null) return { ...NO_LEGS, notes: [noGuardNote()] };
   let a: { server: Server; port: number } | null = null;
   let b: { server: Server; port: number } | null = null;
   let scratch: string | null = null;

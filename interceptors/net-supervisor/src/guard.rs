@@ -27,7 +27,7 @@
 //! PURE + fail-closed: default-DENY. Everything here is `std`-only, no libc, no
 //! syscalls — fully unit-tested on the unprivileged host. `Mandu-new`.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 /// Transport protocol a rule (or a live connect) targets. A rule may pin one
 /// protocol, or match `Any` (both). The kernel leg learns a connect's protocol
@@ -121,6 +121,19 @@ pub struct GuardPolicy {
     pub deny: Vec<AllowRule>,
     /// Skip the always-denied destination check (default false = deny them).
     pub allow_metadata: bool,
+    /// Connects performed to another address (`--redirect`): the database
+    /// login release (docs/design/confidentiality/db-login-release.md). A TCP
+    /// connect a redirect's `from` matches is connected to its `to`, a relay
+    /// of the session's egress proxy on loopback, and decided there.
+    pub redirects: Vec<Redirect>,
+}
+
+/// One redirect: a TCP destination (host × port) and the loopback relay its
+/// connects are performed to instead (`--redirect from=to`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Redirect {
+    pub from: AllowRule,
+    pub to: SocketAddr,
 }
 
 /// The opt-out for the always-denied destinations: `MANDU_NET_ALLOW_METADATA=1`
@@ -198,7 +211,27 @@ impl HostResolver for NoResolver {
 
 impl GuardPolicy {
     pub fn new(rules: Vec<AllowRule>) -> Self {
-        GuardPolicy { rules, deny: Vec::new(), allow_metadata: false }
+        GuardPolicy { rules, deny: Vec::new(), allow_metadata: false, redirects: Vec::new() }
+    }
+
+    /// The same policy with these redirects (`--redirect`).
+    pub fn with_redirects(mut self, redirects: Vec<Redirect>) -> Self {
+        self.redirects = redirects;
+        self
+    }
+
+    /// The redirect a TCP connect to `target` takes, or `None`. Never for an
+    /// always-denied destination or one a deny rule refuses (those are
+    /// refused as they are), and never for anything but TCP.
+    pub fn redirect_for<'a>(&'a self, target: &Endpoint, resolver: &dyn HostResolver) -> Option<&'a Redirect> {
+        if target.proto != Proto::Tcp || self.redirects.is_empty() {
+            return None;
+        }
+        if self.blocked_reason(target).is_some() || self.denied_by(target, resolver).is_some() {
+            return None;
+        }
+        let ip = normalize_ip(target.ip);
+        self.redirects.iter().find(|r| rule_matches(&r.from, target, ip, resolver))
     }
 
     /// The same policy with these deny rules (checked before every allow rule).
@@ -411,6 +444,64 @@ pub fn parse_rules(specs: &[String]) -> Result<Vec<AllowRule>, String> {
         out.push(parse_rule(s).map_err(|e| format!("allow spec #{i}: {e}"))?);
     }
     Ok(out)
+}
+
+/// Parse one redirect, `<from>=<to>`: `from` an allow-spec for TCP with a
+/// port and a host (not `*`: a redirect names one database), `to` a loopback
+/// address and port (`127.0.0.1:41000`, `[::1]:41000`), the relay. Anything
+/// else is an error (the launcher's bug fails the setup, closed).
+pub fn parse_redirect(spec: &str) -> Result<Redirect, String> {
+    let (from, to) = spec.trim().rsplit_once('=').ok_or_else(|| format!("redirect {spec:?} is not <from>=<to>"))?;
+    let from = parse_rule(from)?;
+    if from.proto != Proto::Tcp {
+        return Err(format!("redirect {spec:?}: only tcp connects are redirected"));
+    }
+    if from.port.is_none() || from.host == HostMatch::Any {
+        return Err(format!("redirect {spec:?}: name one host and one port"));
+    }
+    let to: SocketAddr = to.trim().parse().map_err(|_| format!("redirect {spec:?}: {to:?} is not an address:port"))?;
+    if !to.ip().is_loopback() || to.port() == 0 {
+        return Err(format!("redirect {spec:?}: the relay must be a loopback address with a port"));
+    }
+    Ok(Redirect { from, to })
+}
+
+/// Parse many redirects, the first error with its index.
+pub fn parse_redirects(specs: &[String]) -> Result<Vec<Redirect>, String> {
+    specs.iter().enumerate().map(|(i, s)| parse_redirect(s).map_err(|e| format!("redirect #{i}: {e}"))).collect()
+}
+
+/// The sockaddr to connect a socket of `raw`'s family to `to`: the same
+/// family as the tracee's socket (an IPv6 socket gets a v4 relay as its
+/// v4-mapped address). `None` when it cannot be written (an IPv4 socket and
+/// an IPv6 relay, or a `raw` that is no INET sockaddr): the caller refuses.
+pub fn redirect_sockaddr(raw: &[u8], to: SocketAddr) -> Option<Vec<u8>> {
+    if raw.len() < 2 {
+        return None;
+    }
+    let family = u16::from_ne_bytes([raw[0], raw[1]]);
+    let port = to.port().to_be_bytes();
+    match (family, to.ip()) {
+        (AF_INET, IpAddr::V4(v4)) => {
+            let mut out = vec![0u8; 16];
+            out[0..2].copy_from_slice(&AF_INET.to_ne_bytes());
+            out[2..4].copy_from_slice(&port);
+            out[4..8].copy_from_slice(&v4.octets());
+            Some(out)
+        }
+        (AF_INET6, ip) => {
+            let v6 = match ip {
+                IpAddr::V4(v4) => v4.to_ipv6_mapped(),
+                IpAddr::V6(v6) => v6,
+            };
+            let mut out = vec![0u8; 28];
+            out[0..2].copy_from_slice(&AF_INET6.to_ne_bytes());
+            out[2..4].copy_from_slice(&port);
+            out[8..24].copy_from_slice(&v6.octets());
+            Some(out)
+        }
+        _ => None,
+    }
 }
 
 fn is_proto_kw(s: &str) -> bool {
@@ -648,6 +739,68 @@ mod tests {
                 .map(|(_, ips)| ips.clone())
                 .unwrap_or_default()
         }
+    }
+
+    #[test]
+    fn redirects_parse_strictly() {
+        let r = parse_redirect("tcp:db.internal:5432=127.0.0.1:41000").unwrap();
+        assert_eq!(r.from, AllowRule { proto: Proto::Tcp, host: HostMatch::Host("db.internal".into()), port: Some(5432) });
+        assert_eq!(r.to, "127.0.0.1:41000".parse::<SocketAddr>().unwrap());
+        assert!(parse_redirect("tcp:[2001:db8::7]:5432=[::1]:41000").is_ok());
+        assert!(parse_redirect("db.internal:5432=127.0.0.1:41000").is_ok(), "tcp by default");
+        for bad in [
+            "udp:db:5432=127.0.0.1:41000",
+            "tcp:db:*=127.0.0.1:41000",
+            "tcp:*:5432=127.0.0.1:41000",
+            "tcp:db:5432=10.0.0.1:41000",
+            "tcp:db:5432=127.0.0.1:0",
+            "tcp:db:5432",
+            "tcp:db:5432=db.internal:41000",
+        ] {
+            assert!(parse_redirect(bad).is_err(), "{bad}");
+        }
+        assert!(parse_redirects(&["tcp:a:1=127.0.0.1:2".into(), "nope".into()]).unwrap_err().starts_with("redirect #1"));
+    }
+
+    #[test]
+    fn a_redirect_matches_its_host_and_port_only_and_never_a_denied_destination() {
+        let r = MapResolver(vec![("db.internal", vec![ip("10.0.0.5")])]);
+        let p = GuardPolicy::new(parse_rules(&["tcp:127.0.0.1:41000".into()]).unwrap())
+            .with_redirects(parse_redirects(&["tcp:db.internal:5432=127.0.0.1:41000".into(), "tcp:10.9.9.9:5432=127.0.0.1:41001".into()]).unwrap())
+            .with_deny(parse_rules(&["tcp:10.9.9.9:*".into()]).unwrap());
+        let hit = p.redirect_for(&tcp("10.0.0.5", 5432), &r).expect("the database's address");
+        assert_eq!(hit.to.port(), 41000);
+        assert!(p.redirect_for(&tcp("::ffff:10.0.0.5", 5432), &r).is_some(), "a v4-mapped connect");
+        assert!(p.redirect_for(&tcp("10.0.0.5", 5433), &r).is_none(), "another port");
+        assert!(p.redirect_for(&tcp("10.0.0.6", 5432), &r).is_none(), "another host");
+        assert!(p.redirect_for(&Endpoint { ip: ip("10.0.0.5"), port: 5432, proto: Proto::Udp }, &r).is_none(), "udp");
+        assert!(p.redirect_for(&tcp("10.9.9.9", 5432), &r).is_none(), "a deny rule wins");
+        let meta = GuardPolicy::new(vec![]).with_redirects(parse_redirects(&["tcp:169.254.169.254:80=127.0.0.1:41002".into()]).unwrap());
+        assert!(meta.redirect_for(&tcp("169.254.169.254", 80), &NoResolver).is_none(), "an always-denied destination");
+        // The relay itself is then decided by the allow rules.
+        assert_eq!(p.decide(&tcp("127.0.0.1", 41000), &r), Decision::Allow);
+        assert_eq!(p.decide(&tcp("10.0.0.5", 5432), &r), Decision::Deny, "the database itself is not allowed");
+    }
+
+    #[test]
+    fn redirect_sockaddrs_keep_the_sockets_family() {
+        let mut v4 = vec![0u8; 16];
+        v4[0..2].copy_from_slice(&AF_INET.to_ne_bytes());
+        let relay: SocketAddr = "127.0.0.1:41000".parse().unwrap();
+        let out = redirect_sockaddr(&v4, relay).unwrap();
+        match decode_sockaddr(&out) {
+            ConnTarget::Inet(e) => assert_eq!((e.ip, e.port), (ip("127.0.0.1"), 41000)),
+            other => panic!("{other:?}"),
+        }
+        let mut v6 = vec![0u8; 28];
+        v6[0..2].copy_from_slice(&AF_INET6.to_ne_bytes());
+        let out = redirect_sockaddr(&v6, relay).unwrap();
+        match decode_sockaddr(&out) {
+            ConnTarget::Inet(e) => assert_eq!((normalize_ip(e.ip), e.port), (ip("127.0.0.1"), 41000)),
+            other => panic!("{other:?}"),
+        }
+        assert!(redirect_sockaddr(&v4, "[::1]:41000".parse().unwrap()).is_none(), "an IPv4 socket cannot reach an IPv6 relay");
+        assert!(redirect_sockaddr(&[1, 0], relay).is_none(), "not INET");
     }
 
     #[test]

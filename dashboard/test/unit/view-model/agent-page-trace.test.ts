@@ -11,7 +11,8 @@
  *   - its *What to do now* (`finding.todo`): change each secret the lines
  *     name, once, in their order, at most TODO_NAMES_CAP and the rest
  *     counted; a line that names none says the same for whatever it was;
- *     always, report the fault, linked to ISSUES_URL; never a value;
+ *     always, report the fault privately, linked to SECURITY_REPORT_URL
+ *     (SECURITY.md), never to the public ISSUES_URL; never a value;
  *   - each background step, listed when the page asks for its turn
  *     (`show.background`, `?background=<turn id>`), oldest first, a folded
  *     repeat counted, up to BACKGROUND_ALL_CAP;
@@ -29,7 +30,7 @@ import assert from "node:assert/strict";
 import {
   backgroundItems, buildAgentPage, BACKGROUND_ALL_CAP, FINDING_CAP, findingTodo, HIDDEN_CAP, leakFinding, ORIGINAL_ALL_CAP, TODO_NAMES_CAP, type StoryStep,
 } from "../../../src/view-model/agent-page.js";
-import { ISSUES_URL } from "../../../src/agent-versions.js";
+import { ISSUES_URL, SECURITY_REPORT_URL } from "../../../src/agent-versions.js";
 import { toSessionViewModel, type SessionViewModel } from "../../../src/view-model.js";
 import type { DualOsStep, DualStep, DualToolStep } from "../../../src/view-model/dual-lanes.js";
 import type { PairedTurn } from "../../../src/view-model/paired-rows.js";
@@ -92,10 +93,10 @@ test("a session the check never flagged has no finding; past FINDING_CAP the res
   assert.equal(f.more, 3);
 });
 
-const REPORT = "This is a fault in Mandu, not in your rules. Report a problem, with this session's time. Never paste the key itself.";
+const REPORT = "This is a fault in Mandu, not in your rules. Report it privately to Mandu's maintainers, with this session's time. Do not open a public issue, and never paste the key itself.";
 const UNNAMED = /^If what reached the AI held a key or a password, change it /;
 
-test("What to do now: change each secret the lines name, once and in order; a line naming none says the same for whatever it was; always report it, linked to the issue tracker; never a value", () => {
+test("What to do now: change each secret the lines name, once and in order; a line naming none says the same for whatever it was; always report it privately, linked to the private report form, never the public tracker; never a value", () => {
   const vm = toSessionViewModel(SESSION, flaggedEvents());
   const f = buildAgentPage({ session: null, id: SESSION, vm, cwd: null, waiting: [] }).finding!;
   // The .env read names PASTE_KEY; the flagged request names none.
@@ -106,7 +107,9 @@ test("What to do now: change each secret the lines name, once and in order; a li
   ]);
   assert.deepEqual(f.todo[0]!.filter((p) => p.kind === "code").map((p) => p.text), ["PASTE_KEY"]);
   const report = f.todo[f.todo.length - 1]!.find((p) => p.href);
-  assert.deepEqual(report, { kind: "text", text: "Report a problem", href: ISSUES_URL });
+  assert.deepEqual(report, { kind: "text", text: "Report it privately", href: SECURITY_REPORT_URL });
+  assert.equal(SECURITY_REPORT_URL, "https://github.com/mandusec/mandu/security/advisories/new", "GitHub's private vulnerability report form");
+  assert.ok(!f.todo.flat().some((p) => p.href === ISSUES_URL), "a leak is never sent to the public issue tracker (SECURITY.md)");
   assert.equal(f.todo.flat().filter((p) => p.href).length, 1, "the one link");
   assert.doesNotMatch(JSON.stringify(f.todo), new RegExp(CANARY));
   assert.doesNotMatch(JSON.stringify(f.todo), /\$MDU:/);

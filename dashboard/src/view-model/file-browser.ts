@@ -11,6 +11,7 @@
  * own terms (rule-words.ts).
  */
 import type { HomeTextPart } from "./ask-words.js";
+import { BUILTIN_RULE_WORDS } from "./builtin-files.js";
 import { hostParts, levelParts, levelWords, perValueParts, perValueWords, sentenceParts, TERMS, tildePath } from "./rule-words.js";
 import { levelClassOf, type LevelClass } from "./secrets.js";
 import { ADMITS_NOTHING, READS_PLACEHOLDER, codeRunningReadersWarning, judgedAdmitsNothing, judgedCopyOf, judgedReadsTwin, readerPrints, type ArbiterReaderJudgment } from "./reader-runs-code.js";
@@ -60,30 +61,11 @@ export interface FileLabelVM {
 const GLOB_META = /[*?[]/;
 
 
-/** The built-in rule as words (secret-catalog.ts's `shape:` / `prefix:` ids). */
-const SHAPE_WORDS: Readonly<Record<string, string>> = {
-  "shape:.env*": "environment files",
-  "shape:*.env": "environment files",
-  "shape:*credentials*": "credential files",
-  "shape:secrets*.json": "secrets files",
-  "shape:ssh-private-key": "SSH keys",
-  "shape:*.keytab": "keytab files",
-  "shape:*secret*": "files named secret",
-  "shape:private-key-file": "private keys",
-  "shape:service-account-key": "service account keys",
-  "shape:*.tfstate": "Terraform state",
-  "shape:tool-login-file": "a tool's saved sign-in",
-  "shape:*.private.env.json": "HTTP client private settings",
-  // The catalog's content tier (secret-discovery.md §2.6): no name, a
-  // credential Mandu read in the file.
-  "content:secret-key": "a saved password or key Mandu found in it",
-  // §2.7: a statement, a tax return, a lab report, household codes.
-  "content:personal-document": "a personal document Mandu recognised",
-};
-
+/** The built-in rule as words (secret-catalog.ts's `shape:` / `prefix:` ids;
+ *  the words are builtin-files.ts', which Rules › Built-in protections uses). */
 export function builtinWords(rule: string, home: string): string {
   if (rule.startsWith("prefix:")) return `Built in: ${tildePath(rule.slice("prefix:".length), home)}`;
-  return `Built in: ${SHAPE_WORDS[rule] ?? rule.replace(/^[a-z]+:/, "")}`;
+  return `Built in: ${BUILTIN_RULE_WORDS[rule] ?? rule.replace(/^[a-z]+:/, "")}`;
 }
 
 /** Strip a trailing slash so `/a/b/` and `/a/b` compare equal. */
@@ -123,8 +105,11 @@ export function fileLabel(entry: PathLevelsEntryWire, home: string): FileLabelVM
     }
     return { ...base, source: "inherited", from: `From your rule on ${tildePath(via, home)}`, via, removable: false };
   }
+  // What wrote it (an AI, a program, a copy) is in the Rules page's list of
+  // files made from secrets, which the page reads for these words; this
+  // sentence is true of all three (dashboard.md §4.25aa).
   if (rule.startsWith("derived:")) {
-    return { ...base, source: "written", from: "Written by the AI after it read a secret", via: null, removable: false };
+    return { ...base, source: "written", from: "Made from a secret: something that held a secret wrote it", via: null, removable: false };
   }
   return { ...base, source: "builtin", from: builtinWords(rule, home), via: rule, removable: false };
 }

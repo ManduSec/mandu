@@ -114,7 +114,7 @@ test("the guard law with policy.yaml models: the helper's entry is pinned to its
       landlockNetStrict: true, netGuardGitRemotes: false,
       modelEndpoints: models.endpoints,
     };
-    const r = applyNetGuard(p, emptyMutation(), { resolveBin: () => "/bin/g", staleNote: () => null, log: () => {}, lawAllow });
+    const r = applyNetGuard(p, emptyMutation(), { resolveBin: () => "/bin/g", probe: () => true, staleNote: () => null, log: () => {}, lawAllow });
     assert.ok(r);
     assert.ok(r.specs.includes("tcp:192.168.7.20:8000"), `the helper's entry in ${JSON.stringify(r.specs)}`);
     assert.ok(!r.specs.some((s) => s.endsWith(":11434")), `the local entry that is not the helper opens nothing: ${JSON.stringify(r.specs)}`);

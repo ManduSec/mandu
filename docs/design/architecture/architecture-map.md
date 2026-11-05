@@ -321,6 +321,7 @@ the FS/net posture on the actual argv (`exec-routing.md` §2–§4).
 |---|---|---|---|
 | cooperative (all OS) | `HTTP(S)_PROXY` → forward proxy → Arbiter data-usage gate (process **taint** + destination; `desymbolizationDecision`). `NO_PROXY` excludes loopback + model hosts. Optional session-CA MITM. | `net-proxy` | 🟢 (on by default); Windows WinHTTP gap ⧗ |
 | kernel (Linux) | the seccomp `connect(2)` / send guard (IP and domain aware, unprivileged) and the Landlock TCP allow-list | `net-supervisor` guard (`--net-guard`), launcher `--landlock-net` | 🟢 on by default, probe-gated |
+| kernel + proxy (Linux) | a database login: the guard performs the connect on the egress proxy's database relay (`--redirect`), which answers the server's login with the password ([`db-login-release.md`](../confidentiality/db-login-release.md)) | `net-supervisor` guard, `net-proxy` `db-relay.ts`, launcher `db-relays.ts` | 🟢 Postgres and MySQL (2026-10-24) |
 | kernel (Linux, root) | TPROXY / nftables | `net-supervisor` | kernel tests only; host-global state, not used (privilege-model.md §0) |
 | microVM | the host user-mode NAT / proxy is the guest's **only** route out | libkrun backend | ⚪ |
 

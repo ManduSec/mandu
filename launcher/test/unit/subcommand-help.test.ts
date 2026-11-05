@@ -27,6 +27,12 @@ test("wantsHelp: --help and -h anywhere before a -- separator", () => {
   assert.equal(wantsHelp(["~/.pgpass", "--json"]), false);
 });
 
+test("mandu dashboard's usage says the account signs in, not the one-time link it replaced", () => {
+  const text = subcommandUsage("dashboard")!;
+  assert.match(text, /how to sign in with your dashboard account, offering to make one\n\s+when there is none/);
+  assert.doesNotMatch(text, /one-time|sign-in link/, "a current dashboard mints no link (only an older one still running does)");
+});
+
 test("an unknown verb has no usage", () => {
   assert.equal(subcommandUsage("launch"), null);
 });

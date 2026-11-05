@@ -171,7 +171,7 @@ test("Rules over the real arbiter: a label chosen in Your rules keeps the focus;
     assert.equal(await level(old), oldBefore);
 
     await servedProductPage(base, "/rules", ready, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       // C2: the page rule tightened, focus kept, saved.
       choose(menuIn(treeRow(doc, old)), "no-model");
       const chosen = menuIn(treeRow(doc, old));

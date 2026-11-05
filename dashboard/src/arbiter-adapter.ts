@@ -54,6 +54,10 @@ export interface RealArbiterApprovalsClient {
   egressApprovals(status?: ApprovalStatus): Promise<EgressApproval[]>;
   /** Admin-only (policy-surface.md §2.6) — travels the admin channel. */
   deleteSession?(sessionId: string): Promise<void>;
+  /** Human plane (openclaw-plugin.md §3.6): the service's route check found
+   *  an attachment's config changed; sent on the admin channel, where the
+   *  arbiter believes it. */
+  updateAttachment?(args: { token: string; coverage: unknown; route?: unknown }): Promise<unknown>;
   /** The scope param is additive (policy-surface.md §9.8.7); the client
    *  forwards it onto the wire, and a pre-scope arbiter ignores it (verdict
    *  lands standing — the honest degrade). */
@@ -90,6 +94,7 @@ export interface RealArbiterApprovalsClient {
    *  Optional: a pre-§4.25m arbiter → labels shown as unknown. */
   pathLevels?(paths: string[], home?: string, withEdits?: unknown): Promise<{ axis: boolean; levels: PathLevelsEntryWire[] }>;
   whyPath?(path: string, home?: string): Promise<unknown>;
+  whyHost?(host: string): Promise<unknown>;
   /** ADMIN: move the page's older rules into policy.yaml (§4.25m). */
   movePageLabels?(requestedBy?: string): Promise<{ moved: number; changeId: string | null }>;
   /** Policy DOCUMENT ops (stage 5a) — reads on the data socket, writes admin-only. */
@@ -212,6 +217,9 @@ export async function makeApprovalsArbiter(
       policyDoc?: PolicyDocArbiter;
       /** Session deletion for the event source (admin-only op). */
       deleteSession: (sessionId: string) => Promise<void>;
+      /** The proxy pool's route check (openclaw-plugin.md §3.6): an
+       *  attachment's new coverage, on the admin channel. */
+      updateAttachment: (args: Record<string, unknown>) => Promise<unknown>;
       close: () => void;
     }
   | undefined
@@ -341,6 +349,7 @@ export async function makeApprovalsArbiter(
             ? { pathLevels: (paths: string[], home?: string, withEdits?: unknown) => client.pathLevels!(paths, home, withEdits) }
             : {}),
           ...(client.whyPath ? { whyPath: (path: string, home?: string) => client.whyPath!(path, home) } : {}),
+          ...(client.whyHost ? { whyHost: (host: string) => client.whyHost!(host) } : {}),
         }
       : undefined;
     // The posture surface rides the SAME connection (dashboard.md §4.19). An
@@ -554,6 +563,11 @@ export async function makeApprovalsArbiter(
       if (!a.deleteSession) throw new Error("arbiter has no 'deleteSession' op — upgrade the arbiter");
       await a.deleteSession(sessionId);
     };
+    const updateAttachment = async (args: Record<string, unknown>): Promise<unknown> => {
+      const a = await adminClient();
+      if (!a.updateAttachment) throw new Error("arbiter has no 'updateAttachment' op — upgrade the arbiter");
+      return a.updateAttachment(args as { token: string; coverage: unknown; route?: unknown });
+    };
     console.error(`[dashboard] egress approvals: arbiter @ ${sock}`);
     return {
       arbiter,
@@ -561,6 +575,7 @@ export async function makeApprovalsArbiter(
       posture,
       audit,
       deleteSession,
+      updateAttachment,
       policyDoc,
       close: () => {
         client.close();

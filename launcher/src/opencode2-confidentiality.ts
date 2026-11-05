@@ -191,3 +191,18 @@ export function probeGuardNotify(guardBin: string, run: typeof spawnSync = spawn
   const r = run(guardBin, ["--", "true"], { stdio: "ignore", timeout: 10_000, env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin" } });
   return r.status === 0;
 }
+
+const guardStarts = new Map<string, boolean>();
+
+/** `probeGuardNotify` once per bin per process: the launch's guard step and
+ *  doctor's posture ask the same question (packaging.md §3.1: a Docker
+ *  container's default seccomp profile refuses the guard's `pidfd_getfd`,
+ *  so a bin that is there may still not start). */
+export function guardStartsHere(guardBin: string, run: typeof spawnSync = spawnSync): boolean {
+  let ok = guardStarts.get(guardBin);
+  if (ok === undefined) {
+    ok = probeGuardNotify(guardBin, run);
+    guardStarts.set(guardBin, ok);
+  }
+  return ok;
+}

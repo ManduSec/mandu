@@ -23,7 +23,7 @@
  *       agent page with that step marked "Mandu asked you here", an EXACT
  *       match;
  *       The step says the answer: "Mandu asked for your OK in Approvals.
- *       Your answer: Blocked." (§4.25b; until 2026-10-08 only "asked");
+ *       Your answer: Blocked. Kept in Rules" (§4.25b; until 2026-10-08 only "asked");
  *   A3b "Allow instead" over the real route: the page's step now says
  *       "Always allowed", the row's answer as Answered earlier states it;
  *   A4  the oracle: neither `/api/home`, the agent page, the inspector's
@@ -185,7 +185,7 @@ test("an answer under Answered earlier links the session that asked, and the lin
       assert.match(step.textContent, /collector\.example/, "the stopped send");
       const asked = step.querySelector(".note.asked");
       assert.ok(asked, "the step says Mandu asked");
-      assert.equal(asked.textContent, "Mandu asked for your OK in Approvals. Your answer: Blocked.", "and the answer, in the words of Answered earlier");
+      assert.equal(asked.textContent, "Mandu asked for your OK in Approvals. Your answer: Blocked. Kept in Rules", "and the answer, in the words of Answered earlier, then where Rules keeps it");
       assert.equal(asked.querySelector("a").getAttribute("href"), `/approvals/${row!.id}`, "the word still opens the row");
       const agentPage = doc.body.textContent ?? "";
       assert.ok(!agentPage.includes(KEY_VALUE), "the agent page carries no secret value");

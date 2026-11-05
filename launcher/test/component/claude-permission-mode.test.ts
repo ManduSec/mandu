@@ -261,7 +261,9 @@ test("mandu claude by name: the launch adds the flag once (the shim does not add
     const code = await main(["--target", "claude", "--no-scope", "--no-reply-filter", "--no-mcp", "--", "claude", "-p", "hi", "--nest", "claude -p inner"],
       r.env({ PATH: `${r.dir}:${process.env["PATH"]}` }));
     assert.equal(code, 0);
-    const [outer, inner, ...rest] = allRuns(r);
+    // macOS: a launch under Mandu's Seatbelt profile first asks Claude Code's
+    // read-only `sandbox status` (claude-sandbox.ts): not a session.
+    const [outer, inner, ...rest] = allRuns(r).filter((a) => a.join(" ") !== "sandbox status");
     assert.equal(rest.length, 0);
     assert.deepEqual(modes(outer!), ["default"], JSON.stringify(outer));
     assert.ok(outer!.indexOf("--permission-mode") < outer!.indexOf("-p"), "the launch's flag ahead of the user's arguments");

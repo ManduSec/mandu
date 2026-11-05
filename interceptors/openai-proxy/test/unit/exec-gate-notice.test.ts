@@ -173,6 +173,13 @@ test("rewriteRequest: program output beside the notice is never forwarded, and t
   }
 });
 
+test("rewriteRequest: a mixed output is masked whole even when the classify calls it public (2026-10-26: a word of the quoted notice is prose, no longer a path)", async () => {
+  const arbiter = new MockArbiter({ classifyFn: () => ({ trust: "TRUSTED", category: null, reason: "mock: public", confidentiality: "public" }), scanSecretValuesFn: () => ({ hits: [] }) });
+  const text = forwarded(await rewriteRequest(request(`${HEADER}${NOTICE}\n${PROGRAM_BYTES}\n`), { arbiter, execGateNotices: notices() }));
+  assert.match(text, SYM_RE);
+  assert.ok(!text.includes(PROGRAM_BYTES) && !text.includes("mandu-exec-gate"), text);
+});
+
 test("rewriteRequest: no record, a backstop hit, a failing or missing backstop → classified as before", async () => {
   const body = `${HEADER}${NOTICE}\n`;
   const clean = new MockArbiter({ classifyFn: secretEverything, scanSecretValuesFn: () => ({ hits: [] }) });

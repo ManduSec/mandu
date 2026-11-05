@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   bindOnlyLines,
+  EGRESS_GATE_OFF_LINE,
   gapExplanation,
   gatedNotice,
   guardOnlyLines,
@@ -155,6 +156,21 @@ test("gatedNotice: names the posture, the honest consequence, the fix, and docto
   assert.ok(!n.join("\n").includes("sysctl"));
 });
 
+test("gatedNotice: the egress gate turned off adds one line saying the sentence's egress half does not hold; otherwise none", () => {
+  for (const gap of ["apparmor-userns", "no-guard", "guard-off", "unsupported-os"] as const) {
+    const on = gatedNotice(gap);
+    const off = gatedNotice(gap, { egressGateOff: true });
+    assert.ok(!on.includes(EGRESS_GATE_OFF_LINE), gap);
+    assert.deepEqual(off.filter((l) => l !== EGRESS_GATE_OFF_LINE), on, `${gap}: the rest is unchanged`);
+    assert.equal(off.filter((l) => l === EGRESS_GATE_OFF_LINE).length, 1, gap);
+    assert.ok(off.at(-1)!.includes("mandu doctor"), `${gap}: doctor stays last`);
+  }
+  assert.match(EGRESS_GATE_OFF_LINE, /--no-net-proxy, MANDU_NET_PROXY=0 or net-proxy = false/);
+  assert.match(EGRESS_GATE_OFF_LINE, /can be sent anywhere/);
+  // the sentence it qualifies
+  assert.match(POSTURE_SENTENCE.gated, /sent out only where a rule or your OK allows/);
+});
+
 test("gatedNotice: a gap `mandu setup` cannot fix never offers it", () => {
   assert.ok(gatedNotice("no-bwrap").some((l) => l.includes("sudo apt install bubblewrap")));
   for (const gap of ["userns-off", "unsupported-os", "no-sandbox-exec"] as const) {
@@ -165,7 +181,7 @@ test("gatedNotice: a gap `mandu setup` cannot fix never offers it", () => {
 
 test("sentences: every posture has one; only `confined` makes the absent-bytes claim", () => {
   for (const p of POSTURES) assert.ok(POSTURE_SENTENCE[p].length > 20);
-  assert.match(POSTURE_SENTENCE.confined, /placeholder copy of each credential file, never the real one/);
+  assert.match(POSTURE_SENTENCE.confined, /masked copy of each credential file, never the real one/);
   for (const p of POSTURES) assert.doesNotMatch(POSTURE_SENTENCE[p], /symbol|twin|the model\b/, `${p}: plain words (release checklist d5)`);
   assert.doesNotMatch(POSTURE_SENTENCE.gated, /absent/);
   assert.match(POSTURE_SENTENCE.gated, /can still read/);

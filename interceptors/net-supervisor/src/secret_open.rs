@@ -2390,6 +2390,13 @@ struct Held {
     /// Its live ancestors (proc keys, nearest first) when it became a
     /// holder: no process among them can be its orphan (`orphan_holders`).
     ancestors: Vec<String>,
+    /// Raw opens recorded under it whose answer is still to come
+    /// (`claim_raw`), and whether anything else made it a holder: a raw
+    /// descriptor handed (`insert`), an inheritance or a flow. A refused
+    /// open drops the key only when it was the last claim and nothing
+    /// else holds it (`release_refused`).
+    claims: u32,
+    kept: bool,
 }
 
 /// A holder whose death was just stamped, for `adopt_orphans`.
@@ -2461,8 +2468,55 @@ impl TaintedSet {
         if let Ok(mut s) = self.keys.lock() {
             let h = s.entry(key.to_string()).or_insert_with(|| Held { since: now_ticks(), ancestors, ..Default::default() });
             h.direct = true;
+            h.kept = true;
         }
         self.watch_death(key);
+    }
+    /// A raw open's record of `key`, before its sweep and its held-back
+    /// truncate: a direct holder from now on (as `insert`), with one claim
+    /// more. Two threads of one process share the key and are answered by
+    /// different workers, so until 2026-10-27 (finding F2) a refused open
+    /// that had seen no key before it (a `contains`, then an `insert`) could
+    /// `forget` the key while another thread's open of it was being handed
+    /// the real file: the process kept a raw descriptor and was no holder.
+    pub fn claim_raw(&self, key: &str) {
+        let ancestors = if self.contains(key) { Vec::new() } else { ancestors_now(key) };
+        if let Ok(mut s) = self.keys.lock() {
+            let h = s.entry(key.to_string()).or_insert_with(|| Held { since: now_ticks(), ancestors, ..Default::default() });
+            h.direct = true;
+            h.claims += 1;
+        }
+        self.watch_death(key);
+    }
+    /// Plan 13 §4.9 (2026-10-03): the raw open `claim_raw` recorded was
+    /// refused before any byte reached it. Its key is dropped only when no
+    /// other raw open of it is in flight and nothing else made it a holder
+    /// (a raw descriptor handed, an inheritance, a flow): a reader that held
+    /// nothing is no holder, or its shell would be judged a holder's reaper
+    /// at its next wait (`guard_wait`) for a status that carries nothing.
+    pub fn release_refused(&self, key: &str) {
+        let dropped = match self.keys.lock() {
+            Ok(mut s) => match s.get_mut(key) {
+                Some(h) => {
+                    h.claims = h.claims.saturating_sub(1);
+                    let drop = h.claims == 0 && !h.kept;
+                    if drop {
+                        s.remove(key);
+                    }
+                    drop
+                }
+                None => false,
+            },
+            Err(_) => false,
+        };
+        #[cfg(target_os = "linux")]
+        if dropped {
+            if let Some(w) = self.deaths.get() {
+                w.unwatch(key);
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = dropped;
     }
     /// Start stamping holders' deaths when they happen (`death_watch`): a
     /// pidfd per holder, up to `cap` at once, for every holder recorded from
@@ -2641,7 +2695,7 @@ impl TaintedSet {
             crate::guard_trace::trace(|| format!("holder {key}: inherits (chain {chain:?})"));
         }
         if let Ok(mut s) = self.keys.lock() {
-            s.entry(key.to_string()).or_insert_with(|| Held { chain: chain.to_vec(), since: born_or_now(key), ancestors: chain.to_vec(), ..Default::default() });
+            s.entry(key.to_string()).or_insert_with(|| Held { chain: chain.to_vec(), since: born_or_now(key), ancestors: chain.to_vec(), ..Default::default() }).kept = true;
         }
         self.watch_death(key);
     }
@@ -2653,6 +2707,7 @@ impl TaintedSet {
         crate::guard_trace::trace(|| format!("holder {key}: flows from {from:?}"));
         if let Ok(mut s) = self.keys.lock() {
             let h = s.entry(key.to_string()).or_insert_with(|| Held { since: now_ticks(), ancestors, ..Default::default() });
+            h.kept = true;
             for f in from {
                 if f != key && !h.flows.contains(f) {
                     h.flows.push(f.clone());
@@ -2797,18 +2852,6 @@ impl TaintedSet {
         }
         let mine = self.taint_sources(waiter);
         held.iter().all(|h| self.taint_sources(h).iter().all(|s| mine.contains(s)))
-    }
-    /// Plan 13 §4.9 (2026-10-03): drop `key`, recorded as a holder for a raw
-    /// open the taint-time sweep then refused (no byte reached it). Only for
-    /// a key that held nothing before that open: the caller checks.
-    pub fn forget(&self, key: &str) {
-        if let Ok(mut s) = self.keys.lock() {
-            s.remove(key);
-        }
-        #[cfg(target_os = "linux")]
-        if let Some(w) = self.deaths.get() {
-            w.unwatch(key);
-        }
     }
     /// Plan 13 §4.9: `waiter`'s sweep at a wait refused; it is never
     /// `covers`' answer again.
@@ -3732,10 +3775,47 @@ mod tests {
         set.refuse_wait("10-1");
         assert!(!set.covers("10-1", &["11-2".into()]));
         // A reader whose raw open was refused is forgotten: no holder.
-        set.insert("13-4");
-        set.forget("13-4");
+        set.claim_raw("13-4");
+        set.release_refused("13-4");
         assert!(!set.contains("13-4"));
         assert!(set.contains("12-3"), "only that key");
+    }
+
+    #[test]
+    fn a_refused_raw_open_never_drops_a_key_something_else_holds() {
+        // Finding F2: two threads of one process share a key, and two
+        // workers answer their raw opens. Thread B's open is handed the
+        // file while thread A's is still in flight; A's is then refused
+        // (its sweep, or its held-back truncate). On master A had seen no
+        // key (`held_before == false`) and `forget` dropped it whole.
+        let set = TaintedSet::default();
+        set.claim_raw("20-1"); // A
+        set.claim_raw("20-1"); // B
+        set.taint_then("20-1", || ()); // B handed the real file
+        set.release_refused("20-1"); // A refused
+        assert!(set.contains("20-1"), "B holds a raw descriptor: still a holder");
+        // B still in flight when A is refused: kept, and B's own refusal
+        // then leaves no holder (neither got a byte).
+        set.claim_raw("21-1");
+        set.claim_raw("21-1");
+        set.release_refused("21-1");
+        assert!(set.contains("21-1"), "another open of the key is in flight");
+        set.release_refused("21-1");
+        assert!(!set.contains("21-1"), "both refused: no holder");
+        // A key that held before the open, or that inherits or flows from a
+        // holder while it is in flight, is never dropped by its refusal.
+        set.insert("22-1");
+        set.claim_raw("22-1");
+        set.release_refused("22-1");
+        assert!(set.contains("22-1"), "held before the open");
+        set.claim_raw("23-1");
+        set.inherit("23-1", &["22-1".into()]);
+        set.release_refused("23-1");
+        assert!(set.contains("23-1"), "inherits from a holder");
+        set.claim_raw("24-1");
+        set.insert_flow("24-1", &["22-1".into()]);
+        set.release_refused("24-1");
+        assert!(set.contains("24-1"), "flows from a holder");
     }
 
     #[test]

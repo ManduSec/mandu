@@ -478,7 +478,7 @@ test("file browser: typing fills the suggestions list with the folder's matching
   assert.deepEqual(opts, ["/home/u/ws/config/", "/home/u/ws/.env", "/home/u/ws/<img src=x onerror=alert(1)>.md", "/home/u/ws/README.md"]);
 });
 
-test("file browser: rules made on this page earlier can be moved into policy.yaml in one step, after a confirmation", async () => {
+test("file browser: rules made on this page earlier can be moved into policy.yaml in one step, after a question asked in the notice", async () => {
   const { doc, calls, window } = load({ url: FILES_URL, routes: { ...FILES_ROUTES, "POST files/move-page-rules": { moved: 1, changeId: "pc-000009" } } });
   await tick();
   doc.getElementById("rules-add").click();
@@ -486,15 +486,27 @@ test("file browser: rules made on this page earlier can be moved into policy.yam
   const box = doc.getElementById("files-move");
   assert.equal(box.hidden, false);
   assert.match(box.textContent, /1 rule was made on this page before rules were kept in policy\.yaml/);
-  let asked = "";
-  window.confirm = (q: string) => { asked = q; return false; };
+  // Asked in the notice, never in a browser dialog (dashboard.md §4.25n
+  // *Rules asks on the page, not in a browser dialog*).
+  window.confirm = () => { throw new Error("window.confirm called"); };
+  const moves = () => calls.filter((c) => c.url.endsWith("/api/files/move-page-rules")).length;
+  box.querySelector("button").focus();
   box.querySelector("button").click();
   await tick();
-  assert.match(asked, /Protection does not change/);
-  assert.equal(calls.filter((c) => c.url.endsWith("/api/files/move-page-rules")).length, 0, "declined: nothing moved");
-  window.confirm = () => true;
-  box.querySelector("button").click();
+  const ask = box.querySelector(".ask-in-place");
+  assert.equal(ask.querySelector(".ask-in-place-words").textContent, "Move 1 rule into policy.yaml? Protection does not change. The move itself cannot be undone.");
+  assert.deepEqual([...box.querySelectorAll("button")].map((b: any) => b.textContent), ["Move them", "Cancel"], "the question in place of the button");
+  assert.equal(doc.activeElement, ask.querySelector(".ask-in-place-words"));
+  assert.equal(moves(), 0, "asked: nothing moved yet");
+  [...box.querySelectorAll("button")].find((b: any) => b.textContent === "Cancel").click();
   await tick();
+  assert.equal(moves(), 0, "Cancel: nothing moved");
+  assert.equal(box.querySelector(".ask-in-place"), null);
+  assert.equal(doc.activeElement, box.querySelector("button"), "the focus back on Move them into policy.yaml");
+  box.querySelector("button").click();
+  [...box.querySelectorAll("button")].find((b: any) => b.textContent === "Move them").click();
+  await tick();
+  assert.equal(moves(), 1, "Move them posts once");
   const post = calls.find((c) => c.url.endsWith("/api/files/move-page-rules"))!;
   assert.equal(post.headers["X-Mandu-Control"], "1");
   assert.match(doc.getElementById("rules-notice").textContent, /Moved 1 rule into policy\.yaml\./);

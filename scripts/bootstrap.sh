@@ -51,9 +51,9 @@ ok()   { printf '  %s✓%s %s\n' "$G" "$Z" "$*"; }
 warn() { printf '  %s!%s %s\n' "$Y" "$Z" "$*"; }
 bad()  { printf '  %s✗%s %s\n' "$R" "$Z" "$*"; }
 
-# ── preflight: Node ≥ 22.13.0 (node:sqlite floor), git (required), claude (optional) ─
+# ── preflight: Node ≥ 22.15.0 (node:sqlite, zstd), git (required), claude (optional) ─
 # NODE_FLOOR is pinned to launcher/src/node-floor.ts by launcher/test/unit/node-floor.test.ts.
-NODE_FLOOR="22.13.0"
+NODE_FLOOR="22.15.0"
 info "${B}Mandu bootstrap${Z} — repo: $REPO_ROOT"
 info ""
 info "${B}Prerequisites${Z}"
@@ -73,7 +73,7 @@ node_meets_floor() {
   return 0
 }
 if ! node_meets_floor "$NODE_VER" "$NODE_FLOOR"; then
-  bad "node $NODE_VER is too old — Mandu needs Node ≥ $NODE_FLOOR (node:sqlite is unflagged from 22.13). Try: nvm install 22"
+  bad "node $NODE_VER is too old — Mandu needs Node ≥ $NODE_FLOOR. Try: nvm install 22"
   exit 1
 fi
 ok "node $NODE_VER (≥ $NODE_FLOOR)"

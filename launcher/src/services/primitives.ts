@@ -124,6 +124,9 @@ export interface ProxyIdentity {
   /** The logins the net-proxy's session leaves raw
    *  (MANDU_NET_PROXY_SESSION_LOGINS); absent = none (an older proxy). */
   sessionLogins?: unknown;
+  /** The net-proxy's database relays and their loopback ports
+   *  (db-relays.ts; MANDU_NET_PROXY_DB_RELAYS); absent = none. */
+  dbRelays?: unknown;
 }
 
 /** A short human description of an occupying process for the fail-closed

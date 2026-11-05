@@ -52,7 +52,7 @@ use fs_supervisor::tracee::tracee_fd;
 
 use crate::guard::{Decision, Endpoint, Proto};
 use crate::guard_kernel::{
-    abstract_unix_verdict, answer_continue, answer_errno, binding_to_spec, close_fd, emit_unix_refusal, is_abstract_unix,
+    abstract_unix_verdict, answer_continue, answer_errno, close_fd, emit_unix_refusal, is_abstract_unix,
     is_box_thread, proto_of_fd, sockopt_int, socket_in_our_netns, unix_path_verdict, GuardConfig, TaintedRefusal, UnixVerdict,
 };
 use crate::send_guard::{self as sg, InetDest, MsgHdr};
@@ -231,7 +231,7 @@ pub(crate) fn taint_bindings(cfg: &GuardConfig, own: &str, chain: Vec<String>) -
 /// Does a binding list admit this INET destination (`host[:port]`, suffix,
 /// CIDR, as a connect's taint leg reads it)?
 pub(crate) fn bindings_admit(cfg: &GuardConfig, bindings: &[String], ip: IpAddr, port: u16, proto: Proto) -> bool {
-    let specs: Vec<String> = bindings.iter().filter(|h| crate::local_exits::is_host_binding(h)).map(|h| binding_to_spec(h)).collect();
+    let specs = crate::local_exits::host_binding_specs(bindings);
     match crate::guard::parse_rules(&specs) {
         Ok(rules) => crate::guard::GuardPolicy::new(rules).decide(&Endpoint { ip, port, proto }, cfg.resolver.as_ref()) == Decision::Allow,
         Err(_) => false,

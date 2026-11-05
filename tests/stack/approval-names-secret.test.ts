@@ -14,6 +14,10 @@
  *       secret GITHUB_TOKEN", the file `~/…` under the dashboard's home;
  *   N2  /api/policy/panel: the inspector's words name them too, with the
  *       full path, from the provenance the arbiter attached at read time;
+ *   N2b the served Approvals page: its intro and the stripe card agree on
+ *       Allow once (dashboard.md §4.25 *A remembered answer opens where
+ *       Rules keeps it*, 2026-10-27): the card says "Mandu refused this one",
+ *       and the intro never says Allow once lets this one through;
  *   N3  an answer (Allow once, over the real route and the real resolve op):
  *       Answered earlier names the secret, and the served Approvals page
  *       draws that row whole, when under its words, never cut to one line
@@ -110,6 +114,22 @@ test("a send question names its secret on the product page and in the inspector;
     assert.equal(said(row.words.sentence), "The agent wants to send your secret STRIPE_KEY to api.stripe.com");
     assert.equal(row.words.why, `STRIPE_KEY comes from ${env}. Mandu masked it, so the AI never read it. Sending it would show the real secret to api.stripe.com.`);
     assert.equal(panel.queue.find((r) => r.id === asked["gist.github.com"])!.origin, "env:GITHUB_TOKEN");
+
+    // N2b: the served Approvals page, the send still waiting. Until
+    // 2026-10-27 its intro said "Allow once lets just this one through"
+    // about 250 px above the card's "Mandu refused this one".
+    const cardSel = `#approvals-waiting .ask[data-id="${asked["api.stripe.com"]}"]`;
+    await servedProductPage(base, "/approvals", (doc) => doc.querySelector(cardSel) !== null, (doc) => {
+      const card = doc.querySelector(cardSel);
+      assert.ok(card, "the served page draws the waiting send");
+      assert.match(card.textContent, /Mandu refused this one, so nothing was sent\./, "the card says the send was refused");
+      const intro = (doc.querySelector("#page-approvals .page-head > p").textContent as string).replace(/\s+/g, " ");
+      assert.doesNotMatch(intro, /this one/i, "the intro does not say Allow once lets this one through");
+      assert.match(intro, /Allow once covers one request\. When Mandu has already refused the one asked about, that is the agent's next try\./);
+      const page = doc.body.textContent ?? "";
+      assert.ok(!page.includes(KEY_VALUE) && !page.includes(ENV_VALUE), "the served page carries no secret value");
+      assert.doesNotMatch(page, /\$MDU/, "nor a token");
+    });
 
     // N3: Allow once over the real route; Answered earlier names it.
     const once = await pageFetch(`${base}/api/egress/approvals/${asked["api.stripe.com"]}/approve-once`, { method: "POST", headers: { ...CSRF, Cookie: dashboard.adminCookie() } });

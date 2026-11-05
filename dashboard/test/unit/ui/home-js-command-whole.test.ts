@@ -144,10 +144,16 @@ test("W4: every command the page writes itself is code and kept whole, History's
   assert.equal(empty.textContent, "No session has been recorded yet. Start your agent through Mandu, mandu claude or mandu codex, and it shows up here.");
   assert.deepEqual(codes(empty), ["[mandu claude]", "[mandu codex]"]);
 
-  // Every literal command in home.js goes through ownCode, and each is whole.
+  // Every literal command in home.js goes through ownCode (runCode, the
+  // one with its Copy, draws its code with it), and each is whole.
   assert.deepEqual(JS.match(/el\('code', \{ text: '[^']*\s[^']*' \}\)/g) ?? [], [], "a literal command drawn past ownCode");
-  const literals = [...JS.matchAll(/ownCode\('([^']*)'\)/g)].map((m) => m[1]!);
-  const owned = [...JS.matchAll(/ownWords\([^;]*?\['([^']*)'\]/g)].map((m) => m[1]!);
+  // The commands that start your agent are drawn through ownCode from
+  // `/api/home`'s `start`, or from START_FALLBACK when it sends none.
+  const fallback = [...(JS.match(/const START_FALLBACK = \[([^\]]*)\]/)?.[1] ?? "").matchAll(/'([^']*)'/g)].map((m) => m[1]!);
+  assert.deepEqual(fallback, ["mandu claude", "mandu codex"], "the start commands' fallback");
+  const literals = [...[...JS.matchAll(/(?:ownCode|runCode)\('([^']*)'\)/g)].map((m) => m[1]!), ...fallback];
+  // An own-words command, ['…'], or one it asks you to run, ['…', 'run'].
+  const owned = [...JS.matchAll(/ownWords\([^;]*?\['([^']*)'(?:, 'run')?\]/g)].map((m) => m[1]!);
   assert.ok(literals.length >= 7 && owned.length >= 2, `found the page's commands: ${JSON.stringify([...literals, ...owned])}`);
   // Each one that fits the narrowest column (WHOLE_MAX, 24) is whole; the
   // one longer command, `mandu dashboard --set-password`, wraps as a plain code.

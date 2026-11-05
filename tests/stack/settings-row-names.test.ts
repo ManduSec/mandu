@@ -143,7 +143,7 @@ test("Settings over the real arbiter: each row's button names its row; a Save, a
       && doc.querySelectorAll("#settings-prompt-exceptions .prompt-exception").length === 3;
 
     await servedProductPage(base, "/settings", ready, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       // N1: the names.
       const names = (sel: string) => [...doc.querySelectorAll(sel)].map((b: Doc) => controlName(b));
       assert.deepEqual(names("#settings-models .model-row button"), [
@@ -168,12 +168,15 @@ test("Settings over the real arbiter: each row's button names its row; a Save, a
       // N2: a label's Save. The focus is given back in the same task as the
       // list's draw, so waiting for the draw is enough.
       const conf = labelRow(doc, CONF);
-      conf.querySelector("select.label-level").value = "no-model";
+      const level = conf.querySelector("select.label-level");
+      level.value = "no-model";
+      level.dispatchEvent(new doc.defaultView.Event("change", { bubbles: true }));
       const save = conf.querySelector(".label-save-btn");
       press(save);
       await waitWhile(() => labelRow(doc, CONF) === conf);
       assert.match(doc.getElementById("labels-notice").textContent, /^Saved Confidential\./);
       assert.equal(doc.activeElement, labelRow(doc, CONF).querySelector(".label-save-btn"), "Save on the same label, drawn again");
+      assert.equal(doc.activeElement.getAttribute("aria-disabled"), "true", "greyed at the level now saved, and still given the focus");
       assert.notEqual(doc.activeElement, save);
       const mapped = (await read("/api/policy/sensitivity-labels")).labels.mappings.find((m: { id: string }) => m.id === CONF);
       assert.equal(mapped?.level, "no-model", "the new level is in policy.yaml, read back through the arbiter");
@@ -187,8 +190,12 @@ test("Settings over the real arbiter: each row's button names its row; a Save, a
       assert.doesNotMatch(yaml, /\*@example\.com/, "that exception is gone from policy.yaml");
       assert.match(yaml, /\*@corp\.example/, "the other stays");
 
-      // N4: a model, asked first.
+      // N4: a model, asked first, under its row: the sentence holds the
+      // focus, and Remove anyway is a second, separate press.
       press(modelRow(doc, "lab").querySelector(".model-remove-btn"));
+      await waitWhile(() => !doc.querySelector("#settings-models .ask-in-place"));
+      assert.equal(doc.activeElement, doc.querySelector("#settings-models .ask-in-place-words"), "the question's sentence");
+      press(doc.querySelector("#settings-models .ask-in-place-yes"));
       await waitWhile(() => modelRow(doc, "lab") !== undefined);
       assert.equal(doc.activeElement, doc.getElementById("settings-models-title"), "the Models heading, not ollama's buttons");
       assert.deepEqual((await data.modelEndpoints()).map((m: { name: string }) => m.name), ["ollama"], "the arbiter no longer lists lab");
@@ -205,7 +212,7 @@ test("Settings over the real arbiter: each row's button names its row; a Save, a
     // N6: signed out, a refusal.
     const before = readFileSync(policyPath, "utf8");
     await servedProductPage(base, "/settings", (doc) => modelRow(doc, "ollama") !== undefined, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       const b = modelRow(doc, "ollama").querySelector(".model-remove-btn");
       press(b);
       await waitWhile(() => !modelRow(doc, "ollama").querySelector(".ask-error"));

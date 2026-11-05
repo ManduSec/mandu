@@ -24,6 +24,14 @@
  *     computes that min-width.
  * The layout itself is the run's Chromium probe (before: 109 px; after:
  * 49 px; a phone's card as before).
+ *
+ * A short card (not `.expanded`) keeps its answers in the same row, so its
+ * words keep 520 px beside them, or the answers go under the words
+ * (dashboard.md §4.25 *A short question's words keep 520 px*, #252): the
+ * words' basis there is `max(320px, min(520px, 100% - 60px))`, the row less
+ * the icon and the gap at most, so the icon stays beside the words. Pinned
+ * here as arithmetic and as which cards the rule reaches; its layout is the
+ * stack test ask-words-wide's real Chromium.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -61,6 +69,8 @@ const px = (v: string) => {
 };
 
 const MIN_WIDTH = "min(100%, 380px)";
+/** The short card's own rule for its words. */
+const SHORT_WORDS = ".ask:not(.expanded) > .ask-top > .ask-body";
 
 /** Each card under `root` that draws an icon draws it in its `.ask-top`:
  *  no inline style, a wrapping flex row that computes the min-width. */
@@ -119,6 +129,41 @@ test("the stylesheet: the header row's min-width is the icon, the gap and the wo
   const basis = px(decl(".ask-body", "flex").split(/\s+/)[2] ?? "");
   assert.equal(px(m![1]), icon + gap + basis, `the icon (${icon}), the gap (${gap}) and the words' basis (${basis}) side by side`);
   assert.equal(RULES.some((r) => r.selectors.includes(".suggestion-card-top")), false, "the possible-keys card shares the row's rule");
+});
+
+test("the stylesheet: a short card's words keep 520 px beside its answers, never more than the row less the icon and the gap, never less than the words' basis", () => {
+  const found = RULES.filter((r) => r.selectors.includes(SHORT_WORDS));
+  assert.equal(found.length, 1, `one rule for a short card's words: ${JSON.stringify(found)}`);
+  assert.equal(found[0]!.media, null, "at every width: one rule for one shape");
+  const m = /^max\((\d+px), min\((\d+px), 100% - (\d+px)\)\)$/.exec(declValue(found[0]!.block, "flex-basis") ?? "");
+  assert.ok(m, `flex-basis: max(<basis>, min(<wide>, 100% - <icon and gap>)): ${declValue(found[0]!.block, "flex-basis")}`);
+  const icon = px(decl(".ask-icon", "width"));
+  const gap = px(decl(".ask-top", "gap"));
+  const basis = px(decl(".ask-body", "flex").split(/\s+/)[2] ?? "");
+  assert.equal(px(m![1]!), basis, "never less than the words' basis: a row under 380 px (a phone) wraps as before");
+  assert.ok(px(m![2]!) >= 520, `the words keep at least 520 px beside the answers: ${m![2]}`);
+  assert.equal(px(m![3]!), icon + gap, `never more than the row less the icon (${icon}) and the gap (${gap}): the icon stays beside the words`);
+  assert.equal(declValue(found[0]!.block, "flex"), null, "only the basis: the words still grow and shrink as before");
+});
+
+test("the short card's rule reaches Home's cards and Approvals' short ones, never a full card", async () => {
+  const vm = home({ waiting: [SHORT, ASK], window: { ...home().window, waiting: 2 } });
+  const h = load({ url: "http://127.0.0.1:4500/mandu/", homeVm: vm });
+  await tick();
+  const homeWords = [...h.doc.querySelectorAll("#home-waiting .ask .ask-body")] as El[];
+  assert.equal(homeWords.length, 2);
+  for (const w of homeWords) assert.ok(w.matches(SHORT_WORDS), "Home's card: its answers share the row");
+  for (const w of homeWords) assert.ok(w.parentElement.querySelector(":scope > .ask-actions"), "the answers in the row the rule sizes");
+  const a = load({ url: "http://127.0.0.1:4500/mandu/approvals", homeVm: vm });
+  await tick();
+  const full = [...a.doc.querySelectorAll("#approvals-waiting .ask .ask-body")] as El[];
+  assert.equal(full.length, 2);
+  for (const w of full) assert.equal(w.matches(SHORT_WORDS), false, "Approvals' full card: its answers are in its foot");
+  const g = load({ url: "http://127.0.0.1:4500/mandu/agents/s1", routes: { "GET home/agent?session=s1": { ...AGENT, waiting: [SHORT] } } });
+  await tick();
+  const needs = g.doc.querySelector("#agent-waiting .ask .ask-body");
+  assert.ok(needs);
+  assert.equal(needs.matches(SHORT_WORDS), false, "Needs your OK is a full card");
 });
 
 test("Home and Approvals: each waiting card, short or long, draws its icon in an .ask-top", async () => {

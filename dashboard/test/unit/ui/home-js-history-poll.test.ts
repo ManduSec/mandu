@@ -19,7 +19,14 @@
  *       after the page was left is not drawn;
  *   P6  more new sessions than the read reaches past: the read's rows and
  *       cursor, never the rows drawn before after a gap;
- *   P7  a click on a row the poll kept opens that row's session.
+ *   P7  a click on a row the poll kept opens that row's session;
+ *   P8  a running row names its last step as Running now does (§4.25 *A live
+ *       row names its last step*): "running now, started 5 hours ago · last
+ *       step 2 minutes ago", the second phrase a link to the session at its
+ *       newest turn, named by its words and its row; none within a minute of
+ *       the start, none on an ended row; a poll moves the moment in place,
+ *       the row and a focused Details kept;
+ *   P9  so does a running row Show more brought, past the first page.
  */
 
 import { test } from "node:test";
@@ -32,6 +39,8 @@ const row = (id: string, over: Record<string, unknown> = {}) => ({
   id, agent: "Claude Code", title: `Task ${id}`, cwd: "/home/u/ws", startedAt: "2026-09-01T10:00:00.000Z", lastAt: "2026-09-01T10:05:00.000Z", state: "idle",
   stats: { flows: 0, secret: 0, complete: 0, egressAllowed: 0, egressBlocked: 0, egressPending: 0 }, secrets: { masked: 1, early: 0 }, untrusted: 0, blocked: 0, sent: 0, holds: true, waiting: 0, notice: null, preview: null, ...over,
 });
+/** A row's Details, not the "last step" link a running row has before it. */
+const DETAILS = 'a.right[data-page-link="agent"]';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const historyRows = (doc: any) => [...doc.querySelectorAll("#history-list .row.agent")] as any[];
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -80,7 +89,7 @@ test("P2: an answer as drawn leaves the list as it is; a changed one gives the f
   const { doc } = load({ extensions: "", url: URL, homeVm: home(), routes: { "GET home/history": answers(a, a, b, c) } });
   await tick();
   const drawn = historyRows(doc);
-  const details = rowOf(doc, "s2").querySelector("a");
+  const details = rowOf(doc, "s2").querySelector(DETAILS);
   details.focus();
   await poll(doc);
   assert.equal(historyRows(doc)[0], drawn[0], "the same answer draws nothing again");
@@ -92,7 +101,7 @@ test("P2: an answer as drawn leaves the list as it is; a changed one gives the f
   assert.notEqual(rowOf(doc, "s2"), drawn[0], "the changed row is drawn again");
   assert.equal(rowOf(doc, "s1"), drawn[1], "the row that did not change is kept");
   assert.match(rowOf(doc, "s2").textContent, /3 secrets masked/);
-  assert.equal(doc.activeElement, rowOf(doc, "s2").querySelector("a"), "the focus is back on the same row's Details");
+  assert.equal(doc.activeElement, rowOf(doc, "s2").querySelector(DETAILS), "the focus is back on the same row's Details");
   doc.querySelector("#history-list .history-more button").focus();
   await poll(doc);
   assert.deepEqual(ids(doc), ["s4", "s2", "s1"]);
@@ -198,4 +207,70 @@ test("P7: a click on a row's prompt opens that session, also on a row the poll k
   assert.equal(doc.getElementById("page-agent").hidden, false);
   assert.equal(doc.getElementById("page-history").hidden, true);
   assert.ok(calls.some((c) => c.url === "/mandu/api/home/agent?session=s1"));
+});
+
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const lastLink = (doc: any, id: string) => rowOf(doc, id)?.querySelector("a.agent-last-link") ?? null;
+
+test("P8: a running row names its last step, a link to its newest turn; none near its start nor once ended; a poll moves it in place, the row and its focus kept", async () => {
+  const live = row("r1", { state: "running", startedAt: minutesAgo(5 * 60), lastAt: minutesAgo(2) });
+  const fresh = row("r2", { state: "running", startedAt: minutesAgo(30), lastAt: minutesAgo(29.5) });
+  const done = row("e1", { startedAt: minutesAgo(5 * 60), lastAt: minutesAgo(3 * 60) });
+  const later = { ...live, lastAt: minutesAgo(1) };
+  const r2Stepped = { ...fresh, lastAt: minutesAgo(1) };
+  const { doc } = load({ extensions: "", url: URL, homeVm: home(), routes: { "GET home/history": answers(
+    { total: 3, rows: [live, fresh, done], next: null },
+    { total: 3, rows: [later, r2Stepped, done], next: null },
+  ) } });
+  await tick();
+  const when = (id: string) => rowOf(doc, id).querySelector(".agent-when").textContent;
+  assert.equal(when("r1"), "running now, started 5 hours ago · last step 2 minutes ago");
+  const link = lastLink(doc, "r1");
+  assert.ok(link, "the second phrase is a link");
+  assert.equal(link.getAttribute("href"), "/mandu/agents/r1?go=latest");
+  assert.equal(link.dataset.land, "latest");
+  assert.ok(link.classList.contains("when-phrase"), "its own phrase: the column breaks only between the phrases");
+  assert.deepEqual([...rowOf(doc, "r1").querySelectorAll(".when-phrase")].map((x: { textContent: string }) => x.textContent), ["started 5 hours ago ·", "last step 2 minutes ago"]);
+  assert.equal(link.getAttribute("aria-label"), "Last step 2 minutes ago: go to the latest turn of Claude Code, Task r1 in ~/ws", "named as Running now names it");
+  assert.equal(link.querySelector("time.agent-last").getAttribute("datetime"), live.lastAt);
+  assert.equal(when("r2"), "running now, started 30 minutes ago", "within a minute of its start: the start alone");
+  assert.equal(lastLink(doc, "r2"), null);
+  assert.equal(when("e1"), "ended 3 hours ago", "an ended row keeps its one moment");
+  assert.equal(lastLink(doc, "e1"), null);
+
+  const r1 = rowOf(doc, "r1");
+  const e1 = rowOf(doc, "e1");
+  const details = r1.querySelector(DETAILS);
+  details.focus();
+  await poll(doc);
+  assert.equal(rowOf(doc, "r1"), r1, "a newer last step leaves the row as drawn");
+  assert.equal(lastLink(doc, "r1"), link, "and its link");
+  assert.equal(doc.activeElement, details, "its focused Details keeps the focus");
+  assert.equal(link.querySelector("time.agent-last").getAttribute("datetime"), later.lastAt, "the moment moved");
+  assert.equal(when("r1"), "running now, started 5 hours ago · last step 1 minute ago");
+  assert.equal(link.getAttribute("aria-label"), "Last step 1 minute ago: go to the latest turn of Claude Code, Task r1 in ~/ws");
+  assert.equal(rowOf(doc, "e1"), e1);
+  assert.equal(when("r2"), "running now, started 30 minutes ago · last step 1 minute ago", "a row whose first step past its first minute comes in gains the link");
+  assert.equal(lastLink(doc, "r2").getAttribute("href"), "/mandu/agents/r2?go=latest");
+});
+
+test("P9: a running row that Show more brought moves its last step in place on the next poll", async () => {
+  const page1 = Array.from({ length: 25 }, (_, i) => row(`a${String(i).padStart(2, "0")}`));
+  const deep = row("b0", { state: "running", startedAt: minutesAgo(5 * 60), lastAt: minutesAgo(10) });
+  const routes = {
+    "GET home/history": { total: 26, rows: page1, next: "a24" },
+    "GET home/history?after=a24": { total: 26, rows: [deep], next: null },
+    "GET home/history?limit=26": { total: 26, rows: [...page1, { ...deep, lastAt: minutesAgo(3) }], next: null },
+  };
+  const { doc, calls } = load({ extensions: "", url: URL, homeVm: home(), routes });
+  await tick();
+  doc.querySelector("#history-list .history-more button").click();
+  await tick();
+  const b0 = rowOf(doc, "b0");
+  assert.equal(b0.querySelector(".agent-when").textContent, "running now, started 5 hours ago · last step 10 minutes ago");
+  await poll(doc);
+  assert.deepEqual(historyCalls(calls).slice(-1), ["home/history?limit=26"]);
+  assert.equal(rowOf(doc, "b0"), b0, "the row on the second page is the node already there");
+  assert.equal(b0.querySelector(".agent-when").textContent, "running now, started 5 hours ago · last step 3 minutes ago", "its moment moved");
 });

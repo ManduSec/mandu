@@ -1,0 +1,10 @@
+{
+  "id": "pypi",
+  "name": "PyPI",
+  "formats": ["^pypi-AgEIcHlwaS5vcmc[0-9A-Za-z_-]{50,2000}$"],
+  "shapes": ["pypi-AgEIcHlwaS5vcmc…"],
+  "hosts": ["upload.pypi.org"],
+  "docs": ["https://docs.pypi.org/api/upload/", "https://pypi.org/help/#apitoken"],
+  "examples": ["pypi-AgEIcHlwaS5vcmc{x*120}"],
+  "non_examples": ["pypi-AgEIcHlwaS5vcmc{x*49}", "pypi-AgENdGVzdC5weXBpLm9yZw{x*120}"]
+}

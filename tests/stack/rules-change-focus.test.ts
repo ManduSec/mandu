@@ -19,14 +19,24 @@
  *       arbiter's panel has the rule blocking;
  *   F2  the notice's Undo gives the focus to the Your rules heading, and the
  *       rule allows again;
- *   F3  Remove under b.example's opened row gives the focus to the heading,
- *       never another row's control, and the rule is gone;
+ *   F3  Remove under b.example's opened row makes protection weaker, so it
+ *       asks under the row, on the page (§4.25n *Rules asks on the page,
+ *       not in a browser dialog*), its sentence focused: Cancel leaves the
+ *       arbiter's rule blocking and the focus on the ⋯; Remove anyway gives
+ *       the focus to the heading, never another row's control, the rule is
+ *       gone and the notice has its Undo;
  *   F4  Always allowed in the answer's menu gives the focus back to that
  *       answer's menu, and the arbiter now lets that send go;
  *   F5  signed out, a refused change gives the focus back to the menu,
  *       described by "Sign in first…", and nothing changed;
  *   F6  the oracle: neither the rendered pages nor the answers read here
- *       carry the registered key.
+ *       carry the registered key;
+ *   F7  a menu that saves at once waits for Enter from the keyboard
+ *       (§4.25 *A menu that saves at once waits for Enter from the
+ *       keyboard*): a Down arrow alone on the answer's menu leaves the send
+ *       blocked (before F4); a Down arrow on api.example.com's menu leaves
+ *       the arbiter's panel allowing, and Enter makes it block, the focus
+ *       back on the menu (after F4).
  *
  * jsdom keeps the focus of a control turned off, so `pick` and `press` drop
  * it to <body> after the change, as Chromium does. Axes: secrets (stated).
@@ -82,6 +92,18 @@ function pick(sel: Doc): void {
   sel.value = "flip";
   sel.dispatchEvent(new sel.ownerDocument.defaultView.Event("change", { bubbles: true }));
   drop(sel);
+}
+/** A Down arrow on the closed menu, as Chromium on Linux takes it: the
+ *  next choice, and `change` at once. */
+function arrow(sel: Doc): void {
+  const win = sel.ownerDocument.defaultView;
+  sel.focus();
+  sel.dispatchEvent(new win.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+  sel.value = "flip";
+  sel.dispatchEvent(new win.Event("change", { bubbles: true }));
+}
+function enter(sel: Doc): void {
+  sel.dispatchEvent(new sel.ownerDocument.defaultView.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 }
 const rowOf = (doc: Doc, key: string) => [...doc.querySelectorAll("#rules-list .row.rule")].find((r: Doc) => r.dataset.rule === key);
 const menuOf = (doc: Doc, key: string) => rowOf(doc, key)?.querySelector("select.effect-select");
@@ -152,7 +174,9 @@ test("Rules over the real arbiter: a rule's menu, an answer's menu, Remove and U
 
     const ready = (doc: Doc) => !!menuOf(doc, "r-0001") && !!menuOf(doc, "r-0002") && !!menuOf(doc, ANSWER);
     await servedProductPage(base, "/rules", ready, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      // Remove that makes protection weaker asks on the page (dashboard.md
+      // §4.25n *Rules asks on the page, not in a browser dialog*).
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       assert.equal(controlName(menuOf(doc, "r-0001")), "What happens for api.example.com");
 
       // F1: a rule's menu.
@@ -175,22 +199,61 @@ test("Rules over the real arbiter: a rule's menu, an answer's menu, Remove and U
       assert.deepEqual(effects(menuOf(doc, "r-0001")), before, "the rule as it was");
       assert.equal((await rule("r-0001"))?.kind, "release-allow");
 
-      // F3: Remove under an opened rule.
+      // F3: Remove under an opened rule. Removing a block makes protection
+      // weaker: the arbiter asks first, and the page asks under the row.
       rowOf(doc, "r-0002").querySelector(".file-more").click();
-      const remove = [...rowOf(doc, "r-0002").nextElementSibling.querySelectorAll("button")].find((b: Doc) => b.textContent === "Remove");
-      press(remove);
+      const askOf = () => doc.querySelector("#rules-list .ask-in-place");
+      const inAsk = (words: string) => [...askOf().querySelectorAll("button")].find((b: Doc) => b.textContent === words);
+      const removeOf = () => [...rowOf(doc, "r-0002").nextElementSibling.querySelectorAll("button")].find((b: Doc) => b.textContent === "Remove");
+      press(removeOf());
+      await waitWhile(() => !askOf());
+      assert.equal(askOf().querySelector(".ask-in-place-words").textContent, "Removing this rule makes protection weaker for b.example.");
+      assert.equal(doc.activeElement, askOf().querySelector(".ask-in-place-words"), "the question's sentence, never Remove anyway");
+      // Cancel: nothing changed in the arbiter, the focus on the row's ⋯.
+      inAsk("Cancel").focus();
+      inAsk("Cancel").click();
+      assert.equal(askOf(), null);
+      assert.equal(doc.activeElement, rowOf(doc, "r-0002").querySelector(".file-more"));
+      assert.equal((await rule("r-0002"))?.kind, "release-block", "Cancel: the rule still blocks");
+      // Remove anyway: gone, the focus on the heading, the notice with its Undo.
+      press(removeOf());
+      await waitWhile(() => !askOf());
+      press(inAsk("Remove anyway"));
       await waitWhile(() => rowOf(doc, "r-0002") !== undefined);
       assert.equal(doc.activeElement, doc.getElementById("rules-title"), "the heading, never another row's control");
       assert.equal(doc.getElementById("rules-notice").firstChild.textContent, "Rule removed.");
+      assert.ok([...doc.querySelectorAll("#rules-notice button")].some((b: Doc) => b.textContent === "Undo"), "the removal has its Undo");
       assert.equal(await rule("r-0002"), undefined, "the rule is gone");
 
-      // F4: an answer's menu.
+      // F7, the answer: a Down arrow alone sends nothing.
       const answerMenu = menuOf(doc, ANSWER);
+      arrow(answerMenu);
+      assert.match(rowOf(doc, ANSWER).querySelector(".menu-wait").textContent, /^Press Enter to change it to Always allowed, or Escape to keep /);
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal((await send()).allow, false, "a Down arrow alone leaves the send blocked");
+      answerMenu.blur();
+      await waitWhile(() => !!rowOf(doc, ANSWER).querySelector(".menu-wait"));
+      assert.equal(answerMenu.value, "", "leaving it: the answer in force");
+      assert.equal((await send()).allow, false);
+
+      // F4: an answer's menu.
       pick(answerMenu);
       await waitWhile(() => menuOf(doc, ANSWER) === answerMenu);
       assert.equal(doc.activeElement, menuOf(doc, ANSWER), "the same answer's menu, drawn again");
       assert.equal(doc.getElementById("rules-notice").firstChild.textContent, "Now always allowed.");
       assert.equal((await send()).allow, true, "the arbiter now lets that send go");
+
+      // F7, a rule: a Down arrow waits, Enter makes it.
+      const keyed = menuOf(doc, "r-0001");
+      arrow(keyed);
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal((await rule("r-0001"))?.kind, "release-allow", "a Down arrow alone leaves the rule allowing");
+      enter(keyed);
+      drop(keyed);
+      await waitWhile(() => menuOf(doc, "r-0001") === keyed);
+      assert.equal((await rule("r-0001"))?.kind, "release-block", "Enter makes it block");
+      assert.equal(doc.activeElement, menuOf(doc, "r-0001"), "the focus back on the menu, drawn again");
+      assert.equal(doc.getElementById("rules-notice").firstChild.textContent, "Now always blocked.");
       pages.push(doc.body.textContent ?? "");
     }, { headers: { Cookie: ADMIN_COOKIE } });
 

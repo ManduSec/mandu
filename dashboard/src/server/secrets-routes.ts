@@ -42,7 +42,7 @@ import {
   type SecretsPanel,
 } from "../view-model/secrets.js";
 import type { PathLevelsEntryWire } from "../view-model/file-browser.js";
-import { filePaths } from "./path-kinds.js";
+import { pathKinds } from "./path-kinds.js";
 
 export type { DerivedLabelWire, PathLabelWire } from "../view-model/secrets.js";
 
@@ -123,6 +123,10 @@ export interface SecretsArbiter {
   /** `mandu why <path>`: the rules' view of one file (a data-socket READ).
    *  Optional: an older arbiter → the browser's Why answers 501. */
   whyPath?(path: string, home?: string): Promise<unknown>;
+  /** `mandu why <host>`: who may be sent to one host, and what the egress
+   *  gate does (a data-socket READ, a probe: nothing queued). Optional: an
+   *  older arbiter → Rules' Check a host answers 501 and is hidden. */
+  whyHost?(host: string): Promise<unknown>;
 }
 
 /** The GET body: the axis switch and the projected panel (the pure
@@ -146,11 +150,14 @@ export async function getSecrets(
 ): Promise<void> {
   try {
     const state = await arbiter.confidentialityState();
-    // A label reaching everything inside a file reads as that file on the
-    // product page (path-kinds.ts; display only).
-    const recursive = (Array.isArray(state.labels) ? state.labels : [])
-      .flatMap((l) => (typeof l?.path === "string" && l.recursive !== false && l.glob !== true ? [l.path] : []));
-    const panel = toSecretsPanel(state, await filePaths(recursive));
+    // A label reaching everything inside a file reads as that file, and one
+    // on a path with nothing there says so, on the product page
+    // (path-kinds.ts; display only). Every literal label path is looked at,
+    // exact or recursive; pathKinds drops patterns and relative paths.
+    const paths = (Array.isArray(state.labels) ? state.labels : [])
+      .flatMap((l) => (typeof l?.path === "string" && l.glob !== true ? [l.path] : []));
+    const { files, missing } = await pathKinds(paths);
+    const panel = toSecretsPanel(state, files, missing);
     const body: SecretsResponse = { enabled: panel.enabled, panel };
     json(res, 200, body);
   } catch (err) {

@@ -1601,7 +1601,9 @@ was fixed on 2026-10-02 or 2026-10-03; the rules are Plan 10 §2.3's, extended.
   - *What it costs.* (`git`'s cost is (11)'s.) `aws` (SigV4 signs with the secret), `docker`
     (the daemon logs in) and `kubectl` / `helm` (they pin the cluster CA)
     read their credentials as the twin, which does not log in: a human who
-    trusts them writes `prints: nothing` (or the probe vets them). The
+    trusts them writes `prints: nothing` (or the probe vets them). Since
+    2026-10-24 `aws`'s twin logs in: the egress proxy re-signs its requests
+    with the real key ([`aws-sigv4-resign.md`](aws-sigv4-resign.md)). The
     guard suites' raw holder (`mdu-holder`) carries the field.
   Tests: `reader-allow-list.test.ts` (the rule, the vouch, the refusals,
   the migration warnings, pins keeping the field), `secret_open.rs` (the
@@ -3462,11 +3464,12 @@ from the vendor's documentation, not measured.
 | Ruby `Net::HTTP` | served | `SSL_CERT_FILE` | measured |
 | cargo | served | `CARGO_HTTP_CAINFO` | measured |
 | cargo without `CARGO_HTTP_CAINFO` | served (rustup's cargo); **refused** by a cargo whose libcurl ignores `SSL_CERT_FILE` | rustup's cargo vendors libcurl over OpenSSL with no CA file of its own, so OpenSSL's default paths (`SSL_CERT_FILE`) apply; a cargo linked to a GnuTLS libcurl (or a system one with a compiled-in CA bundle) does not read it | measured (rustup 1.75) |
-| Java (`HttpClient`, `HttpsURLConnection`) | **bypass** | reads no proxy or CA variable; would need `-Dhttps.proxyHost`/`-Djavax.net.ssl.trustStore` with a PKCS12 store | measured |
-| aws CLI / botocore | served for bearer calls | `AWS_CA_BUNDLE` | doc |
+| Java (`HttpsURLConnection`, `HttpClient` on the default `ProxySelector`) | served (since 2026-10-24) | `JAVA_TOOL_OPTIONS`: a session PKCS#12 trust store and `-Dhttps.proxyHost` (kube-wire-release.md §5); JDK 18+, 11.0.12+, 8u301+. Before: **bypass** (reads no proxy or CA variable) | measured (JDK 25, `tests/stack/kube-wire-release.test.ts`) |
+| Java `HttpClient` built without `.proxy(…)` | **bypass** | the client uses no proxy unless given one | doc |
+| aws CLI / botocore | served (SigV4 re-signed at the proxy, [`aws-sigv4-resign.md`](aws-sigv4-resign.md)) | `AWS_CA_BUNDLE` | measured: boto3 1.40.72 STS and S3 PutObject in `tests/stack/aws-sigv4-resign.test.ts` |
 | gcloud | served | `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` | doc |
 | az | served | `REQUESTS_CA_BUNDLE` | doc |
-| kubectl, helm (to the cluster) | **refused** | trusts only the kubeconfig's cluster CA | doc |
+| kubectl, helm (to a cluster of `~/.kube/config`) | served (since 2026-10-24) | the session KUBECONFIG overlay: the session CA and `proxy-url` per https cluster; the proxy dials the cluster with its own CA (kube-wire-release.md). Before: **refused** (trusts only the kubeconfig's cluster CA) | client-go's reading measured; real kubectl where installed |
 | docker pull/push | **not in session** | the daemon makes the request | doc |
 
 **Your own CA files are kept** (Plan 12 F6). Each client reads one file from
@@ -3506,8 +3509,8 @@ row's events with their reasons, the client's version and the proxy log, and
 retries once a row whose only event is `forward_error` (the upstream was
 unreachable: transport, not a cell).
 
-**Utility gap on Mandu's floor Node.** Mandu supports Node 22.13
-(`scripts/ci/pins.env` `NODE_VERSION`), which predates `NODE_USE_ENV_PROXY`:
+**Utility gap on Mandu's floor Node.** Mandu supports Node 22.15
+(`scripts/ci/pins.env` `NODE_VERSION`; 22.13 until 2026-10-26), which predates `NODE_USE_ENV_PROXY`:
 on it a Node program in the session (`fetch`, `https`) silently goes around
 the egress proxy, so a placeholder it sends is never put back and its login
 fails. Nothing leaks (it only ever held the placeholder, and a request that
@@ -3536,17 +3539,17 @@ row (`consumerWireRelease(path)`), with the reason:
 | `~/.git-credentials`, `~/.config/git/credentials` | git, git-credential-store | served | basic auth header (Plan 10 §11.13) |
 | `.pypirc` | twine | served | requests |
 | `~/.cargo/credentials.toml` | cargo | served | `CARGO_HTTP_CAINFO` |
-| `.pgpass` | psql, pg_dump, pg_restore | reader | Postgres protocol, not HTTP |
-| `~/.aws/credentials` | aws | reader | SigV4 signs with the secret: a placeholder cannot be put back after signing |
+| `.pgpass` | psql, pg_dump, pg_restore | served (relay) | since 2026-10-24 ([`db-login-release.md`](db-login-release.md)): the connect guard performs a connect to the line's database on the egress proxy's database relay, which answers the server's SCRAM or md5 login with the password; the launch HOME's file binds each line's password to its `host:port`; Linux under the connect guard only (elsewhere: Postgres protocol, not HTTP, so a reader) |
+| `~/.aws/credentials` | aws | served | SigV4: `aws` signs with the placeholder key, the egress proxy re-signs each request with the real key at an AWS endpoint ([`aws-sigv4-resign.md`](aws-sigv4-resign.md), 2026-10-24; a reader until then). A listed reader still gets the real file |
 | `~/.docker/config.json` | docker | reader | the daemon, outside the session, makes the requests |
-| `~/.kube/config` | kubectl, helm | reader | pins the cluster CA |
+| `~/.kube/config` | kubectl, helm | served | the KUBECONFIG overlay trusts the session CA; a bearer token in a header, a client certificate the proxy presents at the cluster (kube-wire-release.md, 2026-10-24) |
 | `~/.ssh/id_*` | ssh, git, scp, ssh-add | reader | SSH, and the key signs |
 
 Since 2026-10-04 (§3 D8 (12)) only the vetted ones (`ssh`, `ssh-add`) read
 their file raw by default; the others read the twin, which logs in where the
 wire release serves it (`psql` and `pg_restore` are printers since that
-day's correction, and `.pgpass` has no wire release: Postgres logins from it
-fail). Before, the
+day's correction; `.pgpass` had no wire release, so Postgres logins from it
+failed, until the database relay of 2026-10-24, `db-login-release.md`). Before, the
 table's consumers read the file raw by default (rule i); the `wire` field
 records which of them *could* instead work from a twin, the data a "prefer the
 twin" default needs. Exception: `curl` and `scp` are printers since §3 D8's
@@ -3575,9 +3578,10 @@ and `git` start) opens the key.
 
 ### 10.5 Not done
 
-- **Java** stays a reader. Serving it needs a PKCS12 trust store generated per
-  session (`keytool`, a JVM start at launch) and `JAVA_TOOL_OPTIONS`, which
-  every JVM echoes to stderr.
+- ~~**Java** stays a reader.~~ Served since 2026-10-24 (kube-wire-release.md
+  §5): the trust store is written without a JVM start (password-less
+  PKCS#12, JDK 18+), and `JAVA_TOOL_OPTIONS`, which every JVM echoes to
+  stderr, carries it and the proxy (`MANDU_JAVA_TRUST=0` opts out).
 - **A per-host inspection opt-out** for pinning clients: today
   `MANDU_MODEL_HOSTS` both excludes a host from the proxy (`NO_PROXY`) and
   passes it through uninspected, but the connect guard then decides the

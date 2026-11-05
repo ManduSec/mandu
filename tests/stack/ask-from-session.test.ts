@@ -21,7 +21,8 @@
  *       code, with no period after it; its *See what the agent was doing*
  *       opens the session whose folder it names;
  *   F3  the served Home page: each short card names its folder before
- *       ". Details in Approvals";
+ *       ". ", then its line on which answers last (§4.34 *Home's card
+ *       says which answers last*), then "Details in Approvals";
  *   F4  the oracle: the model never got a value, and no page or answer
  *       read here carries a variable's value or a token (`$MDU`).
  *
@@ -162,7 +163,8 @@ test("two agents of one kind: Approvals and Home name the folder of the session 
     await servedProductPage(base, "/", (doc: Doc) => doc.querySelectorAll("#home-waiting .ask .ask-from").length === AGENTS.length, (doc: Doc) => {
       for (const a of AGENTS) {
         const sub = cardFor(doc, "#home-waiting .ask", a.host).querySelector(".ask-sub");
-        assert.match(sub.textContent, new RegExp(`${CLOCK} · just now · from Claude Code in ~/projects/${a.folder}\\. Details in Approvals$`), sub.textContent);
+        const lasting = `Allow once and Send without it cover only the next such request. Always allow and Block are kept for ${a.name} and ${a.host} until you change them under Rules.`;
+        assert.match(sub.textContent, new RegExp(`${CLOCK} · just now · from Claude Code in ~/projects/${a.folder}\\. ${lasting.replace(/[.]/g, "\\.")} Details in Approvals$`), sub.textContent);
       }
       pages.push(doc.documentElement.outerHTML);
     }, { css, ...signedIn });

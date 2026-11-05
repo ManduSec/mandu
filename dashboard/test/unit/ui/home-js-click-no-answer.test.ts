@@ -25,6 +25,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { JS, load, tick, rulesPage, rowOf, openRule } from "./home-js-fixtures.js";
+import { turnOffTyped } from "./protect-off.js";
 
 const GONE = "The dashboard could not reach its own server. Refresh in a moment.";
 const noAnswer = () => { throw new TypeError("Failed to fetch"); };
@@ -114,15 +115,14 @@ test("Rules: Undo with no answer says so in the notice, never a disabled Undo", 
 
 test("Settings › Protection: the switch with no answer says so in its note and keeps what it showed", async () => {
   const left = await unhandledDuring(async () => {
-    const { doc, window } = load({ url: SETTINGS_URL, routes: {
+    const { doc } = load({ url: SETTINGS_URL, routes: {
       "GET config/axes": { ok: true, effective: { integrity: false, confidentiality: true }, effectiveMode: "secrets" },
       "POST config/axes": noAnswer,
     } });
     await tick();
     const sw = doc.getElementById("switch-protection");
     assert.equal(sw.getAttribute("aria-checked"), "true");
-    window.prompt = () => "OFF";
-    sw.click();
+    turnOffTyped(doc);
     await tick();
     assert.equal(doc.getElementById("settings-protect-note").textContent, GONE);
     assert.equal(sw.getAttribute("aria-checked"), "true", "nothing changed");

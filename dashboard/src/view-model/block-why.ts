@@ -79,30 +79,31 @@ const WHY: Record<string, (ctx: WhyContext) => StoryPart[]> = {
   "egress:secret-unbound": (x) => [t(`No rule lets ${theSecret(x.carried)} go`), ...toHost(x.host), t("." + OR_YOUR_OK)],
   "egress:secret-unknown-destination": () => [t("Mandu could not tell where this request was going." + OR_YOUR_OK)],
   "egress:secret-https-only": () => [t("Mandu fills this secret in only in requests it knows are HTTPS, and this one was not.")],
+  "egress:secret-db-login-only": () => [t("Mandu fills this database password in only when your database client logs in to that database, never in a web request.")],
   // Also when the caller stated no position at all (the model proxy's
   // pre-check, the Rust net-supervisor): the words claim only that Mandu
   // could not confirm the header was the one place (2026-10-10).
   "egress:secret-wire-position": () => [t("Mandu fills this login secret in only in a request's Authorization header, and could not confirm that is the only place this request carried it.")],
   "egress:secret-model-context": () => [t("Mandu never gives a secret's real value to the AI.")],
-  "egress:obsolete-symbol": () => [t("The placeholder stands for a value that has changed since, so Mandu would not guess which one to send.")],
-  "egress:invalid-symbol": () => [t("Mandu could not read a placeholder in it, so it would not guess.")],
+  "egress:obsolete-symbol": () => [t("The mask stands for a value that has changed since, so Mandu would not guess which one to send.")],
+  "egress:invalid-symbol": () => [t("Mandu could not read a mask in it, so it would not guess.")],
   "egress:user-rule-block": () => [t("One of your rules blocks sending this data there.")],
   "egress:disposition-block": () => [t("Your rules block this kind of send instead of asking you.")],
   // The net-proxy's check for a placeholder a shell emptied (confidentiality
   // §7): nothing was in the request to send or to approve.
-  "egress:shell-expanded-placeholder": () => [t("The program's shell had emptied the secret's placeholder (it was not in single quotes), so the request carried neither your secret nor its placeholder. Mandu stopped it so it would not fail unseen, and told the AI how to quote it. There is nothing to approve.")],
+  "egress:shell-expanded-placeholder": () => [t("The program's shell had emptied the secret's mask (it was not in single quotes), so the request carried neither your secret nor its mask. Mandu stopped it so it would not fail unseen, and told the AI how to quote it. There is nothing to approve.")],
   // ── The session gate (decideSessionEgress, confidentiality §4) ──
   "session:high-unbound": (x) => [
     t("This session read a secret, and "), ...(x.host ? [c(x.host)] : [t("this place")]),
-    t(" is not a place it may go. The AI could pass a secret on in its own words, which no placeholder marks."),
+    t(" is not a place it may go. The AI could pass a secret on in its own words, which no mask marks."),
   ],
   // A HIGH session's command (confidentiality.md §4, 2026-10-11): no gate can
   // tell whether it sends anything, so it waits for your OK.
   "session:high-shell": () => [
-    t("This session read a secret, and Mandu cannot tell whether this command sends anything over the network. The AI could pass a secret on in its own words, which no placeholder marks."),
+    t("This session read a secret, and Mandu cannot tell whether this command sends anything over the network. The AI could pass a secret on in its own words, which no mask marks."),
   ],
   // ── The exec gate (execGate) and the escalation wrap ──
-  "exec:symbol-in-command": () => [t("The command would run a placeholder as code, and Mandu never runs one.")],
+  "exec:symbol-in-command": () => [t("The command would run a mask as code, and Mandu never runs one.")],
   "exec:tainted-program-text": () => [t("It runs code downloaded from the internet, which can do anything the site that served it wants.")],
   "exec:escalation-approval": () => [t("The command needed the network or your real files. The AI's commands get those only with your OK.")],
   // ── The file gate (decideFsPath) ──
@@ -124,7 +125,7 @@ const WHY: Record<string, (ctx: WhyContext) => StoryPart[]> = {
   "proxy:symbol-in-tls-tunnel": () => [t("Mandu could not fill in the real value inside this tool's encrypted request, so it sent nothing.")],
   "proxy:net-gate-unreadable": () => [t(COULD_NOT_CHECK)],
   "proxy:net-gate-destination-bound": () => [t(COULD_NOT_CHECK)],
-  "proxy:net-gate-symbol-bound": () => [t("The request carried more placeholders than Mandu checks at once, so it sent nothing.")],
+  "proxy:net-gate-symbol-bound": () => [t("The request carried more masked values than Mandu checks at once, so it sent nothing.")],
 };
 
 /** Block words in a check's recorded text ("net_action · blocked …",

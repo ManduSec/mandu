@@ -16,7 +16,7 @@
  *            main pass per file and each `.agents/checks/*.md` check) reaches
  *            the model only through the proxy, and the labelled file in the
  *            diff (an untracked file Goose inlines into the prompt) reaches
- *            the model only as a symbol; `review --provider google` (a
+ *            the model only as a symbol; `review --provider gcp_vertex_ai` (a
  *            provider Mandu does not route) is refused before anything
  *            starts.
  */
@@ -249,11 +249,11 @@ test("`mandu goose review`: every reviewer child goes through the proxy, and the
   passed++;
 });
 
-test("`mandu goose review --provider google`: refused before anything starts", { skip: SKIP, timeout: 60_000 }, async () => {
+test("`mandu goose review --provider gcp_vertex_ai`: refused before anything starts", { skip: SKIP, timeout: 60_000 }, async () => {
   reqs.length = 0;
   await assert.rejects(
-    () => main(["--no-scope", "--", GOOSE!, "review", "--provider", "google"], launchEnv(join(tmp, "goose-review-refused"))),
-    /--provider names the provider `google`/,
+    () => main(["--no-scope", "--", GOOSE!, "review", "--provider", "gcp_vertex_ai"], launchEnv(join(tmp, "goose-review-refused"))),
+    /--provider names the provider `gcp_vertex_ai`/,
   );
   assert.equal(reqs.length, 0, "nothing reached the upstream");
   passed++;

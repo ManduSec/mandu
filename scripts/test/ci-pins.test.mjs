@@ -231,6 +231,23 @@ NOT_AGENTS.add("SBX_SHA256");
 NOT_AGENTS.add("NONO_SHA256");
 // the reftable tests' git, built from source (its own test above)
 NOT_AGENTS.add("GIT_REFTABLE_SHA256");
+// the live client lanes' cluster tools (their own test below)
+for (const k of ["K3S_SHA256", "KUBECTL_SHA256", "HELM_SHA256"]) NOT_AGENTS.add(k);
+
+test("the live client lanes (live-clients.md): k3s with its air-gap images, kubectl and helm, by sha256, installed and run by provision.sh; the k3s fixture installed beside boot.sh", () => {
+  assert.match(pins.K3S_VERSION, /^v\d+\.\d+\.\d+\+k3s\d+$/);
+  assert.match(pins.KUBECTL_VERSION, /^\d+\.\d+\.\d+$/);
+  assert.match(pins.HELM_VERSION, /^\d+\.\d+\.\d+$/);
+  for (const k of ["K3S_SHA256", "K3S_AIRGAP_SHA256", "KUBECTL_SHA256", "HELM_SHA256"]) assert.match(pins[k], /^[0-9a-f]{64}$/, k);
+  const p = read("scripts/ci/guest/provision.sh");
+  for (const k of ["K3S_SHA256", "K3S_AIRGAP_SHA256", "KUBECTL_SHA256"]) assert.ok(p.includes(`echo "$${k}  `), `provision.sh checks ${k}`);
+  assert.match(p, /install_release_bin helm "[^"]*\$HELM_VERSION[^"]*" "\$HELM_SHA256"/);
+  assert.ok(p.includes('[[ "$(k3s --version | head -1)" == "k3s version $K3S_VERSION "* ]]'), "k3s runs, at its pin");
+  assert.ok(p.includes('"Client Version: v$KUBECTL_VERSION"'), "kubectl runs, at its pin");
+  assert.ok(p.includes('[[ "$(helm version --short)" == "v$HELM_VERSION+"* ]]'), "helm runs, at its pin");
+  assert.ok(p.includes('"$SRC/scripts/ci/guest/fixture-k3s.sh" "$LIB/fixture-k3s.sh"'), "the fixture is installed");
+  assert.match(p, /systemctl disable --now postgresql\.service mysql\.service/, "the distro's servers do not run at boot");
+});
 const releaseBins = Object.keys(pins)
   .filter((k) => k.endsWith("_SHA256") && !NOT_AGENTS.has(k) && `${k.slice(0, -7)}_VERSION` in pins)
   .map((k) => k.slice(0, -7));

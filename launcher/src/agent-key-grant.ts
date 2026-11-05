@@ -23,7 +23,8 @@
  * Goose's Chat Completions providers (2026-10-11, agent-sign-in.md §3.10;
  * goose-route.ts GOOSE_COMPAT_PROVIDERS, supported-agents.md §5.6.4): each
  * one's key field goes to its own API host (openrouter.ai, api.x.ai,
- * api.router.tetrate.ai) or this machine's loopback (LiteLLM is a server the
+ * api.router.tetrate.ai; google, 2026-10-25: generativelanguage.googleapis.com)
+ * or this machine's loopback (LiteLLM is a server the
  * user runs, so loopback only); Ollama takes no key and asks for nothing.
  * The same providers' key VARIABLES (and ANTHROPIC_API_KEY / OPENAI_API_KEY)
  * in Goose's environment get an env grant each (`gooseEnvKeyGrantPlans`)
@@ -64,6 +65,7 @@ const GOOSE_COMPAT_VENDOR: Readonly<Record<string, string | null>> = {
   openrouter: "openrouter.ai",
   xai: "api.x.ai",
   tetrate: "api.router.tetrate.ai",
+  google: "generativelanguage.googleapis.com",
   litellm: null,
 };
 

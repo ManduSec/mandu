@@ -14,6 +14,10 @@
  *       registered key's value, only names;
  *   I3  `issuer_bindings: false`: the item says every key asks, with no list;
  *   I4  no `issuer_bindings`: on for every company.
+ *   W1  the same home says where the Which files fold opens (the files
+ *       kept secret with no rule), `/api/home?files=1` carries its lists,
+ *       and the page draws it closed, every kind's names and every home
+ *       place as code (its parity with the arbiter: builtin-files-parity).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -28,6 +32,7 @@ import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import type { HomeVM } from "../../dashboard/src/view-model/home.js";
 import { ISSUER_TABLE } from "../../dashboard/src/view-model/issuer-words.js";
+import { BUILTIN_FILE_KINDS, BUILTIN_HOME_PLACES } from "../../dashboard/src/view-model/builtin-files.js";
 import { ADMIN_COOKIE, ADMIN_OPTS } from "../../dashboard/test/unit/admin-session.js";
 import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
@@ -99,11 +104,23 @@ test("Built-in protections names the companies whose keys go without asking, as 
     assert.deepEqual(it.companies.map((c) => c.name), ISSUER_TABLE.map((i) => i.name));
     assert.deepEqual(it.companies.filter((c) => c.off).map((c) => c.name), ["Stripe"]);
     assert.ok(vm.builtIn.items.includes("Keys and secret files leave this computer only where a rule or your OK allows."), "the sentence beside it stays");
+    // W1: the Which files fold opens under the masking item; its lists are
+    // fixed copy, so only ?files=1 carries them.
+    assert.equal(vm.builtIn.filesAt, 0, "the fold is there in the Secrets mode");
+    assert.equal(vm.builtIn.items[0], "Keys and secret files reach the AI masked, unless a rule lets the AI read them.");
+    assert.equal(vm.builtIn.files, undefined, "the polled home leaves the lists out");
+    const withFiles = await pageFetch(`${base}/api/home?files=1`, { headers: { Cookie: ADMIN_COOKIE } });
+    const filesBody = await withFiles.text();
+    assert.equal(withFiles.status, 200, filesBody);
+    const files = (JSON.parse(filesBody) as HomeVM).builtIn.files;
+    assert.ok(files, "?files=1 carries the lists");
+    assert.deepEqual(files.places, [...BUILTIN_HOME_PLACES]);
+    assert.ok(!filesBody.includes(KEY_VALUE), "CONFIDENTIALITY VIOLATION: /api/home?files=1 carries the key's value");
     assert.ok(!body.includes(KEY_VALUE), "CONFIDENTIALITY VIOLATION: /api/home carries the key's value");
     assert.doesNotMatch(body, /\$MDU/, "the product's home carries no token");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     type Doc = any;
-    await servedProductPage(base, "/rules", (doc: Doc) => doc.querySelector("#builtin-list > li.builtin-issuers") !== null, (doc: Doc) => {
+    await servedProductPage(base, "/rules", (doc: Doc) => doc.querySelector("#builtin-list > li.builtin-issuers") !== null && doc.querySelector("#builtin-list > li.builtin-files") !== null, (doc: Doc) => {
       const li = doc.querySelector("#builtin-list > li.builtin-issuers");
       assert.ok(li, "the Rules page draws the item");
       assert.equal(li.dataset.state, "partly");
@@ -113,6 +130,14 @@ test("Built-in protections names the companies whose keys go without asking, as 
       const codes = [...fold.querySelectorAll("code")].map((c: Doc) => c.textContent);
       assert.deepEqual(codes, ISSUER_TABLE.flatMap((i) => [...i.hosts]), "every host, as code");
       assert.ok(!doc.body.textContent.includes(KEY_VALUE), "CONFIDENTIALITY VIOLATION: the rendered page carries the key's value");
+      // W1: the served page draws the Which files fold, closed, its names as code.
+      const files = doc.querySelector("#builtin-list > li.builtin-files details.more");
+      assert.ok(files, "the Rules page draws the Which files fold");
+      assert.equal(files.open, false);
+      assert.equal(files.querySelector("summary").textContent, "Which files");
+      const names = new Set([...files.querySelectorAll("code")].map((c: Doc) => c.textContent));
+      for (const n of [...BUILTIN_FILE_KINDS.flatMap((k) => k.names), ...BUILTIN_HOME_PLACES]) assert.ok(names.has(n), `the fold names ${n}`);
+      assert.equal(files.querySelector(".builtin-files-change a").textContent, "Your rules");
     }, { headers: { Cookie: ADMIN_COOKIE } });
   });
   // I3: off.

@@ -134,7 +134,11 @@ test("the served Home heads its earlier sessions by that window, never 'today', 
     assert.deepEqual([...recent.querySelector(".agent-what").children].map((c: any) => c.className), ["sub ellipsis", "dim agent-counts"]);
     assert.equal(recent.querySelector(".agent-when").textContent, "ended 3 hours ago");
     assert.match(recent.querySelector(".agent-ended time").getAttribute("title"), /^[A-Z][a-z]{2} \d{1,2}(?:, \d{4})?, \d{2}:\d{2}$/);
-    assert.equal(row("last-night").querySelector(".agent-ended").textContent, "ended 22 hours ago");
+    // 22 hours back is yesterday by the calendar, unless the clock is past
+    // 22:00 (dashboard.md §4.25u *Every moment reads absolute and relative*).
+    const lastNight = row("last-night").querySelector(".agent-ended");
+    const today = new Date(lastNight.querySelector("time").getAttribute("datetime")).toDateString() === new Date().toDateString();
+    assert.equal(lastNight.textContent, today ? "ended 22 hours ago" : "ended yesterday");
     assert.equal(row("too-old"), null, "a session outside the window is not listed");
     assert.doesNotMatch(doc.getElementById("page-home").textContent, /\$MDU:/);
   });

@@ -103,10 +103,12 @@ function claudeSettings(r: Rig, on: boolean | null): void {
 
 // XDG_RUNTIME_DIR: the scope run dir in the test's own dir. CODEX_HOME: the
 // test's own (empty), never the host's. HOME (claude): an empty one, so no
-// host Claude Code settings or credential rules decide.
+// host Claude Code settings or credential rules decide. MANDU_VERBOSE: the
+// notes in full, as `mandu log` has them; the default display prints one
+// short line per note (launch-banner.ts postureLine).
 const env = (r: Rig, extra: Record<string, string> = {}) => ({
   HOME: process.env["HOME"], PWD: r.dir, MANDU_ARBITER_SOCK: r.sock, PATH: process.env["PATH"], CODEX_HOME: join(r.dir, "codex-home"),
-  MANDU_NO_CONTEXT_PROXY: "1", MANDU_HOME: PRIVATE_MANDU_HOME, MANDU_MODE: "off", XDG_RUNTIME_DIR: r.dir, OPENAI_API_KEY: "sk-test-only", ...extra,
+  MANDU_NO_CONTEXT_PROXY: "1", MANDU_HOME: PRIVATE_MANDU_HOME, MANDU_MODE: "off", MANDU_VERBOSE: "1", XDG_RUNTIME_DIR: r.dir, OPENAI_API_KEY: "sk-test-only", ...extra,
 });
 
 /** Run main() with console.error captured (the launch notes' channel). */

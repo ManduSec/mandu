@@ -51,6 +51,12 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF: the default mode
 const SECRET = `CONFNET_TOKEN_CANARY_${process.pid}_4242`;
 const CONTROL = `CONFCTL_TOKEN_CANARY_${process.pid}_4243`;
 const SYMBOL_RE = /^\$MDU:nomodel_read\[[0-9a-f]{4,8}\]$/;
+/** A masked `read` of a no-model file ends with the protected-file note (confidentiality.md §7.1, "A protected file read whole"): the symbol is what comes before it. */
+const beforeNote = (s: string): string => {
+  const at = s.indexOf("\n\n[mandu:secret] masked: ");
+  if (at >= 0) assert.match(s.slice(at), /is a protected file that no AI model may read/, "the note says what the symbol is");
+  return at < 0 ? s : s.slice(0, at);
+};
 
 /** OpenCode 1.18.13's `read` rendering of a whole text file (read off the
  *  compiled binary and the live capture of 2026-10-05). */
@@ -180,9 +186,9 @@ for (const gen of [1, 2] as const) test(`OpenCode ${gen}: a read of a no-model f
 
     // 1. the labelled read: masked whole, one symbol
     const masked = await forwarded(exfil, turn("toolu_ocv_1", "read", g.readInput(vault), g.frame(vault, `Partner API token: ${SECRET}\n`)));
-    assert.match(masked, SYMBOL_RE, `the labelled read reaches the model as one no-model symbol: ${masked}`);
+    assert.match(beforeNote(masked), SYMBOL_RE, `the labelled read reaches the model as one no-model symbol: ${masked}`);
     // (3) the symbol stands for the file's text, not OpenCode's frame
-    assert.equal(await admin.resolve(masked), `Partner API token: ${SECRET}`, "the symbol's value is the file's text");
+    assert.equal(await admin.resolve(beforeNote(masked)), `Partner API token: ${SECRET}`, "the symbol's value is the file's text");
 
     // 2. the control, in ANOTHER session of the same arbiter: an unlabelled one-line file rides raw
     const controlWire = g.frame(control, `Partner API token: ${CONTROL}\n`);

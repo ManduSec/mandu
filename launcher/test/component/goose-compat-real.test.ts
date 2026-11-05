@@ -1,7 +1,8 @@
 /**
  * goose-compat-real.test — the REAL goose binary on each of its built-in
  * Chat Completions providers with an env host (litellm, openrouter, ollama,
- * xai, tetrate) under the REAL launcher (`main()`), the REAL arbiter daemon
+ * xai, tetrate), and on its `google` provider (the Gemini wire, a scripted
+ * Gemini upstream, model-wires.md §4), under the REAL launcher (`main()`), the REAL arbiter daemon
  * and the autostarted model proxy, against a scripted Chat Completions
  * upstream on loopback (supported-agents.md §5.6.4). No key is spent and no
  * provider is dialed: every provider's host key in the user's env points at
@@ -75,7 +76,7 @@ let vault: string;
 let arbiter: ChildProcess | undefined;
 let upstream: Server;
 let origin = "";
-const seen: Array<{ method: string; path: string; auth: string; body: string }> = [];
+const seen: Array<{ method: string; path: string; auth: string; googKey: string; body: string }> = [];
 let passed = 0;
 
 // ── the scripted Chat Completions model (Goose 1.53.0's stream reader) ─────
@@ -90,6 +91,14 @@ const chatShell = (model: string, command: string): string => {
     chatChunk(model, { tool_calls: [{ index: 0, function: { arguments: args.slice(8) } }] }) + chatChunk(model, {}, "tool_calls") + "data: [DONE]\n\n";
 };
 
+// -- the scripted Gemini model (Goose's google provider, formats/google.rs) --
+
+const geminiChunk = (parts: unknown[], finish?: string): string =>
+  `data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts }, index: 0, ...(finish ? { finishReason: finish } : {}) }], modelVersion: "mandu-test-model", responseId: "resp-goose-1", usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 } })}\r\n\r\n`;
+const geminiText = (t: string): string => geminiChunk([{ text: t }]) + geminiChunk([{ text: "" }], "STOP");
+// no id: Gemini's own answers carry none, so the proxy mints one
+const geminiShell = (command: string): string => geminiChunk([{ functionCall: { name: "shell", args: { command } } }], "STOP");
+
 /** One agentic turn: the first tool-bearing request gets a `cat` of the
  *  labelled file, the request carrying its result the closing text; a
  *  tool-less request (Goose's title call) a title. A GET (a model listing:
@@ -101,7 +110,8 @@ function scripted(req: IncomingMessage, res: ServerResponse): void {
   req.on("data", (c) => (buf += c));
   req.on("end", () => {
     const path = req.url ?? "";
-    seen.push({ method: req.method ?? "", path, auth: String(req.headers["authorization"] ?? ""), body: buf });
+    seen.push({ method: req.method ?? "", path, auth: String(req.headers["authorization"] ?? ""), googKey: String(req.headers["x-goog-api-key"] ?? ""), body: buf });
+    if (process.env["MANDU_GOOSE_DUMP"]) writeFileSync(join(process.env["MANDU_GOOSE_DUMP"], `req-${seen.length}.json`), JSON.stringify({ method: req.method, path, headers: req.headers, body: buf }, null, 2));
     let body: Record<string, unknown> = {};
     try { body = JSON.parse(buf) as Record<string, unknown>; } catch { /* a GET */ }
     const model = typeof body["model"] === "string" ? body["model"] : "m";
@@ -110,6 +120,14 @@ function scripted(req: IncomingMessage, res: ServerResponse): void {
     if (req.method === "GET") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ object: "list", data: [], models: [] }));
+    } else if (/:streamGenerateContent$/.test(path.split("?")[0] ?? "")) {
+      // the Gemini wire (Goose's google provider, model-wires.md §4)
+      const contents = (body["contents"] as Array<{ parts?: Array<Record<string, unknown>> }> | undefined) ?? [];
+      const hasResult = contents.some((c) => (c.parts ?? []).some((p) => p["functionResponse"] !== undefined));
+      // goose sends `tools` as ONE Tool object (`{"functionDeclarations": [...]}`)
+      const gtools = body["tools"] === undefined ? [] : [body["tools"]].flat();
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(gtools.length === 0 ? geminiText("Title") : hasResult ? geminiText("MANDU_COMPAT_DONE") : geminiShell(`cat ${join(vault, "api.env")}`));
     } else if (/\/chat\/completions$/.test(path) && textCall && tools.length > 0) {
       // the call as TEXT, split across deltas the way a model streams it
       const xml = `<function=shell><parameter=command>touch ${join(tmp, "text-call-ran")}</parameter></function>`;
@@ -170,10 +188,10 @@ function userEnv(name: string, provider: string, extra: Record<string, string> =
     MANDU_NET_PROXY: "0", MANDU_EXEC_WRAP: "0", MANDU_REPLY_FILTER: "0", MANDU_NO_KERNEL: "1", MANDU_FS_SYNC: "0",
     GOOSE_PATH_ROOT: join(tmp, `goose-${name}`), GOOSE_DISABLE_KEYRING: "1", GOOSE_MODE: "auto",
     GOOSE_PROVIDER: provider, GOOSE_MODEL: "mandu-test-model",
-    LITELLM_HOST: origin, OPENROUTER_HOST: origin, OLLAMA_HOST: origin, XAI_HOST: `${origin}/v1`, TETRATE_HOST: origin,
+    LITELLM_HOST: origin, OPENROUTER_HOST: origin, OLLAMA_HOST: origin, XAI_HOST: `${origin}/v1`, TETRATE_HOST: origin, GOOGLE_HOST: origin,
     OPENAI_HOST: origin,
     LITELLM_API_KEY: "sk-mandu-test-not-a-key", OPENROUTER_API_KEY: "sk-mandu-test-not-a-key",
-    XAI_API_KEY: "sk-mandu-test-not-a-key", TETRATE_API_KEY: "sk-mandu-test-not-a-key",
+    XAI_API_KEY: "sk-mandu-test-not-a-key", TETRATE_API_KEY: "sk-mandu-test-not-a-key", GOOGLE_API_KEY: "sk-mandu-test-not-a-key",
     ...extra,
   };
 }
@@ -182,6 +200,7 @@ function userEnv(name: string, provider: string, extra: Record<string, string> =
 const WIRE: Record<string, string> = {
   litellm: "/v1/chat/completions", openrouter: "/api/v1/chat/completions", ollama: "/v1/chat/completions",
   xai: "/v1/chat/completions", tetrate: "/v1/chat/completions",
+  google: "/v1beta/models/mandu-test-model:streamGenerateContent?alt=sse",
 };
 
 for (const { provider } of GOOSE_COMPAT_PROVIDERS) {
@@ -194,9 +213,12 @@ for (const { provider } of GOOSE_COMPAT_PROVIDERS) {
     assert.ok(posts.length >= 2, `the proxy forwarded Goose's turns (${seen.map((q) => `${q.method} ${q.path}`).join(", ")})`);
     for (const q of posts) assert.equal(q.path, WIRE[provider], `Goose's own path for ${provider}`);
     for (const q of seen) {
-      assert.equal(q.auth, provider === "ollama" ? "" : "Bearer sk-mandu-test-not-a-key", "the user's own key is relayed (ollama sends none)");
+      if (provider === "google") assert.equal(q.googKey, "sk-mandu-test-not-a-key", "the user's own key is relayed in x-goog-api-key");
+      else assert.equal(q.auth, provider === "ollama" ? "" : "Bearer sk-mandu-test-not-a-key", "the user's own key is relayed (ollama sends none)");
     }
-    const withResult = posts.filter((q) => q.body.includes("call_cat") && q.body.includes('"role":"tool"'));
+    const withResult = provider === "google"
+      ? posts.filter((q) => q.body.includes('"functionResponse"'))
+      : posts.filter((q) => q.body.includes("call_cat") && q.body.includes('"role":"tool"'));
     assert.ok(withResult.length >= 1, "the shell ran and its result came back through the proxy");
     assert.match(withResult.at(-1)!.body, SYMBOL_RE, "the result reached the model as a symbol (only the proxy mints one)");
     for (const q of seen) assert.ok(!q.body.includes(CANARY), `INVARIANT: no request carries the labelled secret (${q.path})`);

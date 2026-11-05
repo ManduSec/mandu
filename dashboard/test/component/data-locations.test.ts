@@ -91,7 +91,7 @@ test("GET /api/data-locations: behind the auth, the server's MANDU_HOME with the
     assert.deepEqual({ exists: row("packs").exists, ownerOnly: row("packs").ownerOnly }, { exists: false, ownerOnly: null });
     assert.equal(row("runtime-dir").where, "outside");
     assert.equal(row("runtime-dir").ownerOnly, null);
-    assert.match(row("symbol-db").holds, /placeholders the AI saw/);
+    assert.match(row("symbol-db").holds, /masked values the AI saw/);
     assert.deepEqual({ developer: row("dev-root").developer, exists: row("dev-root").exists, path: row("dev-root").path }, { developer: true, exists: true, path: "~/mh/dev" });
     assert.deepEqual({ developer: row("runs-root").developer, exists: row("runs-root").exists }, { developer: true, exists: false });
     assert.equal(row("events").developer, false);

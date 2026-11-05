@@ -950,8 +950,103 @@ export interface BeginLaunchResult {
   confined: boolean;
   epoch: string;
   /** The unconfined launches live before this one (absent from an older
-   *  arbiter): a confined launch warns of them. */
-  others?: Array<{ pid: number; mode: string; posture: string; walled: boolean; session?: string; begunAt?: number; workspace?: string; why?: string }>;
+   *  arbiter): a confined launch warns of them. An attachment among them
+   *  has pid 0 and names its kind (`attachment`). */
+  others?: Array<{ pid: number; mode: string; posture: string; walled: boolean; session?: string; begunAt?: number; workspace?: string; why?: string; attachment?: string }>;
+}
+
+/** HUMAN PLANE (docs/design/agents/openclaw-plugin.md §3.3): Mandu attached
+ *  to an agent it does not run, the attachment form of `beginLaunch`. The
+ *  registering service (outside the agent) sends it; there is no pid. The
+ *  arbiter decides the posture from the declared coverage
+ *  (confinement-posture.ts `resolvePosture`) and accepts only `gated` with
+ *  the kind's own gap: an attachment is never confined, never walled, never
+ *  guarded. While it is live no cache seal is honoured and the human plane
+ *  is exposed (its agent's programs reach the human socket). It lives on a
+ *  lease (`leaseMs`), renewed by `renewAttachment`; a lapsed lease ends it.
+ *  On an attested registration the arbiter records the session's posture
+ *  itself (a `launch_posture` event, emitter `arbiter`). Result:
+ *  {@link BeginAttachmentResult}. */
+export interface BeginAttachmentOpRequest extends BaseRequest {
+  op: "beginAttachment";
+  /** `<kind prefix>:<name>` (`openclaw:<agentId>` for `openclaw-plugin`),
+   *  shaped like a scope id. */
+  sessionId: string;
+  /** confinement-posture.ts `AttachmentGap`: `openclaw-plugin`. */
+  kind: string;
+  /** confinement-posture.ts `Coverage`, as declared by the registrant: the
+   *  kind's coverage, or less (a route the service found lost, §3.6). */
+  coverage: unknown;
+  /** The service's route check, when it has one (server.ts AttachmentRoute):
+   *  carried on the posture record. */
+  route?: unknown;
+}
+
+export interface BeginAttachmentResult {
+  /** Handed back to `renewAttachment` and `endAttachment`. */
+  token: string;
+  epoch: string;
+  /** When the lease runs out without a renewal (ms since the epoch). */
+  expiresAt: number;
+  leaseMs: number;
+  /** The posture the arbiter decided (always `gated`), and its gap (the
+   *  kind's, or `model-route-lost`). */
+  posture: "gated";
+  gap: string;
+  /** Whether the arbiter recorded the posture as believed (the registration
+   *  came on an attested channel; false while the human plane was exposed
+   *  before it, when the record is stored as a claim). */
+  believed: boolean;
+  /** The unconfined launches and attachments live before this one. */
+  others: Array<{ pid: number; mode: string; posture: string; walled: boolean; session?: string; begunAt?: number; workspace?: string; why?: string; attachment?: string }>;
+}
+
+/** HUMAN PLANE (openclaw-plugin.md §3.6): the registering service's route
+ *  check found the attachment's config changed. The arbiter decides the
+ *  posture over the new coverage (the kind's, or less: `modelContext: none`
+ *  when model calls may go around the proxy, `exec`/`replies: none` when the
+ *  plugin is not loaded) and records a new `launch_posture` on the session's
+ *  stream, carrying `route`; believed only on an attested channel (the admin
+ *  channel while the attachment holds the human plane exposed). Result:
+ *  {@link UpdateAttachmentResult}. */
+export interface UpdateAttachmentOpRequest extends BaseRequest {
+  op: "updateAttachment";
+  token: string;
+  coverage: unknown;
+  route?: unknown;
+}
+
+export interface UpdateAttachmentResult {
+  posture: "gated";
+  gap: string;
+  believed: boolean;
+}
+
+/** HUMAN PLANE: one more lease for a live attachment. Result:
+ *  {@link RenewAttachmentResult}. */
+export interface RenewAttachmentOpRequest extends BaseRequest {
+  op: "renewAttachment";
+  token: string;
+}
+
+export interface RenewAttachmentResult {
+  /** false: the token is not live (ended, replaced, or its lease ran out);
+   *  register again. */
+  renewed: boolean;
+  expiresAt: number | null;
+}
+
+/** HUMAN PLANE: an attachment ended; its end starts a new epoch. Result:
+ *  {@link EndAttachmentResult}. */
+export interface EndAttachmentOpRequest extends BaseRequest {
+  op: "endAttachment";
+  token: string;
+}
+
+export interface EndAttachmentResult {
+  ended: boolean;
+  rotated: boolean;
+  epoch: string;
 }
 
 /** HUMAN PLANE, read-only (arbiter-human-plane.md §10.1.1): is the human
@@ -972,8 +1067,9 @@ export interface HumanPlaneStatusResult {
   /** When this arbiter first saw the current exposure (ms since the epoch);
    *  null while walled. */
   since: number | null;
-  /** The unwalled launches live now, oldest first. */
-  launches: Array<{ pid: number; mode: string; posture: string; session?: string; begunAt?: number }>;
+  /** The unwalled launches live now, oldest first. An attachment has pid 0
+   *  and names its kind (`attachment`). */
+  launches: Array<{ pid: number; mode: string; posture: string; session?: string; begunAt?: number; attachment?: string }>;
 }
 
 /** A launch ended; an unconfined one's end starts a new epoch. Result:
@@ -1592,6 +1688,28 @@ export interface RegisterWireReleaseOpRequest extends BaseRequest {
    *  restart while that launcher runs (wire-release-sessions.ts), and an
    *  `inspecting: false` drops only that launcher's word. */
   pid?: number;
+}
+
+/** kube-wire-release.md (HUMAN PLANE): the session KUBECONFIG overlay for
+ *  the launch HOME's registered `~/.kube/config` (`kubeconfig.ts`
+ *  `kubeOverlay`, built from its twin), and the launcher's word that this
+ *  file is that home's own, whose clusters the proxy may then dial with the
+ *  real CA and client certificate (`kubeUpstream`). */
+export interface KubeOverlayOpRequest extends BaseRequest {
+  op: "kubeOverlay";
+  /** Absolute path of the registered kubeconfig. */
+  path: string;
+  /** The launch HOME: only `<home>/.kube/config` is served. */
+  home: string;
+}
+
+/** kube-wire-release.md (HUMAN PLANE: the answer holds a client key): how
+ *  the egress proxy dials one cluster (`kubeconfig.ts` `kubeUpstream`), from
+ *  a kubeconfig a launch named with `kubeOverlay`. */
+export interface KubeUpstreamOpRequest extends BaseRequest {
+  op: "kubeUpstream";
+  /** `host:port`, the port stated (the proxy's `statedDestination`). */
+  authority: string;
 }
 
 /** Agent-sign-in.md §3 (HUMAN PLANE): a field of the agent's own key file
@@ -2634,6 +2752,10 @@ export interface ScanAgentTranscriptsOpRequest extends BaseRequest {
   home?: string;
   /** Mandu's event store, for the sessions Mandu ran (plan 17 §3 item 6). */
   eventsDir?: string;
+  /** The resident arbiter's store (`mandu.db`, absolute), read-only, for the
+   *  periods of its attachment sessions (the OpenClaw plugin's) when the
+   *  scan runs in another arbiter; read only beside `eventsDir`. */
+  manduDb?: string;
   /** Skip transcript files last written before this (ms since the epoch). */
   since?: number;
 }
@@ -3314,6 +3436,13 @@ export interface EgressFingerprintScanOpRequest extends BaseRequest {
    *  session leaves raw are not scanned for it (secret-discovery.md §1.10).
    *  Login files only; absent or malformed, nothing is exempt. */
   sessionLogins?: SessionLoginsWire;
+  /** `reply`: the surfaces are a reply the MODEL wrote (the OpenClaw
+   *  plugin's message_sending, openclaw-plugin.md §3.5). A tool result's row
+   *  the proxy masked whole then counts only by its secrets (its whole value,
+   *  a credential-shaped span or line, and every registered value's own
+   *  row), never by an ordinary line of it, which the model never saw.
+   *  Absent: an outbound request, every piece counts. */
+  scope?: "reply";
 }
 
 /** A session's logins on the wire (secret-discovery.ts `SessionLogins`). */
@@ -3346,6 +3475,28 @@ export interface StrippedPlaceholdersOpRequest extends BaseRequest {
 
 /** The most names one `strippedPlaceholders` ask may carry. */
 export const STRIPPED_PLACEHOLDERS_MAX = 64;
+
+/** The AWS secret access keys a SigV4 request may have been signed with
+ * (aws-sigv4-resign.md): the net-proxy recomputes a request's signature
+ * with each placeholder to find the one that signed it, and re-signs with
+ * the real key once the gate releases it. Names only: never a value, a
+ * label or a binding (the same existence answer `strippedPlaceholders`
+ * gives). Result: `SigningKeysResultWire`. */
+export interface SigningKeysOpRequest extends BaseRequest {
+  op: "signingKeys";
+  /** Attribution only. */
+  sessionKey?: string;
+}
+
+/** The most names one `signingKeys` answer carries (the newest first). */
+export const SIGNING_KEYS_MAX = 64;
+
+export interface SigningKeysResultWire {
+  /** The `$MDU:` names of the active rows an AWS signing release may read
+   *  whose name is a secret access key's (aws-signing.ts
+   *  `awsCredentialRole` = `secret`). Empty when the axis is off. */
+  symbols: string[];
+}
 
 export interface StrippedPlaceholdersResultWire {
   /** The candidates that name a secret-labelled row (the row's level, never
@@ -3431,6 +3582,7 @@ export type ArbiterRequest =
   | GuardAttachOpRequest
   | EgressFingerprintScanOpRequest
   | StrippedPlaceholdersOpRequest
+  | SigningKeysOpRequest
   | RelayNoticeOpRequest
   | TakeRelayNoticesOpRequest
   | PlaceholderKnownOpRequest
@@ -3482,6 +3634,10 @@ export type ArbiterRequest =
   | SealCacheEntriesOpRequest
   | BeginLaunchOpRequest
   | EndLaunchOpRequest
+  | BeginAttachmentOpRequest
+  | RenewAttachmentOpRequest
+  | UpdateAttachmentOpRequest
+  | EndAttachmentOpRequest
   | HumanPlaneStatusOpRequest
   | ConsumerPacksOpRequest
   | PolicySnapshotOpRequest
@@ -3519,6 +3675,8 @@ export type ArbiterRequest =
   | RecordEgressRefusalOpRequest
   | RegisterMcpServersOpRequest
   | RegisterWireReleaseOpRequest
+  | KubeOverlayOpRequest
+  | KubeUpstreamOpRequest
   | RegisterAuthGrantOpRequest
   | McpServerTaintOpRequest
   | DecideSecretOpenOpRequest

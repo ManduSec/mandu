@@ -39,7 +39,11 @@
  *       it, `loadExtensions`), the served `/dev/` then draws Light with its
  *       menu on Light; its pick of Dark is `/settings`' first paint (home.js
  *       blocked again). The public tree skips this half;
- *   B4  the oracle again, on every page read.
+ *   B4  with `/settings` open on Light in a second target of the same browser
+ *       context, a pick of Dark in the first turns the second dark, its
+ *       menu on Dark, with no reload (the `storage` event); Same as this
+ *       computer then leaves both bare, both menus on it;
+ *   B5  the oracle again, on every page read.
  *
  * The Chromium test self-SKIPs without a Chromium (probeBrowser:
  * MANDU_TOUR_BROWSER, CHROME_PATH, a Playwright headless shell, or one on
@@ -240,7 +244,7 @@ test("the developer view follows the product page's pick, and the product page t
   }
 });
 
-test("in a real Chromium: Dark stored is the first paint of /settings and / before home.js runs; Light picked on Settings is the developer view's, and its Dark the product page's (secrets axes, explicit)", {
+test("in a real Chromium: Dark stored is the first paint of /settings and / before home.js runs; Light picked on Settings is the developer view's, and its Dark the product page's; a pick in one open tab is the other's at once (secrets axes, explicit)", {
   skip: browser ? false : "no Chromium found (MANDU_TOUR_BROWSER, CHROME_PATH, a Playwright headless shell)", timeout: 180_000,
 }, async () => {
   const s = await start(); // the tokens, from the served mandu.css
@@ -356,7 +360,49 @@ test("in a real Chromium: Dark stored is the first paint of /settings and / befo
       assert.equal(back.ground, rgb(s.dark));
     }
 
-    // B4: the oracle.
+    // B4: two open tabs of one browser: a pick in one is the other's at once.
+    // The mark tells the page left behind from the new one.
+    await evaluate(`window.__left = true`);
+    await send("Page.navigate", { url: base + "/settings" });
+    await until("/settings: home.js drew the page again", `!window.__left && document.querySelector('#page-settings nav.section-links a[data-section="appearance"]') !== null`);
+    const pick = (value: string) => evaluate(`(() => { const m = document.getElementById("settings-theme"); m.value = ${JSON.stringify(value)}; m.dispatchEvent(new Event("change", { bubbles: true })); return true; })()`);
+    await pick("light"); // B3 left Dark stored: the second tab opens light, so Dark is a change
+    const second = await cdp.send("Target.createTarget", { url: "about:blank" });
+    const { sessionId: secondSession } = await cdp.send("Target.attachToTarget", { targetId: second.targetId, flatten: true });
+    const inSecond = async (expression: string) => {
+      const r = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, secondSession);
+      if (r.exceptionDetails) throw new Error(`second tab's script failed: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`);
+      return r.result.value;
+    };
+    const untilSecond = async (what: string, expression: string) => {
+      let ok = false;
+      for (const end = Date.now() + 30_000; Date.now() < end && !ok; await new Promise((r) => setTimeout(r, 100))) {
+        try { ok = await inSecond(expression); } catch { /* navigating */ }
+      }
+      assert.ok(ok, what);
+    };
+    const tabLook = `({ theme: document.documentElement.getAttribute("data-theme"), menu: document.getElementById("settings-theme").value, text: document.body.innerText })`;
+    await cdp.send("Page.navigate", { url: base + "/settings" }, secondSession);
+    await untilSecond("the second tab: home.js drew /settings", `document.querySelector('#page-settings nav.section-links a[data-section="appearance"]') !== null`);
+    assert.deepEqual(await inSecond(`[document.documentElement.getAttribute("data-theme"), document.getElementById("settings-theme").value]`), ["light", "light"], "the second tab opens on Light");
+    await pick("dark");
+    assert.equal((await look()).theme, "dark", "the first tab: Dark, at once");
+    await untilSecond("the second tab turns Dark without a reload", `document.documentElement.getAttribute("data-theme") === "dark"`);
+    const darkSecond = await inSecond(tabLook);
+    texts.push(darkSecond.text);
+    assert.equal(darkSecond.menu, "dark", "the second tab's menu reads Dark");
+    assert.equal(await inSecond(`getComputedStyle(document.body).backgroundColor`), rgb(s.dark), "the second tab is drawn dark");
+    await pick("system");
+    await untilSecond("the second tab is back on the system's", `!document.documentElement.hasAttribute("data-theme")`);
+    const bareSecond = await inSecond(tabLook);
+    texts.push(bareSecond.text);
+    assert.equal(bareSecond.menu, "system", "the second tab's menu reads Same as this computer");
+    const bareFirst = await evaluate(tabLook);
+    texts.push(bareFirst.text);
+    assert.equal(bareFirst.theme, null, "the first tab: <html> bare");
+    assert.equal(bareFirst.menu, "system");
+
+    // B5: the oracle.
     for (const t of texts) {
       assert.ok(!t.includes(VALUE), "CONFIDENTIALITY VIOLATION: a page carries the key's value");
       assert.doesNotMatch(t, /\$MDU/, "no page carries a token");

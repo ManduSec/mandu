@@ -154,6 +154,48 @@ function inboundVM(snapshot: PolicySnapshot): InboundVM {
 
 // ── Row + group builders ──────────────────────────────────────────────────────
 
+/** Whether a row, once answered, offers a one-click change of its answer
+ *  on Approvals (toQueueRow's answered `actions`). The line an answer leaves
+ *  says *See your answer* in place of *Change your answer* where not
+ *  (home.ts `HomeAsk.reversible`, dashboard.md §4.25 *An answer says what it
+ *  did*), so the two cannot disagree. None for:
+ *  - a HIGH session's ask (`session-net:` / `session-exec:`): its labels say
+ *    "Always", and the arbiter keeps an allow on it as once. Removing the
+ *    answer (Rules) makes the next request ask again;
+ *  - "Send without it" answered (§4.34): an answer about one request; the
+ *    next such request asks again once it is used;
+ *  - an answer that applies to nothing any more (§4.34 "Answers that no
+ *    longer apply"): changing it would change nothing;
+ *  - a held message's answer for that message (`#turn:`, §4.34 "A held
+ *    message's answer"): the message went, and the generic Allow on it
+ *    would file a standing verdict for the whole session (holds.ts
+ *    afterResolve), which "Allow instead" never said. Every waiting held
+ *    message is such a row; a session's answer also files a row of its own
+ *    for the session, which flips. */
+export function answerHasReversal(row: { subject: string; target: string; strip?: boolean; noLongerApplies?: unknown }): boolean {
+  if (/^session-(?:net|exec):./.test(row.subject)) return false;
+  if (row.strip === true) return false;
+  if (row.noLongerApplies !== undefined) return false;
+  return !(verdictFamily(row.subject) === "prompt" && row.target.includes("#turn:"));
+}
+
+/** What a standing allow (`…/approve`, no `scope`) on a row is kept as,
+ *  mirroring the arbiter's `resolveEgressApproval` (arbiter
+ *  `ipc/server.ts`, the `scope` it records): `once` on one run of a
+ *  program (`open:`/`write:` … `#run:`), on a HIGH session's ask
+ *  (`session-net:` / `session-exec:`) and on a holder's send keyed to no
+ *  session; `session` on a holder's send keyed to one (its row is that
+ *  session's, plan 13 §5.4); `always` everywhere else. Answered earlier
+ *  names an allow by it (dashboard.md §4.25 *The allow that reverses a
+ *  Block names its scope*). Pure. */
+export function allowKeptAs(subject: string): "always" | "session" | "once" {
+  if (/^(?:open|write):.*#run:[^#]*$/.test(subject)) return "once";
+  if (/^session-(?:net|exec):/.test(subject)) return "once";
+  const holder = holderSendOf(subject);
+  if (holder !== null) return holder.session !== null ? "session" : "once";
+  return "always";
+}
+
 function toQueueRow(v: VerdictEntry, readFirst?: string, home = ""): QueueRowVM | null {
   if (v.status !== "pending" && v.status !== "approved" && v.status !== "denied") return null;
   // A masked value asked to be shown to the model as it is (the arbiter's
@@ -211,6 +253,9 @@ function toQueueRow(v: VerdictEntry, readFirst?: string, home = ""): QueueRowVM 
   // A file's card (egress-hold.md "One card per file"): how many of its
   // values the answer covers.
   const fileValues = typeof v.fileValues === "number" && Number.isInteger(v.fileValues) && v.fileValues > 1 ? v.fileValues : undefined;
+  // What the arbiter keeps an allow on an answered row as (allowKeptAs):
+  // Rules names the row's effect and its flip by it.
+  const kept = v.status !== "pending" ? allowKeptAs(v.symbol) : "always";
   const said = describeAsk({ where, subject: v.symbol, target: v.destination, reason: v.reason, ...(onceOnly ? { onceOnly } : {}), ...(origin ? { origin } : {}), ...(early ? { readFirst: early } : {}), ...sessionFacts, ...(holderSources ? { holderSources } : {}), ...(fileValues ? { fileValues } : {}) }, "The agent");
   return {
     id: v.id,
@@ -264,28 +309,12 @@ function toQueueRow(v: VerdictEntry, readFirst?: string, home = ""): QueueRowVM 
             ...(/^(?:open|write):.*#run:[^#]*$/.test(v.symbol) || session ? [] : [{ approve: true, label: "Always allow" }]),
             { approve: false, label: "Block" },
           ]
-        // A HIGH session's answered row takes no one-click reversal: its
-        // labels say "Always", and the arbiter keeps an allow on it as once.
-        // Removing the answer (Rules) makes the next request ask again.
-        : session
+        // The answered rows with no one-click reversal (answerHasReversal).
+        : !answerHasReversal({ subject: v.symbol, target: v.destination, strip: v.strip, noLongerApplies: v.noLongerApplies })
           ? []
-        // "Send without it" answered (§4.34): an answer about one request, so
-        // no reversal; the next such request asks again once it is used.
-        : v.strip === true
-          ? []
-        // A held message's answer (dashboard.md §4.34 "A held message's
-        // answer"): an answer about one message has no reversal, since the
-        // message went, and the generic Allow on it would file a standing
-        // verdict for the whole session (holds.ts afterResolve), which "Allow
-        // instead" never said. A session's answer flips as itself.
-        // An answer that applies to nothing any more (§4.34 "Answers that
-        // no longer apply"): changing it would change nothing, so no button.
-        : v.noLongerApplies !== undefined
-          ? []
+        // A session's answer to a held message flips as itself.
         : verdictFamily(v.symbol) === "prompt"
-          ? v.destination.includes("#turn:")
-            ? []
-            : v.status === "approved"
+          ? v.status === "approved"
               ? [{ approve: false, label: "Send masked instead" }]
               : [{ approve: true, label: "Send as written instead" }]
         : v.status === "approved"
@@ -300,6 +329,7 @@ function toQueueRow(v: VerdictEntry, readFirst?: string, home = ""): QueueRowVM 
     // `sendWithoutActions`); these `actions` stay the three answers.
     ...(v.stripOffered === true && v.status === "pending" && !session && holder === null && verdictFamily(v.symbol) !== "prompt" ? { stripOffered: true as const } : {}),
     originHost: v.originHost ?? null,
+    ...(kept !== "always" ? { allowKeptAs: kept } : {}),
     ...(origin ? { origin } : {}),
     ...(early ? { readFirst: early } : {}),
     ...sessionFacts,
@@ -394,8 +424,11 @@ export function verdictDetailOf(snapshot: PolicySnapshot | null | undefined, id:
  *  `~` (§4.34 "`~` is the dashboard's home"); absent, paths as recorded.
  *  `files`: the rule paths that are files on disk (server/path-kinds.ts),
  *  so a rule reaching everything inside a file is worded as that file
- *  (§4.25f *A rule on a file reads as a file*); absent, none known. */
-export function toPolicyPanelViewModel(snapshot: PolicySnapshot | null | undefined, readFirst?: ReadonlyMap<string, string>, home = "", files: ReadonlySet<string> = new Set()): PolicyPanelVM {
+ *  (§4.25f *A rule on a file reads as a file*); absent, none known.
+ *  `missing`: the rule paths with nothing on disk (the same look), marked
+ *  so the page says so (§4.25f *A rule on nothing says so*); absent, none
+ *  known. */
+export function toPolicyPanelViewModel(snapshot: PolicySnapshot | null | undefined, readFirst?: ReadonlyMap<string, string>, home = "", files: ReadonlySet<string> = new Set(), missing: ReadonlySet<string> = new Set()): PolicyPanelVM {
   if (!snapshot) {
     const unknownChip = (detail: DetailSection[]): PostureChipVM => ({ state: "unknown", detail });
     return {
@@ -449,7 +482,7 @@ export function toPolicyPanelViewModel(snapshot: PolicySnapshot | null | undefin
     gateGroups: groupRules(snapshot.usage?.rules ?? [], snapshot.usage?.gates, sensitivePaths, snapshot.hits, snapshot.document?.rules),
     sensitivePaths,
     inbound: inboundVM(snapshot),
-    yourRules: snapshot.document ? yourRulesVM(snapshot, files) : null,
+    yourRules: snapshot.document ? yourRulesVM(snapshot, files, missing) : null,
     relaxations: snapshot.relaxations ? snapshot.relaxations.map((r) => ({ kind: r.kind, subject: r.subject, detail: r.detail })) : null,
     lists: snapshot.document ? Object.fromEntries(Object.entries(snapshot.document.lists ?? {}).map(([k, v]) => [k, [...v]])) : null,
     policyFile: snapshot.policyFile ? { ...snapshot.policyFile, problems: [...snapshot.policyFile.problems] } : null,
@@ -502,11 +535,11 @@ function hitsFor(hits: PolicySnapshot["hits"], id: string): { hits: number | nul
   return { hits: h?.hits ?? 0, auditHits: h?.auditHits ?? 0, lastHit: h?.lastHit ?? null };
 }
 
-function yourRulesVM(snapshot: PolicySnapshot, files: ReadonlySet<string>): YourRuleRowVM[] {
-  return yourRuleRowsVM(snapshot, files).map((r) => ({ ...r, actions: ruleRowActions(r) }));
+function yourRulesVM(snapshot: PolicySnapshot, files: ReadonlySet<string>, missing: ReadonlySet<string>): YourRuleRowVM[] {
+  return yourRuleRowsVM(snapshot, files, missing).map((r) => ({ ...r, actions: ruleRowActions(r) }));
 }
 
-function yourRuleRowsVM(snapshot: PolicySnapshot, files: ReadonlySet<string>): Array<Omit<YourRuleRowVM, "actions">> {
+function yourRuleRowsVM(snapshot: PolicySnapshot, files: ReadonlySet<string>, missing: ReadonlySet<string>): Array<Omit<YourRuleRowVM, "actions">> {
   const doc = snapshot.document!;
   const relaxed = new Set((snapshot.relaxations ?? []).map((r) => `${r.kind} ${r.subject}`));
   const rows: Array<Omit<YourRuleRowVM, "actions">> = [];
@@ -550,10 +583,14 @@ function yourRuleRowsVM(snapshot: PolicySnapshot, files: ReadonlySet<string>): A
     // saved suggestion writes it) is worded as that file; `covers` keeps
     // what the rule says, so an edit made on the page keeps its reach.
     const isFile = p.recursive && !glob && files.has(p.path);
+    const openers = pathOpeners(p);
     rows.push({
       id: `lock:${p.path}`, kind: "lock", icon: "🔒", subject: p.path,
       covers: glob ? "pattern" : p.recursive ? "subtree" : "exact",
       ...(isFile ? { pathIsFile: true as const } : {}),
+      // Nothing at the path (a typo, a moved folder): display only, the
+      // rule and its reach are as written.
+      ...(!glob && missing.has(p.path) ? { missing: true as const } : {}),
       level: p.level,
       bindings: [...p.bindings],
       // The rule's version as read (policy-surface.md §8.4.6): a label
@@ -568,7 +605,9 @@ function yourRuleRowsVM(snapshot: PolicySnapshot, files: ReadonlySet<string>): A
         ...(p.values?.length && p.level !== "public" ? { send: perValueWords(p.values, p.bindings, p.wholeBindings ?? []), sendParts: perValueParts(p.values, p.bindings, p.wholeBindings ?? []) } : {}),
         ...(p.level === "public" ? {} : {
           // The same judgment the per-program view reads (rules-by-who.ts).
-          opens: opensWords(pathOpeners(p)?.map((o) => ({ name: o.name, how: o.how })) ?? null, p.others),
+          opens: opensWords(openers?.map((o) => ({ name: o.name, how: o.how })) ?? null, p.others),
+          // No `readers:`: the default, said once on the page (§4.25p).
+          opensDefault: openers === null,
         }),
       },
       effect: effect + (p.recursive ? "" : " (this file only)") + (p.bindings.length ? ` · may go to ${p.bindings.join(", ")}` : "")

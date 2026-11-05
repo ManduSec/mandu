@@ -16,19 +16,22 @@ const here = dirname(fileURLToPath(import.meta.url));
 const launcherRoot = join(here, "..", "..");
 const repoRoot = join(launcherRoot, "..");
 
-test("the floor is 22.13.0 — where node:sqlite lost its flag", () => {
-  assert.equal(NODE_FLOOR, "22.13.0");
+test("the floor is 22.15.0 — node:sqlite lost its flag in 22.13, node:zlib gained zstd in 22.15", () => {
+  assert.equal(NODE_FLOOR, "22.15.0");
 });
 
 test("nodeMeetsFloor compares major.minor.patch, not the major alone", () => {
-  assert.equal(nodeMeetsFloor("22.13.0"), true);
-  assert.equal(nodeMeetsFloor("v22.13.0"), true);
-  assert.equal(nodeMeetsFloor("22.14.1"), true);
+  assert.equal(nodeMeetsFloor("22.15.0"), true);
+  assert.equal(nodeMeetsFloor("v22.15.0"), true);
+  assert.equal(nodeMeetsFloor("22.22.1"), true);
   assert.equal(nodeMeetsFloor("23.0.0"), true);
   assert.equal(nodeMeetsFloor("24.2.0"), true);
   // The versions the old `>= 22` check wrongly admitted:
   assert.equal(nodeMeetsFloor("22.0.0"), false);
   assert.equal(nodeMeetsFloor("22.12.9"), false);
+  // Below the zstd floor (2026-10-26): no zstd in node:zlib.
+  assert.equal(nodeMeetsFloor("22.13.0"), false);
+  assert.equal(nodeMeetsFloor("22.14.1"), false);
   assert.equal(nodeMeetsFloor("20.19.0"), false);
   // Unparseable fails closed.
   assert.equal(nodeMeetsFloor(""), false);

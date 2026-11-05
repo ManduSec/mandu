@@ -29,7 +29,7 @@ import assert from "node:assert/strict";
 import {
   actionSentence, actionOutcome, osSentence, turnSummary, routineParts, ROUTINE_HOST_CAP, buildAgentPage, buildStory, storyCounts, mainModelOf, maskTokens, revealParts, aiParts,
   revealValues, valueScope, promptOf, TURN_CAP, TURN_STEP_CAP, locateAsk, destHost, pageSecrets, untrustedMasked, noteMasks, refusedReadNote, heldTokens, storyReply, type AskRef, type StoryStep, type ValueScope,
-  patchSentence, PATCH_NAMES_SHOWN, POLICY_VALUE_CAP,
+  patchSentence, PATCH_NAMES_SHOWN, POLICY_VALUE_CAP, READ_AS_IS_CAP,
 } from "../../../src/view-model/agent-page.js";
 import type { ManduEvent } from "../../../src/event-model.js";
 import { toSessionViewModel, type SessionViewModel } from "../../../src/view-model.js";
@@ -66,6 +66,8 @@ function os(over: Partial<DualOsStep>): DualOsStep {
   };
 }
 const text = (parts: { kind: string; text: string }[]) => parts.map((p) => (p.kind === "masked" ? `[${p.text}]` : p.text)).join("");
+/** The name a masked part's chip carries (undefined: the bare word). */
+const chipName = (parts: { kind: string; name?: string }[]) => parts.find((p) => p.kind === "masked")?.name;
 
 /** A view model with the given steps, paired turns, symbol values and flows. */
 function vmOf(steps: DualStep[], turns: PairedTurn[], symbols: { name: string; value: string | null }[] = [], flows: SymbolLineage[] = []): SessionViewModel {
@@ -330,8 +332,13 @@ test("pageSecrets is the page's Your secrets, so Home's count of a session is it
   // (§4.25b, "A time opens its step"); Home passes none: the same words and
   // counts, no time opening a step.
   const drawn = new Set(page.story.flatMap((t) => t.steps.filter((s) => s.kind === "action").map((s) => s.id)));
-  assert.deepEqual(pageSecrets(vm, events, vm, "", drawn), page.secrets);
-  const noSteps = (x: unknown) => JSON.parse(JSON.stringify(x, (k, v) => (k === "step" ? undefined : v)));
+  // And its turns, so each card lists its steps (§4.25b *A card shows its
+  // steps*); Home passes none of them either.
+  const turnOf = new Map(page.story.flatMap((t) => t.steps.filter((s) => s.kind === "action").map((s): [string, string] => [s.id, t.id])));
+  const turns = { turnOf, drawn: new Set(page.story.map((t) => t.id)) };
+  assert.deepEqual(pageSecrets(vm, events, vm, "", drawn, undefined, turns), page.secrets);
+  assert.ok(page.secrets.secrets.every((s) => s.steps?.length && s.turns?.length), "the page's cards list their steps");
+  const noSteps = (x: unknown) => JSON.parse(JSON.stringify(x, (k, v) => (k === "step" || k === "steps" || k === "turns" ? undefined : v)));
   assert.ok(JSON.stringify(page.secrets).includes('"step":'), "the walkthrough's card times open steps");
   assert.deepEqual(pageSecrets(vm, events, vm), noSteps(page.secrets), "Home's call: the page's words, without steps");
   assert.deepEqual(pageSecrets(vm, events).counts, page.secrets.counts, "no believed view-model: the full one");
@@ -339,7 +346,7 @@ test("pageSecrets is the page's Your secrets, so Home's count of a session is it
   assert.deepEqual(pageSecrets(vm, [], null).counts, { masked: 0, early: 0 });
   // The route's home folder reaches Your secrets: a file under it is ~/….
   const homed = buildAgentPage({ session: { ...SESSION, id: WALK }, id: WALK, vm, cwd: null, waiting: [], events, believedVm: vm, home: "/home/dev" });
-  assert.deepEqual(pageSecrets(vm, events, vm, "/home/dev", drawn), homed.secrets);
+  assert.deepEqual(pageSecrets(vm, events, vm, "/home/dev", drawn, undefined, turns), homed.secrets);
   assert.deepEqual(homed.secrets.secrets.map((s) => s.what.map((p) => p.text).join("")), ["The environment variable GITHUB_TOKEN", "PASTE_KEY in ~/app/.env"]);
 });
 
@@ -400,7 +407,7 @@ test("the kernel guard's FILE decisions, recorded as net_action, read as files, 
     [guardEv("change of /home/u/.config/opencode/opencode.json — REFUSED (write-protect: /home/u/.config/opencode/opencode.json, an OpenCode setting; no answer in time; EACCES)", "/home/u/.config/opencode/opencode.json"),
       "write-protect", "Mandu blocked a change to a protected file: opencode.json"],
     [guardEv("read of /home/u/proj/.env by /usr/bin/cat — REAL FILE WITHHELD (remote-mount-visible: /mnt/nfs; the placeholder copy was served)", "/home/u/proj/.env"),
-      "raw-withheld", "A program got the placeholder copy of .env, not the real file"],
+      "raw-withheld", "A program got the masked copy of .env, not the real file"],
   ];
   for (const [e, what, sentence] of cases) {
     const g = fileGuardOf(e);
@@ -539,7 +546,7 @@ test("turnSummary names the secrets the turn's results held, its sends carried a
     label,
   );
   assert.equal(walk.summary, "Mandu blocked 1 request that carried your secret GITHUB_TOKEN and hid your secret PASTE_KEY from the AI. " +
-    "2 requests left this machine with your secrets GITHUB_TOKEN and PASTE_KEY filled in, each to a destination allowed to receive it.");
+    "2 requests left this computer with your secrets GITHUB_TOKEN and PASTE_KEY filled in, each to a destination allowed to receive it.");
   assert.deepEqual(codes(walk.parts), ["GITHUB_TOKEN", "PASTE_KEY", "GITHUB_TOKEN", "PASTE_KEY"], "each name is code, as on the steps");
   assert.equal(walk.tone, "blocked");
 
@@ -549,7 +556,7 @@ test("turnSummary names the secrets the turn's results held, its sends carried a
     new Map([["r1", { held: [PK] }], ["r2", { held: [PK2, PK] }], ["s1", { carried: [GH] }], ["s2", { carried: [GH] }]]),
     label,
   );
-  assert.equal(once.summary, "Mandu hid your secret PASTE_KEY from the AI. 2 requests left this machine with your secret GITHUB_TOKEN filled in, each to a destination allowed to receive it.");
+  assert.equal(once.summary, "Mandu hid your secret PASTE_KEY from the AI. 2 requests left this computer with your secret GITHUB_TOKEN filled in, each to a destination allowed to receive it.");
 
   // No name known: a count. A result that held only the proxy's note is one
   // secret; an unnamed secret is one per item, never merged with another.
@@ -590,12 +597,12 @@ test("turnSummary names the secrets the turn's results held, its sends carried a
     "Mandu blocked 1 action and stopped 2 reads of secret files.", "no named send: never \"other\"");
   // So is a send: an ordinary masked item reads as on the step; one send of unknown items, a count.
   assert.equal(turnSummary([act("s1", "sent")], new Map([["s1", { carried: [PUB] }]]), label).summary,
-    "1 request left this machine with a masked item filled in, to a destination allowed to receive it.");
+    "1 request left this computer with a masked item filled in, to a destination allowed to receive it.");
   assert.equal(turnSummary([act("s1", "sent"), act("s2", "sent")], new Map([["s1", { carried: [GH] }]]), label).summary,
-    "2 requests left this machine with a real value filled in, each to a destination allowed to receive it.");
+    "2 requests left this computer with a real value filled in, each to a destination allowed to receive it.");
   // One request went to one destination: never "each" (the tour's 10:39 turn).
   assert.equal(turnSummary([act("s1", "sent")], new Map([["s1", { carried: [GH] }]]), label).summary,
-    "1 request left this machine with your secret GITHUB_TOKEN filled in, to a destination allowed to receive it.");
+    "1 request left this computer with your secret GITHUB_TOKEN filled in, to a destination allowed to receive it.");
 
   assert.doesNotMatch(JSON.stringify([walk, once]), /\$MDU:|f8d2|3fa9|7a7a/);
 });
@@ -860,6 +867,9 @@ test("a masked read names the secret it held, by the name the send steps use (§
   const { page, step } = readPage(`PASTE_KEY=${pk}\nDEBUG=1`, [{ name: pk, value: "pk-live-123", origin: "/home/dev/app/.env" }]);
   assert.equal(step.outcome, "secret");
   assert.equal(text(step.split!.ai), "Got the result with [secret] in place of the real value.", "not the whole result: the rest was not masked");
+  // ...and its chip carries the name too, as a command's chip does (§4.25b
+  // *A masked result's chip names its secret*): both halves say PASTE_KEY
+  assert.deepEqual(step.split!.ai.find((p) => p.kind === "masked"), { kind: "masked", text: "secret", name: "PASTE_KEY" });
   assert.equal(text(step.split!.real), "The result held your secret PASTE_KEY.");
   assert.deepEqual(step.split!.real.find((p) => p.kind === "code"), { kind: "code", text: "PASTE_KEY" }, "the name reads as code, as on the send steps");
   assert.deepEqual(withoutRefs(step.split!.hidden!), { text: null, secret: true, truncated: false }, "its value is still never shipped");
@@ -867,17 +877,37 @@ test("a masked read names the secret it held, by the name the send steps use (§
   assert.doesNotMatch(JSON.stringify(page), /\$MDU:|3fa9|pk-live-123/);
 });
 
+test("a command's output holding a registered value: the chip of what the AI got names the secret, as its right half and the reveal do (the OpenClaw plugin video's debug run, §4.25b *A masked result's chip names its secret*)", () => {
+  // OpenClaw's exec of the debug sync printed the .env's passphrase; the
+  // proxy masked the value as the .env twin's field (the run's own token
+  // shape), the rest of the output reached the AI as it was.
+  const pp = "$MDU:nomodel_Read[83d1].ORDERHUB_PASSPHRASE";
+  const cmd = "DEBUG=1 sh orders-app/bin/sync-orders.sh";
+  const ran = readPage(`config: ORDERHUB_USER=bakery-shop\nORDERHUB_PASSPHRASE: ${pp}\norders: FAILED, HTTP 401`, [{ name: pp, value: null, origin: "/home/dev/projects/orders-app/.env" }], [], { tool: "exec", input: JSON.stringify({ command: cmd }) });
+  assert.equal(ran.step.outcome, "secret");
+  assert.equal(text(ran.step.split!.ai), "Got the result with [secret] in place of the real value.");
+  assert.deepEqual(ran.step.split!.ai.find((p) => p.kind === "masked"), { kind: "masked", text: "secret", name: "ORDERHUB_PASSPHRASE" }, "the chip names what it hides");
+  assert.equal(text(ran.step.split!.real), "The result held your secret ORDERHUB_PASSPHRASE.");
+  assert.deepEqual(ran.step.split!.hidden!.secrets!.map((x) => x.name), ["ORDERHUB_PASSPHRASE"], "the reveal names the same");
+  // the same secret twice is one secret: still named
+  const twice = readPage(`A: ${pp}\nB: ${pp}`, [{ name: pp, value: null, origin: "/home/dev/projects/orders-app/.env" }], [], { tool: "exec", input: JSON.stringify({ command: cmd }) });
+  assert.equal(chipName(twice.step.split!.ai), "ORDERHUB_PASSPHRASE");
+  for (const p of [ran.page, twice.page]) assert.doesNotMatch(JSON.stringify(p), /\$MDU:|83d1/);
+});
+
 test("a whole-result secret is named by its file; one with no name says so; two secrets are each named once", () => {
   // A labeled file read whole (a harness reminder after it is not part of the result).
   const key = "$MDU:nomodel_Read[a1b2]";
   const whole = readPage(`${key}\n\n<system-reminder>harness</system-reminder>`, [{ name: key, value: null, origin: "/home/dev/.ssh/id_ed25519" }]);
   assert.equal(text(whole.step.split!.ai), "Got [secret] in place of the result.");
+  assert.equal(chipName(whole.step.split!.ai), "id_ed25519", "the chip named as the right half names it");
   assert.equal(text(whole.step.split!.real), "The result held your secret id_ed25519.");
 
   // A secret by level, with no field and no recorded origin.
   const sec = "$MDU:Read[5ec5].content";
   const unnamed = readPage(sec, [{ name: sec, value: "API_KEY=sk-live" }], [secretFlow(sec)]);
   assert.equal(text(unnamed.step.split!.ai), "Got [secret] in place of the result.");
+  assert.equal(chipName(unnamed.step.split!.ai), undefined, "no name known: the secret chip");
   assert.equal(text(unnamed.step.split!.real), "The result held a secret of yours.");
 
   // Two secrets, one of them twice, and an ordinary masked item beside them.
@@ -886,6 +916,7 @@ test("a whole-result secret is named by its file; one with no name says so; two 
   const pub = "$MDU:Read[d4d4]";
   const two = readPage(`DB_PASS=${a}\nPASTE_KEY=${b}\nAGAIN=${a}\nNOTE=${pub}`, [{ name: a, value: null }, { name: b, value: null }, { name: pub, value: "hello" }]);
   assert.equal(text(two.step.split!.ai), "Got the result with [secret] in place of 3 real values.");
+  assert.equal(chipName(two.step.split!.ai), undefined, "two secrets: one chip names neither");
   assert.equal(text(two.step.split!.real), "The result held your secrets DB_PASS and PASTE_KEY and a masked item.");
   assert.deepEqual(withoutRefs(two.step.split!.hidden!), { text: null, secret: true, truncated: false });
   assert.deepEqual(two.step.split!.hidden!.secrets!.map((x) => x.name), ["DB_PASS", "PASTE_KEY"], "each secret once; the ordinary item has none");
@@ -911,6 +942,7 @@ test("a command's output masked whole reads whole (the proxy's note after it is 
     const ran = readPage(`${out}\n\n${note}`, [{ name: out, value: null, origin: tour }], [], { tool: tag, input: JSON.stringify({ command: tour }), secretNote: note });
     assert.equal(ran.step.outcome, "secret", tag);
     assert.equal(text(ran.step.split!.ai), "Got [secret] in place of the result.", tag);
+    assert.equal(chipName(ran.step.split!.ai), undefined, `${tag}: nor its chip`);
     // Its right half says why, from the note (§4.25b *A command's masked
     // output says why*): the file the command names, as the model wrote it.
     assert.equal(text(ran.step.split!.real), "The command names your secret file ./.env, so Mandu hid its whole output from the AI, even whether it worked.", tag);
@@ -1159,7 +1191,7 @@ const UNBOUND = { source: "rule" as const, id: "egress:secret-unbound" };
 test("a blocked send says why, from the rule its event recorded: the host as recorded, the secret it carried (§4.25b)", () => {
   const o = osSentence(os({ title: "net_action · blocked api.stripe.com", target: "api.stripe.com:443", usage: "deny", ruleRef: UNBOUND, carried: [SENT_KEY] }));
   assert.equal(o.outcome, "blocked");
-  assert.equal(o.note, "The request never left this machine.", "the note is unchanged");
+  assert.equal(o.note, "The request never left this computer.", "the note is unchanged");
   assert.equal(text(o.why!), "No rule lets this secret go to api.stripe.com. Mandu sends a secret only where a rule lets it go, or with your OK.");
   // Held for the person: the same rule, the same words.
   const held = osSentence(os({ action: null, usage: "needs_approval", title: "net_action · paste.example", target: "paste.example", ruleRef: UNBOUND, carried: [SENT_KEY, "$MDU:nomodel_Env[77aa].B"] }));
@@ -1167,7 +1199,7 @@ test("a blocked send says why, from the rule its event recorded: the host as rec
   assert.equal(text(held.why!), "No rule lets one of these secrets go to paste.example. Mandu sends a secret only where a rule lets it go, or with your OK.");
   // A command and a file say theirs.
   assert.equal(text(osSentence(os({ kind: "exec_action", title: "exec_action · denied curl", action: "denied", target: null, ruleRef: { source: "rule", id: "exec:symbol-in-command" } })).why!),
-    "The command would run a placeholder as code, and Mandu never runs one.");
+    "The command would run a mask as code, and Mandu never runs one.");
   assert.equal(text(osSentence(os({ kind: "fs_action", title: "fs_action · denied /etc/shadow", action: "denied", target: null, ruleRef: { source: "fail-closed", id: "fs:default-deny" } })).why!),
     "The file is outside the folders this agent works in, so Mandu asks first.");
 });
@@ -1203,7 +1235,7 @@ test("a blocked or held tool call says why from the gate that stopped it, never 
   const blocked = story([allowed, denied]);
   assert.equal(blocked.outcome, "blocked");
   assert.equal(blocked.note, "Mandu stopped it.");
-  assert.equal(text(blocked.why!), "The command would run a placeholder as code, and Mandu never runs one.");
+  assert.equal(text(blocked.why!), "The command would run a mask as code, and Mandu never runs one.");
   // Held: the gate that waits for the person.
   const outside = { text: "fs_action · /etc/hosts", ruleRef: { source: "fail-closed" as const, id: "fs:default-deny" }, kind: "fs_action" as const, usage: "needs_approval" as const };
   const held = story([outside], { usage: "needs_approval" });
@@ -1257,7 +1289,7 @@ test("a call the proxy rewrote reads as what Mandu stopped, when a check of the 
   assert.equal(text(fetch.sentence), "Mandu blocked opening a web page on evil.example");
   assert.deepEqual(fetch.sentence[1], { kind: "code", text: "evil.example" });
   assert.equal(fetch.note, "The request was never sent.");
-  assert.equal(text(fetch.why!), "This session read a secret, and evil.example is not a place it may go. The AI could pass a secret on in its own words, which no placeholder marks.");
+  assert.equal(text(fetch.why!), "This session read a secret, and evil.example is not a place it may go. The AI could pass a secret on in its own words, which no mask marks.");
   // No host recorded, a `:443`, or a host holding a token: never the token.
   assert.equal(text(story("WebFetch", { url: "https://blocked.mandu.invalid/x" }, [{ ...netDeny, target: null }]).sentence), "Mandu blocked opening a web page");
   assert.equal(text(story("WebFetch", { url: "https://blocked.mandu.invalid/x" }, [{ ...netDeny, target: "evil.example:443" }]).sentence), "Mandu blocked opening a web page on evil.example");
@@ -1360,11 +1392,11 @@ test("a step that asked carries its row's answer from the route's map; a waiting
     os({ id: "o3", title: "net_action · blocked gist.github.com", target: "gist.github.com", usage: "deny", ruleRef: UNBOUND, carried: [SENT_KEY] }),
   ];
   const turns: PairedTurn[] = [{ id: "turn:in1", inputId: "in1", background: [], rows: ["o1", "o2", "o3"].map((stepId) => ({ row: "action" as const, stepId })) }];
-  const page = (answers?: Map<string, "blocked" | "allowed" | "allowed-once" | "allowed-once-used">) => {
+  const page = (answers?: Map<string, "blocked" | "allowed" | "allowed-session" | "allowed-once" | "allowed-once-used">) => {
     const vm = buildAgentPage({ session: SESSION, id: "s1", vm: vmOf(steps, turns), cwd: null, waiting: [], ...(answers ? { answers } : {}) });
     return vm.story[0]!.steps as Extract<StoryStep, { kind: "action" }>[];
   };
-  for (const outcome of ["blocked", "allowed", "allowed-once", "allowed-once-used"] as const) {
+  for (const outcome of ["blocked", "allowed", "allowed-session", "allowed-once", "allowed-once-used"] as const) {
     const [one, two, none] = page(new Map([["egr-1", outcome], ["egr-9", "blocked"]]));
     assert.equal(one!.askId, "egr-1");
     assert.equal(one!.answer, outcome, `the row's ${outcome}`);
@@ -1381,6 +1413,13 @@ test("answeredOutcome: the answered row's outcome, as Answered earlier states it
   assert.equal(answeredOutcome({ status: "approved", scope: "always", consumedAt: null }), "allowed");
   assert.equal(answeredOutcome({ status: "approved", scope: "once", consumedAt: null }), "allowed-once");
   assert.equal(answeredOutcome({ status: "approved", scope: "once", consumedAt: 1_790_000_000_000 }), "allowed-once-used");
+  // A program's send allowed for its session (its row keyed to it): the
+  // arbiter keeps it for that session, so the step says so (§4.25).
+  const holder = 'holder-send:{"session":"s1","files":["/home/u/.env"]}';
+  assert.equal(answeredOutcome({ status: "approved", scope: "always", consumedAt: null, subject: holder, target: "hooks.slack.com" }), "allowed-session");
+  assert.equal(answeredOutcome({ status: "denied", scope: "always", consumedAt: null, subject: holder, target: "hooks.slack.com" }), "blocked");
+  assert.equal(answeredOutcome({ status: "approved", scope: "once", consumedAt: null, subject: holder, target: "hooks.slack.com" }), "allowed-once");
+  assert.equal(answeredOutcome({ status: "approved", scope: "always", consumedAt: null, subject: "$MDU:nomodel_Read[ab12cd34].K", target: "api.stripe.com" }), "allowed");
 });
 
 test("noteMasks: a note of refusals only is not a mask; any other line, or an unknown form, keeps the masked reading", () => {
@@ -1870,7 +1909,7 @@ test("the page's title names the agent's generation from its own version check: 
   assert.equal(page("goose", health("goose", "1.53.0")).agent, "Goose");
 });
 
-test("a broken session's notice is marked to be written out under the header; a degraded one's stays behind the mark (dashboard.md §4.21 On the product page)", () => {
+test("a broken session's notice, or one where a protection did not start, is marked to be written out under the header, titled for which; another degraded one's stays behind the mark (dashboard.md §4.21 On the product page)", () => {
   const health = (over: Partial<SessionHealth>): SessionHealth => ({
     verdict: "ok", live: [], dropped: [], relay: null, clientVersion: null, unknownTools: [], turns: 1, toolFailures: 0, exitCode: null, reasons: [], agentVersion: null,
     ...over,
@@ -1879,19 +1918,37 @@ test("a broken session's notice is marked to be written out under the header; a 
     buildAgentPage({ session: { ...SESSION, agent: "claude", health: h }, id: "s1", vm: null, cwd: null, waiting: [] });
   const relay = page(health({ verdict: "broken", relay: "passthrough", broken: ["relay"] }));
   assert.equal(relay.noticeShown, true);
+  assert.equal(relay.noticeTitle, "This session did not work as it should.");
   assert.match(relay.notice!, /^Your terminal showed masked values instead of your real ones/);
   assert.equal(relay.noticeParts!.map((p) => p.text).join(""), relay.notice);
   const all = page(health({ verdict: "broken", toolFailures: 4, broken: ["commands"] }));
   assert.equal(all.noticeShown, true);
+  assert.equal(all.noticeTitle, "This session did not work as it should.");
   assert.equal(all.notice, "None of the 4 commands the agent ran could start: a sandbox or a missing program stopped them. Run mandu log s1 for this launch's notices.");
   assert.deepEqual(all.noticeParts!.filter((p) => p.kind === "code").map((p) => p.text), ["mandu log s1"], "the page's own session's log");
+  // A protection that did not start is a protection-status fact: written out too.
+  const dropped = page(health({ verdict: "degraded", dropped: ["mandu: service 'net-proxy' is on by default but failed to start: port busy"], droppedProtections: 1 }));
+  assert.equal(dropped.noticeShown, true);
+  assert.equal(dropped.noticeTitle, "This session ran with less protection than usual.", "the agent worked: the title says what was lost, not a failure");
+  assert.equal(dropped.notice, "1 of Mandu's protections did not start in this session, so it ran with less protection than usual. Run mandu log s1 to see which, and mandu doctor to check this computer.");
+  assert.deepEqual(dropped.noticeParts!.filter((p) => p.kind === "code").map((p) => p.text), ["mandu log s1", "mandu doctor"]);
+  // Broken and a protection that did not start: the broken title, the bigger news.
+  const both = page(health({ verdict: "broken", toolFailures: 4, broken: ["commands"], dropped: ["mandu: service 'net-proxy' is on by default but failed to start: port busy"], droppedProtections: 1 }));
+  assert.equal(both.noticeShown, true);
+  assert.equal(both.noticeTitle, "This session did not work as it should.");
+  const offVersion = page(health({ verdict: "degraded", agentVersion: { agent: "claude", name: "Claude Code", version: "9.0.0", verdict: "newer", min: "2.1.273", max: "2.1.295" } }));
+  assert.match(offVersion.notice!, /newer than the versions Mandu was tested with/);
+  assert.equal(offVersion.noticeShown, false, "only off-version: behind the mark");
+  assert.equal(offVersion.noticeTitle, null);
   const some = page(health({ verdict: "degraded", toolFailures: 1 }));
   assert.equal(some.notice, "1 of the commands the agent ran could not start.");
   assert.equal(some.noticeShown, false, "degraded: behind the mark only");
+  assert.equal(some.noticeTitle, null);
   for (const quiet of [page(health({})), page(undefined), buildAgentPage({ session: null, id: "gone", vm: null, cwd: null, waiting: [] })]) {
     assert.equal(quiet.notice, null);
     assert.equal(quiet.noticeParts, null);
     assert.equal(quiet.noticeShown, false);
+    assert.equal(quiet.noticeTitle, null);
   }
 });
 
@@ -1942,4 +1999,116 @@ test("a gated session's page carries its own launch's posture with the fix, in t
   assert.equal(buildAgentPage({ session: { ...SESSION, health: health() }, id: "s1", vm: null, cwd: null, waiting: [] }).secretsPosture, null, "no posture on record");
   assert.equal(buildAgentPage({ session: SESSION, id: "s1", vm: null, cwd: null, waiting: [] }).secretsPosture, null, "a session no launcher recorded");
   assert.equal(buildAgentPage({ session: null, id: "gone", vm: null, cwd: null, waiting: [] }).secretsPosture, null);
+});
+
+// ── Files the AI read as they were (§4.25b) ──────────────────────────────────
+
+/** One turn of the given tool steps (each a `tool` row), in `mode`. */
+function readsPage(steps: DualToolStep[], opts: { mode?: string | null; home?: string; cwd?: string | null; labels?: { path: string; level: string; at: string }[] } = {}) {
+  const all: DualStep[] = [{ step: "input", id: "in1", ts: "2026-09-25T10:00:00.000Z", turn: 1, violated: false, text: "Look around" }, ...steps];
+  const turns: PairedTurn[] = [{ id: "turn:in1", inputId: "in1", rows: steps.map((s) => ({ row: "tool" as const, stepId: s.id, masked: false, original: null, pathMapped: false, checked: true, inspect: null, flaggedValue: null })), background: [] }];
+  const vm = vmOf(all, turns);
+  const mode = opts.mode === undefined ? "secrets" : opts.mode;
+  return buildAgentPage({
+    session: SESSION, id: "s1", vm: { ...vm, paired: { ...vm.paired, mode } as SessionViewModel["paired"] }, cwd: opts.cwd ?? null, waiting: [],
+    home: opts.home ?? "/home/dev", ...(opts.labels ? { labels: opts.labels } : {}),
+  });
+}
+const readOf = (id: string, path: string, over: Partial<DualToolStep> = {}): DualToolStep =>
+  tool({ id, callId: id, ts: `2026-09-25T10:00:${id.replace(/\D/g, "").padStart(2, "0").slice(-2)}.000Z`, input: JSON.stringify({ file_path: path }), resultAgent: "line one\nline two", ...over });
+
+test("Files the AI read as they were: each file once, in the order first read, by its ~/ path, its first read's time and step (§4.25b)", () => {
+  const page = readsPage([
+    readOf("t1", "/home/dev/app/notes.txt"),
+    readOf("t2", "/home/dev/app/src/main.ts"),
+    readOf("t3", "/home/dev/app/notes.txt"),
+    readOf("t4", "/etc/hosts", { tool: "read_file" }),
+    readOf("t5", "README.md", { tool: "read", input: JSON.stringify({ filePath: "README.md" }) }),
+  ], { cwd: "/home/dev/app" });
+  assert.deepEqual(page.readAsIs, { files: [
+    { path: "~/app/notes.txt", at: "2026-09-25T10:00:01.000Z", step: "t1" },
+    { path: "~/app/src/main.ts", at: "2026-09-25T10:00:02.000Z", step: "t2" },
+    { path: "/etc/hosts", at: "2026-09-25T10:00:04.000Z", step: "t4" },
+    { path: "~/app/README.md", at: "2026-09-25T10:00:05.000Z", step: "t5" },
+  ], more: 0 }, "two reads of one file are one entry, by its first read; any agent's read tool; a relative path placed in the session's folder");
+  assert.doesNotMatch(JSON.stringify(page.readAsIs), /line one|line two/, "paths and times only, never a byte of the file");
+});
+
+test("Files the AI read as they were: never a read the AI got masked, one marked a secret after it, a stopped, held or sandboxed one, nor a command's cat (§4.25b)", () => {
+  const sym = "$MDU:nomodel_Read[5c6e].STRIPE_KEY";
+  const page = readsPage([
+    readOf("t1", "/home/dev/app/notes.txt"),
+    readOf("t2", "/home/dev/app/.env", { resultAgent: `STRIPE_KEY=${sym}`, newSymbols: [sym] }),
+    readOf("t3", "/home/dev/app/key.pem", { resultAgent: "[masked]", secretNote: "[mandu:secret] masked" }),
+    readOf("t4", "/home/dev/app/staging.conf", { maskedLater: { ts: "2026-09-25T10:00:09.000Z", deliveredTs: "2026-09-25T10:00:09.000Z", symbols: [sym] } }),
+    readOf("t5", "/home/dev/app/deploy.conf"),
+    readOf("t6", "/home/dev/app/blocked.txt", { usage: "deny" }),
+    readOf("t7", "/home/dev/app/held.txt", { usage: "needs_approval" }),
+    readOf("t8", "/home/dev/app/boxed.txt", { quarantine: true }),
+    tool({ id: "t9", callId: "t9", tool: "Bash", input: JSON.stringify({ command: "cat /home/dev/app/printed.txt" }), resultAgent: "printed" }),
+    readOf("t10", "/home/dev/app/$MDU:nomodel_Read[3fa9].DIR/x.txt"),
+  ], { labels: [{ path: "/home/dev/app/deploy.conf", level: "no-model", at: "2026-09-25T11:00:00.000Z" }] });
+  assert.deepEqual(page.readAsIs?.files.map((f) => f.path), ["~/app/notes.txt"]);
+  const outcomes = Object.fromEntries(page.story[0]!.steps.map((s) => [s.id, s.kind === "action" ? s.outcome : s.kind]));
+  assert.equal(outcomes["t5"], "raw", "deploy.conf was marked a secret after the read: the step says so, and the fold leaves it out");
+  assert.doesNotMatch(JSON.stringify(page.readAsIs), /\$MDU:|3fa9|printed/);
+});
+
+test("Files the AI read as they were: up to READ_AS_IS_CAP sent (40 are all sent), past it the rest are counted; a read the story does not draw has no step (§4.25b)", () => {
+  const many = Array.from({ length: READ_AS_IS_CAP + 12 }, (_, i) => readOf(`t${i + 1}`, `/home/dev/app/f${i + 1}.ts`));
+  const capped = readsPage(many);
+  assert.equal(capped.readAsIs?.files.length, READ_AS_IS_CAP);
+  assert.equal(capped.readAsIs?.more, 12);
+  assert.equal(capped.readAsIs?.files[0]!.path, "~/app/f1.ts");
+  // The page draws 30 and the rest after Show them: past 30 every file is sent.
+  const forty = readsPage(many.slice(0, 40));
+  assert.equal(forty.readAsIs?.files.length, 40);
+  assert.equal(forty.readAsIs?.more, 0);
+  assert.equal(forty.readAsIs?.files[39]!.path, "~/app/f40.ts");
+  // A turn draws its first TURN_STEP_CAP steps: a file first read past them has no step.
+  const long = [...Array.from({ length: TURN_STEP_CAP }, (_, i) => readOf(`a${i}`, "/home/dev/app/a.ts")), readOf("b1", "/home/dev/app/b.ts")];
+  const page = readsPage(long);
+  assert.deepEqual(page.readAsIs?.files.map((f) => [f.path, f.step ?? null]), [["~/app/a.ts", "a0"], ["~/app/b.ts", null]]);
+  assert.equal(page.story[0]!.moreSteps, 1, "the read of b.ts is past what the page draws");
+});
+
+test("Files the AI read as they were: none with protection off, nor with no such read (§4.25b)", () => {
+  assert.equal(readsPage([readOf("t1", "/home/dev/app/notes.txt")], { mode: "off" }).readAsIs, null, "the limits line says Mandu masked nothing");
+  assert.notEqual(readsPage([readOf("t1", "/home/dev/app/notes.txt")], { mode: null }).readAsIs, null, "a recording with no mode still lists it");
+  assert.equal(readsPage([tool({ id: "t1", tool: "Bash", input: JSON.stringify({ command: "cat notes.txt" }), resultAgent: "x" })]).readAsIs, null);
+  assert.equal(buildAgentPage({ session: SESSION, id: "s1", vm: null, cwd: null, waiting: [] }).readAsIs, null);
+});
+
+// ── A card shows its steps (§4.25b) ──────────────────────────────────────────
+
+test("A card shows its steps: a file labelled after the session has its reads as its steps, by the page's own step ids and turn (§4.25b)", () => {
+  const page = readsPage([
+    readOf("t1", "/home/dev/app/notes.txt"),
+    readOf("t5", "/home/dev/app/deploy.conf"),
+    readOf("t6", "/home/dev/app/deploy.conf"),
+  ], { labels: [{ path: "/home/dev/app/deploy.conf", level: "no-model", at: "2026-09-25T11:00:00.000Z" }] });
+  const card = page.secrets.secrets.find((s) => s.file === "~/app/deploy.conf");
+  assert.ok(card, JSON.stringify(page.secrets.secrets.map((s) => s.what)));
+  assert.deepEqual(card.steps, ["t5", "t6"], "both reads, never the notes read");
+  assert.deepEqual(card.turns, [page.story[0]!.id]);
+  assert.equal(card.earlierTurns, undefined);
+});
+
+test("A card shows its steps: a step in a turn older than the ones drawn counts in earlierTurns, a drawn turn's in turns (§4.25b)", () => {
+  // TURN_CAP + 1 turns, each reading the same labelled file: the first is not drawn.
+  const steps: DualStep[] = [];
+  const turns: PairedTurn[] = [];
+  for (let i = 0; i <= TURN_CAP; i++) {
+    const at = new Date(Date.parse("2026-09-25T10:00:00.000Z") + i * 2000).toISOString();
+    const read = readOf(`r${i}`, "/home/dev/app/deploy.conf", { ts: at, turn: i + 1 });
+    steps.push({ step: "input", id: `in${i}`, ts: at, turn: i + 1, violated: false, text: `Look ${i}` }, read);
+    turns.push({ id: `turn:in${i}`, inputId: `in${i}`, rows: [{ row: "tool", stepId: read.id, masked: false, original: null, pathMapped: false, checked: true, inspect: null, flaggedValue: null }], background: [] });
+  }
+  const page = buildAgentPage({ session: SESSION, id: "s1", vm: vmOf(steps, turns), cwd: null, waiting: [], home: "/home/dev", labels: [{ path: "/home/dev/app/deploy.conf", level: "no-model", at: "2026-09-25T12:00:00.000Z" }] });
+  assert.equal(page.earlier, 1);
+  const card = page.secrets.secrets.find((s) => s.file === "~/app/deploy.conf")!;
+  assert.equal(card.turns!.length, TURN_CAP);
+  assert.equal(card.turns![0], "turn:in1");
+  assert.equal(card.earlierTurns, 1, "the first read's turn is not drawn");
+  assert.equal(card.steps!.length, TURN_CAP + 1);
 });

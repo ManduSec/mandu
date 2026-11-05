@@ -46,7 +46,7 @@ const STEP = {
   split: { ai: [T("Got "), M("secret"), T(" in place of the result.")], real: [T("The result held your secret "), code(".env"), T(".")],
     hidden: { text: null, secret: true, truncated: false, secrets: [{ ref: "aaaaaaaaaaaaaaaaaaaaaaa1", name: ".env" }] } },
 };
-const CARD = { what: [T("The file "), code("~/ws/.env")], level: "No AI", saw: "masked", lines: [{ tone: "good", parts: [T("The AI got only a placeholder, never the real value.")] }], ref: "bbbbbbbbbbbbbbbbbbbbbbb1" };
+const CARD = { what: [T("The file "), code("~/ws/.env")], level: "No AI", saw: "masked", lines: [{ tone: "good", parts: [T("The AI got only its masked version, never the real value.")] }], ref: "bbbbbbbbbbbbbbbbbbbbbbb1" };
 const NOTE = {
   lines: ["One value in your prompt was hidden from the AI (an email address)."],
   items: [{ eventId: "ev-1", index: 0, category: "pii.email", words: "an email address", state: "hidden", canLetOnce: false, canLetSession: false, canShow: true }],

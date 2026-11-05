@@ -20,7 +20,17 @@
  *   A4  `whatParts` is the sentence from its verb on, its names still
  *       code, its parts its own; a sentence whose subject is more than the
  *       agent stays whole;
- *   A5  Home's ask carries both (home.ts spreads describeAsk).
+ *   A5  Home's ask carries both (home.ts spreads describeAsk);
+ *   A6  an ended asker's words (`endedAskWords`, dashboard.md §4.34
+ *       *After you answer*): over every row of A1, no TELL_AGENT in
+ *       `ifAllowed` nor its parts (mid-cell too, on a held program),
+ *       the parts still joining to it, their names still code, and no
+ *       try-again `afterAllow`; the rest of the cell as it was; words
+ *       without the sentence come back as they are;
+ *   A7  Home applies it exactly to a card whose asking session has ended:
+ *       a send, a held program that stopped waiting and the path gate from
+ *       an ended session lose the sentence and `afterAllow`, the same from
+ *       a running one keep both.
  *
  * Pure: describeAsk and buildHomeViewModel over queue rows, no I/O. Axes: none
  * (display words only). Mandu-new test.
@@ -29,7 +39,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { describeAsk, TELL_AGENT, type AskWords, type HomeTextPart } from "../../../src/view-model/ask-words.js";
+import { describeAsk, endedAskWords, TELL_AGENT, type AskWords, type HomeTextPart } from "../../../src/view-model/ask-words.js";
 import { buildHomeViewModel } from "../../../src/view-model/home.js";
 import { toPolicyPanelViewModel } from "../../../src/view-model/policy-panel.js";
 import type { PolicySnapshot } from "../../../src/policy-model.js";
@@ -133,4 +143,72 @@ test("A5: Home's waiting ask carries both", () => {
   assert.equal(w.afterAllow, TRY);
   assert.equal(text(w.whatParts), "send your secret STRIPE_KEY to api.stripe.com");
   assert.ok(!JSON.stringify(w.whatParts).includes("$MDU"), "names, never a placeholder");
+});
+
+test("A6: an ended asker's words leave out 'tell the agent to try again', wherever the cell has it", () => {
+  for (const [name, row] of FAMILIES) {
+    const live = ask(row);
+    const ended = endedAskWords(live);
+    if (!live.ifAllowed.includes(TELL_AGENT)) {
+      assert.equal(ended, live, `${name}: unchanged`);
+      continue;
+    }
+    assert.ok(!ended.ifAllowed.includes(TELL_AGENT), `${name}: not in the cell`);
+    assert.ok(!text(ended.ifAllowedParts).includes(TELL_AGENT), `${name}: nor in its parts`);
+    assert.equal(text(ended.ifAllowedParts), ended.ifAllowed, `${name}: the parts are the cell`);
+    assert.equal(ended.ifAllowed, live.ifAllowed.replace(` ${TELL_AGENT}`, ""), `${name}: the rest as it was`);
+    assert.deepEqual(ended.ifAllowedParts.filter((p) => p.kind === "code"), live.ifAllowedParts.filter((p) => p.kind === "code"), `${name}: names still code`);
+    assert.ok(!("afterAllow" in ended), `${name}: no try-again line`);
+    assert.equal(live.afterAllow, TRY, `${name}: the live words keep theirs`);
+    assert.ok(live.ifAllowed.includes(TELL_AGENT), `${name}: the live words are not changed`);
+    assert.deepEqual({ ...ended, ifAllowed: "", ifAllowedParts: [] }, (({ afterAllow: _a, ...r }) => ({ ...r, ifAllowed: "", ifAllowedParts: [] }))(live), `${name}: nothing else moves`);
+  }
+  assert.equal(endedAskWords(ask({ origin: env })).ifAllowed,
+    "The AI's next request goes to api.stripe.com with the real secret filled in. Mandu refused this one, so nothing was sent.");
+  // A held program that stopped waiting: the sentence is mid-cell.
+  const read = endedAskWords(ask({ where: "file", subject: `open:${cat}`, target: env, held: false }));
+  assert.equal(read.ifAllowed,
+    "The AI's program /usr/bin/cat stopped waiting and could not read the file. If you allow it, it reads the real file the next time the AI runs it. What it prints still reaches the AI masked.");
+  assert.deepEqual(read.ifAllowedParts.map((p) => p.kind), ["text", "code", "text"]);
+  assert.equal(endedAskWords(ask({ where: "file", subject: "fs:Read:read", target: `${HOME}/.aws/credentials`, reason: "sensitive path ~/.aws" })).ifAllowed.endsWith(TELL_AGENT), false);
+  // A held program still waiting goes on at once: its line stays.
+  assert.equal(endedAskWords(ask({ where: "file", subject: `open:${cat}`, target: env, held: true })).afterAllow, GOES);
+});
+
+test("A7: Home leaves the sentence out exactly where the asking session has ended", () => {
+  const NOW = Date.parse("2026-10-22T12:00:00Z");
+  const row = (id: string, session: string, symbol: string, destination: string, lastSeen = NOW - 60_000) => ({
+    id, symbol, destination, status: "pending", reason: "r", count: 1,
+    firstSeen: NOW - 120_000, lastSeen, sessions: [session], source: { origin: env },
+  });
+  const verdicts = (["live", "gone"] as const).flatMap((s) => [
+    row(`send-${s}`, `s-${s}`, KEY, "hooks.slack.com"),
+    row(`read-${s}`, `s-${s}`, `open:${cat}`, `${env}.${s}`, NOW - 90_000),
+    row(`path-${s}`, `s-${s}`, "fs:Read:read", `${HOME}/.aws/credentials.${s}`),
+  ]);
+  const snapshot = {
+    specId: "claude-code", origins: [], tools: {}, fallbackTrust: "UNTRUSTED", mcpPrefix: "mcp__",
+    posture: { integrity: false, confidentiality: true }, usage: { rules: [], sensitivePaths: [] }, verdicts,
+  } as unknown as PolicySnapshot;
+  const session = (id: string) => ({ id, label: id, eventCount: 3, firstTs: new Date(NOW - 600_000).toISOString(), lastTs: new Date(NOW - 60_000).toISOString(), violated: false, agent: "claude" as const, status: "running" as const });
+  const fact = (exited: boolean) => ({ stats: { secretsSymbolized: 0, egressBlocked: 0, egressAllowed: 0 }, blocked: 0, sent: 0, holds: true, violations: 0, cwd: null, ...(exited ? { exited: true } : {}) });
+  const vm = buildHomeViewModel({
+    sessions: [session("s-live"), session("s-gone")],
+    facts: new Map([["s-live", fact(false)], ["s-gone", fact(true)]]) as never,
+    panel: toPolicyPanelViewModel(snapshot), configuredMode: "secrets", nowMs: NOW, windowHours: 24, historyTotal: 1, home: HOME,
+  });
+  const card = (id: string) => vm.waiting.find((a) => a.id === id)!;
+  for (const kind of ["send", "read", "path"]) {
+    const live = card(`${kind}-live`);
+    const gone = card(`${kind}-gone`);
+    assert.ok(!("askerEnded" in live) && gone.askerEnded === true, kind);
+    assert.ok(live.ifAllowed.includes(TELL_AGENT), `${kind}: a running agent's card keeps it`);
+    assert.equal(live.afterAllow, TRY, kind);
+    assert.ok(!gone.ifAllowed.includes(TELL_AGENT), `${kind}: an ended one's card leaves it out`);
+    assert.equal(text(gone.ifAllowedParts), gone.ifAllowed, kind);
+    assert.ok(!("afterAllow" in gone), kind);
+  }
+  assert.equal(card("read-gone").held, false, "the held program stopped waiting");
+  assert.equal(card("send-gone").ifAllowed,
+    "The AI's next request goes to hooks.slack.com with the real secret filled in. Mandu refused this one, so nothing was sent.");
 });

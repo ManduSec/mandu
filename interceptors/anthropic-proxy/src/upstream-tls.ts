@@ -9,6 +9,9 @@
  * Fail-closed: a value that does not parse, or a file that cannot be used,
  * THROWS, and the proxy does not start (the launch then refuses), rather than
  * dialing the model without the checks. Unset or empty: no option.
+ *
+ * One module, two copies (both model proxies); the source is
+ * interceptors/anthropic-proxy/src/upstream-tls.ts: change it, then run `node scripts/copies/module-copies.mjs generate`.
  */
 import { asTlsConfig, hasTlsConfig, loadTlsMaterial, type TlsMaterial } from "./endpoint-tls.js";
 

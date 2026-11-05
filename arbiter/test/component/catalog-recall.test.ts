@@ -48,8 +48,10 @@ test("every corpus credential is discovered and registered over the wire, and no
       const twin = r.twin ?? r.symbol!;
       assert.ok(!twin.includes(e.secret), `${e.path}: the twin carries no secret byte [${r.shape ?? "whole"}]`);
       // A URL's user or password in pip.conf is percent-encoded (pip decodes
-      // it; plan 10 §11.13.1), and npm's _password is base64: decode both forms.
-      const decoded = [twin, decodeURIComponent(twin), ...[...twin.matchAll(/_password=([A-Za-z0-9+/=]+)/g)].map((m) => Buffer.from(m[1]!, "base64").toString("utf8"))];
+      // it; plan 10 §11.13.1), npm's _password is base64, and a .pgpass
+      // token has its colon escaped (libpq unescapes it; db-login-release.md):
+      // decode each form.
+      const decoded = [twin, decodeURIComponent(twin), twin.replace(/\\(.)/g, "$1"), ...[...twin.matchAll(/_password=([A-Za-z0-9+/=]+)/g)].map((m) => Buffer.from(m[1]!, "base64").toString("utf8"))];
       assert.ok(decoded.some((t) => /\$MDU:nomodel_/.test(t)), `${e.path}: the twin holds a placeholder:\n${twin}`);
     }
   } finally {

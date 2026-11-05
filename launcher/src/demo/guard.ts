@@ -29,6 +29,7 @@ import { humanPlaneDirs } from "../human-plane.js";
 import { computeNetGuardSpecs, NET_GUARD_PROXY_PORTS_ENV, planNetGuard, sessionProxyPorts } from "../net-guard.js";
 import { NET_GUARD_STATUS_ENV } from "../guard-death.js";
 import { guardPolicyBase } from "../guard-policy-file.js";
+import { probeGuardNotify } from "../opencode2-confidentiality.js";
 import { resolveNativeBin, staleNativeBinNote } from "../services/native-bins.js";
 import type { AgentId } from "./render.js";
 
@@ -39,6 +40,9 @@ export type GuardAbsence =
   | "linux-only" //  not Linux: the guard is seccomp user notification
   | "not-built" //   Linux, but no mandu-net-guard bin resolves
   | "turned-off" //  MANDU_NET_GUARD=0, the launch's own opt-out
+  | "cannot-start" // the bin is here but cannot set up on this machine (its
+  //                  probe failed: a container whose seccomp profile refuses
+  //                  what it needs, or a kernel without user notification)
   | "kernel"; //     the bin ran but could not attach (it ran the command unguarded)
 
 /** The guard found for this run, or why there is none. */
@@ -51,17 +55,25 @@ function turnedOff(env: Env): boolean {
 }
 
 /** Find the guard as a launch does (net-guard-setup.ts: Linux only, the
- *  launch's resolver, the launch's opt-out). Pure over its inputs. */
+ *  launch's resolver, the launch's opt-out), then ask the bin whether it can
+ *  set up here at all (`probeGuardNotify`: the bin around `true`, without
+ *  `--skip-unsupported`). A bin that cannot is no guard for the demo: in a
+ *  Docker container with the default seccomp profile the guard fails closed
+ *  at setup (it cannot copy its tracee's listener with `pidfd_getfd`), so
+ *  every command under it would fail and the demo could not run
+ *  (packaging.md §3.1, 2026-10-24). Pure over its inputs. */
 export function findDemoGuard(
   platform: string,
   env: Env,
   resolve: () => string | null = () => resolveNativeBin("mandu-net-guard", { env }),
   stale: (bin: string) => string | null = (bin) => staleNativeBinNote("mandu-net-guard", bin),
+  probe: (bin: string) => boolean = (bin) => probeGuardNotify(bin),
 ): DemoGuardFind {
   if (platform !== "linux") return { absent: "linux-only" };
   if (turnedOff(env)) return { absent: "turned-off" };
   const bin = resolve();
   if (bin === null) return { absent: "not-built" };
+  if (!probe(bin)) return { absent: "cannot-start" };
   return { bin, stale: stale(bin) };
 }
 
@@ -72,6 +84,7 @@ export function wholeFileWhy(a: GuardAbsence): string {
     case "linux-only": return "the keys show only under Mandu's guard, which is Linux only";
     case "not-built": return "the keys show only under Mandu's guard, not built on this machine";
     case "turned-off": return "the keys show only under Mandu's guard, turned off (MANDU_NET_GUARD=0)";
+    case "cannot-start": return "the keys show only under Mandu's guard, which cannot start on this machine";
     case "kernel": return "the keys show only under Mandu's guard, which this kernel cannot run";
   }
 }

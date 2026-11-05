@@ -20,6 +20,7 @@ import { type SidebarTestRun, type SidebarWatchRun } from "../session-batches.js
 import { type Tenant, type TenantState } from "./options.js";
 import { type ReadRoute } from "./read-gate.js";
 import { type WarmResult } from "./cache-warmup.js";
+import { type LineageFacts } from "../view-model/secret-path.js";
 
 /** One request, as an extension sees it: past every gate, base path stripped. */
 export interface ExtensionRequest {
@@ -56,6 +57,10 @@ export interface ExtensionHost {
    *  need; false once refused (the 403 is answered). */
   requireAdminRead(req: IncomingMessage, res: ServerResponse, urlPath: string): boolean;
   hasAdminSession(req: IncomingMessage): boolean;
+  /** What *Where each went* adds to a session's record for `tenant`: the
+   *  registry's files, the kept scan and the home folder (secret-path.ts
+   *  `LineageFacts`). Never throws: none known is empty. */
+  lineageFacts(tenant: TenantState): Promise<LineageFacts>;
 }
 
 /** The runs that sort the session list (session-batches.ts): a test run's

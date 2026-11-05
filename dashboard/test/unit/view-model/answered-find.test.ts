@@ -19,7 +19,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ANSWERED_OUTCOME_WORDS, answeredMatches, answeredPage, answeredRowWords, HISTORY_QUERY_MAX, type HomeAnswered } from "../../../src/view-model/home.js";
+import { ANSWERED_OUTCOME_WORDS, answeredMatches, answeredOutcome, answeredPage, answeredRowWords, HISTORY_QUERY_MAX, type HomeAnswered } from "../../../src/view-model/home.js";
 import { toPolicyPanelViewModel } from "../../../src/view-model/policy-panel.js";
 import type { PolicySnapshot, VerdictEntry } from "../../../src/policy-model.js";
 import type { SessionRef } from "../../../src/event-source/contract.js";
@@ -133,9 +133,37 @@ test("W4: paging inside a match: total, next and after count the matches; query 
 });
 
 test("W5: every outcome has its words, as the page draws them", () => {
-  const outcomes: HomeAnswered["outcome"][] = ["allowed", "blocked", "allowed-once", "allowed-once-used", "sent", "sent-session", "masked", "masked-session", "without", "without-used"];
+  const outcomes: HomeAnswered["outcome"][] = ["allowed", "allowed-session", "blocked", "allowed-once", "allowed-once-used", "sent", "sent-session", "masked", "masked-session", "without", "without-used"];
   assert.deepEqual(Object.keys(ANSWERED_OUTCOME_WORDS).sort(), [...outcomes].sort());
   for (const o of outcomes) assert.ok(ANSWERED_OUTCOME_WORDS[o].length > 0);
   assert.equal(ANSWERED_OUTCOME_WORDS.blocked, "Blocked");
   assert.equal(ANSWERED_OUTCOME_WORDS["allowed-once-used"], "Allowed once");
+});
+
+test("W6: a program's send allowed for its session reads Allowed for this session, and Find finds it by those words; a plain send stays Always allowed (§4.25)", () => {
+  const holder = (session: string | null) => `holder-send:${JSON.stringify({ ...(session ? { session } : {}), files: ["/home/u/shop/.env"] })}`;
+  const rows = [
+    verdict({ id: "hs", symbol: holder("s-claude"), source: undefined, destination: "hooks.slack.com", status: "approved", resolvedAt: NOW - 1_000 }),
+    verdict({ id: "hd", symbol: holder("s-claude"), source: undefined, destination: "paste.example", status: "denied", resolvedAt: NOW - 2_000 }),
+    verdict({ id: "hn", symbol: holder(null), source: undefined, destination: "paste.example", status: "denied", resolvedAt: NOW - 3_000 }),
+    verdict({ id: "rn", symbol: `write:/usr/bin/git#${"a".repeat(64)}#run:gw-1`, source: undefined, destination: "/home/u/.bashrc", status: "denied", resolvedAt: NOW - 4_000 }),
+    verdict({ id: "e", status: "approved", resolvedAt: NOW - 5_000 }),
+    verdict({ id: "a", resolvedAt: NOW - 6_000 }),
+  ];
+  const q = queueOf(rows);
+  const of = (id: string) => q.find((r) => r.id === id)!;
+  assert.equal(answeredOutcome(of("hs")), "allowed-session", "kept on that session's row");
+  assert.equal(answeredOutcome(of("e")), "allowed", "a plain send's allow stands");
+  assert.equal(answeredOutcome(of("hd")), "blocked");
+  const all = page(null, rows).rows;
+  const row = (id: string) => all.find((r) => r.id === id)!;
+  assert.equal(row("hs").outcome, "allowed-session");
+  assert.equal(row("hs").allowKeptAs, undefined, "its reversal blocks");
+  assert.equal(row("hd").allowKeptAs, "session", "Allow this session instead");
+  assert.equal(row("hn").allowKeptAs, "once", "no session: Allow once instead");
+  assert.equal(row("rn").allowKeptAs, "once", "one run of a program: Allow once instead");
+  assert.equal(row("a").allowKeptAs, undefined, "a plain send's: Always allow instead");
+  assert.equal("allowKeptAs" in row("e"), false, "absent, not undefined, on the wire");
+  assert.deepEqual(ids(page("this session", rows).rows), ["hs"], "Find an answer finds it by its words");
+  assert.deepEqual(ids(page("always allowed", rows).rows), ["e"], "never Always allowed");
 });

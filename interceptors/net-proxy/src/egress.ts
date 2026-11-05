@@ -22,6 +22,10 @@
  *   - `isModelHost` — the exclusion predicate; model-API hosts are owned by the
  *     anthropic-proxy / openai-proxy under a different policy, so this proxy never
  *     gates them.
+ *   - AWS SigV4 re-signing (aws-sigv4-resign.md, `sigv4Plan` / `resignRequest`):
+ *     a request signed with the placeholder of an AWS secret access key has
+ *     that placeholder decided at position `signature`, and is signed again
+ *     with the real key once every placeholder in it is released.
  *
  * SECURITY INVARIANT (mandu.md): un-symbolized untrusted data must never leave
  * via a desymbolized egress without a positive gate decision. The T-LLM invariant
@@ -36,6 +40,10 @@ import { NETWORK_BOUNDARY } from "./arbiter-client.js";
 import { randomUUID } from "node:crypto";
 import type { ProcHolder } from "./conn-attr.js";
 import { destinationMatchesBindings } from "./host-bindings.js";
+import {
+  SIGV4_ALGORITHM, matchSignature, normalHost, parseSigV4Authorization, payloadModeOf, resignedAuthorization,
+  sha256Hex, sigv4AuthorizationOf, sigv4Signature, type CanonicalForm, type SigV4Authorization,
+} from "./sigv4.js";
 
 /** The kind of an egress refusal, from a gate's reason (below), for the
  *  arbiter's record (plan 10 §11.8, "Refused connections"). The reason
@@ -331,7 +339,7 @@ export interface GateInput {
    * declared for https into a request that is not HTTPS (plan 10 §11.13.1,
    * 2026-10-03). Omitted → not sent (such a credential is then refused).
    */
-  scheme?: "http" | "https";
+  scheme?: "http" | "https" | "postgres" | "mysql";
   /**
    * The destination is a model service a program in the session calls
    * itself (`MANDU_NET_PROXY_MODEL_SERVICES`, the launcher's
@@ -343,6 +351,14 @@ export interface GateInput {
    * still refuses a raw registered value.
    */
   modelService?: boolean;
+  /** The body's bytes as received, when the leg has them (a SigV4 request
+   *  signs the bytes, not their UTF-8 reading). Absent: `bodyText`'s bytes. */
+  bodyBytes?: Buffer;
+  /** The Host value the leg sends upstream (the TLS-inspected leg: the
+   *  CONNECT authority). A SigV4 request is re-signed only when the Host it
+   *  signed is this one. Absent: `destinationHost` less its scheme's default
+   *  port. */
+  hostHeader?: string;
 }
 
 /** Is `host` (host[:port]) one of the model services, or under one? Pure. */
@@ -531,16 +547,23 @@ export function requestSymbolPositions(
       at.add(position);
     }
   };
+  // A SigV4 request carries its credential in two headers: the access key id
+  // in Authorization, the session token in X-Amz-Security-Token
+  // (aws-sigv4-resign.md §3).
+  const sigv4 = sigv4AuthorizationOf(input.headers) !== null;
   note(input.url, "url");
   note(input.destinationHost, "url");
   note(input.bodyText, "body");
-  for (const [k, v] of Object.entries(input.headers)) note(headerText(v), isAuthorizationHeader(k) ? "authorization" : "header");
+  for (const [k, v] of Object.entries(input.headers)) {
+    const credential = isAuthorizationHeader(k) || (sigv4 && k.toLowerCase() === "x-amz-security-token");
+    note(headerText(v), credential ? "authorization" : "header");
+  }
   for (const pair of basicPairs(input.headers)) note(pair, "authorization");
   return out;
 }
 
 /** A position set in the order the arbiter names them. */
-const POSITION_ORDER: readonly RequestPosition[] = ["authorization", "url", "header", "body"];
+const POSITION_ORDER: readonly RequestPosition[] = ["authorization", "url", "header", "body", "signature"];
 function orderedPositions(at: ReadonlySet<RequestPosition>): RequestPosition[] {
   return POSITION_ORDER.filter((p) => at.has(p));
 }
@@ -667,6 +690,149 @@ async function gatePrelude(input: GateInput): Promise<GateResult | null> {
  * allow (with its resolved value) and a Send without it are carried; a
  * denial ends the request and a pending ask is asked again.
  */
+// ── AWS SigV4 re-signing (aws-sigv4-resign.md) ───────────────────────────────
+//
+// `aws` and the SDKs sign with the placeholder of the secret access key they
+// read from the masked `~/.aws/credentials` (or a masked
+// `AWS_SECRET_ACCESS_KEY`). The key itself is in no byte of the request,
+// only its HMAC, so the per-symbol gate below never sees it. `sigv4Plan`
+// finds which placeholder signed the request by recomputing the signature
+// with each one the arbiter lists (`signingKeys`); the gate then decides
+// that placeholder at position `signature`, the access key id and the
+// session token where they sit (both `authorization`), and
+// `resignRequest` signs the released request with the real key. Every case
+// it cannot handle, in a request that carries a placeholder, is refused
+// (fail-closed): forwarding it would send a signature AWS rejects anyway.
+// A SigV4 request with no placeholder and no placeholder signature (a key
+// of the program's own, a reader's real key) goes to the gates as before.
+
+/** The most signing-key candidates one request is checked against. */
+export const SIGNING_KEYS_MAX = 64;
+
+/** What the gate does with a request's SigV4 signature. */
+export type SigV4Plan =
+  | { kind: "none" }
+  | { kind: "refuse"; reason: string }
+  | { kind: "resign"; signing: string; form: CanonicalForm; sentHost: string };
+
+const SIGV4_REFUSED = "a SigV4-signed AWS request";
+
+/** The scheme a SigV4 request is judged in: `http` or `https` (absent:
+ *  https, the TLS-inspected leg's), else null: no other scheme (a database
+ *  relay's `postgres` / `mysql`, anything new) carries a SigV4 request,
+ *  and one that seems to is refused (fail-closed). */
+function sigv4Scheme(input: Pick<GateInput, "scheme">): "http" | "https" | null {
+  if (input.scheme === undefined || input.scheme === "https") return "https";
+  return input.scheme === "http" ? "http" : null;
+}
+
+/** The Host the leg sends upstream (`GateInput.hostHeader`). */
+function sentHostOf(input: Pick<GateInput, "hostHeader" | "destinationHost">, scheme: "http" | "https"): string {
+  return input.hostHeader ?? normalHost(input.destinationHost, scheme);
+}
+
+/** The request's body bytes (`GateInput.bodyBytes`, else `bodyText`'s). */
+function bodyBytesOf(input: Pick<GateInput, "bodyBytes" | "bodyText">): Buffer {
+  return input.bodyBytes ?? Buffer.from(input.bodyText, "utf8");
+}
+
+function sigv4HeaderValues(headers: GateInput["headers"], name: string): string[] {
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(headers)) {
+    if (v == null || k.toLowerCase() !== name) continue;
+    for (const one of Array.isArray(v) ? v : [v]) out.push(one);
+  }
+  return out;
+}
+
+/**
+ * Whether and how a SigV4 request is re-signed. `carries`: the request holds
+ * a placeholder in a credential position (the access key id, the session
+ * token), so anything short of a re-sign is refused. Pure but for the one
+ * `signingKeys` read.
+ */
+export async function sigv4Plan(input: GateInput, carries: boolean): Promise<SigV4Plan> {
+  const refuse = (why: string): SigV4Plan => ({ kind: "refuse", reason: `${SIGV4_REFUSED} ${why} → block (fail-closed)` });
+  const found = sigv4AuthorizationOf(input.headers);
+  if (found === null) return { kind: "none" };
+  // A SigV4 Authorization in a request of another scheme (a database login
+  // through the relay, to an `*.rds.amazonaws.com` host or any other):
+  // refused whatever it carries, never read as HTTPS.
+  const scheme = sigv4Scheme(input);
+  if (scheme === null) return refuse(`in a ${input.scheme} request: only HTTP and HTTPS requests are signed again`);
+  if (found === "ambiguous") return carries ? refuse("has more than one Authorization header") : { kind: "none" };
+  const auth = found.parsed;
+  if (auth === null) return carries ? refuse("has an Authorization header Mandu cannot read") : { kind: "none" };
+  if (auth.algorithm !== SIGV4_ALGORITHM) {
+    // SigV4a signs with an ECDSA key derived from the secret: open (§6).
+    return carries ? refuse(`is signed with ${auth.algorithm}, which Mandu cannot sign again (only ${SIGV4_ALGORITHM}; SigV4a is not supported)`) : { kind: "none" };
+  }
+  let candidates: string[];
+  try {
+    if (!input.arbiter.signingKeys) return carries ? refuse("cannot be signed again: this arbiter cannot list the signing keys") : { kind: "none" };
+    const r = await input.arbiter.signingKeys(input.sessionKey !== undefined ? { sessionKey: input.sessionKey } : {});
+    candidates = (Array.isArray(r?.symbols) ? r.symbols : [])
+      .filter((c): c is string => typeof c === "string" && findSymbols(c)[0] === c)
+      .slice(0, SIGNING_KEYS_MAX);
+  } catch (err) {
+    return carries ? refuse(`cannot be signed again: listing the signing keys failed (${(err as Error).message})`) : { kind: "none" };
+  }
+  const hit = matchSignature({ method: input.method, url: input.url, headers: input.headers, body: bodyBytesOf(input) }, auth, candidates);
+  if (hit === null) {
+    return carries
+      ? refuse("carries a placeholder, but its signature was not made with the placeholder of a secret access key Mandu holds (or in a form Mandu does not read), so it cannot be signed with the real key")
+      : { kind: "none" };
+  }
+  // Signed by a placeholder: from here on nothing goes as it is.
+  if (!auth.signedHeaders.includes("host")) return refuse("does not sign its Host");
+  const sentHost = sentHostOf(input, scheme);
+  const signedHost = sigv4HeaderValues(input.headers, "host");
+  if (signedHost.length !== 1 || normalHost(signedHost[0]!, scheme) !== normalHost(sentHost, scheme)) {
+    // A signature made for another host and sent here could be replayed
+    // there: never signed with the real key.
+    return refuse(`signs Host '${signedHost.join(",")}' but is sent to '${sentHost}'`);
+  }
+  const mode = payloadModeOf(input.headers);
+  if (mode === "streaming-signed") return refuse("streams a body whose every chunk is signed (aws-chunked with chunk signatures), which Mandu does not sign again yet");
+  if (mode === "other") return refuse("states an x-amz-content-sha256 Mandu does not know");
+  return { kind: "resign", signing: hit.secret, form: hit.form, sentHost };
+}
+
+/**
+ * The released request signed with the real key `secret`, in the canonical
+ * form the agent's signature matched. A body the release changed gets its
+ * stated hash (`x-amz-content-sha256`) recomputed; an aws-chunked body it
+ * changed is refused (its framing and trailer checksum would be wrong).
+ * Returns the request to send, or why it cannot be sent. Pure.
+ */
+export function resignRequest(
+  input: Pick<GateInput, "method" | "bodyText" | "bodyBytes">,
+  rewritten: { url: string; headers: Record<string, string | string[] | undefined>; bodyText: string },
+  plan: Extract<SigV4Plan, { kind: "resign" }>,
+  secret: string,
+): { url: string; headers: Record<string, string | string[] | undefined>; bodyText: string } | { refused: string } {
+  const refuse = (why: string) => ({ refused: `${SIGV4_REFUSED} ${why} → block (fail-closed)` });
+  const headers: Record<string, string | string[] | undefined> = { ...rewritten.headers };
+  const bodyChanged = rewritten.bodyText !== input.bodyText;
+  const body = bodyChanged ? Buffer.from(rewritten.bodyText, "utf8") : bodyBytesOf(input);
+  if (bodyChanged) {
+    const mode = payloadModeOf(headers);
+    if (mode === "streaming-unsigned") return refuse("streams an aws-chunked body that a released value changed");
+    if (mode === "hashed") {
+      for (const k of Object.keys(headers)) if (k.toLowerCase() === "x-amz-content-sha256") headers[k] = sha256Hex(body);
+    }
+  }
+  const keys = Object.keys(headers).filter((k) => k.toLowerCase() === "authorization");
+  const value = keys.length === 1 ? headers[keys[0]!] : undefined;
+  if (typeof value !== "string") return refuse("lost its Authorization header");
+  const auth: SigV4Authorization | null = parseSigV4Authorization(value);
+  if (auth === null) return refuse("has an Authorization header Mandu cannot read once released");
+  const signature = sigv4Signature({ method: input.method, url: rewritten.url, headers, body, host: plan.sentHost }, auth, secret, plan.form);
+  if (signature === null) return refuse("cannot be signed (no x-amz-date on its scope's day)");
+  headers[keys[0]!] = resignedAuthorization(value, signature);
+  return { ...rewritten, headers };
+}
+
 async function gateSymbols(input: GateInput, carried: CarriedAnswers, requestId: string): Promise<GateResult> {
   const arbiter = input.arbiter;
   const symbols = requestSymbolPositions(input);
@@ -679,6 +845,22 @@ async function gateSymbols(input: GateInput, carried: CarriedAnswers, requestId:
       keptOpaque.push(symbol);
       symbols.delete(symbol);
     }
+  }
+  // AWS SigV4 (aws-sigv4-resign.md): the placeholder that signed the request
+  // is decided where its value goes, the signature.
+  const carries = [...symbols.values()].some((at) => at.has("authorization"));
+  const sigv4 = await sigv4Plan(input, carries);
+  if (sigv4.kind === "refuse") {
+    return {
+      action: "block",
+      reason: sigv4.reason,
+      withheld: [...symbols.keys()].map((symbol) => ({ symbol, requiresApproval: false, reason: sigv4.reason })),
+    };
+  }
+  if (sigv4.kind === "resign") {
+    const at = symbols.get(sigv4.signing) ?? new Set<RequestPosition>();
+    at.add("signature");
+    symbols.set(sigv4.signing, at);
   }
   if (symbols.size === 0) {
     return keptOpaque.length > 0 ? { action: "forward", keptOpaque } : { action: "forward" };
@@ -779,12 +961,32 @@ async function gateSymbols(input: GateInput, carried: CarriedAnswers, requestId:
     };
   }
 
+  // A SigV4 request is sent signed with the real key, or not at all.
+  type Rewritten = { url: string; headers: Record<string, string | string[] | undefined>; bodyText: string };
+  const signed = (rewritten: Rewritten): Rewritten | { refused: string } => {
+    if (sigv4.kind !== "resign") return rewritten;
+    const key = resolvedValues.get(sigv4.signing);
+    // Unknown to the table (resolved to itself): no key to sign with.
+    if (key === undefined || key === sigv4.signing) return { refused: `${SIGV4_REFUSED} was signed with a placeholder whose key Mandu could not read → block (fail-closed)` };
+    return resignRequest(input, rewritten, sigv4, key);
+  };
+  const refusedSigning = (reason: string): GateResult => ({
+    action: "block",
+    reason,
+    withheld: sigv4.kind === "resign" ? [{ symbol: sigv4.signing, requiresApproval: false, reason }] : [],
+  });
+  if (sigv4.kind === "resign" && sentWithout.includes(sigv4.signing)) {
+    return refusedSigning(`${SIGV4_REFUSED} cannot go without its signing key: a signature has no place for a marker → block (fail-closed)`);
+  }
+
   // All symbols allowed → substitute resolved values into a rewritten request,
   // each whole token where it was found and judged (`substituteTokens`).
   if (sentWithout.length === 0) {
+    const rewritten = signed(substituteRequest(input, { url: resolvedValues, body: resolvedValues, header: resolvedValues }));
+    if ("refused" in rewritten) return refusedSigning(rewritten.refused);
     return {
       action: "forward",
-      rewritten: substituteRequest(input, { url: resolvedValues, body: resolvedValues, header: resolvedValues }),
+      rewritten,
       resolved: [...resolvedValues.keys()],
       ...(keptOpaque.length > 0 ? { keptOpaque } : {}),
     };
@@ -804,7 +1006,9 @@ async function gateSymbols(input: GateInput, carried: CarriedAnswers, requestId:
   const encoded = new Map(sentWithout.map((sym) => [sym, SEND_WITHOUT_MARKER_ENCODED] as const));
   const bodyMarks = isFormBody(input.headers) ? encoded : plain;
   const merge = (marks: ReadonlyMap<string, string>): Map<string, string> => new Map([...resolvedValues, ...marks]);
-  const rewritten = substituteRequest(input, { url: merge(encoded), body: merge(bodyMarks), header: merge(plain) });
+  const marked = signed(substituteRequest(input, { url: merge(encoded), body: merge(bodyMarks), header: merge(plain) }));
+  if ("refused" in marked) return refusedSigning(marked.refused);
+  const rewritten = marked;
   const sentWithoutView = substituteRequest(input, { url: encoded, body: bodyMarks, header: plain });
   // Self-check: no token of a symbol sent without is left anywhere the gate
   // reads (URL, body, headers, Basic pairs). Fail-closed.

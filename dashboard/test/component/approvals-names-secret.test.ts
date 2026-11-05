@@ -124,7 +124,7 @@ test("Approvals: each send card names its secret, its key or variable, else its 
     // Answered earlier names it too, whole: the words wrap in the row's
     // widest cell, when on the line under them (§4.25, *Read in full*). Until
     // 2026-10-08 they kept one ellipsized line, so a phone read "…your
-    // secret STRIPE_…" above Allow instead.
+    // secret STRIPE_…" above its reversal.
     await until(() => doc.querySelectorAll("#approvals-answered .row.answered").length === 1, "one answered row");
     const answered = doc.querySelector("#approvals-answered .row.answered")!;
     assert.match(squash(answered.textContent), /^The agent wants to send your secret STRIPE_KEY to webhook\.example/);
@@ -134,7 +134,7 @@ test("Approvals: each send card names its secret, its key or variable, else its 
     assert.equal(squash(what.querySelector(".answered-sentence")?.textContent), "The agent wants to send your secret STRIPE_KEY to webhook.example");
     assert.equal(what.lastElementChild?.className, "dim answered-when");
     assert.equal(what.lastElementChild?.querySelector("time")?.getAttribute("datetime"), new Date(NOW - 10_000).toISOString());
-    assert.deepEqual([...answered.children].slice(1).map((c) => squash(c.textContent)), ["Blocked", "Allow instead"], "then the answer and its reversal");
+    assert.deepEqual([...answered.children].slice(1).map((c) => squash(c.textContent)), ["Blocked", "Always allow instead"], "then the answer and its reversal");
     // Never the token on the product page.
     assert.doesNotMatch(doc.body.textContent ?? "", /\$MDU/);
   } finally {

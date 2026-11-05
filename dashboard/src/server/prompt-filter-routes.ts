@@ -8,6 +8,11 @@
  *   GET  /api/prompt-filters/findings?session= → the session's `prompt_filter` events
  *   POST /api/prompt-filters/reveal  {session, symbol} → one finding's original
  *   POST /api/prompt-filters/bench   {text, origin}    → a DRY RUN of the filter
+ *   POST /api/policy/prompt-filters/try {text}         → the SAME dry run for
+ *        Settings › Prompt filters' *Try a message* (dashboard.md §4.25y):
+ *        the origin is always `human`, and the answer carries the spans,
+ *        their kinds in the card's words and their actions, never the text
+ *        the model would get nor a symbol
  *
  * PHASE 2, THE EDITING (plan 15 §8.1, §13.4):
  *   POST /api/prompt-filters/change {edit, expected?}
@@ -99,7 +104,7 @@ import { editRow, relaxLine } from "../view-model/policy-proposals.js";
 import { type EventSource } from "../event-source.js";
 import { isCloudBackedModel } from "../model-probe.js";
 import type { ManduEvent, PromptFilterDetail } from "../event-model.js";
-import { lockOf, promptSettingsVM, READ_ONLY_SETTINGS, SETTINGS_PROMPT_OPS, type PromptFiltersProjection } from "../view-model/prompt-settings.js";
+import { categoryWords, kindName, lockOf, promptSettingsVM, READ_ONLY_SETTINGS, SETTINGS_PROMPT_OPS, type PromptFiltersProjection } from "../view-model/prompt-settings.js";
 import type { PromptLocks } from "../view-model/prompt-notes.js";
 
 export type PromptFilterOrigin = "human" | "harness" | "side-call";
@@ -647,22 +652,29 @@ async function revealNoted(source: EventSource, session: string, eventId: string
   }
 }
 
-export async function postPromptBench(arbiter: PromptFiltersArbiter | undefined, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!arbiter) return noArbiter(res);
+/** `bench`: the inspector's bench (the body names the origin; the answer
+ *  shows what the model would get). `try`: Settings › Prompt filters' *Try
+ *  a message*, the person's own message (the origin is `human` whatever the
+ *  body says; the answer leaves out the model's text and every symbol). */
+export type PromptBenchForm = "bench" | "try";
+/** *Try a message* on an arbiter predating the prompt filter. */
+export const TRY_UNSUPPORTED = "This protection service cannot try a message. Restart Mandu on the current build.";
+
+export async function postPromptBench(arbiter: PromptFiltersArbiter | undefined, req: IncomingMessage, res: ServerResponse, form: PromptBenchForm = "bench"): Promise<void> {
+  // The same refusals in both forms; the product's in its own words.
+  const refuse = (status: number, bench: string, words: string): void => json(res, status, { error: form === "try" ? words : bench });
+  if (!arbiter) return form === "try" ? json(res, 404, { error: "The protection service is not connected." }) : noArbiter(res);
   if (!arbiter.filterPromptDryRun) {
-    json(res, 501, { error: "this arbiter predates the prompt filter (plan 15): no dry run" });
-    return;
+    return refuse(501, "this arbiter predates the prompt filter (plan 15): no dry run", TRY_UNSUPPORTED);
   }
   const body = (await readJson(req).catch(() => null)) as { text?: unknown; origin?: unknown } | null;
   const text = body?.text;
-  const origin = body?.origin;
+  const origin = form === "try" ? "human" : body?.origin;
   if (typeof text !== "string" || text.trim() === "") {
-    json(res, 400, { error: "text is required" });
-    return;
+    return refuse(400, "text is required", "Type a message to try.");
   }
   if (text.length > BENCH_MAX_CHARS) {
-    json(res, 413, { error: `text is longer than ${BENCH_MAX_CHARS} characters` });
-    return;
+    return refuse(413, `text is longer than ${BENCH_MAX_CHARS} characters`, `The message is longer than ${BENCH_MAX_CHARS.toLocaleString("en-US")} characters.`);
   }
   // The bench offers the two origins a person can reason about (§8.1).
   if (origin !== "human" && origin !== "harness") {
@@ -674,12 +686,25 @@ export async function postPromptBench(arbiter: PromptFiltersArbiter | undefined,
     w = await arbiter.filterPromptDryRun({ agent: "dashboard", segments: [{ id: "bench", origin, text }] });
   } catch (err) {
     // Never echo the text into a log or an error: only the arbiter's reason.
-    json(res, 502, { error: `filterPrompt (dry run) failed: ${(err as Error).message}` });
-    return;
+    return refuse(502, `filterPrompt (dry run) failed: ${(err as Error).message}`, "The protection service did not answer.");
   }
   const seg = (Array.isArray(w.segments) ? w.segments : []).find((s) => s.id === "bench");
   if (!seg) {
-    json(res, 502, { error: "the arbiter did not answer the bench segment" });
+    return refuse(502, "the arbiter did not answer the bench segment", "The protection service did not answer.");
+  }
+  const found = Array.isArray(seg.findings) ? seg.findings : [];
+  if (form === "try") {
+    // Offsets into the person's own text, a kind and an action: the page
+    // marks the spans of what they typed, never the model's text.
+    json(res, 200, {
+      enforcing: w.enforcing === true,
+      action: seg.action,
+      ...(seg.action === "block" && found.length === 0 && typeof seg.reason === "string" ? { reason: seg.reason } : {}),
+      findings: found.map((f) => {
+        const category = str(f.category);
+        return { start: f.start, end: f.end, category, name: kindName(category), named: categoryWords(category) === null, action: str(f.action) };
+      }),
+    });
     return;
   }
   json(res, 200, {
@@ -690,7 +715,7 @@ export async function postPromptBench(arbiter: PromptFiltersArbiter | undefined,
     // What the model would receive for this text.
     modelText: seg.action === "rewrite" && typeof seg.text === "string" ? seg.text : text,
     skipped: typeof seg.skipped === "number" ? seg.skipped : 0,
-    findings: (Array.isArray(seg.findings) ? seg.findings : []).map((f) => ({
+    findings: found.map((f) => ({
       start: f.start, end: f.end, category: str(f.category), filterId: str(f.filterId), action: str(f.action),
       symbol: typeof f.symbol === "string" ? f.symbol : null, how: typeof f.how === "string" ? f.how : null,
     })),

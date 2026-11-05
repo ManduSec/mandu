@@ -14,9 +14,10 @@
  *   S1  signed out, `/api/policy/prompt-filters` is refused (403), and the
  *       block shows the sign-in note alone: its own More is the one fold
  *       drawn, with no "What the choices mean", Exceptions heading, note,
- *       list or form;
+ *       list, form or "Try a message";
  *   S2  signed in, the same page lists the kinds and draws the fold with
- *       every meaning the route sends, and the Exceptions heading;
+ *       every meaning the route sends, the Exceptions heading and "Try a
+ *       message" (dashboard.md §4.25y);
  *   S3  the oracle: no answer or rendered page carries the registered key or
  *       a token.
  *
@@ -43,7 +44,7 @@ stateAxes("secrets"); // confidentiality ON, integrity OFF
 
 const KEY = "sk_" + "live_settingsPromptSignedOutCanary000001";
 const SIGN_IN = "Sign in first: reload this page and sign in with your dashboard account (if there isn't one yet, run mandu dashboard --set-password in your own terminal).";
-const PARTS = ["settings-prompt-meanings-fold", "settings-prompt-meanings", "settings-prompt-exceptions-head", "settings-prompt-exceptions-about", "settings-prompt-exceptions", "prompt-exception-form"];
+const PARTS = ["settings-prompt-meanings-fold", "settings-prompt-meanings", "settings-prompt-exceptions-head", "settings-prompt-exceptions-about", "settings-prompt-exceptions", "prompt-exception-form", "settings-prompt-try"];
 
 /** The block's folds a reader can see: each `<summary>` outside a hidden part. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -107,7 +108,7 @@ test("Settings › Prompt filters over the real arbiter: signed out, the sign-in
     assert.ok(vm.kinds.length > 0 && vm.meanings.length > 0, "with kinds and meanings");
     await servedProductPage(base, "/settings", (doc) => doc.querySelector("#settings-prompt-kinds .prompt-kind") != null, (doc) => {
       assert.equal(doc.querySelectorAll("#settings-prompt-kinds .prompt-kind").length, vm.kinds.length, "every kind is listed");
-      assert.deepEqual(drawnFolds(doc), ["More", "What the choices mean"]);
+      assert.deepEqual(drawnFolds(doc), ["More", "What the choices mean", "Try a message"]);
       assert.equal(doc.getElementById("settings-prompt-meanings-fold").hidden, false);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       assert.deepEqual([...doc.querySelectorAll("#settings-prompt-meanings dt")].map((d: any) => d.textContent), vm.meanings.map((m: { words: string }) => m.words));

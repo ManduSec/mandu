@@ -204,14 +204,14 @@ test("Claude Code, a session that read a secret: a command, a web fetch and a we
     const [cmd, web, search] = steps;
     assert.equal(cmd!.note ?? null, null);
     // the command's own rule (session:high-shell, block-why.ts) words it
-    assert.equal(words(cmd!.why), "This session read a secret, and Mandu cannot tell whether this command sends anything over the network. The AI could pass a secret on in its own words, which no placeholder marks.");
+    assert.equal(words(cmd!.why), "This session read a secret, and Mandu cannot tell whether this command sends anything over the network. The AI could pass a secret on in its own words, which no mask marks.");
     // …and each step links the Approvals row its block filed
     const rowOf = async (dest: string) => (await admin.egressApprovals("pending")).find((a) => a.destination === dest)?.id;
     assert.equal((cmd as { askId?: string }).askId, await rowOf(CURL), "the command's step links its row");
     assert.equal((web as { askId?: string }).askId, await rowOf("evil.example"), "the fetch's step links its row");
     assert.equal((search as { askId?: string }).askId, await rowOf("(no destination named)"), "the search's step links its row");
     assert.equal(web!.note, "The request was never sent.");
-    assert.equal(words(web!.why), "This session read a secret, and evil.example is not a place it may go. The AI could pass a secret on in its own words, which no placeholder marks.");
+    assert.equal(words(web!.why), "This session read a secret, and evil.example is not a place it may go. The AI could pass a secret on in its own words, which no mask marks.");
     assert.equal(search!.note, "The AI's search words were never sent.");
     for (const s of steps) assert.doesNotMatch(JSON.stringify(s), REWRITES, "no step shows the proxy's rewrite");
     const homeRow = ((await get("home")).body["agents"] as Array<{ id: string; blocked?: number }>).find((a) => a.id === session);

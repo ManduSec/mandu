@@ -845,7 +845,7 @@ fn a_socket_passed_to_a_holder_is_judged_at_its_sender() {
     lo_up();
     let off = udp_listener([127, 0, 0, 3], 0);
     let port = off.local_addr().unwrap().port();
-    // Bindings are TCP (`binding_to_spec`): the bound peer is a TCP server.
+    // Bindings are TCP (`local_exits::host_binding_specs`): the bound peer is a TCP server.
     let (bound_port, bound_got) = tcp_listener([127, 0, 0, 2]);
     let secret = Secret::new("pass");
     let arbiter = reader_arbiter(vec!["127.0.0.2".into()]);
@@ -1654,4 +1654,59 @@ fn a_unix_connect_cannot_be_swapped_for_an_unjudged_inet_one() {
     assert!(drain(&allowed).iter().any(|d| d == b"ALLOWED"));
     let _ = std::fs::remove_dir_all(&dir);
     eprintln!("UNIX SWAP PASS");
+}
+
+// ── (f) a `*` binding admits no destination (finding F-A, 2026-10-27) ───────
+
+#[test]
+#[ignore]
+fn a_holder_bound_to_star_connects_nowhere() {
+    // The arbiter's rule (host-bindings.ts, confidentiality.md §2.2) gives
+    // `*` no network destination; the guard turned it into `*:*`, any host,
+    // so the holder's connect went wherever the static list allowed.
+    let _serial = serial();
+    lo_up();
+    let (port, got) = tcp_listener([127, 0, 0, 2]);
+    let star_port = format!("*:{port}");
+    for (bindings, want) in [
+        (vec!["*".to_string()], libc::EACCES),
+        (vec![star_port.clone()], libc::EACCES),
+        // Control: beside a real binding, `*` takes nothing away.
+        (vec!["*".to_string(), "127.0.0.2".to_string()], 0),
+    ] {
+        let secret = Secret::new("star-binding");
+        let arbiter = reader_arbiter(bindings.clone());
+        let cfg = secret_cfg(&secret, arbiter);
+        let path = secret.path.clone();
+        let Some(code) = guarded(secret_traps(), cfg, move || {
+            let k = read_file(&path).unwrap_or_default();
+            if !k.contains(CANARY) {
+                return 90;
+            }
+            match tcp_connect([127, 0, 0, 2], port) {
+                Ok(fd) => {
+                    write_all(fd, k.as_bytes());
+                    unsafe { libc::close(fd) };
+                    0
+                }
+                Err(e) => e,
+            }
+        }) else {
+            return;
+        };
+        assert_eq!(code, Some(want), "{bindings:?}");
+        if want != 0 {
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(
+                !String::from_utf8_lossy(&got.lock().unwrap()).contains(CANARY),
+                "THE LEAK: a holder bound to {bindings:?} reached an unbound host"
+            );
+        }
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        String::from_utf8_lossy(&got.lock().unwrap()).contains(CANARY),
+        "control: the bound host got the secret"
+    );
+    eprintln!("STAR BINDING PASS");
 }

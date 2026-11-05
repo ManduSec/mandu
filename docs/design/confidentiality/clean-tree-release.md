@@ -138,8 +138,10 @@ unless every rule holds:
 
   It never answers a string the request itself carries (its origin, any
   string of its input, either spelling, each as the path rules may rewrite
-  it before they read it, `--exclude-dir=NAME` blanked by
-  [exclusion-flags.md](./exclusion-flags.md), and for a tool the spec does
+  it before they read it: its search exclusions blanked by
+  [exclusion-flags.md](./exclusion-flags.md), a grep's `--exclude-dir=NAME`
+  and `--exclude=…` and, since 2026-10-27, an rg negated glob, through the
+  same `withoutSearchExclusions` the path rules apply; and for a tool the spec does
   not map each object key of its input), and its blank-holding rule answers
   only a word of the command (`commandWords`): the scan asks the lookup about a whole
   command as one path, where an exact label on that string short-circuits
@@ -409,6 +411,14 @@ the model or the network through the release), in order:
   --exclude-dir=x memo/plan.md` read public; a leak, medium). Fixed: those
   spellings are never answered, and the blank-holding rule answers only one
   shell word of a command text. Tests: the component test.
+- **With exclusion-flags.md's rg amendment** (2026-10-27): the blanked
+  spellings now include rg negated globs and grep `--exclude=` words, in
+  any segment of an exactly split compound. The never-answered list adds
+  every string as that one function rewrites it, so it follows the rule
+  without a hand-kept list. Tests: the component test's R4 case gains `rg
+  KEY -g '!x' memo/plan.md`, the one-word, `--iglob … | sort`, `cd … &&`
+  and grep `--exclude=` spellings (each offered with both guards removed,
+  none with either).
 
 ## 7. Log
 

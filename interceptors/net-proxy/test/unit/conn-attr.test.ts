@@ -32,6 +32,9 @@ import {
   holdersAmong,
   parseProcKey,
   socketInodeFor,
+  socketUidFromTcpText,
+  farEndOwner,
+  descendsFrom,
 } from "../../src/conn-attr.js";
 
 // A real /proc/net/tcp line, lifted from conn_attr.rs's TCP_LINE so the two
@@ -571,4 +574,28 @@ test("LIVE: an AF_INET6 client (::1, and a v4-mapped address at an IPv4 listener
       server.close();
     }
   }
+});
+
+// db-login-release.md (security review 2026-10-24): who listens at a local
+// database the relay dialed.
+test("the far end of a local connection: its socket's uid and holders; descent from the session's root", () => {
+  // The server's end: local 127.0.0.1:80, remote 127.0.0.1:54321, uid 1000.
+  const table = "  sl  local_address rem_address ...\n" + TCP_LINE + "\n";
+  assert.equal(socketUidFromTcpText(table, { ip: "127.0.0.1", port: 80 }, { ip: "127.0.0.1", port: 54321 }), 1000);
+  assert.equal(socketUidFromTcpText(table, { ip: "127.0.0.1", port: 81 }, { ip: "127.0.0.1", port: 54321 }), null);
+  const stats: Record<number, string> = {
+    700: "700 (postgres) S 650 700 700 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5000 0",
+    650: "650 (bash) S 600 650 650 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 4000 0",
+    600: "600 (mandu) S 1 600 600 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 3000 0",
+  };
+  const readStat = (pid: number): string => { const st = stats[pid]; if (!st) throw new Error("gone"); return st; };
+  const owner = farEndOwner(
+    { localIp: "127.0.0.1", localPort: 54321, remoteIp: "127.0.0.1", remotePort: 80 },
+    { readTcp: () => table, readTcp6: () => "", listFds: () => [{ pid: 700, target: "socket:[123456]" }], readStat },
+  );
+  assert.equal(owner.uid, 1000);
+  assert.deepEqual(owner.holders.map((h) => parseProcKey(h.procKey)?.pid), [700]);
+  assert.equal(descendsFrom(700, 600, readStat), true, "under the launcher");
+  assert.equal(descendsFrom(700, 999, readStat), false, "another root");
+  assert.equal(descendsFrom(701, 600, readStat), false, "a pid that cannot be read");
 });

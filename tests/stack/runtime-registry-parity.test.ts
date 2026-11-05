@@ -22,6 +22,9 @@
  *   vm-guests/                           scripts/lib/guest-registry.sh
  *   release-check/                       launcher/src/release-gate.ts GATE_DIR (the
  *                                        release check's pending markers and lock)
+ *   attachments/                         attachment-contract.ts ATTACHMENTS_DIR
+ *                                        (`mandu serve`'s port files and pool
+ *                                        records; launcher and dashboard copies)
  *
  * Two oracles. The first pins each owner's name to the list. The second is
  * the completeness check: it scans every package's sources for a path joined
@@ -48,6 +51,8 @@ import { DASHBOARDS_DIR } from "../../dashboard/src/registry.js";
 import { testTenantPaths } from "../../dashboard/src/supervisor/supervisor-defs.js";
 import { RUNTIME_REGISTRY, runtimeRegistryPaths } from "../../launcher/src/runtime-registry.js";
 import { GATE_DIR } from "../../launcher/src/release-gate.js";
+import { ATTACHMENTS_DIR, attachmentsRoot } from "../../launcher/src/attachment-contract.js";
+import { ATTACHMENTS_DIR as DASH_ATTACHMENTS_DIR } from "../../dashboard/src/attachment-contract.js";
 import { stateAxes } from "../lib/axes.js";
 
 stateAxes("secrets"); // no arbiter runs here; the profile is the secrets-mode enactment on macOS
@@ -108,6 +113,11 @@ test("and the dashboard's, `mandu dashboard`'s, the supervisor's, the launcher's
   // The release check's gate (runtime-instances.md §4.1): a forged pending
   // marker would take a real session out of a launch's session scan.
   assert.ok(r.dirs.includes(join(BASE, GATE_DIR)), "the release check's gate");
+  // `mandu serve`'s proxy pool (openclaw-plugin.md §3.2): the port files the
+  // installer adopts a port through and the records reap reads.
+  assert.equal(DASH_ATTACHMENTS_DIR, ATTACHMENTS_DIR, "the dashboard's pool writes where the launcher reads");
+  assert.equal(attachmentsRoot(BASE), join(BASE, ATTACHMENTS_DIR));
+  assert.ok(r.dirs.includes(join(BASE, ATTACHMENTS_DIR)), "the proxy pool's folder");
 });
 
 // ── the completeness oracle ────────────────────────────────────────────────
@@ -136,7 +146,7 @@ const SCOPE_EXPR: Record<string, string> = {
   "launcher/src/reap.ts": "name", // the scope-dir walk, `^\d+-\d+$` only
 };
 const CONSTS: Record<string, string> = {
-  HUMAN_DIR, INSTANCES_DIR, CURRENT_LINK, ARBITER_SOCK, DASHBOARDS_DIR, CURRENT_TMP_PREFIX, GATE_DIR,
+  HUMAN_DIR, INSTANCES_DIR, CURRENT_LINK, ARBITER_SOCK, DASHBOARDS_DIR, CURRENT_TMP_PREFIX, GATE_DIR, ATTACHMENTS_DIR,
 };
 
 function sources(): string[] {
@@ -199,7 +209,7 @@ test("completeness: every entry joined directly onto a runtime base anywhere in 
     "arbiter/ipc/instance.ts human", "dashboard/src/registry.ts dashboards", "dashboard/src/supervisor/supervisor-defs.ts test",
     "dashboard/src/supervisor/supervisor.ts logs", "launcher/src/run.ts logs", "launcher/src/subcommands.ts dashboard.log",
     "launcher/src/subcommands.ts dashboard-<x>.port", "launcher/src/reap.ts vm-guests", "launcher/src/parse.ts <scope>",
-    "launcher/src/release-gate.ts release-check",
+    "launcher/src/release-gate.ts release-check", "launcher/src/reap.ts attachments",
   ]) assert.ok(found.includes(want), `the scan found ${want}\n${found.join("\n")}`);
 });
 

@@ -39,6 +39,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { AGENT, ASK, FILES_ROUTES, home, load, tick } from "./home-js-fixtures.js";
+import { offBox, typeInOffBox, enterInOffBox } from "./protect-off.js";
 import { labelSettingsVM } from "../../../src/view-model/sensitivity-labels.js";
 import { promptSettingsVM } from "../../../src/view-model/prompt-settings.js";
 import { suggestionRows, type SuggestionWire } from "../../../src/view-model/suggestions.js";
@@ -359,7 +360,10 @@ const RULES_CHANGES: Array<{ name: string; act: (doc: Doc, window: Doc) => Promi
   {
     name: "Move them into policy.yaml",
     labels: [{ path: "/home/u/ws/.env", levelClass: "strict", modelOk: false, scope: "exact", pattern: false, bindings: [], source: "user" }],
-    act: (doc) => doc.querySelector("#files-move button").click(),
+    act: (doc) => {
+      doc.querySelector("#files-move button").click();
+      button(doc.getElementById("files-move"), "Move them").click();
+    },
     done: (doc) => !!ruleRow(doc, "moved.example"),
   },
   {
@@ -629,8 +633,16 @@ function protectionPage(url = SETTINGS_URL, routes: Record<string, unknown> = {}
     "POST config/axes": (b: { mode: string }) => { saved = b.mode === "secrets"; return savedAs(saved); },
     ...routes,
   } });
-  page.window.prompt = () => "OFF";
   return { ...page, reads, set: (v: boolean) => { saved = v; } };
+}
+/** Press the switch; turning it off, type OFF in the box it opens and
+ *  press Enter there (dashboard.md §4.25 *Turning protection off asks on
+ *  the page*). */
+function flipSwitch(doc: Doc): void {
+  protectSwitch(doc).click();
+  if (!offBox(doc)) return;
+  typeInOffBox(doc, "OFF");
+  enterInOffBox(doc);
 }
 
 for (const flip of [
@@ -645,7 +657,7 @@ for (const flip of [
     await go(doc, "home");
     await go(doc, "settings"); // Settings opened again: its read of the setting is held
     protectSwitch(doc).focus();
-    protectSwitch(doc).click();
+    flipSwitch(doc);
     await tick(30);
     assert.deepEqual(calls.filter((c: Doc) => c.method === "POST" && c.url.endsWith("/config/axes")).map((c: Doc) => c.body), [{ mode: flip.from ? "off" : "secrets" }]);
     assert.deepEqual(protectRow(doc), flip.drawn, "the flip's answer is drawn");
@@ -666,6 +678,31 @@ for (const flip of [
   });
 }
 
+test("Settings › Protection: a poll's read of a setting saved elsewhere, answered after this tab's own flip, never draws the switch as it was", async () => {
+  const { doc, reads, set, setHome } = protectionPage();
+  await tick(30);
+  assert.equal(protectRow(doc).checked, "true");
+  // Turned off from a terminal: the next poll reads the setting again
+  // (followSaved), and that read is held.
+  set(false);
+  setHome(home({ protection: { level: "full", configured: "off", connected: true } }));
+  const follow = reads.hold();
+  await poll(doc);
+  assert.equal(reads.reads, 2, "the poll read the setting");
+  assert.equal(protectRow(doc).checked, "true", "its read is held");
+  // Meanwhile this tab turns it off, then on again: config.toml says on.
+  protectSwitch(doc).focus();
+  flipSwitch(doc);
+  await tick(30);
+  flipSwitch(doc);
+  await tick(30);
+  assert.deepEqual(protectRow(doc), { checked: "true", name: "On", text: ON_WORDS }, "the flip's answer is drawn");
+  follow.release();
+  await tick(30);
+  assert.deepEqual(protectRow(doc), { checked: "true", name: "On", text: ON_WORDS }, "the read asked before the flips drew nothing");
+  assert.equal(doc.getElementById("settings-protect-changed").hidden, true, "and said nothing moved");
+});
+
 test("Settings › Protection: a refused flip marks nothing, so a read asked before it is still drawn", async () => {
   const { doc, reads, set } = protectionPage(SETTINGS_URL, { "POST config/axes": { status: 403, body: { error: "admin session required" } } });
   await tick(30);
@@ -674,7 +711,7 @@ test("Settings › Protection: a refused flip marks nothing, so a read asked bef
   await go(doc, "home");
   await go(doc, "settings"); // its read (off) is held; the switch still says On
   assert.equal(protectRow(doc).checked, "true");
-  protectSwitch(doc).click();
+  flipSwitch(doc);
   await tick(30);
   assert.match(doc.getElementById("settings-protect-note").textContent, /^Sign in first/);
   before.release();

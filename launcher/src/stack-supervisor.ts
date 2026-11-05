@@ -27,6 +27,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { runtimeBase } from "./arbiter-sock.js";
+import { SERVE_UNIT } from "./serve-unit.js";
 
 /** A systemd service that runs a Mandu daemon as its main process. */
 export interface StackSupervisor {
@@ -206,6 +207,21 @@ export function disableCommand(s: Pick<StackSupervisor, "unit" | "user">): strin
   return `systemctl${s.user ? " --user" : ""} disable --now ${s.unit}`;
 }
 
+/** The unit `mandu serve install` ships (serve-unit.ts, runtime-instances.md
+ *  §4.1d): a user unit of that name. Its fixes are `mandu serve` verbs. */
+export function isServeUnit(s: Pick<StackSupervisor, "unit" | "user">): boolean {
+  return s.user && s.unit === SERVE_UNIT;
+}
+
+/** For the shipped unit running this mandu's own code (an npm package
+ *  updated in place, a checkout pulled: the files are new, the processes
+ *  old), the fix is `mandu serve upgrade`, never disabling the service. Null
+ *  for any other unit, or for one that runs other code. `force` for a
+ *  refusal that names live sessions (without it the upgrade defers). */
+export function serveUpgradeFix(s: StackSupervisor, force = false): string | null {
+  return isServeUnit(s) && s.runsOurCode === true ? `mandu serve upgrade${force ? " --force" : ""}` : null;
+}
+
 /** The other way out, for a service kept on purpose (the lab's dashboard
  *  service, a deliberate second install): this mandu on a stack of its own
  *  beside the one at `base`. A runtime folder of its own is not enough: the
@@ -280,8 +296,10 @@ export function stackService(base: string, deps: StackServiceDeps = realStackSer
   return pids.length === 0 ? null : stackSupervisor(pids, deps);
 }
 
-/** "the systemd user service mandu-dashboard.service (Restart=always, in /home/u/mandu)". */
+/** "the systemd user service mandu-dashboard.service (Restart=always, in /home/u/mandu)";
+ *  the shipped unit reads "the Mandu service mandu.service (`mandu serve`, …)". */
 export function describeSupervisor(s: StackSupervisor): string {
   const where = s.workingDirectory ? `, in ${s.workingDirectory}` : "";
+  if (isServeUnit(s)) return `the Mandu service ${s.unit} (\`mandu serve\`, Restart=${s.restart}${where})`;
   return `the systemd ${s.user ? "user " : ""}service ${s.unit} (Restart=${s.restart}${where})`;
 }

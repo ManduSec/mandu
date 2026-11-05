@@ -135,8 +135,23 @@ test("Approvals: each card says what happens after an answer, and that the perso
     assert.equal(cells("egr-3")[2]![0], "If you click Allow once");
     assert.equal(cells("egr-3")[2]![1], "The AI's program /usr/bin/bash running its own code stopped waiting and its change was refused. Your answer covers that run only, so a new try asks again.");
     assert.match(cells("egr-3")[0]![1]!, /Mandu held the change for a while, then refused it\./);
-    // An ended agent's question: nothing waits on it now.
-    assert.match(sub("egr-4"), /, 2 times\. The agent that asked has ended, so nothing is waiting on this now\. Your answer counts the next time an agent asks\.$/);
+    // An ended agent's question: nothing waits on it now. With questions a
+    // running agent waits on, it is listed after them, under a heading that
+    // says so once (dashboard.md §4.25 *A question from a session that has
+    // ended*), so the card leaves its own sentence out.
+    const list = doc.getElementById("approvals-waiting")!;
+    const kids = [...list.children].map((c) => c.getAttribute("data-id") ?? c.className);
+    assert.equal(kids.at(-1), "egr-4", "the ended one last");
+    assert.equal(kids.at(-2), "ask-group-head");
+    assert.equal(squash(list.querySelector(".ask-group-head h3")?.textContent), "From sessions that have ended");
+    assert.equal(squash(list.querySelector(".ask-group-head p")?.textContent), "No agent is waiting on these now. Your answer decides what happens the next time an agent asks the same.");
+    // Short under the heading (§4.25 *An ended question is short on
+    // Approvals*): what each answer does is one press away.
+    assert.match(sub("egr-4"), /, 2 times\. What each answer does$/);
+    assert.equal(card("egr-4").querySelector(".ask-detail"), null, "no cells until pressed");
+    (card("egr-4").querySelector(".ask-more") as HTMLButtonElement).click();
+    assert.equal(cells("egr-4")[2]![0], "If you click Allow once or Always allow");
+    assert.equal(card("egr-1").querySelector(".ask-more"), null, "a running agent's card is full");
     assert.doesNotMatch(sub("egr-1"), /has ended/, "a running agent's question");
     assert.doesNotMatch(doc.body.textContent ?? "", /\$MDU|model_context/);
   } finally {
@@ -190,6 +205,37 @@ test("Approvals › Answered earlier: an answer that applies to nothing any more
     assert.match(squash(row()!.querySelector(".answered-stale")?.textContent), /^This answer no longer applies: it names the program by its name only/);
     assert.equal(squash(row()!.querySelector(".outcome")?.textContent), "No longer applies");
     assert.equal(row()!.querySelectorAll("button").length, 0);
+  } finally {
+    close();
+  }
+});
+
+test("Approvals › Answered earlier: the answers sit under the day they were given, Today, as History's sessions do (§4.34 *Answers sit under their day*)", async () => {
+  const { doc, close } = await openPage("/approvals");
+  try {
+    const list = () => doc.getElementById("approvals-answered")!;
+    await until(() => list().querySelectorAll(".row.answered").length === 3, "the three answers");
+    // The local day of each answer, as the page keys it; the run starting
+    // just past midnight puts an answer 30 s old under Yesterday, so the
+    // words follow the clock rather than assume one day.
+    const pad = (k: number) => String(k).padStart(2, "0");
+    const day = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+    const today = day(Date.now());
+    const words = (key: string) => (key === today ? "Today" : "Yesterday");
+    // Newest first: egr-7, egr-6, egr-5 (answered 10, 20 and 30 s before NOW).
+    const expected: string[] = [];
+    let last = "";
+    for (const [id, ms] of [["egr-7", NOW - 10_000], ["egr-6", NOW - 20_000], ["egr-5", NOW - 30_000]] as const) {
+      if (day(ms) !== last) expected.push(`# ${words(day(ms))}`);
+      last = day(ms);
+      expected.push(id);
+    }
+    const order = [...list().children].map((x) => x.matches(".history-day") ? `# ${squash(x.textContent)}` : (x as HTMLElement).dataset.id ?? x.className);
+    assert.deepEqual(order, expected);
+    for (const h of list().querySelectorAll(".history-day")) {
+      assert.equal(h.tagName, "H3", "a heading under Answered earlier's h2");
+      assert.equal(h.getAttribute("data-id"), null, "never taken for an answer");
+    }
   } finally {
     close();
   }

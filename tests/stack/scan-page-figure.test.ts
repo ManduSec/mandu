@@ -16,7 +16,10 @@
  *   P2  at 1280 px: the WIDE layout instead, the steps in three columns;
  *   P3  the sections and rows carry their tone and their word ("Reached the
  *       AI"), the small flow ends on the real value in red;
- *   P4  the oracle: no 8-character run of the planted value in the page.
+ *   P4  the oracle: no 8-character run of the planted value in the page;
+ *   P5  without reduced motion: the figure moves on arrival, then every one
+ *       of its animations finishes (under 5 s, WCAG 2.2.2) and the key and
+ *       the mask hold still at their own place.
  *
  * Axes: secrets (stated; display only: the dashboard reads a kept report,
  * no arbiter, no model). No kernel layer.
@@ -201,6 +204,34 @@ test("the Scan page in a real browser: red for what left, green with Mandu, the 
         if (piece !== "sk_live_") assert.ok(!text.includes(piece), `the page holds "${piece}" of the planted value`);
       }
     }
+
+    // ── P5: without reduced motion, the figure plays once, then holds still ──
+    await p.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "no-preference" }] });
+    await p.send("Page.navigate", { url: `${base}/scan` });
+    await until(`${READY} && location.pathname === "/scan" && document.querySelectorAll("#scan-figure .scan-fig-row").length === 2`, "the Scan page's figure with motion");
+    // A finished animation with no fill leaves getAnimations(): keep them.
+    const first = JSON.parse(String(await evaluate(`JSON.stringify((() => {
+      const fig = document.getElementById("scan-figure");
+      window.__sfAnims = document.getAnimations().filter((a) => a.effect && a.effect.target && fig.contains(a.effect.target));
+      return {
+        states: window.__sfAnims.map((a) => a.playState), names: [...new Set(window.__sfAnims.map((a) => a.animationName))].sort(),
+        ends: window.__sfAnims.map((a) => a.effect.getComputedTiming().endTime),
+      };
+    })())`))) as { states: string[]; names: string[]; ends: number[] };
+    assert.ok(first.states.length >= 3, `the figure moves on arrival (${first.states.length} animations)`);
+    assert.ok(first.states.every((st) => st === "running"), `each runs at first: ${first.states.join(", ")}`);
+    assert.deepEqual(first.names, ["sf-flow", "sf-ride"], "the lanes' dots flow, the key and the mask ride them (the wide layout)");
+    assert.ok(first.ends.every((ms) => ms > 0 && ms <= 5000), `each ends within 5 s of its start (WCAG 2.2.2): ${first.ends.join(", ")} ms`);
+    await until(`window.__sfAnims.every((a) => a.playState === "finished")`, "every animation of the figure finished");
+    const still = JSON.parse(String(await evaluate(`JSON.stringify({
+      now: document.getAnimations().filter((a) => document.getElementById("scan-figure").contains(a.effect && a.effect.target)).length,
+      riders: [...document.querySelectorAll("#scan-figure svg.sf-w .sf-ride")].map((g) => getComputedStyle(g).transform),
+      offsets: [...new Set([...document.querySelectorAll("#scan-figure svg.sf-w .sf-lane")].map((l) => getComputedStyle(l).strokeDashoffset))],
+    })`))) as { now: number; riders: string[]; offsets: string[] };
+    assert.equal(still.now, 0, "nothing in the figure moves after that");
+    assert.ok(still.riders.length >= 2, "the key and the mask are drawn");
+    assert.ok(still.riders.every((t) => t === "none"), `the key and the mask rest at their own place: ${still.riders.join(", ")}`);
+    assert.deepEqual(still.offsets, ["0px"], "the lanes' dots rest on their first frame");
   } finally {
     page?.close();
     await stopChromium(chrome, profile);

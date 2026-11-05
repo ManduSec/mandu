@@ -58,12 +58,14 @@ import { createServer, request as httpRequest, type Server, type IncomingMessage
 import { connect as netConnect, isIP, type Socket } from "node:net";
 import { Duplex as DuplexStream, type Duplex } from "node:stream";
 
-import type { Arbiter, ArbiterEvent, EgressRefusalKind } from "./arbiter-client.js";
+import type { Arbiter, ArbiterEvent, EgressRefusalKind, KubeUpstream } from "./arbiter-client.js";
 import type { MockSites } from "./mock-sites.js";
 import { gateRequest, observeResponse, isModelHost, isModelService, findSymbols, withheldPolicy, agentWithheld, heldForEvent, secretTaintVerdict, refusalKindOf, EGRESS_HOLD_MAX_MS, type SecretTaintVerdict } from "./egress.js";
 import { MitmEngine, type MitmConfig } from "./mitm.js";
+import { DbRelay, type DbRelayBound, type DbRelayTarget } from "./db-relay.js";
 import { forwardDestination, statedDestination } from "./destination.js";
-import { attributeHolders as liveAttributeHolders, holdersAmong, holdersOfInode, socketInodeFor, type Endpoint, type ProcHolder } from "./conn-attr.js";
+import { attributeHolders as liveAttributeHolders, descendsFrom, farEndOwner, holdersAmong, holdersOfInode, parseProcKey, socketInodeFor, type Endpoint, type ProcHolder } from "./conn-attr.js";
+import { readFileSync } from "node:fs";
 
 export interface NetProxyOptions {
   arbiter: Arbiter;
@@ -207,6 +209,37 @@ export interface NetProxyOptions {
    * tunnel, the plain leg's passthrough).
    */
   modelHostDeny?: boolean;
+  /**
+   * The database login release (db-relay.ts; db-login-release.md): one
+   * loopback relay per database the launch's secrets name, opened by
+   * `listenDbRelays`. server-main reads them from MANDU_NET_PROXY_DB_RELAYS.
+   * Published in the identity (`dbRelays`). Default none.
+   */
+  dbRelays?: readonly DbRelayTarget[];
+  /**
+   * The CA a database server's certificate must chain to (the user's own
+   * PGSSLROOTCERT / ~/.postgresql/root.crt, PEM), checked with its name.
+   * Absent: a server's TLS is not verified (libpq's default with no root
+   * certificate) and a cleartext password request is refused.
+   */
+  dbUpstreamCa?: string;
+  /** The user's own libpq settings the relays hold themselves to
+   *  (PGSSLMODE, PGREQUIREAUTH, PGCHANNELBINDING; db-relay.ts). */
+  dbPgSettings?: { sslmode?: string; requireAuth?: string; channelBinding?: string };
+  /** The launcher's pid: a local database whose listening end descends
+   *  from it is a program of the session (db-relay.ts `localServer`).
+   *  Absent: a local database of this user's is refused. */
+  dbSessionRoot?: number;
+  /** TEST ONLY: who listens at a local relay target (db-relay.ts
+   *  `localServer`); default the live /proc reading. */
+  dbLocalServer?: (sock: Socket) => "session" | "other" | "unknown";
+  /** The same for a MySQL server: the `ssl-ca` of the user's own
+   *  `~/.my.cnf`, PEM. Absent: not verified, and the password itself (a
+   *  cleartext request, caching_sha2's full path) is refused. */
+  dbMysqlUpstreamCa?: string;
+  /** TEST ONLY: dial these addresses in place of a relay target's
+   *  (`host:port` of the target → the address dialed). */
+  dbRoutes?: ReadonlyMap<string, { host: string; port: number }>;
 }
 
 /** The identity a net-proxy publishes at `/_mandu/identity` (see NetProxyOptions). */
@@ -241,6 +274,8 @@ export type HttpForwarder = (args: {
 }) => Promise<ForwardedResponse>;
 
 const DEFAULT_MAX_BODY = 64 * 1024 * 1024; // 64 MiB
+/** How long a cluster's dial profile (kube-wire-release.md) is kept. */
+const KUBE_UPSTREAM_TTL_MS = 30_000;
 
 /** The bound on noteRefusal's report (it delays the 403 at most this long). */
 const REFUSAL_NOTE_TIMEOUT_MS = 1000;
@@ -275,6 +310,8 @@ export class NetProxy {
   private readonly modelHosts: string[];
   private readonly log: (msg: string) => void;
   private readonly maxBodyBytes: number;
+  /** kubeUpstreamOf's answers by authority (kube-wire-release.md). */
+  private readonly kubeUpstreamCache = new Map<string, { at: number; profile: KubeUpstream | null }>();
   private readonly forward: HttpForwarder;
   private readonly sessionId: string;
   /** Tenant stamp for emitted events (policy-surface.md §2.7), or null. */
@@ -327,6 +364,10 @@ export class NetProxy {
   private readonly modelServices: readonly string[];
   /** The handling note's kind for model-service calls (see NetProxyOptions). */
   private readonly modelNote: ModelNoteKind | null;
+  /** The database relays (see NetProxyOptions), opened by listenDbRelays. */
+  private readonly dbRelays: DbRelay[];
+  /** Where each relay listens, once open (published in the identity). */
+  private dbBound: DbRelayBound[] = [];
 
   constructor(opts: NetProxyOptions) {
     this.arbiter = opts.arbiter;
@@ -401,11 +442,53 @@ export class NetProxy {
         // only by a route naming it, never by the `*` catch-all.
         route: (host) => (isModelHost(host, this.modelHosts) ? this.mockSites?.routeOf(host) : this.mockSites?.route(host))?.tls,
         noteRefusal: (holders, kind) => this.noteRefusal(holders, kind),
+        ...(this.arbiter.kubeUpstream ? { kubeUpstream: (authority: string) => this.kubeUpstreamOf(authority) } : {}),
         ...(this.modelHostDeny ? { modelPath: (host: string, method: string, target: string) => this.modelPathOf(host, method, target) } : {}),
         track: (s) => this.tunnels.add(s),
         untrack: (s) => this.tunnels.delete(s),
       });
     }
+    this.dbRelays = this.makeDbRelays(opts);
+  }
+
+  /** One relay per database target (db-relay.ts), sharing this proxy's
+   *  gate, attribution, tripwire and events. */
+  private makeDbRelays(opts: NetProxyOptions): DbRelay[] {
+    return (opts.dbRelays ?? []).map((target) => {
+      const route = opts.dbRoutes?.get(`${target.host}:${target.port}`);
+      return new DbRelay(target, {
+        arbiter: this.arbiter,
+        log: this.log,
+        emit: (action, fields) => this.safeEmit(action, fields),
+        sessionKey: this.sessionId,
+        holders: (sock) => this.resolveHolders(sock),
+        recheck: (sock, holders, destination) => this.tunnelRecheck(holders, sock, destination),
+        tripwire: (surfaces, destination) => this.fingerprintTripwire(surfaces, destination),
+        noteRefusal: (holders, kind) => this.noteRefusal(holders, kind),
+        egressHoldMs: this.egressHoldMs,
+        ...(this.mitm ? { clientTls: (host: string) => this.mitm!.contextForHost(host) } : {}),
+        ...((target.protocol === "mysql" ? opts.dbMysqlUpstreamCa : opts.dbUpstreamCa) !== undefined
+          ? { upstreamCa: (target.protocol === "mysql" ? opts.dbMysqlUpstreamCa : opts.dbUpstreamCa)! }
+          : {}),
+        allowMetadata: this.allowMetadata,
+        ...(opts.dbPgSettings ? { pgSettings: opts.dbPgSettings } : {}),
+        localServer: opts.dbLocalServer ?? ((sock) => liveLocalServer(sock, opts.dbSessionRoot)),
+        ...(route ? { route } : {}),
+      });
+    });
+  }
+
+  /** Open the database relays on loopback (each on a port of its own,
+   *  kernel-assigned), and say where each listens. */
+  async listenDbRelays(host = "127.0.0.1"): Promise<DbRelayBound[]> {
+    const out: DbRelayBound[] = [];
+    for (const r of this.dbRelays) {
+      const listen = await r.listen(0, host);
+      out.push({ ...r.target, listen });
+      this.log(`database relay for ${r.destination} (${r.target.protocol}) on ${host}:${listen}`);
+    }
+    this.dbBound = out;
+    return out;
   }
 
   /** The body of a model-service Chat Completions call with Mandu's
@@ -420,6 +503,20 @@ export class NetProxy {
       ...(arbiter.handlingPrompt ? { note: () => arbiter.handlingPrompt!({ capabilities: BROWSER_NOTE_CAPABILITIES, sessionKey: this.sessionId }) } : {}),
       ...(arbiter.takeRelayNotices ? { relayNotices: () => arbiter.takeRelayNotices!({ sessionKey: this.sessionId }) } : {}),
     });
+  }
+
+  /** kube-wire-release.md: the dial profile of a cluster at `authority`
+   *  (`host:port`), or null for any other host; the arbiter's answer kept for
+   *  KUBE_UPSTREAM_TTL_MS so a request does not cost a round trip. A failed
+   *  ask is not kept, and throws (the request fails closed). */
+  private async kubeUpstreamOf(authority: string): Promise<KubeUpstream | null> {
+    const now = Date.now();
+    const hit = this.kubeUpstreamCache.get(authority);
+    if (hit !== undefined && now - hit.at < KUBE_UPSTREAM_TTL_MS) return hit.profile;
+    const profile = await this.arbiter.kubeUpstream!(authority);
+    if (this.kubeUpstreamCache.size > 1024) this.kubeUpstreamCache.clear(); // only a cache
+    this.kubeUpstreamCache.set(authority, { at: now, profile });
+    return profile;
   }
 
   /** The session CA cert path when MITM is enabled (else undefined). The launcher
@@ -463,6 +560,7 @@ export class NetProxy {
   }
 
   async close(): Promise<void> {
+    await Promise.allSettled(this.dbRelays.map((r) => r.close()));
     for (const t of this.tunnels) t.destroy();
     this.tunnels.clear();
     if (this.server) {
@@ -840,6 +938,8 @@ export class NetProxy {
       url: dest.absoluteUrl,
       headers: req.headers,
       bodyText: body.toString("utf8"),
+      // A SigV4 request signs these bytes (aws-sigv4-resign.md).
+      bodyBytes: body,
       arbiter: this.arbiter,
       procKey, // the integrity leg (frozen); undefined → that branch skipped
       holders, // the secret-taint leg (plan 13 D6)
@@ -912,7 +1012,9 @@ export class NetProxy {
     // Forward the (possibly rewritten) request to the real destination.
     const fwdUrl = gate.rewritten?.url ?? dest.absoluteUrl;
     const fwdHeaders = sanitizeForwardHeaders(gate.rewritten?.headers ?? req.headers);
-    const fwdBody = gate.rewritten ? Buffer.from(gate.rewritten.bodyText, "utf8") : body;
+    // The body's own bytes unless the release changed its text (a binary
+    // body read as UTF-8 and written back is not the same bytes).
+    const fwdBody = gate.rewritten && gate.rewritten.bodyText !== body.toString("utf8") ? Buffer.from(gate.rewritten.bodyText, "utf8") : body;
     // The model-host deny judges the URL that is SENT: a value the gate put
     // back into it could make its path another one (fail-closed).
     if (modelPath && gate.rewritten && gate.rewritten.url !== dest.absoluteUrl) {
@@ -1172,7 +1274,12 @@ export class NetProxy {
     // leg (`servePlainTunnel`), request by request, under the same gate.
     if (this.mitm && (!model || modelDeny)) {
       const mitm = this.mitm;
-      const attribution = { holders, current: () => this.resolveHolders(sock) };
+      const attribution = {
+        holders,
+        current: () => this.resolveHolders(sock),
+        // A cluster's upgraded stream is judged per chunk as a blind tunnel is.
+        streamCheck: (destination: string) => this.tunnelRecheck(holders, sock, destination),
+      };
       this.sniffTunnel(clientSocket, head, (first, stream, rest) => {
         if (first === TLS_HANDSHAKE_RECORD) mitm.handleConnect(host, port, stream, rest, attribution, { established: true });
         else this.servePlainTunnel(rest.length > 0 ? prependChunk(stream, rest) : stream, `${host}:${port}`);
@@ -1295,25 +1402,38 @@ export class NetProxy {
       return;
     }
     if (clientSocket.destroyed) return;
-    // Before each chunk: the CONNECT's holders (tainted since?) and every
-    // process holding the socket now that holds a secret (a child forked
-    // after the CONNECT that read one: the P0 triage's 2a), as the MITM leg
-    // judges each request. A holder's chain is sent the first time it is
-    // asked about (its lineage edges are recorded then); later asks go
-    // without it (no write per chunk).
+    const recheck = this.tunnelRecheck(holders, sock, statedDestination(host, port), granted);
+    this.establishTunnel(host, port, clientSocket, head, model, holders, route, recheck);
+  }
+
+  /**
+   * A tunnel's per-chunk verdict (plan 13 D6), for a blind tunnel and for a
+   * cluster's upgraded stream on the TLS-inspected leg (kube-wire-release.md
+   * §4.1): before each chunk, the CONNECT's holders (tainted since?) and
+   * every process holding the socket now that holds a secret (a child forked
+   * after the CONNECT that read one: the P0 triage's 2a), as the MITM leg
+   * judges each request. A holder's chain is sent the first time it is
+   * asked about (its lineage edges are recorded then); later asks go
+   * without it (no write per chunk).
+   */
+  private tunnelRecheck(
+    holders: readonly ProcHolder[],
+    sock: { remoteAddress?: string; localAddress?: string; remotePort?: number; localPort?: number },
+    destination: string,
+    granted: Set<string> = new Set(),
+  ): () => Promise<SecretTaintVerdict> {
     const keys: ProcHolder[] = holders.map((h) => ({ procKey: h.procKey, ancestors: [] }));
     const chained = new Set(holders.map((h) => h.procKey));
     const narrow = this.taintedHoldersFor();
-    const recheck = async (): Promise<SecretTaintVerdict> => {
+    return async (): Promise<SecretTaintVerdict> => {
       const ask = [...keys];
       for (const h of await this.chunkHolders(sock, narrow)) {
         if (ask.some((a) => a.procKey === h.procKey)) continue;
         ask.push(chained.has(h.procKey) ? { procKey: h.procKey, ancestors: [] } : h);
         chained.add(h.procKey);
       }
-      return this.taintVerdict(ask, statedDestination(host, port), granted);
+      return this.taintVerdict(ask, destination, granted);
     };
-    this.establishTunnel(host, port, clientSocket, head, model, holders, route, recheck);
   }
 
   private establishTunnel(
@@ -1540,11 +1660,35 @@ export class NetProxy {
         mandu: true, ...this.identity, ...(this.denyHosts.length > 0 ? { denyHosts: denyHostsForIdentity(this.denyHosts) } : {}),
         ...(this.modelHostDeny ? { modelHostDeny: [...MODEL_HOST_NAMES] } : {}),
         ...(this.sessionLogins ? { sessionLogins: this.sessionLogins } : {}),
+        ...(this.dbBound.length > 0 ? { dbRelays: this.dbBound } : {}),
       }
       : { mandu: false };
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
   }
+}
+
+/**
+ * Who listens at a local database the relay dialed (db-relay.ts
+ * `localServer`): `other` when the far end's socket belongs to another uid
+ * (a system Postgres, a container's proxy) or every process holding it is
+ * readable and none descends from the session's root (the launcher);
+ * `session` when one does; `unknown` otherwise (a socket of this user's
+ * that no readable process holds, e.g. a program that made itself
+ * non-dumpable; or no session root to judge by).
+ */
+function liveLocalServer(sock: Socket, root: number | undefined): "session" | "other" | "unknown" {
+  const conn = { localIp: normalizeIp(sock.localAddress) ?? "", localPort: sock.localPort ?? 0, remoteIp: normalizeIp(sock.remoteAddress) ?? "", remotePort: sock.remotePort ?? 0 };
+  const { uid, holders } = farEndOwner(conn);
+  if (uid === null) return "unknown";
+  if (typeof process.getuid === "function" && uid !== process.getuid()) return "other";
+  if (root === undefined || holders.length === 0) return "unknown";
+  const read = (pid: number): string => readFileSync(`/proc/${pid}/stat`, "utf8");
+  for (const h of holders) {
+    const pid = parseProcKey(h.procKey)?.pid;
+    if (pid === undefined || descendsFrom(pid, root, read)) return "session";
+  }
+  return "other";
 }
 
 // ── pure URL/header helpers ────────────────────────────────────────────────────

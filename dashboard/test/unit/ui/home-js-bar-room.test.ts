@@ -79,9 +79,14 @@ function rulesOf(file: string): Array<{ sel: string; body: string }> {
 
 test("the stylesheet keeps the bar's room below what the window scrolls to, except for a control in the bar; the bar is sticky 12px above the window's bottom", () => {
   const all = [...rulesOf("mandu.css"), ...rulesOf("app.css")];
-  const padding = all.filter((r) => /scroll-padding/.test(r.body));
+  const padding = all.filter((r) => /scroll-padding-bottom/.test(r.body));
   assert.deepEqual(padding.map((r) => r.sel), ["html:not(:has(#files-pending:focus-within))"], "one rule, on the window, off while the focus is in the bar");
   assert.equal(padding[0]!.body.replace(/;$/, ""), "scroll-padding-bottom: var(--bar-room, 0px)", "the room home.js measures, none until it does");
+  // The only other room the window keeps is above: 8 px on a phone, and
+  // the top bar's on a wide window (dashboard.md §4.25 *The bar stays in
+  // sight on a wide window*; css-top-bar-sticks.test.ts).
+  const others = all.filter((r) => /scroll-padding/.test(r.body) && !/scroll-padding-bottom/.test(r.body));
+  assert.deepEqual(others.map((r) => [r.sel, r.body.replace(/;$/, "")]), [["html", "scroll-padding-top: 8px"], ["html", "scroll-padding-top: 73px"]], "a room above, never a bottom one");
   const own = all.find((r) => r.sel === ".files-pending");
   assert.ok(own, "the bar's own rule");
   assert.match(own.body, /position: sticky; bottom: 12px;/, "home.js counts its 12px margin into the room");

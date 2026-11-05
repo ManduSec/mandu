@@ -112,12 +112,12 @@ test("provider check: another provider in argv, env or config — for the sessio
     [["goose", "run", "--provider", "groq", "-t", "x"], {}, NO_CFG, /--provider names the provider `groq`/],
     [["goose", "session", "--provider=lmstudio"], {}, NO_CFG, /--provider names the provider `lmstudio`/],
     // review hands its --provider to every `goose run` child (its own value flags: `-s <dir>`)
-    [["goose", "review", "-s", "sub", "--provider", "google"], {}, NO_CFG, /--provider names the provider `google`/],
+    [["goose", "review", "-s", "sub", "--provider", "gcp_vertex_ai"], {}, NO_CFG, /--provider names the provider `gcp_vertex_ai`/],
     [["goose", "review"], { GOOSE_PROVIDER: "mistral" }, NO_CFG, /GOOSE_PROVIDER names the provider `mistral`/],
     [["goose", "session"], { GOOSE_PROVIDER: "databricks" }, NO_CFG, /environment's GOOSE_PROVIDER names the provider `databricks`/],
     [["goose", "session"], {}, cfg({ GOOSE_PROVIDER: "deepseek" }), /GOOSE_PROVIDER in .*config\.yaml names the provider `deepseek`/],
     [["goose", "session"], {}, cfg({ GOOSE_SUBAGENT_PROVIDER: "custom_corp" }), /GOOSE_SUBAGENT_PROVIDER in .* names the provider `custom_corp`/],
-    [["goose", "session"], { GOOSE_SUBAGENT_PROVIDER: "google" }, NO_CFG, /GOOSE_SUBAGENT_PROVIDER names the provider `google`/],
+    [["goose", "session"], { GOOSE_SUBAGENT_PROVIDER: "gcp_vertex_ai" }, NO_CFG, /GOOSE_SUBAGENT_PROVIDER names the provider `gcp_vertex_ai`/],
     [["goose", "session"], {}, cfg({}, [{ file: "anthropic.json", name: "anthropic" }]), /declarative provider custom_providers\/anthropic\.json/],
     [["goose", "session"], {}, cfg({}, [{ file: "openai.json", name: "openai" }]), /declarative provider custom_providers\/openai\.json is named `openai`/],
     // openai with an endpoint the proxy cannot reach
@@ -130,7 +130,7 @@ test("provider check: another provider in argv, env or config — for the sessio
     assert.ok(r, `${argv.join(" ")} ${JSON.stringify(env)} ${JSON.stringify(c.values)}`);
     assert.match(r!, /^mandu: refusing to launch goose: /);
     assert.match(r!, why);
-    assert.match(r!, /routes Goose's built-in anthropic, openai, litellm, openrouter, ollama, xai and tetrate providers/, "the refusal names what is supported");
+    assert.match(r!, /routes Goose's built-in anthropic, openai, litellm, openrouter, ollama, xai, tetrate and google providers/, "the refusal names what is supported");
     assert.deepEqual(gooseRoutePlan(argv, env, c).routing, GOOSE_DEFAULT_ROUTING);
   }
   // the env outranks the config, as in Goose
@@ -198,7 +198,8 @@ test("openai endpoint: resolved in goose 1.53.0's order, and Goose's wire choice
 test("provider verdict: the per-name rule other readers (a recipe's settings) reuse", () => {
   assert.deepEqual(gooseProviderVerdict(" Anthropic ", {}, NO_CFG), { routed: "anthropic", openai: null });
   assert.deepEqual(gooseProviderVerdict("openai", {}, NO_CFG), { routed: "openai", openai: { upstream: "https://api.openai.com", basePath: "v1/chat/completions", wire: "per-model" } });
-  for (const p of ["google", "gcp_vertex_ai", "aws_bedrock", "groq", "lmstudio", "xai_oauth", "custom_corp", "databricks", "ollama_cloud"]) {
+  assert.deepEqual(gooseProviderVerdict("google", {}, NO_CFG), { routed: "google", openai: null, compat: { provider: "google", upstream: "https://generativelanguage.googleapis.com" } });
+  for (const p of ["gcp_vertex_ai", "aws_bedrock", "groq", "lmstudio", "xai_oauth", "custom_corp", "databricks", "ollama_cloud"]) {
     const v = gooseProviderVerdict(p, {}, NO_CFG);
     assert.ok("why" in v, p);
   }

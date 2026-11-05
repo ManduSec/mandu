@@ -18,7 +18,9 @@
  * this computer; a change writes the key and the attribute at once, and
  * Same as this computer removes the attribute; a private window still
  * switches and says it is not remembered; the head script and the page agree
- * on every stored value. Axes: none (display only).
+ * on every stored value; another tab's pick (a `storage` event for the key,
+ * or a clear) is this tab's at once, menu too, and the note stays this
+ * window's own. Axes: none (display only).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -131,4 +133,42 @@ test("a private window, where storage throws, still switches the page and says t
   pick(doc, window, "dark");
   assert.equal(doc.documentElement.getAttribute("data-theme"), "dark", "switched");
   assert.equal(doc.getElementById("settings-theme-note").textContent, "Not remembered in this window.");
+});
+
+test("another tab's pick is this tab's at once, menu too: a storage event for the key re-reads it; a clear is Same as this computer; another key changes nothing", async () => {
+  const { doc, window } = load({ url: URL_SETTINGS });
+  await tick();
+  const other = (key: string | null) => window.dispatchEvent(new window.StorageEvent("storage", { key }));
+  const theme = () => doc.documentElement.getAttribute("data-theme");
+  doc.getElementById("settings-theme-note").textContent = "Not remembered in this window.";
+  // Another tab stored Dark: the event fires only in the tabs that did not write.
+  window.localStorage.setItem("mandu.theme", "dark");
+  other("mandu.theme");
+  assert.equal(theme(), "dark", "the page wears Dark, no reload");
+  assert.equal(menu(doc).value, "dark", "the menu reads Dark");
+  window.localStorage.setItem("mandu.theme", "system");
+  other("mandu.theme");
+  assert.equal(theme(), null, "Same as this computer: <html> bare");
+  assert.equal(menu(doc).value, "system");
+  // A storage clear (a null key): back to Same as this computer.
+  window.localStorage.setItem("mandu.theme", "light");
+  other("mandu.theme");
+  assert.equal(theme(), "light");
+  window.localStorage.clear();
+  other(null);
+  assert.equal(theme(), null, "a clear: the system's");
+  assert.equal(menu(doc).value, "system");
+  // Another key changes nothing, even when the theme's value moved under it.
+  window.localStorage.setItem("mandu.theme", "dark");
+  other("mandu.home.notifyOff"); // Notifications' Turn off
+  assert.equal(theme(), null, "another key: unchanged");
+  assert.equal(menu(doc).value, "system");
+  // An unknown stored value (a retired palette) reads as Same as this computer.
+  other("mandu.theme");
+  assert.equal(theme(), "dark");
+  window.localStorage.setItem("mandu.theme", "theme-ocean");
+  other("mandu.theme");
+  assert.equal(theme(), null, "an unknown value: the system's");
+  assert.equal(menu(doc).value, "system");
+  assert.equal(doc.getElementById("settings-theme-note").textContent, "Not remembered in this window.", "the note is this window's own: untouched");
 });

@@ -28,7 +28,12 @@
  *       change in Your rules", described by "Now always blocked."; its Undo
  *       makes the rule allow again;
  *   U4  the oracle: neither the rendered pages nor the answers read here
- *       carry the registered key.
+ *       carry the registered key;
+ *   U5  a model added through the form (asked first) gives a notice that
+ *       ends with See it in Approvals after its Undo (dashboard.md §4.25
+ *       *… and on Settings*); followed, Approvals opens with the Rule
+ *       changes row whose id the link names marked, and that row has its
+ *       Undo.
  *
  * Axes: secrets (stated).
  */
@@ -65,6 +70,14 @@ type Doc = any;
 const rowBy = (doc: Doc, sel: string, key: string, value: string) => [...doc.querySelectorAll(sel)].find((r: Doc) => r.dataset[key] === value);
 const labelRow = (doc: Doc, id: string) => rowBy(doc, "#settings-labels .label-row", "id", id);
 const modelRow = (doc: Doc, name: string) => rowBy(doc, "#settings-models .model-row", "name", name);
+/** The question a change asks on the page (dashboard.md §4.25n), drawn
+ *  under `root`: its "… anyway" pressed once it is there. */
+async function anyway(root: () => Doc): Promise<void> {
+  await waitWhile(() => !root()?.querySelector(".ask-in-place-yes"));
+  const yes = root().querySelector(".ask-in-place-yes");
+  yes.focus();
+  yes.click();
+}
 const kindRow = (doc: Doc, cat: string) => rowBy(doc, "#settings-prompt-kinds .prompt-kind", "category", cat);
 const undoIn = (doc: Doc, notice: string) => [...doc.querySelectorAll(`#${notice} button`)];
 /** The words a button is described by, as a browser reads them. */
@@ -128,12 +141,13 @@ test("The product page over the real arbiter: each notice's Undo is named by its
       && !!labelRow(doc, CONF) && !!kindRow(doc, "pii.email");
 
     await servedProductPage(base, "/settings", ready, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       // U1: three changes, one per card.
       modelRow(doc, "lab").querySelector(".model-remove-btn").click();
+      await anyway(() => doc.getElementById("settings-models"));
       await waitWhile(() => modelRow(doc, "lab") !== undefined);
       const label = labelRow(doc, CONF);
-      label.querySelector("select.label-level").value = "no-model";
+      pick(label.querySelector("select.label-level"), "no-model");
       label.querySelector(".label-save-btn").click();
       await waitWhile(() => labelRow(doc, CONF) === label);
       pick(kindRow(doc, "pii.email").querySelector("select"), "block");
@@ -151,7 +165,7 @@ test("The product page over the real arbiter: each notice's Undo is named by its
         assert.equal(b.textContent, "Undo", "a sighted reader still sees Undo");
         assert.equal(controlName(b), card.name);
         assert.match(description(b), card.words, "described by its notice's words");
-        assert.equal(doc.getElementById(card.notice).textContent, description(b) + "Undo", "the whole notice, nothing more");
+        assert.equal(doc.getElementById(card.notice).textContent, description(b) + "Undo" + "See it in Approvals", "the whole notice: words, Undo, link");
       }
       assert.deepEqual(nameFaults(doc.getElementById("page-settings")), { shared: [], unnamed: [] }, "no two controls on Settings share a name");
       assert.equal(await level(), "no-model", "the label was saved");
@@ -174,6 +188,33 @@ test("The product page over the real arbiter: each notice's Undo is named by its
       assert.equal(undoIn(doc, "labels-notice").length, 0, "an undone notice has no button");
       assert.equal(doc.activeElement, doc.getElementById("settings-labels-title"), "the card's heading");
       assert.deepEqual(nameFaults(doc.getElementById("page-settings")), { shared: [], unnamed: [] });
+      pages.push(doc.body.textContent ?? "");
+
+      // U5: a model added, then See it in Approvals.
+      doc.getElementById("model-open").click();
+      doc.getElementById("model-name").value = "zdr";
+      doc.getElementById("model-url").value = "https://zdr.example/v1";
+      doc.getElementById("model-save").click();
+      await anyway(() => doc.getElementById("model-form"));
+      await waitWhile(() => modelRow(doc, "zdr") === undefined || !/^Added zdr\./.test(doc.getElementById("models-notice").textContent));
+      const box = doc.getElementById("models-notice");
+      const link = box.querySelector("a.change-link");
+      assert.ok(link, "the notice links its change");
+      assert.equal(link.previousElementSibling, undoIn(doc, "models-notice")[0], "after its Undo");
+      assert.equal(controlName(link), "See it in Approvals: the change in Models");
+      const href = link.getAttribute("href");
+      const added = /^\/approvals\/(pc-\d+)$/.exec(href)?.[1];
+      assert.ok(added, `the served link names a policy change: ${href}`);
+      assert.equal(link.dataset.ask, added);
+      link.click();
+      const marked = () => [...doc.querySelectorAll("#page-approvals .focus")].map((x: Doc) => x.dataset.id);
+      await waitWhile(() => !marked().includes(added));
+      assert.equal(doc.getElementById("page-approvals").hidden, false, "Approvals is open");
+      assert.equal(doc.defaultView.location.pathname, href);
+      assert.deepEqual(marked(), [added], "that change, and only it, is marked");
+      const row = doc.querySelector("#approvals-rule-history .row.focus");
+      assert.equal(row?.dataset.id, added, "its Rule changes row");
+      assert.ok([...row.querySelectorAll("button")].some((b: Doc) => b.textContent === "Undo"), "its Undo on the row");
       pages.push(doc.body.textContent ?? "");
     }, { headers: { Cookie: ADMIN_COOKIE } });
 

@@ -68,13 +68,13 @@ test("the product story: sent with your secret filled in, a blocked send that ca
   const steps = page.story.flatMap((t) => t.steps).filter((s) => s.kind === "action" && s.icon === "web");
   const said = steps.map((s) => (s.kind === "action" ? `${s.outcome}: ${words(s.sentence)} | ${s.note}` : ""));
   assert.deepEqual(said, [
-    "sent: Sent a request to api.github.com with your secret GITHUB_TOKEN filled in | The real value left this machine, to a destination allowed to receive it.",
-    "sent: Sent a request to paste.example with your secret PASTE_KEY filled in | The real value left this machine, to a destination allowed to receive it.",
-    "blocked: Mandu blocked a request to collector.evil.example that carried your secret GITHUB_TOKEN | The request never left this machine.",
+    "sent: Sent a request to api.github.com with your secret GITHUB_TOKEN filled in | The real value left this computer, to a destination allowed to receive it.",
+    "sent: Sent a request to paste.example with your secret PASTE_KEY filled in | The real value left this computer, to a destination allowed to receive it.",
+    "blocked: Mandu blocked a request to collector.evil.example that carried your secret GITHUB_TOKEN | The request never left this computer.",
   ]);
   // The turn's summary names them too, with the steps' labels (as code), never a token.
   assert.equal(page.story[0]!.summary, "Mandu blocked 1 request that carried your secret GITHUB_TOKEN and hid your secret PASTE_KEY from the AI. " +
-    "2 requests left this machine with your secrets GITHUB_TOKEN and PASTE_KEY filled in, each to a destination allowed to receive it.");
+    "2 requests left this computer with your secrets GITHUB_TOKEN and PASTE_KEY filled in, each to a destination allowed to receive it.");
   assert.deepEqual(page.story[0]!.summaryParts!.filter((p) => p.kind === "code").map((p) => p.text), ["GITHUB_TOKEN", "PASTE_KEY", "GITHUB_TOKEN", "PASTE_KEY"]);
   assert.equal(page.story[0]!.tone, "blocked", "a block still sets the tone; a send does not soften it");
   assert.doesNotMatch(JSON.stringify(page.story), /\$MDU:/);
@@ -91,10 +91,10 @@ test("osSentence: a waiting send, an unnamed secret, a masked item, and the plai
     "Sent a request to h.example with your secrets A and B filled in");
   // No carried items: as before.
   assert.equal(words(osSentence(os({})).sentence), "Connected to h.example");
-  assert.equal(osSentence(os({ action: "blocked" })).note, "The request never left this machine.");
+  assert.equal(osSentence(os({ action: "blocked" })).note, "The request never left this computer.");
   // A turn of only sends reads as such, in a plain tone.
   const s = turnSummary([{ kind: "action", id: "a", ts: "", icon: "web", sentence: [], outcome: "sent", note: null, split: null }]);
-  assert.equal(s.summary, "1 request left this machine with a real value filled in, to a destination allowed to receive it.");
+  assert.equal(s.summary, "1 request left this computer with a real value filled in, to a destination allowed to receive it.");
   assert.equal(s.tone, "sent");
 });
 
@@ -102,7 +102,7 @@ test("a send to a company's own API says why it did not ask, after the unchanged
   const vm = toSessionViewModel(SESSION, walkthroughEvents());
   const sent = (issuerBindings?: { read: true; raw: unknown } | { read: false }) => buildAgentPage({ session: null, id: SESSION, vm, cwd: null, waiting: [], ...(issuerBindings ? { issuerBindings } : {}) })
     .story.flatMap((t) => t.steps).filter((s): s is Extract<typeof s, { kind: "action" }> => s.kind === "action" && s.icon === "web");
-  const NOTE = "The real value left this machine, to a destination allowed to receive it.";
+  const NOTE = "The real value left this computer, to a destination allowed to receive it.";
   const on = sent({ read: true, raw: undefined });
   const gh = on.find((s) => words(s.sentence).startsWith("Sent a request to api.github.com"))!;
   assert.equal(gh.outcome, "sent");
@@ -133,7 +133,7 @@ test("osSentence: a blocked or waiting send to a company's own API has no such s
   const os = (over: Partial<DualOsStep>) => ({ kind: "net_action" as const, title: "net_action · forwarded api.github.com", action: "forwarded", usage: null, target: "api.github.com", violated: false, carried: ["$MDU:x[aaaa]"], ...over });
   assert.ok(osSentence(os({}), undefined, true, on).noteParts, "sent: the sentence");
   const blocked = osSentence(os({ action: "blocked" }), undefined, true, on);
-  assert.equal(blocked.note, "The request never left this machine.");
+  assert.equal(blocked.note, "The request never left this computer.");
   assert.equal(blocked.noteParts, undefined);
   const waiting = osSentence(os({ action: "queued", usage: "needs_approval" }), undefined, true, on);
   assert.equal(waiting.note, "Waiting for your OK.");

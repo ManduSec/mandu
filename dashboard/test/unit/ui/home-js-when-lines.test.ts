@@ -71,7 +71,7 @@ test("W1: a moment that says both is written in two parts, the text as before (�
   await tick();
   const runLine = running.doc.querySelector("#agent-sub .agent-when");
   assert.equal(parts(runLine.querySelector("time.when"))[1], "5 minutes ago");
-  assert.match(runLine.textContent, new RegExp(`^running now, started ${CLOCK} · 5 minutes ago, in ~/ws$`));
+  assert.match(runLine.textContent, new RegExp(`^running now, started ${CLOCK} · 5 minutes ago, last step just now, in ~/ws$`));
   // A question card on Home: "… Oct 15, 15:32 · 1 minute ago."
   const asked = load({ homeVm: home({ waiting: [{ ...ASK, askedAt: NOW - 60_000 }] }) });
   await tick();

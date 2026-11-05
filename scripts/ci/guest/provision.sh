@@ -213,6 +213,17 @@ provision() {
   printf '#!/bin/sh\nexec /opt/agent-node/bin/node /opt/agent-node/lib/node_modules/openclaw/openclaw.mjs "$@"\n' \
     > /usr/local/bin/openclaw
   chmod 0755 /usr/local/bin/openclaw
+  # The OpenClaw plugin lane's other versions (openclaw-plugin.md §4 step 5):
+  # each in /opt/openclaw/<version> on the agent node, as openclaw-<version>.
+  for v in ${OPENCLAW_PLUGIN_LANE_VERSIONS//:/ }; do
+    stamp "openclaw $v (the plugin lane)"
+    PATH=/opt/agent-node/bin:$PATH /opt/agent-node/bin/npm install -g --no-audit --no-fund \
+      --prefix "/opt/openclaw/$v" "openclaw@$v"
+    printf '#!/bin/sh\nexec /opt/agent-node/bin/node /opt/openclaw/%s/lib/node_modules/openclaw/openclaw.mjs "$@"\n' "$v" \
+      > "/usr/local/bin/openclaw-$v"
+    chmod 0755 "/usr/local/bin/openclaw-$v"
+    HOME="$(mktemp -d)" "openclaw-$v" --version | grep -qF "OpenClaw $v "
+  done
   stamp "release-binary agents: goose $GOOSE_VERSION"
   install_release_bin goose \
     "https://github.com/aaif-goose/goose/releases/download/v$GOOSE_VERSION/goose-x86_64-unknown-linux-gnu.tar.bz2" \
@@ -318,6 +329,7 @@ provision() {
   # Every CLI must RUN, not just be on PATH: a CLI that installs but refuses
   # to start would make its suite skip to green in every run.
   for c in claude codex opencode opencode2 openclaw goose; do command -v "$c"; "$c" --version; done
+  for v in ${OPENCLAW_PLUGIN_LANE_VERSIONS//:/ }; do command -v "openclaw-$v"; "openclaw-$v" --version; done
   # Claude Code's own sandbox (the cc-* baselines, §9.9) needs these on PATH;
   # without one it refuses to start under failIfUnavailable.
   for c in bwrap socat rg; do command -v "$c"; done
@@ -326,6 +338,46 @@ provision() {
   # The sibling refusal's Go leg (clone_filter_integration, wrap-clone-filter)
   # builds its probe with the distro's go; without it the leg skips.
   go version
+
+  # 4b. the live client lanes (docs/design/testing/live-clients.md): the
+  #     distro's PostgreSQL and MySQL server and client, and k3s with its
+  #     air-gap images (so pods start offline), kubectl and helm at their
+  #     pins. Nothing of them runs at boot: integration.live-db-clients
+  #     starts its own servers, and boot.sh starts the k3s fixture
+  #     (fixture-k3s.sh) only for a job that asks (MANDU_CI_FIXTURES=k3s).
+  stamp "live clients: postgresql, mysql, k3s $K3S_VERSION, kubectl $KUBECTL_VERSION, helm $HELM_VERSION"
+  apt_retry postgresql postgresql-client mysql-server mysql-client
+  systemctl disable --now postgresql.service mysql.service 2>/dev/null || true
+  # the distro's own cluster is not used (the suite runs initdb in a temp dir)
+  local pgc
+  for pgc in $(pg_lsclusters -h 2>/dev/null | awk '{print $1 "/" $2}'); do pg_dropcluster --stop "${pgc%/*}" "${pgc#*/}"; done
+  # mysqld's AppArmor profile confines it to /var/lib/mysql; the suite's
+  # server runs from its own temp dir (disabled the documented way, as the
+  # bwrap profile below)
+  if [[ -f /etc/apparmor.d/usr.sbin.mysqld ]]; then
+    install -d /etc/apparmor.d/disable
+    ln -sf /etc/apparmor.d/usr.sbin.mysqld /etc/apparmor.d/disable/usr.sbin.mysqld
+    apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld 2>/dev/null || true
+  fi
+  ls /usr/lib/postgresql/*/bin/postgres /usr/lib/postgresql/*/bin/initdb
+  psql --version; mysql --version; mysqld --version
+  d="$(mktemp -d)"
+  local k3s_url="https://github.com/k3s-io/k3s/releases/download/${K3S_VERSION//+/%2B}"
+  curl -fsSL --retry 5 -o "$d/k3s" "$k3s_url/k3s"
+  echo "$K3S_SHA256  $d/k3s" | sha256sum -c -
+  install -m 0755 "$d/k3s" /usr/local/bin/k3s
+  install -d /var/lib/rancher/k3s/agent/images
+  curl -fsSL --retry 5 -o /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.zst "$k3s_url/k3s-airgap-images-amd64.tar.zst"
+  echo "$K3S_AIRGAP_SHA256  /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.zst" | sha256sum -c -
+  curl -fsSL --retry 5 -o "$d/kubectl" "https://dl.k8s.io/release/v$KUBECTL_VERSION/bin/linux/amd64/kubectl"
+  echo "$KUBECTL_SHA256  $d/kubectl" | sha256sum -c -
+  install -m 0755 "$d/kubectl" /usr/local/bin/kubectl
+  rm -rf "$d"
+  install_release_bin helm "https://get.helm.sh/helm-v$HELM_VERSION-linux-amd64.tar.gz" "$HELM_SHA256" linux-amd64/helm
+  [[ "$(k3s --version | head -1)" == "k3s version $K3S_VERSION "* ]]
+  [[ "$(kubectl version --client 2>/dev/null | head -1)" == "Client Version: v$KUBECTL_VERSION" ]]
+  [[ "$(helm version --short)" == "v$HELM_VERSION+"* ]]
+  install -m 0755 "$SRC/scripts/ci/guest/fixture-k3s.sh" "$LIB/fixture-k3s.sh"
 
   # 5. the user, its rust, a git identity (fs-sync commits; git refuses to
   #    without one).

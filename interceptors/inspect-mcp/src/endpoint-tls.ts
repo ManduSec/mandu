@@ -29,7 +29,8 @@
  *   launcher/src/endpoint-tls.ts                      (mandu doctor)
  *   dashboard/src/endpoint-tls.ts                     (Settings › Test connection)
  * and tests/stack/endpoint-tls-parity.test.ts fails unless the
- * five are byte-identical. Change the copy in inspect-mcp and copy it out.
+ * five are byte-identical. Change the copy in inspect-mcp, then run
+ * `node scripts/copies/module-copies.mjs generate`.
  *
  * Node built-ins only. PROVENANCE (CONTRIBUTING.md reuse policy): NEW Mandu code.
  */

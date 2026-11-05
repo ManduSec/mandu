@@ -13,8 +13,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
-import { load, rowOf, rulesPage, tick } from "./home-js-fixtures.js";
+import { home, load, rowOf, rulesPage, tick } from "./home-js-fixtures.js";
 
 // ── Rule changes the agent asked for (policy-surface.md §8.6) ─────────────
 
@@ -153,6 +154,58 @@ test("a narrow change has no ALLOW box and no hint", async () => {
   assert.equal(card.querySelector(".proposal-confirm"), null);
   assert.equal(card.querySelector(".confirm-hint"), null);
   assert.equal(card.querySelector(".proposal-allow").disabled, false);
+});
+
+// ── Where a wide change's line is drawn (dashboard.md §4.25 *A wide change
+// says what is open*, *Where the line is drawn*): at 1280 px the line ran on
+// from the link, and the field and the answers wrapped to the left.
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const footOf = (card: any) => card.querySelector(".proposal-allow").closest(".proposal-foot");
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const tabOrder = (el: any) => ([...el.querySelectorAll("a[href], input, button")] as any[]).map((c) => c.getAttribute("aria-label") ? c.getAttribute("aria-label").split(":")[0] : c.textContent || c.className);
+
+test("a wide change: its line stands right above the foot, never in it; the foot is the link, then the field, Allow and Not now", async () => {
+  const { doc } = load({ url: WIDE_URL, routes: { [PENDING]: { proposals: [{ ...CARD, overBroad: true, session: "s1", byAgent: true }] } } });
+  await tick();
+  const card = doc.querySelector("#approvals-proposals .proposal") as any;
+  const why = card.querySelector(".wide-why");
+  const foot = footOf(card);
+  assert.ok(why && foot, "the line and the foot are drawn");
+  assert.equal(why.tagName, "DIV", "a line of its own");
+  assert.equal(why.parentElement, card, "a line of the card");
+  assert.equal(why.nextElementSibling, foot, "right before the foot");
+  assert.equal(foot.querySelector(".wide-why"), null, "not in the foot");
+  assert.ok(why.classList.contains("dim"), "the note's ink");
+  assert.equal(why.textContent, "This change has no limit on one side.", "its words as before (no sentences sent)");
+  assert.deepEqual([...foot.children].map((c: any) => c.className), ["ask-link", "proposal-confirm", "ask-actions", "confirm-hint"], "the link, the field, the answers, the hint line");
+  assert.match(foot.querySelector(".ask-link").getAttribute("style"), /margin-right:\s*auto/, "the link keeps the left; the rest goes right");
+  assert.deepEqual(tabOrder(card), ["See what the agent was doing", "Type ALLOW to confirm this wide change", "Allow", "Not now"], "the Tab order is unchanged");
+  assert.ok(card.contains(card.querySelector(".proposal-confirm")), "the field stays in its card (the poll keeps a card being typed in)");
+});
+
+test("a wide change with no session: the line and the field, no link; the field takes the left margin past a phone's width", async () => {
+  const { doc } = load({ url: WIDE_URL, routes: { [PENDING]: { proposals: [{ ...CARD, overBroad: true, session: null }] } } });
+  await tick();
+  const card = doc.querySelector("#approvals-proposals .proposal") as any;
+  const foot = footOf(card);
+  assert.equal(card.querySelector(".wide-why").nextElementSibling, foot);
+  assert.equal(card.querySelector(".ask-link"), null, "no session: no link");
+  assert.deepEqual([...foot.children].map((c: any) => c.className), ["proposal-confirm", "ask-actions", "confirm-hint"]);
+  const css = readFileSync(new URL("../../../public/app.css", import.meta.url), "utf8");
+  assert.match(css, /@media \(min-width: 641px\) \{ \.proposal-foot > \.proposal-confirm:first-child \{ margin-left: auto; \} \}/, "with no link the field and the answers sit right");
+  assert.match(css, /\.wide-why \{ font-size: 14px; \}/, "the line keeps its size");
+});
+
+test("a change that is not wide: no line, the foot is the link and the two answers as before", async () => {
+  const { doc } = load({ url: WIDE_URL, routes: { [PENDING]: { proposals: [{ ...CARD, session: "s1", byAgent: true }] } } });
+  await tick();
+  const card = doc.querySelector("#approvals-proposals .proposal") as any;
+  assert.equal(card.querySelector(".wide-why"), null);
+  const foot = footOf(card);
+  assert.deepEqual([...foot.children].map((c: any) => c.className), ["ask-link", "ask-actions"]);
+  assert.match(foot.querySelector(".ask-link").getAttribute("style"), /margin-right:\s*auto/);
+  assert.deepEqual(tabOrder(foot), ["See what the agent was doing", "Allow", "Not now"]);
 });
 
 test("a re-filed request says the rules changed and shows the updated one; a refusal shows the server's words", async () => {
@@ -332,4 +385,263 @@ test("a poll that swaps the one waiting change for another points Home's line at
   doc.dispatchEvent(new window.Event("visibilitychange"));
   await tick();
   assert.equal(doc.querySelector("#home-waiting a.more").getAttribute("href"), "/mandu/approvals/pp-000007");
+});
+
+// ── An answer to a rule change says what it did (dashboard.md §4.25 *An answer says what it did*) ──
+// Until 2026-10-25 an answered rule change just went: the block hid with its
+// last card, nothing said to tell the agent, and the Undo sat at the bottom
+// of Approvals under Rule changes.
+
+const ASKED = {
+  ...CARD, id: "pp-000004", byAgent: true, session: "s1",
+  rows: [[{ kind: "code", text: "~/shop/.env" }, { kind: "text", text: " may be sent to " }, { kind: "code", text: "api.stripe.com" }]],
+  wouldLet: [[{ kind: "code", text: "~/shop/.env" }, { kind: "text", text: " would reach " }, { kind: "code", text: "api.stripe.com" }]],
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const lineWords = (x: any): string => String(x.textContent).replace(/\s+/g, " ").trim();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const proposalButton = (doc: any, id: string, label: string): any =>
+  [...doc.querySelectorAll(`#approvals-proposals .proposal`)].find((c: any) => c.dataset.id === id)
+    .querySelector(label === "Allow" ? ".proposal-allow" : "button.primary");
+/** Approvals with `cards` waiting; the answer to `id` takes it away and
+ *  answers `reply`. */
+function proposalsAnswered(cards: unknown[], id: string, reply: unknown) {
+  let pending = cards;
+  const page = load({
+    url: "http://127.0.0.1:4500/mandu/approvals",
+    routes: {
+      [PENDING]: () => ({ proposals: pending }),
+      [`POST policy/proposals/${id}`]: () => ((pending = pending.filter((p: any) => p.id !== id)), reply),
+    },
+  });
+  return page;
+}
+
+test("Allow on the only rule change leaves its block shown with a line: what was allowed, to tell the agent, and Undo it at the change's row", async () => {
+  const { doc } = proposalsAnswered([ASKED], "pp-000004", { proposal: { ...ASKED, status: "approved" }, changeId: "pc-000012" });
+  await tick();
+  proposalButton(doc, "pp-000004", "Allow").click();
+  await tick(30);
+  assert.equal(doc.querySelector("#approvals-proposals .proposal"), null, "the card went");
+  assert.equal(doc.getElementById("approvals-proposals-block").hidden, false, "the block stays shown");
+  assert.equal(doc.getElementById("approvals-proposals-head").textContent, "Rule changes Claude Code asked for", "named by the change answered, as its session's agent");
+  const line = doc.querySelector("#approvals-proposals .answer-line");
+  assert.equal(lineWords(line), "Allowed: Claude Code's rule change: ~/shop/.env may be sent to api.stripe.com. It is in force now. Tell Claude Code it may go on. Undo it");
+  assert.equal(line.getAttribute("role"), "status");
+  assert.equal(line.querySelector("strong").textContent, "Allowed:");
+  assert.deepEqual([...line.querySelectorAll("code")].map((c: any) => c.textContent), ["~/shop/.env", "api.stripe.com"], "the names as code, as on the card");
+  const undo = line.querySelector("a");
+  assert.equal(undo.textContent, "Undo it");
+  assert.equal(undo.getAttribute("href"), "/mandu/approvals/pc-000012");
+  assert.equal(undo.dataset.ask, "pc-000012");
+  assert.ok(!lineWords(line).includes("Ignore the rules"), "never the agent's reason");
+  assert.equal(line.querySelector("img"), null);
+});
+
+test("Not now says the rules stay; a held policy.yaml edit's Not now says the file was written back; neither has a link", async () => {
+  const { doc } = proposalsAnswered([ASKED, { ...ASKED, id: "pp-000005" }], "pp-000004", { proposal: { ...ASKED, status: "denied" } });
+  await tick();
+  proposalButton(doc, "pp-000004", "Not now").click();
+  await tick(30);
+  const line = doc.querySelector("#approvals-proposals .answer-line");
+  assert.equal(lineWords(line), "Not now: Claude Code's rule change: ~/shop/.env may be sent to api.stripe.com. Your rules stay as they are.");
+  assert.equal(line.querySelector("a"), null);
+  assert.equal(doc.getElementById("approvals-proposals").firstElementChild, line, "where the card was, above the next one");
+
+  const held = {
+    id: "pp-000009", status: "pending", requester: "policy.yaml", onDisk: true, byAgent: false, session: null,
+    headline: "policy.yaml was changed on disk and would loosen 1 rule. Nothing changes until you approve",
+    rows: [], wouldLet: [[{ kind: "text", text: "Rule " }, { kind: "code", text: "hand" }, { kind: "text", text: " would let more data leave without asking" }]],
+    capped: false, overBroad: false, warnings: [], reason: null, createdAt: Date.now() - 1000,
+  };
+  const disk = proposalsAnswered([held], "pp-000009", { proposal: { ...held, status: "denied" } });
+  await tick();
+  proposalButton(disk.doc, "pp-000009", "Not now").click();
+  await tick(30);
+  assert.equal(lineWords(disk.doc.querySelector("#approvals-proposals .answer-line")),
+    "Not now: The change to policy.yaml: Rule hand would let more data leave without asking. Your rules stay as they are, and policy.yaml was written back to match them.");
+});
+
+test("a rule change no agent asked for says nothing about telling one; an older server's Allow has no Undo link", async () => {
+  const mine = { ...ASKED, id: "pp-000006", requester: "You", byAgent: false, session: null, reason: null };
+  const { doc } = proposalsAnswered([mine], "pp-000006", { proposal: { ...mine, status: "approved" } });
+  await tick();
+  proposalButton(doc, "pp-000006", "Allow").click();
+  await tick(30);
+  const line = doc.querySelector("#approvals-proposals .answer-line");
+  assert.equal(lineWords(line), "Allowed: Your rule change: ~/shop/.env may be sent to api.stripe.com. It is in force now.");
+  assert.equal(line.querySelector("a"), null, "no change id, no link");
+  assert.equal(doc.getElementById("approvals-proposals-head").textContent, "Rule changes waiting for you", "the heading still names whose it was");
+});
+
+// ── Rule changes count their cards (dashboard.md §4.25 *Rule changes count their cards*) ──
+// The questions' heading says how many wait, "Waiting for your answer (5)"
+// (#208); until 2026-11-04 the rule changes' heading above it was bare, so
+// with several waiting a person counted the cards.
+
+test("§4.25 Rule changes count their cards: '(3)', an Allow lowers it, a poll raises it, a same poll leaves it, only an answer's line left has none", async () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let pending: any[] = ["pp-000021", "pp-000022", "pp-000023"].map((id) => ({ ...ASKED, id }));
+  const reply = (id: string) => () => {
+    const p = pending.find((c) => c.id === id);
+    pending = pending.filter((c) => c.id !== id);
+    return { proposal: { ...p, status: "approved" } };
+  };
+  const { doc } = load({
+    url: "http://127.0.0.1:4500/mandu/approvals",
+    routes: {
+      [PENDING]: () => ({ proposals: pending }),
+      "POST policy/proposals/pp-000021": reply("pp-000021"),
+      "POST policy/proposals/pp-000022": reply("pp-000022"),
+      "POST policy/proposals/pp-000023": reply("pp-000023"),
+      "POST policy/proposals/pp-000024": reply("pp-000024"),
+    },
+  });
+  const poll = async () => { doc.dispatchEvent(new doc.defaultView.Event("visibilitychange")); await tick(30); };
+  await tick(30);
+  const h2 = doc.getElementById("approvals-proposals-head");
+  const words = doc.getElementById("approvals-proposals-words");
+  const count = doc.getElementById("approvals-proposals-count");
+  const cards = () => doc.querySelectorAll("#approvals-proposals .proposal").length;
+  assert.equal(h2.textContent, "Rule changes Claude Code asked for (3)");
+  assert.equal(words.textContent, "Rule changes Claude Code asked for", "the words as before, in their own span");
+  assert.equal(count.textContent.trim(), "(3)");
+  assert.ok(count.classList.contains("muted"), "muted, as the questions' count");
+  assert.equal(count.parentElement, h2);
+  assert.equal(cards(), 3, "the count is the cards listed");
+
+  // A poll with the same changes leaves the count as written: not written again.
+  const text = count.firstChild;
+  await poll();
+  assert.equal(count.firstChild, text, "written only when it changes");
+  assert.equal(h2.textContent, "Rule changes Claude Code asked for (3)");
+
+  // An Allow that takes a card off lowers it with the redraw that follows.
+  proposalButton(doc, "pp-000021", "Allow").click();
+  await tick(30);
+  assert.equal(cards(), 2);
+  assert.equal(h2.textContent, "Rule changes Claude Code asked for (2)");
+
+  // A poll that brings one more raises it.
+  pending = [...pending, { ...ASKED, id: "pp-000024" }];
+  await poll();
+  assert.equal(cards(), 3);
+  assert.equal(h2.textContent, "Rule changes Claude Code asked for (3)");
+
+  // Nothing left but the last answer's line: the words alone, no count.
+  for (const id of ["pp-000022", "pp-000023", "pp-000024"]) {
+    proposalButton(doc, id, "Allow").click();
+    await tick(30);
+  }
+  assert.equal(cards(), 0);
+  assert.ok(doc.querySelector("#approvals-proposals .answer-line"), "the answer's line stays");
+  assert.equal(doc.getElementById("approvals-proposals-block").hidden, false, "and keeps the block shown");
+  assert.equal(count.textContent, "");
+  assert.equal(h2.textContent, "Rule changes Claude Code asked for", "the words alone end the heading");
+});
+
+// ── A rule change from a session that has ended (dashboard.md §4.25 *An answer says what it did*) ──
+// The card says the agent that asked has ended, in a question's words
+// (§4.34 *After you answer*), and Allow tells no one to go on: no agent
+// waits for it. Until 2026-11-02 the line said "Tell Claude Code it may go
+// on." whether or not that session was still running.
+
+/** Approvals with ASKED from session `s7`, whose row on Home is `state`
+ *  (none: Home does not list it); Allow answers it. */
+function askedFrom(state: string | null) {
+  const base = home();
+  const row = { ...(base.agents as any[])[0], id: "s7", cwd: "/home/u/shop", state, waiting: 0 };
+  const card = { ...ASKED, id: "pp-000021", session: "s7" };
+  let pending: unknown[] = [card];
+  return load({
+    url: "http://127.0.0.1:4500/mandu/approvals",
+    homeVm: home({ agents: state === null ? base.agents : [...(base.agents as any[]), row] }),
+    routes: {
+      [PENDING]: () => ({ proposals: pending }),
+      ["POST policy/proposals/pp-000021"]: () => ((pending = []), { proposal: { ...card, status: "approved" }, changeId: "pc-000031" }),
+    },
+  });
+}
+const ENDED = "The agent that asked has ended, so nothing is waiting on this now.";
+
+test("a rule change whose session has ended says so on its card, and Allow says it is in force without telling the agent to go on", async () => {
+  const { doc } = askedFrom("idle");
+  await tick();
+  const card = doc.querySelector("#approvals-proposals .proposal");
+  const sub = lineWords(card.querySelector(".ask-sub"));
+  assert.ok(sub.endsWith("· from Claude Code in ~/shop. " + ENDED), sub);
+  assert.equal(card.querySelector(".ask-sub .ask-ended").textContent.trim(), ENDED, "drawn as a question's ended sentence");
+  assert.ok(!sub.includes("Your answer counts"), "a rule change asks nothing again");
+  proposalButton(doc, "pp-000021", "Allow").click();
+  await tick(30);
+  const line = doc.querySelector("#approvals-proposals .answer-line");
+  assert.equal(lineWords(line), "Allowed: Claude Code's rule change: ~/shop/.env may be sent to api.stripe.com. It is in force now. Undo it");
+  assert.equal(line.querySelector("a").getAttribute("href"), "/mandu/approvals/pc-000031", "Undo is unchanged");
+});
+
+test("a rule change from a running session keeps its card and its 'Tell … it may go on'; a session Home does not list says neither", async () => {
+  for (const [state, agent] of [["running", "Claude Code"], [null, "Your agent"]] as const) {
+    const { doc } = askedFrom(state);
+    await tick();
+    const card = doc.querySelector("#approvals-proposals .proposal");
+    assert.equal(card.querySelector(".ask-ended"), null, `${state}: no ended sentence`);
+    assert.ok(!lineWords(card).includes("has ended"), `${state}`);
+    proposalButton(doc, "pp-000021", "Allow").click();
+    await tick(30);
+    const tell = agent === "Your agent" ? "your agent" : agent;
+    assert.equal(lineWords(doc.querySelector("#approvals-proposals .answer-line")),
+      `Allowed: ${agent}'s rule change: ~/shop/.env may be sent to api.stripe.com. It is in force now. Tell ${tell} it may go on. Undo it`, `${state}`);
+  }
+});
+
+test("a session that ends while its rule change is drawn: the next poll adds the ended sentence to the card", async () => {
+  const page = askedFrom("running");
+  await tick();
+  assert.equal(page.doc.querySelector("#approvals-proposals .proposal .ask-ended"), null);
+  const vm: any = home({ agents: [...(home().agents as any[]), { ...(home().agents as any[])[0], id: "s7", cwd: "/home/u/shop", state: "idle", waiting: 0 }] });
+  page.setHome(vm);
+  page.doc.dispatchEvent(new page.window.Event("visibilitychange"));
+  await tick(30);
+  assert.equal(page.doc.querySelector("#approvals-proposals .proposal .ask-ended").textContent.trim(), ENDED);
+});
+
+test("a re-filed answer shows its notice and no line; a 409 keeps the card with its words and no line", async () => {
+  const refiled = { ...ASKED, id: "pp-000007" };
+  const routes: Record<string, unknown> = {
+    [PENDING]: { proposals: [ASKED] },
+    "POST policy/proposals/pp-000004": { proposal: { ...ASKED, status: "superseded" }, refiled },
+  };
+  const { doc } = load({ url: "http://127.0.0.1:4500/mandu/approvals", routes });
+  await tick();
+  routes[PENDING] = { proposals: [refiled] };
+  proposalButton(doc, "pp-000004", "Allow").click();
+  await tick(30);
+  assert.match(doc.getElementById("approvals-proposals").textContent, /here is the updated request\./);
+  assert.equal(doc.querySelector("#approvals-proposals .answer-line"), null);
+
+  const bad = load({ url: "http://127.0.0.1:4500/mandu/approvals", routes: { [PENDING]: { proposals: [ASKED] }, "POST policy/proposals/pp-000004": { status: 409, body: { error: "policy proposal pp-000004 is already denied" } } } });
+  await tick();
+  proposalButton(bad.doc, "pp-000004", "Allow").click();
+  await tick(30);
+  assert.match(bad.doc.querySelector("#approvals-proposals .proposal .ask-error").textContent, /already denied/);
+  assert.equal(bad.doc.querySelector("#approvals-proposals .answer-line"), null);
+});
+
+test("a poll keeps the rule change's line; leaving the page drops it and the empty block hides again", async () => {
+  const { doc, window } = proposalsAnswered([ASKED], "pp-000004", { proposal: { ...ASKED, status: "approved" }, changeId: "pc-000012" });
+  await tick();
+  proposalButton(doc, "pp-000004", "Allow").click();
+  await tick(30);
+  const line = doc.querySelector("#approvals-proposals .answer-line");
+  Object.defineProperty(doc, "visibilityState", { value: "visible", configurable: true });
+  doc.dispatchEvent(new window.Event("visibilitychange"));
+  await tick(30);
+  assert.equal(doc.querySelector("#approvals-proposals .answer-line"), line, "kept by the poll");
+  assert.equal(doc.getElementById("approvals-proposals-block").hidden, false);
+  doc.querySelector("#nav [data-page-link=rules]").click();
+  await tick(30);
+  doc.querySelector("#nav [data-page-link=approvals]").click();
+  await tick(30);
+  assert.equal(doc.querySelector("#approvals-proposals .answer-line"), null, "left with the page");
+  assert.equal(doc.getElementById("approvals-proposals-block").hidden, true, "no empty block");
 });

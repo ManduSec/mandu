@@ -42,6 +42,7 @@ import { proxySecretPosture } from "../proxy-secret-posture.js";
 import type { Layout } from "./layout.js";
 import { describeOccupant, readinessBudget, type ServiceDeps, type ProxyIdentity } from "./primitives.js";
 import { humanSockEnv } from "../human-plane.js";
+import { routeUpstreamsEnv } from "../agent-model-route.js";
 
 export interface ContextProxyResult {
   host: string;
@@ -259,12 +260,12 @@ export async function startContextProxy(
       // whatever the environment set (the eval harnesses use this knob).
       MANDU_INBOUND_SPEC: inboundSpecFor(plan.target) ?? process.env["MANDU_INBOUND_SPEC"],
       MANDU_TENANT: plan.tenant,
-      // The routed OpenAI-family providers' real base URLs (agent-model-route.ts;
-      // the proxy serves them under /_mandu/openai/<id>). Plan-derived and
-      // explicitly UNSET otherwise, so an ambient value cannot add a route.
-      MANDU_OPENAI_UPSTREAMS: pkg === "anthropic-proxy" && (plan.openaiRoutes?.length ?? 0) > 0
-        ? JSON.stringify(Object.fromEntries(plan.openaiRoutes!.map((r) => [r.id, r.upstream])))
-        : undefined,
+      // The routed providers' real base URLs (agent-model-route.ts
+      // routeUpstreamsEnv; the proxy serves an OpenAI-family one under
+      // /_mandu/openai/<id>, a Gemini one under /_mandu/google/<id>).
+      // Plan-derived and explicitly UNSET otherwise, so an ambient value
+      // cannot add a route.
+      ...routeUpstreamsEnv(pkg === "anthropic-proxy" ? plan.openaiRoutes ?? [] : []),
       // The routes whose agent runs a tool call written in the model's text
       // (Goose's ollama provider): the proxy ends a response carrying one.
       MANDU_OPENAI_TEXT_CALLS: pkg === "anthropic-proxy" && (plan.openaiRoutes ?? []).some((r) => r.textCalls)

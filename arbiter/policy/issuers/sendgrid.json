@@ -1,0 +1,10 @@
+{
+  "id": "sendgrid",
+  "name": "SendGrid",
+  "formats": ["^SG\\.[0-9A-Za-z_-]{22}\\.[0-9A-Za-z_-]{43}$"],
+  "shapes": ["SG.….…"],
+  "hosts": ["api.sendgrid.com"],
+  "docs": ["https://www.twilio.com/docs/sendgrid/api-reference/how-to-use-the-sendgrid-v3-api/authentication"],
+  "examples": ["SG.{x*22}.{x*43}"],
+  "non_examples": ["SG.{x*21}.{x*43}", "SG.{x*22}{x*44}"]
+}

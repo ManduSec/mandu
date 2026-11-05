@@ -30,7 +30,7 @@
  * tightening are those that are tightening under EVERY catalog and DB-label
  * state: a PLAIN STRICT label (no-model, no bindings / readers / others /
  * extract), guarded against the one hazard inside the law itself (a label that
- * starts winning brings its own readers/extract/bindings; see overlapHazard).
+ * starts winning ends the loser's readers/others/extract; see overlapHazard).
  */
 import { compareGuardSettings, GUARD_SETTINGS_KEYS } from "./guard-settings.js";
 import { compilePathGlob } from "./path-glob.js";
@@ -189,18 +189,31 @@ function mayOverlap(a: PathLabel, b: PathLabel): boolean {
 }
 
 /**
- * A label that starts winning where another used to win brings its own
- * readers / others / extract / bindings with it, and the loser's may have been
- * stricter (`readers: [aws], others: deny` on `~/.aws`, shadowed by a new label
- * on `~/.aws/credentials`, turns "everyone else denied" into "everyone else gets
- * the twin"). Conservative: any other label, in either law, whose literal prefix
- * is a segment-prefix of this one's (or the reverse) and that carries any of
- * those fields is a hazard.
+ * A label that starts winning where another used to win ends the loser's
+ * readers / others / extract there, and those may have been stricter than a
+ * plain strict label (`readers: [aws], others: deny` on `~/.aws`, shadowed by
+ * a new label on `~/.aws/credentials`, turns "everyone else denied" into
+ * "everyone else gets the twin"). Conservative: any other label, in either
+ * law, whose literal prefix is a segment-prefix of this one's (or the reverse)
+ * and that carries any of those fields is a hazard.
+ *
+ * A loser's `bindings` / `values:` are not: they only RELEASE (each names
+ * where a value may go without an ask), and the caller's label is plain strict
+ * (no-model, no release), so where it starts winning it allows no more than
+ * the loser did; the same argument as for the DB labels it shadows
+ * (policy-surface.md §8.3.3). Counting them made a lone strict lock a
+ * relaxation beside any `**` pattern with a binding (live 2026-10-28,
+ * policy-setup-repo on Codex: the `.env` lock waited in the Inbox beside
+ * another drill's bank pattern bound to one host).
  */
+function mayBeStricter(l: PathLabel): boolean {
+  return l.readers !== undefined || l.others !== undefined || l.extract !== undefined;
+}
+
 function overlapHazard(key: string, label: PathLabel, laws: readonly ReadonlyMap<string, PathLabel>[]): PathLabel | null {
   for (const law of laws) {
     for (const [k, other] of law) {
-      if (k === key || !hasExtras(other)) continue;
+      if (k === key || !mayBeStricter(other)) continue;
       if (mayOverlap(label, other)) return other;
     }
   }

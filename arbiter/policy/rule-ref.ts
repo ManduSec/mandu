@@ -235,9 +235,17 @@ export const RULES = {
     source: "rule", boundary: "network", outcome: "allow",
     summary: "a trusted secret whose own format names its issuer, at that issuer's exact API host, in the Authorization header over HTTPS (the default catalog's issuer bindings, confidentiality §2.3; policy.yaml issuer_bindings)",
   },
+  "egress:secret-aws-signing": {
+    source: "rule", boundary: "network", outcome: "allow",
+    summary: "a trusted AWS credential (its name says which: the secret access key, the access key id, the session token) at an AWS endpoint over HTTPS: the secret only as the key the egress proxy re-signs the request with, the id and token only in the SigV4 credential headers (aws-sigv4-resign.md; policy.yaml issuer_bindings, issuers_off: [aws])",
+  },
   "egress:secret-https-only": {
     source: "rule", boundary: "network", outcome: "deny",
     summary: "a wire-twin credential declared for https is never put back in a plain-HTTP request (plan 10 §11.13.1)",
+  },
+  "egress:secret-db-login-only": {
+    source: "rule", boundary: "network", outcome: "deny",
+    summary: "a database password bound by its own password file (.pgpass, ~/.my.cnf) is put back only in that database's login by the egress proxy's relay, never in an HTTP or HTTPS request (db-login-release.md)",
   },
   "egress:secret-wire-position": {
     source: "rule", boundary: "network", outcome: "deny",

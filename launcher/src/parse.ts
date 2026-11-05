@@ -18,6 +18,7 @@ import {
   integrityFrozenMessage, integrityOptedIn, modeOf, parseMode, resolveRequestedAxes, type AxisLevel,
 } from "./mode.js";
 import { openclawDefaultArgv, openclawLaunchRefusal } from "./openclaw-argv.js";
+import { openclawAttachmentInstalled } from "./openclaw-install-command.js";
 import { gooseAcpLaunch, gooseDefaultArgv, gooseLaunchRefusal } from "./goose-argv.js";
 import { gooseHostOverride } from "./goose-route.js";
 import { codexLaunchRefusal } from "./codex-argv.js";
@@ -92,7 +93,7 @@ export { SHELL_BASENAMES };
 /** Launcher flags that consume the FOLLOWING token as their value (space form).
  *  Everything else is boolean or `--flag=value`. Shared by the opt loop and
  *  commandStart so the two agree on where the agent argv begins. */
-const SPACE_VALUE_FLAGS = new Set(["--id", "--target", "--tenant", "--mode"]);
+const SPACE_VALUE_FLAGS = new Set(["--id", "--target", "--tenant", "--mode", "--write-protect"]);
 
 /**
  * Index in `args` where the agent argv begins in the BARE form (`mandu claude
@@ -191,6 +192,8 @@ export function parse(args: string[], env: Env, launchDir?: string): LaunchPlan 
   let noScope = false;
   let bestEffort = false;
   let requireConfinement = truthy(env["MANDU_REQUIRE_CONFINEMENT"]);
+  let ownConfinementOnly = false;
+  const writeProtectExtra: string[] = [];
   // Default ON: only an explicit 0/false/off turns the env-var mask off.
   let envSecrets = !["0", "false", "off", "no"].includes((env["MANDU_ENV_SECRETS"] ?? "").toLowerCase());
   // Default ON (bind where possible): only an explicit 0/false/off drops the bind.
@@ -304,6 +307,17 @@ export function parse(args: string[], env: Env, launchDir?: string): LaunchPlan 
     if (a === "--best-effort") { bestEffort = true; continue; }
     if (a === "--require-confinement") { requireConfinement = true; continue; }
     if (a === "--no-require-confinement") { requireConfinement = false; continue; }
+    // Refuse when THIS launch cannot be confined, while launches and plugin
+    // sessions beside it that are not confined only warn (the OpenClaw
+    // sandbox backend's box runs beside its own Gateway's attachment;
+    // openclaw-plugin.md §10).
+    if (a === "--require-own-confinement") { requireConfinement = true; ownConfinementOnly = true; continue; }
+    if (a === "--write-protect" || a.startsWith("--write-protect=")) {
+      const v = a === "--write-protect" ? opts[++i] : valueOf(a);
+      if (v === undefined || !v.startsWith("/")) throw new Error(`mandu: --write-protect needs an absolute path (got ${JSON.stringify(v ?? "")})`);
+      writeProtectExtra.push(v);
+      continue;
+    }
     if (a === "--env-secrets") { envSecrets = true; continue; }
     if (a === "--no-env-secrets") { envSecrets = false; continue; }
     if (a === "--secret-bind") { secretBind = undefined; continue; }
@@ -433,7 +447,7 @@ export function parse(args: string[], env: Env, launchDir?: string): LaunchPlan 
     // Only the confined OpenClaw shapes launch (an allowlist): a Gateway
     // client, the Gateway service, Crestodian, … run the agent loop outside
     // this confinement or outside Mandu's routing (openclaw-argv.ts).
-    const refusal = openclawLaunchRefusal(argv, env);
+    const refusal = openclawLaunchRefusal(argv, env, { attached: () => openclawAttachmentInstalled(env) });
     if (refusal) throw new Error(refusal);
   }
   if (target === "goose") {
@@ -626,6 +640,8 @@ export function parse(args: string[], env: Env, launchDir?: string): LaunchPlan 
     ...(writePolicyMcp ? {} : { writePolicyMcp: false }),
     bestEffort,
     ...(requireConfinement ? { requireConfinement: true } : {}),
+    ...(requireConfinement && ownConfinementOnly ? { requireOwnConfinementOnly: true } : {}),
+    ...(writeProtectExtra.length > 0 ? { writeProtectExtra } : {}),
     ...(envSecrets ? {} : { envSecrets: false }),
     ...(secretsAsk ? { secretsAsk } : {}),
     ...(secretBind === false ? { secretBind } : {}),

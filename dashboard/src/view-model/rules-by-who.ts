@@ -19,7 +19,8 @@
  *   - an AI row: what any AI reads as written (Not secret), what it may read
  *     when it asks (`any-model`), and what it always sees masked; each AI of
  *     your own (a declared `local: true` model) also reads `local-model`
- *     files when it asks.
+ *     files when it asks, and its row lists only what differs from "Any AI"
+ *     (queue item #98), then a line counting the rest.
  *
  * READ ONLY. It changes nothing: every change stays in the per-file menus.
  * Every string is the product's closed vocabulary (rule-words.ts, §4.25d).
@@ -103,7 +104,8 @@ export interface ByWhoRow {
   groups: ByWhoGroup[];
   /** A named program: the line under its lists for the files it gets as
    *  any other program does (`sameAsAny`, or `allAsAny` when that is every
-   *  file); null or absent otherwise. */
+   *  file); an own AI: the same for the files it reads as Any AI does
+   *  (`sameAsAnyAI` / `allAsAnyAI`); null or absent otherwise. */
   rest?: string | null;
 }
 
@@ -169,6 +171,8 @@ export const BY_WHO_WORDS = {
   asWritten: "Reads it as written",
   whenAsks: "May read it when it asks",
   alwaysMasked: "Always sees it masked",
+  sameAsAnyAI: (n: number) => "The rest (" + n + "): as Any AI, above.",
+  allAsAnyAI: "Everything: as Any AI, above.",
   anyAI: "Any AI",
   anyAIAbout: "Your agent's AI and Mandu's helper. Your AI provider gets what they read.",
   ownAI: "Your own AI",
@@ -379,17 +383,29 @@ export function toByWhoVM(
         ...group(BY_WHO_WORDS.alwaysMasked, "bad", [...ownOnly, ...noAI]),
       ],
     });
+    // An own model lists only the files whose group differs from Any AI's
+    // (queue item #98), compared file by file, and counts the rest (`rest`),
+    // as a program does against Any other program.
+    const at = (it: ByWhoItem) => `${it.rule}\0${it.path}`;
+    const anyAt = new Map(modelRows[0].groups.flatMap((g) => g.items.map((it) => [at(it), g.label] as const)));
     const own = toModelEndpointRows(models).filter((m) => m.local);
     for (const m of own) {
+      let same = 0;
+      const groups = [
+        ...group(BY_WHO_WORDS.asWritten, "ok", asWritten),
+        ...group(BY_WHO_WORDS.whenAsks, "warn", [...whenAsks, ...ownOnly]),
+        ...group(BY_WHO_WORDS.alwaysMasked, "bad", noAI),
+      ].flatMap((g) => {
+        const items = g.items.filter((it) => anyAt.get(at(it)) !== g.label);
+        same += g.items.length - items.length;
+        return items.length ? [{ ...g, items }] : [];
+      });
       modelRows.push({
         name: m.name,
         about: [BY_WHO_WORDS.ownAI, m.placementWords ? m.placementWords.toLowerCase() : null].filter(Boolean).join(", ") + ".",
         kind: "named",
-        groups: [
-          ...group(BY_WHO_WORDS.asWritten, "ok", asWritten),
-          ...group(BY_WHO_WORDS.whenAsks, "warn", [...whenAsks, ...ownOnly]),
-          ...group(BY_WHO_WORDS.alwaysMasked, "bad", noAI),
-        ],
+        groups,
+        rest: !groups.length ? BY_WHO_WORDS.allAsAnyAI : same ? BY_WHO_WORDS.sameAsAnyAI(same) : null,
       });
     }
     if (!own.length && ownOnly.length) {

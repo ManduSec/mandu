@@ -99,6 +99,12 @@ export interface QueueRowVM {
    * own fields in sentences (dashboard.md §4.30 "The policy panel's rows"). */
   /** The symbol's origin host (from the arbiter, read-time), or null. */
   originHost: string | null;
+  /** An ANSWERED row whose allow the arbiter keeps for one session or one
+   *  use, not standing (`allowKeptAs`, policy-panel.ts): Rules › Your
+   *  answers names its effect, its flip and the notice after a flip by it
+   *  (dashboard.md §4.25 *Kept for one session or one use*). Absent: a
+   *  standing allow, and on a waiting row (§4.30). */
+  allowKeptAs?: "session" | "once";
   /** Where a secret the row asks about came from, when that is a file path
    *  or an environment variable (`env:NAME`): the arbiter's read-time
    *  `source.origin`, which `describeAsk` names the secret by (dashboard.md
@@ -310,6 +316,12 @@ export interface YourRuleRowVM {
    *  (§4.25f *A rule on a file reads as a file*). `covers` still says what
    *  the rule reaches, for the edits made on the page. Absent otherwise. */
   pathIsFile?: true;
+  /** A file rule whose literal path has nothing on disk (`ENOENT` or
+   *  `ENOTDIR`, server/path-kinds.ts): a typo or a moved folder. The page
+   *  says so under its name (§4.25f *A rule on nothing says so*); the rule,
+   *  its `covers` and level are unchanged. Absent when the path is there,
+   *  could not be read, is a pattern, or the look did not answer in time. */
+  missing?: true;
   /** A file rule's level and the hosts its contents may go to, for the
    *  explorer's label buttons (§4.25n). Absent on every other kind. */
   level?: string;

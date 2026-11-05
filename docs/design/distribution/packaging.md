@@ -21,7 +21,7 @@
 Two lines, total, from a user who already runs Claude Code:
 
 ```sh
-npm install -g @mandusec/mandu        # one-line install (Node >= 22.13.0)
+npm install -g @mandusec/mandu        # one-line install (Node >= 22.15.0)
 mandu claude                     # run Claude Code under Mandu
 ```
 
@@ -65,7 +65,7 @@ mandu claude                     # run Claude Code under Mandu
   `launcher/test/lib/launch-in-dir.ts`).
 - Optional zero-thought mode: `mandu alias` prints (or installs) an
   `alias claude="mandu claude"` line so `claude` itself is always gated.
-- Prerequisites: Node ≥ 22.13.0 (checked at install and at launch with a
+- Prerequisites: Node ≥ 22.15.0 (checked at install and at launch with a
   plain-language error), `git` (fs-view worktrees; degrades loudly to
   raw-CWD without it), and the agent binary itself (`claude`, also used by
   inspect-mcp's U-LLM path via `claude -p`,
@@ -143,6 +143,95 @@ only (the M5 unlock, §8, §11.4), so a tarball packed in the source repository,
 whose bundle can carry a module the public tree leaves out, is refused by
 npm, and the publishable one is packed from the public tree.
 
+### 3.1 Try it without installing: the devcontainer (2026-10-24)
+
+The README's "Open in GitHub Codespaces" button
+(`https://codespaces.new/mandusec/mandu?quickstart=1`) opens the public
+repository in a cloud container whose terminal has Mandu installed, so a
+visitor can run `mandu demo` (offline, against the stand-in AI,
+[`mandu-demo.md`](./mandu-demo.md)) before installing anything, the way
+other agent sandboxes offer a one-click cloud trial. It is a **try-it
+surface, not a product channel**: the container has no agent, no login and
+none of the visitor's files, which is the point of the demo; to protect a
+real agent Mandu is installed where the agent runs (§3, "Docker stays what
+it is").
+
+**The files.** `.devcontainer/devcontainer.json` (JSONC) builds
+`.devcontainer/Dockerfile`, `remoteUser: node`, and on attach echoes one
+line: run `mandu demo`, then `mandu doctor`. No `runArgs`, no `privileged`,
+no `capAdd` / `securityOpt`, no mounts: the non-root principle
+(privilege-model.md §0), and `launcher/test/unit/devcontainer.test.ts`
+refuses any of them. The Dockerfile is `FROM node:<NODE_PIN>-bookworm`
+(the full image: git, curl and openssl, which the demo's steps 2 and 3 run)
+and `npm install -g "@mandusec/mandu@${MANDU_VERSION}"` (`latest` by
+default) as root at build time, then `USER node`. A Dockerfile rather than
+`image:` + `postCreateCommand`, for two reasons: the Node version is exact,
+so the unit test can check it against `engines` and keep it equal to
+`scripts/install.sh`'s `NODE_PIN`; and the package is in the image when
+the container opens, with no install step to wait on.
+
+**Published package, not the checkout.** The container installs the release
+from npm. Building the checkout instead means installing every package's
+`node_modules` and a Rust toolchain for the native bins (minutes), and the
+result is a source checkout's layout, not what users install. A contributor
+who opens the codespace has Node there and follows `docs/development.md`;
+the image does not try to be a development environment.
+
+**What works in a Docker container with its defaults** (measured
+2026-10-24: Ubuntu 24.04, Linux 6.8, Docker 29.1.3, default seccomp
+profile, AppArmor on, `node` uid 1000, no capabilities, `NoNewPrivs` 0,
+one seccomp filter (Docker's); built and run by
+`scripts/test/devcontainer-demo.test.sh` in a disposable VM):
+
+| Piece | In the container |
+|---|---|
+| model proxies, arbiter, egress proxy with TLS inspection, reply filter | work: every check of the demo's six scenes holds |
+| the whole-agent guard (`mandu-net-guard`) | **cannot start**: Docker's default seccomp profile refuses `pidfd_getfd` to a process without `CAP_SYS_PTRACE`, and the guard copies its tracee's seccomp listener with it (exec-routing.md §7.5). The guard fails closed at setup (exit 71, "a container's seccomp profile can refuse pidfd_getfd") |
+| user namespaces, so bubblewrap and the mount layer | blocked (`unshare: Operation not permitted`: the same profile refuses `unshare` and namespace `clone` flags); the image ships no bubblewrap either |
+| `mandu demo` | exit 0 in about 3 s: Claude Code's three steps as on a host; Codex's step 1 shows `‹hidden› (the whole file)` with "the keys show only under Mandu's guard, which cannot start on this machine" (mandu-demo.md §2) |
+| `mandu doctor` | runs (exit 0); since the fix below it reports `gated` and that the guard cannot start here |
+
+Two defects this found, fixed in the same change: the guard **hung**
+forever when the listener copy failed (it reaped its child while still
+holding the socket the child waited on; now it closes it first, and
+`net-supervisor/tests/listener_handoff_integration.rs` runs the real bin
+under a filter that refuses `pidfd_getfd`, with and without
+`--skip-unsupported`, and requires exit 71 within 20 s and the target never
+run); and `mandu demo` then stopped with "✗ the demo could not run: the
+agent's command did not run under Mandu's guard" (with 0.2.0-beta.8 after
+about 30 s). The demo now asks the guard bin whether it can set up here
+(`probeGuardNotify`, the bin around `true`) before it uses it, and runs
+without it when it cannot (`cannot-start`, mandu-demo.md §3).
+
+**Doctor and a launch in such a container (fixed 2026-10-24).** Both
+used to resolve the guard by its bin alone, so doctor reported `confined,
+by the guard alone` and a launch wrapped the agent in a guard that failed
+closed at setup, so the agent never started. Now both ask the bin first
+(`guardStartsHere`, the same probe as the demo's, once per bin per
+process): the launch's `applyNetGuard` warns that the guard "cannot start
+on this machine" and proceeds without it, so the launch is `gated` (gap
+`no-guard`, the mount layer still up where the host can mount) or refused
+under `--require-confinement`; a launch that requires the guard (OpenCode 2
+with confidentiality on) keeps it and refuses earlier. Doctor reports
+`gated` with the line "Mandu's file guard is installed but cannot start
+here". Tests: `tests/sandbox/bind-only-posture.test.ts` B4 (the real
+launcher with a stand-in bin that fails as the guard does there),
+`net-guard.test.ts`, `doctor.test.ts`.
+
+**Codespaces itself was not run** (it needs a GitHub sign-in and runs on
+GitHub's machines). It starts the same image with Docker on a VM of its
+own; its kernel, Docker version and default run options are GitHub's and
+may differ from the measurement above, and `mandu doctor` there reports
+what that host allows. **Tests:** `launcher/test/unit/devcontainer.test.ts`
+(per push: the JSONC parses, no privilege is asked for, the image's Node
+meets `engines` and equals `NODE_PIN`, it installs this package, the attach
+line, the README's link) and `scripts.devcontainer-demo` (kind `env`,
+`manual`, `internet`, needs `docker`: builds the image and runs doctor and
+the demo in it; `MANDU_DEVCONTAINER_TARBALL=<tgz>` installs a packed tree
+over the published package to test a change before its release; no CI
+guest has a Docker engine, so it runs by hand when `.devcontainer/` or a
+release changes).
+
 ## 4. Pure-JS runtime: `better-sqlite3` → `node:sqlite` (decided)
 
 `better-sqlite3` was the repo's ONLY native addon (arbiter: `symbol-table/`,
@@ -161,8 +250,8 @@ The API surface used is small and fully covered by Node's built-in
 
 Consequences: the shipped package has **zero native npm deps and zero
 postinstall scripts**: one universal JavaScript artifact for linux/darwin ×
-x64/arm64; install cannot fail on compilation. Cost: the Node ≥ 22.13 floor
-(`node:sqlite` is unflagged from 22.13), enforced via `engines` + a
+x64/arm64; install cannot fail on compilation. Cost: the Node ≥ 22.15 floor
+(`node:sqlite` is unflagged from 22.13; 22.15 since 2026-10-26, below), enforced via `engines` + a
 launch-time check with a clear message (§10.2).
 
 **Status (landed):** a thin `better-sqlite3`-shaped adapter
@@ -344,7 +433,7 @@ reply-row-reservation.md §15.4). The **bin**
 (`bin/mandu.mjs`) runs `dist/mandu.mjs`'s `main()` with plain node, so the
 bundle's `Layout.detect` sees it under `dist/` → installed mode (or, in a
 checkout, the dev layout's bundled form, §5.1); `engines`
-`node >=22.13.0`; `prepack` builds the bundles; `files` ships `dist/` +
+`node >=22.15.0`; `prepack` builds the bundles; `files` ships `dist/` +
 `bin/` only. The **`npm pack` test** (`npm-pack.test.ts`) packs, installs the
 tarball into a throwaway dir, and runs the installed `mandu` with **plain
 node**: the dependency install pulls no tsx, so a working run proves `npm
@@ -1207,7 +1296,7 @@ Not yet run on Windows itself (os-test-matrix.md `wsl2` row).
   `launcher/test/component/run.test.ts` (the launch line, silenced by a key).
 - **The `node` a session's programs run** ✅ (2026-10-09, `node-floor.ts`
   `nodeEnvProxyGap`; confidentiality-plan-13-reader-set-labels.md §10.2).
-  Mandu runs on Node 22.13, but a Node *program* in a session uses Mandu's
+  Mandu runs on Node 22.15, but a Node *program* in a session uses Mandu's
   network proxy only when its Node honours the launcher's
   `NODE_USE_ENV_PROXY=1`: `fetch` from 22.21 / 24.0, `http`/`https` from
   22.21 / 24.5, never 23.x. Below that its requests go around the proxy:
@@ -1437,7 +1526,7 @@ host's own script(1)).
 
 | # | Deliverable | Status |
 |---|---|---|
-| **M1** | `scripts/bootstrap.sh`: clone → one command → `mandu` on PATH (Node ≥ 22.13 preflight, installs every package's deps, per-package typecheck, writes a from-source `mandu` shim via the launcher's local tsx, doctor-style summary + PATH check) | ✅ the from-source channel; also contributor onboarding |
+| **M1** | `scripts/bootstrap.sh`: clone → one command → `mandu` on PATH (Node ≥ 22.15 preflight, installs every package's deps, per-package typecheck, writes a from-source `mandu` shim via the launcher's local tsx, doctor-style summary + PATH check) | ✅ the from-source channel; also contributor onboarding |
 | **M2** | `node:sqlite` migration (§4) + the bundle & layout resolver (§5) + launcher parity (reply-filter, dashboard, bare argv, status/stop, titles) + bin→bundle + `npm pack` test | ✅; open: the fuller wrapper-parity-against-`dist` matrix axis. `mandu-run.sh` is a shim (portable-wrapper.md §7) |
 | **M3** | ◐ macOS: BSD PTY relay and Seatbelt profile implemented; historical `mandu claude` and `codex exec` hardware record (§6); tested by hand on a Mac, no CI | Fresh integrated-branch hardware pass still required; Codex TUI, OpenCode and OpenClaw unverified |
 | **M4** | `doctor` + `init`/config.toml + `demo` (`secrets` mode: hide, use, stop; Claude Code and Codex) | ✅; the attack-contrast demo is deferred ([mandu-demo.md](./mandu-demo.md) §9) |
@@ -1461,13 +1550,28 @@ host's own script(1)).
 
 1. **Bundle vs source drift** is a failure class tsx-from-src never had;
    the mitigation is structural (the bundle tests in §5 run `dist/`), not hope.
-2. **Node ≥ 22.13.0 floor** excludes users pinned to older Node; the error
+2. **Node ≥ 22.15.0 floor** excludes users pinned to older Node; the error
    message says exactly that (`nvm install 22`) rather than failing
    obscurely. The four gates (`engines`, `bin/mandu.mjs`, `bootstrap.sh`,
    `doctor`) compare major.minor.patch (a major-only check would admit
    22.0 to 22.12, where `node:sqlite` is still behind a flag), and
    `launcher/test/unit/node-floor.test.ts` pins them to one constant
    (`launcher/src/node-floor.ts`).
+   **22.15.0 since 2026-10-26** (was 22.13.0): `node:zlib` has zstd from
+   22.15, and OpenClaw uses it twice, for the ChatGPT requests its built-in
+   `openai` provider sends (which the model proxy must decode to mask,
+   model-wires.md §9.3) and for the transcript events it stores (which the
+   past-sessions scan reads). Below 22.15 the first was refused and the
+   second skipped, and the CI guest, which runs Mandu on the floor, could not
+   run OpenClaw on a ChatGPT sign-in at all. The alternative, a pure-JS or
+   WASM zstd decoder kept for 22.13 and 22.14, was not taken: it adds a
+   third-party parser on the model proxy's request path (a supply-chain and
+   a review cost, on bodies the agent controls) and a second decoder to keep
+   at parity, to keep two minor releases of a line whose current release is
+   22.22. One minor step also gives every user the URI-filename read of a
+   live agent database (22.15, past-sessions scan). The runtime probes
+   (`NODE_HAS_ZSTD`, `request-encoding.ts`, `transcript-stores.ts`) stay as
+   the backstop of a from-source run below the floor.
 3. **`node:sqlite` maturity**: `DatabaseSync` is synchronous like
    better-sqlite3 (semantics match); WAL-mode behavior under the arbiter's
    single-writer assumption is re-asserted by the concurrency tests (§4),

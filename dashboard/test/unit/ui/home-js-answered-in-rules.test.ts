@@ -8,13 +8,16 @@
  * answer's row open, as its ⋯ opens it (Remove), the focus on its ⋯; a Find
  * a rule text that would hide it is emptied; an answer forgotten meanwhile
  * says so; a modifier click is the browser's, at `/rules#answer-<id>`, and
- * that address opens the row too.
+ * that address opens the row too. On the session page (§4.25b *A stop says
+ * Mandu asked you*), a step answered Always allowed or Blocked ends its
+ * "Your answer" line with the same link; other answers and a waiting step
+ * do not.
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { RULES_PANEL, home, load, tick } from "./home-js-fixtures.js";
+import { AGENT, RULES_PANEL, home, load, tick } from "./home-js-fixtures.js";
 
 const APPROVALS_URL = "http://127.0.0.1:4500/mandu/approvals";
 const DAY = 86_400_000;
@@ -135,4 +138,87 @@ test("a modifier click is the browser's; the address it opens lands on the row",
   assert.ok(row.nextElementSibling.querySelector(".rule-remove"));
   assert.equal(tab.doc.activeElement, row.querySelector(".file-more"));
   assert.equal(tab.window.location.hash, "", "used once: the address is the page's own");
+});
+
+// ── The session page: a step whose question was answered (§4.25b *A stop
+// says Mandu asked you*) ends with the same link for a standing answer. ──
+
+const AGENT_URL = "http://127.0.0.1:4500/mandu/agents/s1";
+/** A stop that filed `askId`, answered `answer` (agent-page.ts carries both). */
+const askedStep = (id: string, askId: string, answer?: string) =>
+  ({ kind: "action", id, ts: "2026-09-25T10:00:01.000Z", icon: "web", sentence: S("Mandu blocked a request"), outcome: "blocked", note: null, split: null, askId, ...(answer ? { answer } : {}) });
+const SESSION_STEPS = [
+  askedStep("a", "egr-7", "allowed"), askedStep("b", "egr-6", "blocked"),
+  askedStep("c", "once-1", "allowed-once"), askedStep("d", "once-2", "allowed-once-used"),
+  askedStep("e", "strip-1", "without"), askedStep("f", "strip-2", "without-used"),
+  askedStep("g", "msg-1", "sent"), askedStep("h", "msg-2", "masked"),
+  askedStep("i", "wait-1"), askedStep("j", "holder-1", "allowed-session"),
+];
+
+function sessionPage(routes: Record<string, unknown> = {}) {
+  const agent = { ...AGENT, waiting: [], earlier: 0, story: [{ ...AGENT.story[1], id: "turn:answered", steps: SESSION_STEPS }] };
+  return load({ url: AGENT_URL, routes: { "GET home/agent?session=s1": agent, "GET policy/panel": RULES_PANEL, ...routes } });
+}
+const askedLine = (doc: any, step: string) => doc.querySelector(`#agent-story .step[data-step-id="${step}"] .note.asked`);
+
+test("on the session page, an Always allowed and a Blocked step end with Kept in Rules; Allowed once, Send without it, a held message and a waiting step do not", async () => {
+  const { doc } = sessionPage();
+  await tick();
+  assert.equal(askedLine(doc, "a").textContent, "Mandu asked for your OK in Approvals. Your answer: Always allowed. Kept in Rules");
+  assert.equal(askedLine(doc, "a").querySelector("a.kept-link").getAttribute("href"), "/mandu/rules#answer-egr-7");
+  assert.equal(askedLine(doc, "b").textContent, "Mandu asked for your OK in Approvals. Your answer: Blocked. Kept in Rules");
+  assert.equal(askedLine(doc, "b").querySelector("a.kept-link").getAttribute("href"), "/mandu/rules#answer-egr-6");
+  // A program's send allowed for its session: kept in Rules too, never
+  // "Always allowed" (§4.25 *The allow that reverses a Block names its scope*).
+  assert.equal(askedLine(doc, "j").textContent, "Mandu asked for your OK in Approvals. Your answer: Allowed for this session. Kept in Rules");
+  assert.equal(askedLine(doc, "j").querySelector("a.kept-link").getAttribute("href"), "/mandu/rules#answer-holder-1");
+  // The Approvals word still opens the row.
+  assert.equal(askedLine(doc, "a").querySelector("a").getAttribute("href"), "/mandu/approvals/egr-7");
+  for (const step of ["c", "d", "e", "f", "g", "h", "i"]) {
+    const line = askedLine(doc, step);
+    assert.ok(line, step + ": the step says Mandu asked");
+    assert.equal(line.querySelector("a.kept-link"), null, step + ": Rules does not keep it");
+    assert.doesNotMatch(line.textContent, /Kept in Rules/, step);
+  }
+});
+
+test("Kept in Rules on a session step opens Rules with the answer's row open, the focus on its ⋯", async () => {
+  const { doc, window } = sessionPage();
+  await tick();
+  askedLine(doc, "a").querySelector("a.kept-link").click();
+  await tick(30);
+  assert.equal(window.location.pathname, "/mandu/rules");
+  assert.equal(doc.getElementById("page-rules").hidden, false);
+  assert.equal(doc.getElementById("page-agent").hidden, true);
+  const row = ruleRow(doc, "answer:egr-7");
+  assert.ok(row && row.classList.contains("open"), "the answer's row is open");
+  assert.equal(row.nextElementSibling.querySelector(".rule-remove").textContent, "Remove");
+  assert.equal(doc.activeElement, row.querySelector(".file-more"), "the focus is on the row's ⋯");
+  assert.equal(doc.getElementById("rules-answer-note").hidden, true, "no note");
+});
+
+test("Kept in Rules on a session step: a modifier click is the browser's", async () => {
+  const { doc, window } = sessionPage();
+  await tick();
+  let prevented: boolean | null = null;
+  const spy = (e: any) => { prevented = e.defaultPrevented; e.preventDefault(); };
+  doc.addEventListener("click", spy);
+  askedLine(doc, "b").querySelector("a.kept-link").dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+  doc.removeEventListener("click", spy);
+  assert.equal(prevented, false, "not handled by the page");
+  await tick();
+  assert.equal(window.location.pathname, "/mandu/agents/s1", "the session page stays");
+});
+
+test("Kept in Rules on a session step whose answer Rules no longer keeps opens Your rules with the note", async () => {
+  const panel = { panel: { ...RULES_PANEL.panel, queue: RULES_PANEL.panel.queue.filter((v) => v.id !== "egr-7") } };
+  const { doc } = sessionPage({ "GET policy/panel": panel });
+  await tick();
+  askedLine(doc, "a").querySelector("a.kept-link").click();
+  await tick(30);
+  const note = doc.getElementById("rules-answer-note");
+  assert.equal(note.hidden, false);
+  assert.equal(note.textContent, NOTE);
+  assert.equal(ruleRow(doc, "answer:egr-7"), undefined);
+  assert.equal(doc.activeElement, doc.querySelector("#rules-block h2"));
 });

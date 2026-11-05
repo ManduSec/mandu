@@ -15,23 +15,29 @@
  * queue row's family, never as its raw key.
  */
 
-import { PROTECT_COMMAND, type HomeScanCard } from "./last-scan.js";
+import { type HomeScanCard } from "./last-scan.js";
+import { startCommandParts, startCommands } from "./start-commands.js";
 import { type SessionRef } from "../event-source/contract.js";
+import type { SessionNeighbour } from "./agent-page-types.js";
 import { systemLogKind } from "../event-source/registry.js";
-import { type PolicyPanelVM, type QueueRowVM } from "./policy-panel.js";
+import { allowKeptAs, answerHasReversal, type PolicyPanelVM, type QueueRowVM } from "./policy-panel.js";
 import { type SessionFlowStats } from "./lineage.js";
 import { type SessionKept } from "./session-kept.js";
-import { type Mode } from "../config-axes.js";
+import { MODE_AXES, type Mode } from "../config-axes.js";
 import { SECRETS_PARTIAL_NOTE, type SessionHealth } from "../session-health.js";
-import { ISSUES_URL, generationOf, rangeWords } from "../agent-versions.js";
+import { BUG_REPORT_TEMPLATE, ISSUES_URL, SECURITY_REPORT_URL, generationOf, rangeWords } from "../agent-versions.js";
 import { docsUrl } from "../release-version.js";
-import { CLOCK_SKEW_MS, installLine, newerRelease, parseVersion, type UpdateCache, type UpdateChannel } from "../update-notice.js";
+import { CLOCK_SKEW_MS, compareVersions, installLine, newerRelease, parseVersion, RELEASE_REPO, type ReleaseInfo, type SemVer, type UpdateCache, type UpdateChannel, type UpdateCheckSetting } from "../update-notice.js";
 import { manduPath } from "../generated/mandu-paths.js";
 import { homeExposure, type HomeExposure } from "./human-plane.js";
+import { homeRouteLost, type HomeRouteLost } from "./attachment-route.js";
 import { SYM_RE } from "./held-tokens.js";
 import { tildePath } from "./rule-words.js";
 import { issuerItem, type HomeIssuerItem, type IssuerReading } from "./issuer-words.js";
-import { describeAsk, holderLeftParts, holderLeftWords, holderSourceWords, type HolderSourceWords, type HomeAskFamily, type HomeTextPart } from "./ask-words.js";
+import type { HomeBuiltInFiles } from "./builtin-files.js";
+import type { OpenPlace } from "../data-locations.js";
+import { createHash } from "node:crypto";
+import { describeAsk, endedAskWords, holderLeftParts, holderLeftWords, holderSourceWords, type HolderSourceWords, type HomeAskFamily, type HomeTextPart, type StandingPart } from "./ask-words.js";
 
 /** The policy file as the page names it: the path table's `policy` with the
  *  home spelled `~` and no MANDU_HOME override (on-disk-layout.md §5), so the copy
@@ -57,12 +63,22 @@ export interface HomeSessionFacts {
   sent: number;
   holds: boolean;
   violations: number;
+  /** The session recorded that it ran with protection off (its
+   *  `paired.mode`, the mode the arbiter reported at its start, never
+   *  today's setting; dashboard.md §4.25 *A session that ran with
+   *  protection off says so*). Absent: not known, so nothing is claimed. */
+  off?: boolean;
   /** The agent's working directory, when the trace names one. */
   cwd: string | null;
   /** The launcher recorded the agent's exit and no agent activity came after
    *  it (agent-page.ts `sessionExited`, the rule the session's page uses):
    *  the row is not running, however recent its last event. */
   exited?: boolean;
+  /** The secret files whose change stayed in the masked copy, as the
+   *  session's last believed exit names them (`discardedWritesOf`, the
+   *  session page's *Changes Mandu did not apply to your files*,
+   *  dashboard.md §4.25b): a count only, never a path. Absent: none. */
+  notApplied?: number;
   /** When the AI first read each item as it was, before it was masked, by
    *  its token's base (lineage `readFirstByBase` over the trace's
    *  `maskedLater`): what a waiting card about one of them must not call
@@ -76,9 +92,14 @@ export interface HomeSessionFacts {
    *  line the launcher prints when the session ends (dashboard.md §4.25ah).
    *  Absent: not computed. */
   kept?: SessionKept;
+  /** The hosts the session's sends went to or were stopped on their way
+   *  to, each once (session-kept.ts `sendHosts`, over the same believed
+   *  story as `kept`), for History's search (dashboard.md §4.25ae *By a
+   *  secret or a host*). Hosts only. Absent: not computed. */
+  hosts?: string[];
 }
 
-export type { HomeTextPart, HomeAskFamily, AskWords } from "./ask-words.js";
+export type { HomeTextPart, HomeAskFamily, AskWords, StandingPart } from "./ask-words.js";
 export { describeAsk, binaryOfSubject, programOfSubject } from "./ask-words.js";
 
 export interface HomeAsk {
@@ -109,6 +130,18 @@ export interface HomeAsk {
   afterAllow?: string;
   /** The sentence from its verb on, for that line ("Allowed once: …"). */
   whatParts: HomeTextPart[];
+  /** On a send of a secret to a host, what the answers that last keep
+   *  doing (ask-words.ts `AskWords.ifStanding`, dashboard.md §4.34 *A send
+   *  question says what its standing answers keep doing*): the halves its
+   *  `actions` offer, its parts ending in a link to Rules. Absent otherwise. */
+  ifStanding?: string;
+  ifStandingParts?: StandingPart[];
+  /** Its short form for Home's compact card (ask-words.ts
+   *  `AskWords.answersShort`, dashboard.md §4.34 *Home's card says which
+   *  answers last*): which of `actions` cover only the next such request and
+   *  which are kept until changed under Rules. Absent otherwise. */
+  answersShort?: string;
+  answersShortParts?: StandingPart[];
   askedAt: number;
   count: number;
   /** A held open or change (`open:`, `trust:`, `write:`, `heldNow`): whether
@@ -135,6 +168,13 @@ export interface HomeAsk {
   /** Which agents raised it, plain names, deduplicated. */
   agents: string[];
   actions: QueueRowVM["actions"];
+  /** Whether its answer, other than Send without it (one request, never),
+   *  can be changed on its answered row on Approvals (policy-panel.ts
+   *  `answerHasReversal`, the rule of that row's buttons): false for a held
+   *  message and a HIGH session's ask. The line an answer leaves then says
+   *  *See your answer*, not *Change your answer* (dashboard.md §4.25 *An
+   *  answer says what it did*). */
+  reversible: boolean;
   mintable: QueueRowVM["mintable"];
   /** A program's send of the secret files it holds (confidentiality plan 13
    *  §5.4): every file, where it may go, whether it is in the way, and one
@@ -156,14 +196,22 @@ export interface HomeAnswered {
    *  `sent` (as written, that message), `sent-session`, `masked` (with the
    *  part masked, or the message cancelled: the row does not tell them
    *  apart) or `masked-session` (dashboard.md §4.34 "A held message's
-   *  answer"). */
-  outcome: "allowed" | "blocked" | "allowed-once" | "allowed-once-used" | "sent" | "sent-session" | "masked" | "masked-session" | "without" | "without-used";
+   *  answer"). `allowed-session`: a standing allow the arbiter keeps for
+   *  one session (a program's send of the files it holds, answered *Allow
+   *  this session*), never "Always allowed" (§4.25 *The allow that reverses
+   *  a Block names its scope*). */
+  outcome: "allowed" | "allowed-session" | "blocked" | "allowed-once" | "allowed-once-used" | "sent" | "sent-session" | "masked" | "masked-session" | "without" | "without-used";
   decidedAt: number | null;
   /** Sessions that raised it (ids), most recent last, as `HomeAsk`'s: the
    *  row links the last, where it was asked (dashboard.md §4.25h). */
   sessions: string[];
   /** The one-click reversal the row offers (the same verdict routes). */
   actions: QueueRowVM["actions"];
+  /** What the reversal's allow is kept as when narrower than a standing
+   *  answer (policy-panel.ts `allowKeptAs`): the row reads *Allow this
+   *  session instead* or *Allow once instead*. Absent: *Always allow
+   *  instead*, or a reversal that blocks. */
+  allowKeptAs?: "session" | "once";
   /** The answer applies to nothing any more, and why (dashboard.md §4.34
    *  "Answers that no longer apply"); `actions` is then empty. */
   staleNote?: string;
@@ -199,16 +247,35 @@ export interface HomeAgent {
    *  ("N sends with a real value filled in"). */
   sent: number;
   holds: boolean;
+  /** The session ran with protection off, as it recorded (its facts' `off`):
+   *  its row has the amber dot and says so first (dashboard.md §4.25). False
+   *  for a session that recorded no mode. */
+  protectionOff: boolean;
+  /** A protection that is on by default did not start in the session (its
+   *  health's `droppedProtections`, dashboard.md §4.21 *A protection that
+   *  did not start*): its row has the amber dot and says "less protection
+   *  than usual" after the other marks (§4.25). Absent otherwise, no
+   *  health included: every row rides the polled /api/home, so a `false` on
+   *  each would spend its payload budget (§4.30 *Payload budgets*). */
+  lessProtection?: true;
   /** Asks waiting that this session raised. */
   waiting: number;
+  /** The files whose change Mandu did not apply (its facts' `notApplied`),
+   *  only once the row has ended, as its page shows them only then: the
+   *  row says "changes to 1 file not applied", linking the page's block,
+   *  with the amber dot (dashboard.md §4.25b *Home and History say so*).
+   *  Absent otherwise (the payload budget, as `lessProtection`). */
+  notApplied?: number;
   /** The warning by the agent's name (`agentNotice`): the session could
-   *  not do its job or some of its commands could not run (dashboard.md
+   *  not do its job, ran without some of Mandu's protections, or some of
+   *  its commands could not run (dashboard.md
    *  §4.21 *On the product page*), or the agent is outside the versions
    *  Mandu was tested with, or advertised tools Mandu does not know
    *  (supported-agents.md); null otherwise. */
   notice: string | null;
-  /** The same words as parts, each command as code; null with no notice. */
-  noticeParts: HomeTextPart[] | null;
+  /** The same words as parts, each command as code and the moment the AI
+   *  plan's limit resets as a `time` part; null with no notice. */
+  noticeParts: HomeNoticePart[] | null;
   /** The agent's support status when it is a preview (Goose, OpenCode 1 and 2;
    *  supported-agents.md §2.0): the page's "Preview" tag opens it. null for
    *  a supported agent. */
@@ -236,20 +303,63 @@ export type HomeVerdict =
   | "unknown"; // no arbiter connection — nothing can be claimed
 
 /** A place the hero's sentence sends the person (dashboard.md §4.25, *The
- *  hero links where it points*): Settings, or the detailed trace of the one
- *  session where protection failed (`session`; null when several did, so
- *  the trace's session list), or, in a build without the developer view
- *  (§4.25ad), that one session's agent page. It names the place, never an
- *  address: the page builds the link. */
+ *  hero links where it points*): Settings, or Settings at its Protection
+ *  card (`protection`, while On is saved for the next start), or the
+ *  detailed trace of the one session where protection failed (`session`;
+ *  null when several did, so the trace's session list), or, in a build
+ *  without the developer view (§4.25ad), that one session's agent page. It
+ *  names the place, never an address: the page builds the link. */
 export type HomeHeroLink =
-  | { kind: "link"; text: string; to: "settings" }
+  | { kind: "link"; text: string; to: "settings" | "protection" }
   | { kind: "link"; text: string; to: "trace"; session: string | null }
-  | { kind: "link"; text: string; to: "agent"; session: string };
+  | { kind: "link"; text: string; to: "agent"; session: string; parts?: HomeHeroNamePart[] };
+
+/** How a hero link that names a session spells its words (`parts`, its
+ *  `text` joined): the agent as text, its folder as code, and the moment
+ *  that tells two alike sessions apart as a `time` part (an ISO time the
+ *  page draws in the reader's own clock; `text` says it in UTC). */
+export type HomeHeroNamePart = HomeTextPart | { kind: "time"; text: string };
+
+/** A part of an agent's warning (`agentNoticeParts`): words, a command as
+ *  code, or the moment the AI plan's usage limit resets as a `time` part
+ *  (an ISO time the page draws in the reader's own clock; the plain
+ *  `notice` says it in UTC). A moment is never a command to run, so its
+ *  `run` is never set and readers of `run` need no narrowing. */
+export type HomeNoticePart = HomeTextPart | { kind: "time"; text: string; run?: never };
 
 export type HomeHeroPart = HomeTextPart | HomeHeroLink;
 
 /** The hero's counts that link to the one session holding them (`window.only`). */
-export type HomeCountOwners = Record<"secretsMasked" | "secretsEarly" | "blocked" | "sent", string | null>;
+export type HomeCountOwners = Record<"secretsMasked" | "secretsEarly" | "blocked" | "sent" | "off", string | null>;
+
+/** What Mandu did in the session the empty window's line names, the
+ *  numbers of its History row (its counts line: marks, counts, questions
+ *  waiting). Numbers and booleans only. */
+export type HomeStepCounts = Pick<HomeAgent, "secrets" | "untrusted" | "blocked" | "sent" | "waiting" | "holds" | "protectionOff" | "lessProtection">;
+
+/** The session the empty window's line names (`HomeVM.lastSteppedIn`):
+ *  its id, its agent's name and folder as its History row has them, and
+ *  `at`, when it last did anything (its last event, ISO), with `counts`,
+ *  its row's numbers, so the line says what Mandu did there. Metadata
+ *  only. */
+export interface HomeLastSteppedIn {
+  id: string;
+  agent: string;
+  cwd: string | null;
+  at: string;
+  counts?: HomeStepCounts;
+}
+
+/** The window counted nothing the hero's line draws (no secret masked or
+ *  read early, no untrusted item, nothing blocked, nothing sent, no session
+ *  that ran with protection off), over every session in it, under a verdict
+ *  that shows the line and holds no failure: when the line goes on to say
+ *  when Mandu last stepped in. Pure. */
+export function windowCountedNothing(vm: Pick<HomeVM, "verdict" | "window">): boolean {
+  const w = vm.window;
+  if (vm.verdict === "failed" || vm.verdict === "off" || vm.verdict === "unknown") return false;
+  return w.counted === w.sessions && w.secretsMasked === 0 && w.secretsEarly === 0 && w.untrusted === 0 && w.blocked === 0 && w.sent === 0 && !(w.off > 0);
+}
 
 export interface HomeVM {
   /** The viewer's sign-in to the Mandu dashboard account (dashboard.md
@@ -280,7 +390,9 @@ export interface HomeVM {
    *  masked before the AI saw them / read before they were marked;
    *  `untrusted`, non-secret items masked where the level masks them;
    *  `blocked`, steps Mandu blocked; `sent`, sends with a real value filled
-   *  in. `masked` is the lineage's masked items, which only the frozen
+   *  in; `off`, sessions that ran with protection off (their facts' `off`:
+   *  Mandu masked and blocked nothing in them, §4.25 *A session that ran
+   *  with protection off says so*). `masked` is the lineage's masked items, which only the frozen
    *  levels' verdict sentence reads; it is never drawn as a count.
    *  `sessions`: the live sessions active in the window; `counted`: those
    *  whose facts the counts add up. Fewer when the route's cap left some out
@@ -300,6 +412,7 @@ export interface HomeVM {
     untrusted: number;
     blocked: number;
     sent: number;
+    off: number;
     waiting: number;
     only: HomeCountOwners;
   };
@@ -316,6 +429,17 @@ export interface HomeVM {
   answeredTotal: number;
   agents: HomeAgent[];
   history: { total: number };
+  /** The commands Home's sentences tell you to start your agent with
+   *  (start-commands.ts): `["mandu goose"]`, at most two, the agents you use;
+   *  `["mandu claude", "mandu codex"]` when Mandu knows none. Running now's
+   *  and History's empty rows and Settings › Protection draw from it. */
+  start: string[];
+  /** The newest session before the window where Mandu stepped in, sent only
+   *  while the window counts nothing (§4.25 *An empty window says when Mandu
+   *  last stepped in*): the hero's empty line names it and links its page.
+   *  Absent: the window counted something, none was found within the
+   *  look-through budget, or the look-through failed. */
+  lastSteppedIn?: HomeLastSteppedIn;
   /** The last `mandu scan`'s card (§4.25ai, last-scan.ts): what your agents
    *  already sent to the AI before Mandu, or how to find out. Absent: the
    *  server reads no kept scan (a test seam), and the page draws no card. */
@@ -328,12 +452,32 @@ export interface HomeVM {
    *  stops (arbiter-human-plane.md §10.1.1, dashboard.md §4.25x); null when
    *  not, or not known. */
   exposure: HomeExposure | null;
+  /** An attached OpenClaw Gateway's config no longer routes through Mandu
+   *  (openclaw-plugin.md §3.6, the service's route check; dashboard.md §4.25
+   *  *Home notices*): a loud card naming each session, what changed and the
+   *  fix; null while every attachment routes (or none runs). */
+  routeLost: HomeRouteLost | null;
   /** The newest launch on record left the agent's programs able to read
    *  the credential files (its posture `gated`, dashboard.md §4.23 *Product
    *  page*): an amber card under the headline. The newest launch is a
    *  running agent's, else the newest ended one's in the window; null when
    *  that launch is `confined` or `read-blocked`, or recorded no posture. */
   secretsPosture: HomeSecretsPosture | null;
+  /** policy.yaml as the protection service last read it (homePolicyFile):
+   *  `valid: false` while it refuses your last edit to the file and keeps
+   *  the last version that worked, which Home's card says (dashboard.md
+   *  §4.25 *An edit to policy.yaml Mandu refused*). Absent: not read, or no
+   *  file named. */
+  policyFile?: HomePolicyFile;
+  /** The places in Mandu's folder other people on this computer can open,
+   *  by name and what they hold (never a path, a mode or a value), for
+   *  Home's warning card (dashboard.md §4.25q *Home warns about open
+   *  places*). Absent: none open, or not read. */
+  openPlaces?: OpenPlace[];
+  /** The version of your rules as Rules follows it (rulesVersionOf;
+   *  dashboard.md §4.25 *Rules follows a change made elsewhere*): an opaque
+   *  digest, never a path nor a rule's words. Absent: not read. */
+  rulesVersion?: string;
   /** The Rules page's "Built-in protections" list, for the level running
    *  now (dashboard.md §4.25z): never a claim the mode does not make. */
   builtIn: HomeBuiltIn;
@@ -343,13 +487,19 @@ export interface HomeVM {
 }
 
 /** Settings › About Mandu: the release ("unknown" when the dashboard could
- *  not read it), the three public links, each a full `https://` URL, and
+ *  not read it), the four public links, each a full `https://` URL, and
  *  whether a newer release is out (`update`, *A newer release*). */
 export interface HomeAbout {
   version: string;
   guideUrl: string;
   troubleshootingUrl: string;
   issuesUrl: string;
+  /** GitHub's bug report form with *Mandu version* filled in when the
+   *  version is semver (bugReportUrl): *Report a problem* opens it. */
+  bugReportUrl: string;
+  /** GitHub's private vulnerability report form (`SECURITY_REPORT_URL`):
+   *  a security problem is never a public issue (SECURITY.md). */
+  securityUrl: string;
   /** The last update check's answer for this version (aboutUpdate); null
    *  when there is nothing to compare (the version is not known, or the
    *  server read no cache: a test seam). */
@@ -359,35 +509,89 @@ export interface HomeAbout {
 /** Is a newer Mandu out (dashboard.md §4.25 *A newer release*), from the
  *  launcher's update-check cache (update-notice.ts): `unknown`, no usable
  *  answer (no cache, one the reader refused, or no check ever got the
- *  list); `current`, this is the newest release; `newer`, `newest` is out,
- *  `security` when it or a release before it fixes security problems, and
- *  `install` the command that installs it. `at`: when the list was
- *  fetched, null when that time is in the future (it says nothing then). */
+ *  list), with `check` saying whether the launcher checks (`on`; `off`,
+ *  config.toml's `update-check = false`; `source`, a source checkout with
+ *  the key unset: updateCheckSetting); `current`, this is the newest
+ *  release; `newer`, `newest` is out, `security` when it or a release
+ *  before it fixes security problems, and `install` the command that
+ *  installs it; `notesUrl`, what changed (releaseNotesUrl): the newest's
+ *  release notes when it is the one release newer than this one, else
+ *  (`notesSince`) the release list, since a security fix may be in a
+ *  release before the newest. `at`: when the list was fetched, null when
+ *  that time is in the future (it says nothing then). A cached answer is
+ *  given even when the check is off: its "checked …" age says how old it
+ *  is. */
 export type HomeUpdate =
-  | { state: "unknown" }
+  | { state: "unknown"; check: UpdateCheckSetting }
   | { state: "current"; at: number | null }
-  | { state: "newer"; at: number | null; newest: string; security: boolean; install: string };
+  | { state: "newer"; at: number | null; newest: string; security: boolean; install: string; notesUrl: string; notesSince: boolean };
+
+/** The release list on GitHub, newest first (packaging.md §11.4). */
+export const RELEASES_URL = `https://github.com/${RELEASE_REPO}/releases`;
+
+/** Where to read what changed (dashboard.md §4.25 *A newer release*): with
+ *  `since`, the release list (RELEASES_URL); else the notes of `version`'s
+ *  own release, tagged `v<version>` as the launcher reads tags, built only
+ *  from a version that parses as semver (trimmed, URL-encoded), and null
+ *  for any other text. Pure. */
+export function releaseNotesUrl(version: string, since: boolean): string | null {
+  if (since) return RELEASES_URL;
+  const v = version.trim();
+  if (parseVersion(v) === null) return null;
+  return `${RELEASES_URL}/tag/v${encodeURIComponent(v)}`;
+}
+
+/** How many distinct releases in `releases` are newer than `current`, by
+ *  newerRelease's rule (a prerelease counts only for a prerelease user).
+ *  Pure. */
+function newerReleaseCount(current: SemVer, releases: readonly ReleaseInfo[]): number {
+  const seen: SemVer[] = [];
+  for (const r of releases) {
+    const v = parseVersion(r.version);
+    if (v === null || compareVersions(v, current) <= 0) continue;
+    if (v.pre.length > 0 && current.pre.length === 0) continue;
+    if (!seen.some((s) => compareVersions(s, v) === 0)) seen.push(v);
+  }
+  return seen.length;
+}
 
 /** About Mandu's update answer for the running `version`, from the cache
  *  the launcher wrote (`cache`, null when absent or refused), installed
  *  through `channel`. Null when `version` is not semver (nothing to
  *  compare: the row says how to find the version). The install line is
  *  built only from a version that parses as semver, trimmed, never from
- *  other text in the file. Pure. */
-export function aboutUpdate(version: string, cache: UpdateCache | null, channel: UpdateChannel, now: number): HomeUpdate | null {
-  if (parseVersion(version) === null) return null;
-  if (cache === null || cache.releasesAt === null) return { state: "unknown" };
+ *  other text in the file. With no answer, `check` (absent: `on`) says
+ *  whether the launcher checks. Pure. */
+export function aboutUpdate(version: string, cache: UpdateCache | null, channel: UpdateChannel, now: number, check: UpdateCheckSetting = "on"): HomeUpdate | null {
+  const cur = parseVersion(version);
+  if (cur === null) return null;
+  if (cache === null || cache.releasesAt === null) return { state: "unknown", check };
   const at = cache.releasesAt <= now + CLOCK_SKEW_MS ? cache.releasesAt : null;
   const answer = newerRelease(version, cache.releases);
   if (answer === null) return { state: "current", at };
   const newest = answer.newest.trim();
-  if (parseVersion(newest) === null) return { state: "unknown" };
-  return { state: "newer", at, newest, security: answer.security, install: installLine(newest, channel) };
+  if (parseVersion(newest) === null) return { state: "unknown", check };
+  const notesSince = newerReleaseCount(cur, cache.releases) > 1;
+  const notesUrl = releaseNotesUrl(newest, notesSince);
+  if (notesUrl === null) return { state: "unknown", check };
+  return { state: "newer", at, newest, security: answer.security, install: installLine(newest, channel), notesUrl, notesSince };
+}
+
+/** The bug report form on the issue tracker (`BUG_REPORT_TEMPLATE`), its
+ *  `version` field filled from `version` only when that parses as semver
+ *  (trimmed, URL-encoded); any other text is never put in the address, and
+ *  the form opens with the field empty. Nothing else is sent. Pure. */
+export function bugReportUrl(version: string): string {
+  const url = new URL(ISSUES_URL + "/new");
+  url.searchParams.set("template", BUG_REPORT_TEMPLATE);
+  const v = version.trim();
+  if (parseVersion(v) !== null) url.searchParams.set("version", v);
+  return url.toString();
 }
 
 /** The About Mandu card's facts for `version` (absent or blank: "unknown"):
- *  the user guide, its Troubleshooting section, the issue tracker, and the
- *  update answer (aboutUpdate; absent: null). */
+ *  the user guide, its Troubleshooting section, the issue tracker, its bug
+ *  report form (bugReportUrl), the private vulnerability report form, and the update answer (aboutUpdate; absent: null). */
 export function homeAbout(version: string | undefined, update: HomeUpdate | null = null): HomeAbout {
   const v = typeof version === "string" && version.trim() !== "" ? version.trim() : "unknown";
   return {
@@ -395,6 +599,8 @@ export function homeAbout(version: string | undefined, update: HomeUpdate | null
     guideUrl: docsUrl("docs/usage.md"),
     troubleshootingUrl: docsUrl("docs/usage.md#troubleshooting"),
     issuesUrl: ISSUES_URL,
+    bugReportUrl: bugReportUrl(v),
+    securityUrl: SECURITY_REPORT_URL,
     update,
   };
 }
@@ -402,6 +608,7 @@ export function homeAbout(version: string | undefined, update: HomeUpdate | null
 /** A part of a built-in protection: words, or a link to Settings ›
  *  Protection. It names the place, never an address. */
 export type HomeBuiltInPart = HomeTextPart | { kind: "link"; text: string; to: "protection" };
+export type { HomeBuiltInFiles } from "./builtin-files.js";
 
 /** The Rules page's built-in protections: what the running mode does without
  *  a rule of the person's. */
@@ -417,6 +624,15 @@ export interface HomeBuiltIn {
    *  issuer bindings, confidentiality.md §2.3; dashboard.md §4.25z), in the
    *  Secrets and Full modes; null in the others. */
   issuers: HomeIssuerItem | null;
+  /** The index in `items` of "Keys and secret files reach the AI masked …",
+   *  which opens the Which files fold (the files Mandu keeps secret with no
+   *  rule of the person's, dashboard.md §4.25z), in the Secrets and Full
+   *  modes; null in the others. */
+  filesAt: number | null;
+  /** That fold's lists (builtin-files.ts): fixed copy, so only
+   *  `/api/home?files=1` carries them, and only with `filesAt`; the polled
+   *  home leaves them out (§4.30 *Payload budgets*). */
+  files?: HomeBuiltInFiles;
 }
 
 /** One step of the first-run card. */
@@ -479,14 +695,16 @@ const MODE_WORD: Record<Mode, string> = { secrets: "Secrets", off: "Off", inject
  *  `secrets` sentence must say that untrusted content is NOT masked
  *  (CONTRIBUTING.md, protection modes): it is the default, and the one people get.
  *  A secret leaves "only where a rule or your OK allows", never "unless you
- *  allow it": a rule (an administrator's too) sends with no question. */
+ *  allow it": a rule (an administrator's too) sends with no question.
+ *  `off` names what off costs, not "untrusted content is not masked": that is
+ *  as true of the Secrets mode that turning it on brings back. */
 const MODE_PROTECTS: Record<Mode, string> = {
   secrets:
     "Mandu keeps your secrets away from the AI: keys, credential files and the files you mark as secret reach it only masked, " +
     "and they leave this computer only where a rule or your OK allows. Untrusted content, such as a web page or a file from outside, " +
     "is not masked in this mode: the AI reads it as-is.",
   off:
-    "Protection is off, so Mandu only watches: your secrets are not guarded and untrusted content is not masked. " +
+    "Protection is off, so Mandu only watches: keys and secret files reach the AI as they are, and nothing stops them leaving this computer. " +
     "Turn it on in Settings › Protection.",
   injection:
     "Mandu masks untrusted content, such as a web page or a file from outside, before the AI reads it. " +
@@ -496,14 +714,30 @@ const MODE_PROTECTS: Record<Mode, string> = {
     "and it masks untrusted content, such as a web page or a file from outside, before the AI reads it.",
 };
 
+/** On is saved for the next start: the saved mode turns the secrets axis
+ *  on (`secrets`, `full`), the reduction Rules' banner reads. A saved frozen
+ *  `injection` guards no secret, so it is never called on. */
+function savedOn(configured: Mode | undefined): boolean {
+  return configured !== undefined && MODE_AXES[configured].confidentiality;
+}
+
+/** What is left to do while protection runs off and On is saved: the
+ *  service's restart (§4.25, *The hero links where it points*). Never a
+ *  Restart button: Settings shows one only with its service controls. */
+const SAVED_ON_WORDS = "On is saved and starts when the protection service restarts. ";
+const SAVED_ON_LINK = "Open Settings › Protection";
+
 /**
  * The Rules page's built-in protections for a level. The masking sentence
  * appears only where the integrity axis is on (`injection`, `full`): in the
  * default `secrets` mode untrusted text is NOT masked, and the list says so
  * (CONTRIBUTING.md, protection modes; 2026-10-03 the static list claimed it in
- * every mode). Pure.
+ * every mode). Off with On saved for the next start (`configured`) says
+ * what is left to do instead of "Turn it on". With no level known and
+ * Mandu not running at all (`notRunning`, §4.25 *Protection is off when
+ * nothing runs*), that none of them is on yet, never "not connected". Pure.
  */
-export function builtInProtections(level: Mode | "unknown", issuerBindings?: IssuerReading): HomeBuiltIn {
+export function builtInProtections(level: Mode | "unknown", issuerBindings?: IssuerReading, configured?: Mode, notRunning = false): HomeBuiltIn {
   const masked = [
     "Untrusted content is masked before the AI reads it.",
     "Masked text used as a command needs your OK.",
@@ -515,29 +749,40 @@ export function builtInProtections(level: Mode | "unknown", issuerBindings?: Iss
   const secretsKept = "Keys and secret files leave this computer only where a rule or your OK allows.";
   switch (level) {
     case "full":
-      return { note: "always on in the Full mode", items: [...masked, secretsMasked, secretsKept], issuers: issuerItem(issuerBindings) };
+      return {
+        note: "always on in the Full mode", items: [...masked, secretsMasked, secretsKept],
+        issuers: issuerItem(issuerBindings), filesAt: masked.length,
+      };
     case "injection":
-      return { note: "always on in the Injection mode", items: [...masked, "Your secrets are not guarded in this mode."], issuers: null };
+      return { note: "always on in the Injection mode", items: [...masked, "Your secrets are not guarded in this mode."], issuers: null, filesAt: null };
     case "secrets":
       return {
         note: "always on in the Secrets mode",
         items: [secretsMasked, secretsKept, "Untrusted content is not masked in this mode: the AI reads it as-is."],
         // Beside "only where a rule … allows": the built-in rule, named.
         issuers: issuerItem(issuerBindings),
+        // Under "Keys and secret files reach the AI masked": which files.
+        filesAt: 0,
       };
-    case "off":
+    case "off": {
+      const parts: HomeBuiltInPart[] = [
+        { kind: "text", text: "Mandu only watches: nothing is masked, and your secrets are not guarded. " },
+        ...(savedOn(configured)
+          ? [{ kind: "text", text: SAVED_ON_WORDS } as const, { kind: "link", text: SAVED_ON_LINK, to: "protection" } as const]
+          : [{ kind: "link", text: "Turn it on in Settings", to: "protection" } as const]),
+        { kind: "text", text: "." },
+      ];
       return {
         note: "protection is off",
-        items: ["Mandu only watches: nothing is masked, and your secrets are not guarded. Turn it on in Settings."],
-        itemsParts: [[
-          { kind: "text", text: "Mandu only watches: nothing is masked, and your secrets are not guarded. " },
-          { kind: "link", text: "Turn it on in Settings", to: "protection" },
-          { kind: "text", text: "." },
-        ]],
+        items: [parts.map((p) => p.text).join("")],
+        itemsParts: [parts],
         issuers: null,
+        filesAt: null,
       };
+    }
     default:
-      return { note: "not connected", items: ["The protection service is not reachable, so Mandu cannot say what is on."], issuers: null };
+      if (notRunning) return { note: "not running", items: ["Mandu is not running now, so none of these is on. They turn on with your first agent."], issuers: null, filesAt: null };
+      return { note: "not connected", items: ["The protection service is not reachable, so Mandu cannot say what is on."], issuers: null, filesAt: null };
   }
 }
 
@@ -609,7 +854,8 @@ const EMPTY_STATS: SessionFlowStats = { flows: 0, secret: 0, complete: 0, egress
  * product's words, the most serious first (dashboard.md §4.21 *On the
  * product page*): what kept the session from doing its job (session-health.ts
  * `broken`: the reply filter not working, every command failing, the agent
- * stopping before its first turn), then commands that could not run, then
+ * stopping before its first turn), then the protections that did not start,
+ * then commands that could not run, then
  * its version against the tested range or the tools Mandu does not know
  * (supported-agents.md §3). Each sentence is written with its command
  * between backticks (`agentNoticeParts` draws it as code). `masking` =
@@ -627,7 +873,7 @@ function noticeSentences(health: SessionHealth | undefined, masking: boolean, se
     out.push("Your terminal showed masked values instead of your real ones: Mandu's reply filter was not working in this session. The AI's side was not affected. Start the agent again; if it happens again, run `mandu doctor`.");
   }
   const failed = health.toolFailures;
-  const log = session ? `mandu log ${session}` : "mandu log";
+  const log = logCommand(session);
   if (broken.has("commands")) {
     out.push(failed === 1
       ? `The one command the agent ran could not start: a sandbox or a missing program stopped it. Run \`${log}\` for this launch's notices.`
@@ -637,6 +883,20 @@ function noticeSentences(health: SessionHealth | undefined, masking: boolean, se
     out.push(`The agent stopped before it finished a single turn: it exited with code ${health.exitCode} before its first request to the AI model.`);
   } else if (broken.has("no-turn")) {
     out.push("The agent stopped before it finished a single turn.");
+  }
+  // The AI plan's usage limit (session-health.ts `providerLimit`): the
+  // provider's, not Mandu's, and plain about when it lifts.
+  if (health.providerLimit) {
+    const at = limitResetsAt(health);
+    const when = at ? ` It resets ${resetWords(at)}.` : "";
+    out.push(`Your AI plan's usage limit was reached, so the AI model did not answer${broken.has("limit") ? " and the agent stopped" : " some of the agent's requests"}. This limit is your AI provider's, not Mandu's.${when}`);
+  }
+  // A protection that did not start (session-health.ts
+  // `droppedProtections`): the count and fixed words only, never the launch
+  // line, which may name paths, ports or developer terms.
+  const dropped = health.droppedProtections ?? 0;
+  if (dropped > 0) {
+    out.push(`${dropped} of Mandu's protections did not start in this session, so it ran with less protection than usual. Run \`${log}\` to see which, and \`mandu doctor\` to check this computer.`);
   }
   if (failed > 0 && !broken.has("commands")) out.push(`${failed} of the commands the agent ran could not start.`);
   const v = health.agentVersion;
@@ -655,18 +915,55 @@ function noticeSentences(health: SessionHealth | undefined, masking: boolean, se
   return out;
 }
 
-/** The notice as parts, each command as code (home.js draws them); null
- *  when there is none. Its text is `agentNotice`'s. */
-export function agentNoticeParts(health: SessionHealth | undefined, masking: boolean, session?: string): HomeTextPart[] | null {
-  const sentences = noticeSentences(health, masking, session);
-  if (!sentences.length) return null;
-  return ownSentence(sentences.join(" ")).parts;
+/** When the AI plan's usage limit lifts, as the provider said (an ISO
+ *  time); null when it said nothing or nothing that reads as a date. */
+function limitResetsAt(health: SessionHealth | undefined): string | null {
+  const at = health?.providerLimit?.resetsAt;
+  return at !== undefined && !Number.isNaN(Date.parse(at)) ? at : null;
 }
 
-/** The notice as one plain line (no backticks); null when there is none. */
+/** The reset moment in the plain notice: "2026-10-28 at 21:00 UTC". The
+ *  page's parts carry the moment itself and draw it in the reader's clock. */
+function resetWords(at: string): string {
+  return `${at.slice(0, 10)} at ${at.slice(11, 16)} UTC`;
+}
+
+/** The command a notice gives for a session's own launch log. */
+function logCommand(session?: string): string {
+  return session ? `mandu log ${session}` : "mandu log";
+}
+
+/** The notice as parts, each command as code (home.js draws them); null
+ *  when there is none. Its text is `agentNotice`'s, but for the moment the
+ *  AI plan's limit resets: a `time` part with the provider's ISO time,
+ *  which the page draws in the reader's own clock ("It resets Oct 29,
+ *  06:00.", dashboard.md §4.25u) where the plain line says it in UTC. The
+ *  launch log's command is marked `run`, so the page draws it with a Copy
+ *  (dashboard.md §4.25b, *A command Mandu asks you to run has one too*); no
+ *  other part is. */
+export function agentNoticeParts(health: SessionHealth | undefined, masking: boolean, session?: string): HomeNoticePart[] | null {
+  const sentences = noticeSentences(health, masking, session);
+  if (!sentences.length) return null;
+  const log = logCommand(session);
+  const parts: HomeNoticePart[] = ownSentence(sentences.join(" ")).parts.map((p) => (p.kind === "code" && p.text === log ? { ...p, run: true as const } : p));
+  const at = limitResetsAt(health);
+  if (!at) return parts;
+  const lead = "It resets ";
+  const words = `${lead}${resetWords(at)}.`;
+  return parts.flatMap((p): HomeNoticePart[] => {
+    const i = p.kind === "text" ? p.text.indexOf(words) : -1;
+    if (i < 0) return [p];
+    const before: HomeNoticePart = { kind: "text", text: p.text.slice(0, i) + lead };
+    const after: HomeNoticePart = { kind: "text", text: "." + p.text.slice(i + words.length) };
+    return [before, { kind: "time", text: at }, after];
+  });
+}
+
+/** The notice as one plain line (no backticks, the reset moment in UTC);
+ *  null when there is none. */
 export function agentNotice(health: SessionHealth | undefined, masking: boolean, session?: string): string | null {
   const parts = agentNoticeParts(health, masking, session);
-  return parts ? parts.map((p) => p.text).join("") : null;
+  return parts ? parts.map((p) => (p.kind === "time" ? resetWords(p.text) : p.text)).join("") : null;
 }
 
 /**
@@ -835,7 +1132,9 @@ export function answeredOutcome(v: Pick<QueueRowVM, "status" | "scope" | "consum
   }
   if (v.status === "denied") return "blocked";
   if (v.scope === "once") return v.consumedAt ? "allowed-once-used" : "allowed-once";
-  return "allowed";
+  // A holder's send allowed for its session is kept on that session's row
+  // (allowKeptAs), not for every session.
+  return allowKeptAs(String(v.subject ?? "")) === "session" ? "allowed-session" : "allowed";
 }
 
 /**
@@ -884,17 +1183,30 @@ export interface HomeInput {
   version?: string;
   /** The launcher's update-check cache as the route read it (null: absent
    *  or refused) and the channel this package updates through, for About
-   *  Mandu's *A newer release*; absent: not read, so `about.update` is null. */
-  update?: { cache: UpdateCache | null; channel: UpdateChannel };
+   *  Mandu's *A newer release*; absent: not read, so `about.update` is null.
+   *  `check`: whether the launcher checks (updateCheckSetting; absent: on). */
+  update?: { cache: UpdateCache | null; channel: UpdateChannel; check?: UpdateCheckSetting };
   /** policy.yaml's `issuer_bindings` as the route read it (Rules › Built-in
    *  protections); absent: not read, so the item says it does not know. */
   issuerBindings?: IssuerReading;
+  /** policy.yaml's status as the route read it, in the same read
+   *  (`PolicyFileStatusRow` of the arbiter's `policyDocument`), for the card
+   *  on an edit Mandu refused (homePolicyFile); absent: not read, no card. */
+  policyFileStatus?: unknown;
+  /** The in-force document's version (`lawHash` of the arbiter's
+   *  `policyDocument`), in the same read, for `rulesVersion`; absent: not
+   *  read, so the page does not follow your rules. */
+  lawHash?: unknown;
   /** Mandu is not running at all (mandu-running.ts: no arbiter at the
    *  rendezvous, none starting, no launch alive), as the route found when
    *  the arbiter did not answer; `everRan`: an agent session is on record.
    *  Absent or null: the arbiter answered, or something of Mandu's is there
    *  (an unanswered arbiter is "Not connected."). */
   notRunning?: { everRan: boolean } | null;
+  /** The last `mandu scan`'s sessions per agent (last-scan.ts
+   *  `LastScanWire.sessions`), for the agents `start` names; absent: no scan
+   *  kept, or not read. */
+  scanSessions?: Readonly<Record<string, number>> | null;
 }
 
 /** The answers one read of Answered earlier brings (Home's first page and
@@ -912,21 +1224,28 @@ export const ANSWERED_PAGE_MAX = 500;
  * `next`: the last row's id while more follow. `/api/home` draws the first
  * page and `/api/home/answered` each next one, both through this, so the
  * two never differ. `q`: a search (*Finding an answer*, answeredMatches),
- * matched before the page is cut. Pure.
+ * matched before the page is cut. `before`: a day (*Go to a day*,
+ * answeredBefore), cut before the search. Pure.
  */
-export function answeredPage(queue: readonly QueueRowVM[], byId: Map<string, AgentOf>, home: string | undefined, after: string | null, limit: number, q?: string | null): AnsweredPage {
-  const answered = queue
+export function answeredPage(queue: readonly QueueRowVM[], byId: Map<string, AgentOf>, home: string | undefined, after: string | null, limit: number, q?: string | null, before?: number | null): AnsweredPage {
+  const every = queue
     .filter((r) => r.status !== "pending")
-    .sort((a, b) => (b.resolvedAt ?? b.lastSeen) - (a.resolvedAt ?? a.lastSeen));
-  const row = (v: QueueRowVM): HomeAnswered => ({
-    id: v.id,
-    sentence: describeAsk(v, askedBy(v, byId), home).sentence,
-    outcome: answeredOutcome(v),
-    decidedAt: v.resolvedAt,
-    sessions: v.sessions ?? [],
-    actions: v.actions,
-    ...(v.staleNote ? { staleNote: v.staleNote } : {}),
-  });
+    .sort((a, b) => answeredMoment(b) - answeredMoment(a));
+  const bounded = typeof before === "number" && Number.isFinite(before);
+  const answered = bounded ? answeredBefore(every, before) : every;
+  const row = (v: QueueRowVM): HomeAnswered => {
+    const kept = v.actions[0]?.approve === true ? allowKeptAs(v.subject) : "always";
+    return {
+      id: v.id,
+      sentence: describeAsk(v, askedBy(v, byId), home).sentence,
+      outcome: answeredOutcome(v),
+      decidedAt: v.resolvedAt,
+      sessions: v.sessions ?? [],
+      actions: v.actions,
+      ...(kept !== "always" ? { allowKeptAs: kept } : {}),
+      ...(v.staleNote ? { staleNote: v.staleNote } : {}),
+    };
+  };
   // A search (*Finding an answer*) keeps the matches before the page is
   // cut, so `total`, `next` and `after` count and page through them.
   const words = historyWords(q);
@@ -936,16 +1255,41 @@ export function answeredPage(queue: readonly QueueRowVM[], byId: Map<string, Age
   const page = all.slice(at + 1, at + 1 + n);
   const next = at + 1 + n < all.length && page.length ? page[page.length - 1]!.v.id : null;
   const rows = page.map((x) => x.r ?? row(x.v));
-  return { rows, total: all.length, next, ...(words.length ? { query: { text: words.join(" "), all: answered.length } } : {}) };
+  return { rows, total: all.length, next, ...(words.length ? { query: { text: words.join(" "), all: every.length } } : {}), ...(bounded ? { before: { at: before, all: every.length } } : {}) };
+}
+
+/** The moment Answered earlier orders an answer by: when it was decided,
+ *  else (an answer not stamped) when it was last asked. */
+function answeredMoment(r: Pick<QueueRowVM, "resolvedAt" | "lastSeen">): number {
+  return r.resolvedAt ?? r.lastSeen;
+}
+
+/**
+ * The answers Answered earlier lists from a day back (dashboard.md §4.25
+ * *Go to a day on Answered earlier*): those whose moment, the one the list
+ * is ordered by (`resolvedAt`, else `lastSeen` for an answer not stamped),
+ * is before `ms` (the start of the day after the one chosen, as the
+ * browser reckons it, as History's `historyBefore`). Every answer has a
+ * `lastSeen`, so none is undated. A non-finite `ms` is no bound. Order
+ * kept. Pure.
+ */
+export function answeredBefore<T extends Pick<QueueRowVM, "resolvedAt" | "lastSeen">>(rows: readonly T[], ms: number): T[] {
+  if (!Number.isFinite(ms)) return [...rows];
+  return rows.filter((r) => !(answeredMoment(r) >= ms));
 }
 
 /** One read of Answered earlier (answeredPage). `query`: the search it was
- *  found by (*Finding an answer*), its words and every answer (`all`). */
+ *  found by (*Finding an answer*), its words and every answer (`all`);
+ *  `before`: the day it was cut at (*Go to a day*). */
 export interface AnsweredPage {
   rows: HomeAnswered[];
   total: number;
   next: string | null;
   query?: { text: string; all: number };
+  /** Set when the read named a day (`?before=<ms>`, *Go to a day*): `at`,
+   *  the bound as read, and `all`, every answer; `total` then counts the
+   *  answers before it. */
+  before?: { at: number; all: number };
 }
 
 /** An answer's outcome in the words Answered earlier draws it with (home.js
@@ -954,6 +1298,7 @@ export interface AnsweredPage {
 export const ANSWERED_OUTCOME_WORDS: Readonly<Record<HomeAnswered["outcome"], string>> = {
   "blocked": "Blocked",
   "allowed": "Always allowed",
+  "allowed-session": "Allowed for this session",
   "allowed-once": "Allowed once, unused",
   "allowed-once-used": "Allowed once",
   "without": "Send without it, unused",
@@ -1017,6 +1362,15 @@ export function heldNow(v: Pick<QueueRowVM, "subject" | "lastSeen">, nowMs: numb
  * running now masks untrusted content (the agent notice's wording).
  */
 export function homeAgentRow(s: SessionRef, f: HomeSessionFacts | undefined, waiting: number, masking: boolean): HomeAgent {
+  // A recorded exit outranks the listing's recency rule (2026-10-05: a
+  // `/exit`ed agent stayed under Running now beside the next one), and
+  // an ended agent's question does not bring it back (2026-10-11: one
+  // that ended hours ago stayed under Running now, "Waiting for your
+  // OK", until the question was answered); its row still counts it.
+  const state: HomeAgentState = !(s.status === "running" && !f?.exited) ? "idle" : waiting > 0 ? "waiting" : "running";
+  // The page lists the changes it did not apply only once the session
+  // ended (a resumed one runs again), so its row says so only then.
+  const notApplied = state === "idle" ? f?.notApplied ?? 0 : 0;
   return {
     id: s.id,
     agent: agentName(s.agent, s.health),
@@ -1024,19 +1378,17 @@ export function homeAgentRow(s: SessionRef, f: HomeSessionFacts | undefined, wai
     cwd: f?.cwd ?? null,
     startedAt: s.firstTs,
     lastAt: s.lastTs,
-    // A recorded exit outranks the listing's recency rule (2026-10-05: a
-    // `/exit`ed agent stayed under Running now beside the next one), and
-    // an ended agent's question does not bring it back (2026-10-11: one
-    // that ended hours ago stayed under Running now, "Waiting for your
-    // OK", until the question was answered); its row still counts it.
-    state: !(s.status === "running" && !f?.exited) ? "idle" : waiting > 0 ? "waiting" : "running",
+    state,
     stats: f?.stats ?? EMPTY_STATS,
     secrets: f?.secrets ?? { masked: 0, early: 0 },
     untrusted: f?.untrusted ?? 0,
     blocked: f?.blocked ?? 0,
     sent: f?.sent ?? 0,
     holds: f ? f.holds : !s.violated,
+    protectionOff: f?.off === true,
+    ...((s.health?.droppedProtections ?? 0) > 0 ? { lessProtection: true as const } : {}),
     waiting,
+    ...(notApplied > 0 ? { notApplied } : {}),
     notice: agentNotice(s.health, masking, s.id),
     noticeParts: agentNoticeParts(s.health, masking, s.id),
     preview: agentPreview(s.health),
@@ -1070,21 +1422,39 @@ export function rowContext(panel: PolicyPanelVM): { waiting: Map<string, number>
 export interface HistoryVM {
   /** Every agent session on record (the Home link's number). */
   total: number;
-  /** This page of them, newest first, each as Home draws a row. */
-  rows: HomeAgent[];
+  /** This page of them, newest first, each as Home draws a row; with a
+   *  search, a row found by its secrets or hosts and not by its own words
+   *  carries `found`, the names it was found by and where each came up
+   *  (`historyFactsMatch`). */
+  rows: HistoryRow[];
   /** The id the next page starts after (`?after=`); null: no more. */
   next: string | null;
   /** Set when the read named a search (`?q=`, §4.25ae *Finding a session*):
    *  its words as matched, and `all`, every agent session on record; `total`
-   *  then counts the matches. */
-  query?: { text: string; all: number };
+   *  then counts the matches. `through` (the switch off): the read looked
+   *  through only the newest `through` sessions (HISTORY_SCAN_BUDGET past
+   *  where it started, §4.25ae *By a secret or a host*), so `total` counts
+   *  the matches among those and `next` goes on; absent, it looked through
+   *  every session and `total` is every match. `of`, with `through`: the
+   *  sessions it could look through (every one on record, or before the
+   *  day when one is set). */
+  query?: { text: string; all: number; through?: number; of?: number };
   /** Set when the read named the switch (`?only=stepped-in`, §4.25ae *Only
    *  the sessions where Mandu stepped in*): `rows` are only those
    *  (`steppedIn`), and `through` counts the sessions looked through from
    *  the newest to `next` (all of them when `next` is null). `total` still
    *  counts every session (the search's matches, with `q`). */
   only?: { through: number };
+  /** Set when the read named a day (`?before=<ms>`, §4.25ae *Go to a
+   *  day*): `at`, the bound as read, and `all`, every agent session on
+   *  record; `total` then counts the sessions before it. */
+  before?: { at: number; all: number };
 }
+
+/** A History row: Home's row, and with a search the names a row found by
+ *  its facts was found by (§4.25ae *By a secret or a host*), each with the
+ *  place on the session's page it came up (`go`, the page's `?go=`). */
+export type HistoryRow = HomeAgent & { found?: FoundName[] };
 
 /** The most rows one History read returns, and its default. */
 export const HISTORY_PAGE_MAX = 100;
@@ -1106,6 +1476,39 @@ export function historyPage(sessions: readonly SessionRef[], after: string | nul
   return { page, next };
 }
 
+/**
+ * The sessions just above and just below `id` in History's list `list`
+ * (dashboard.md §4.25b *Newer and older sessions*): `list` is History's full
+ * list, newest first, none of its filters applied. Each is named as its
+ * History row: the agent, what you asked (null for a fallback label) and its
+ * last moment. null when `id` is not in the list (a drill or test run).
+ * Pure.
+ */
+export function sessionNeighbours(list: readonly SessionRef[], id: string): { newer: SessionNeighbour | null; older: SessionNeighbour | null } | null {
+  const at = list.findIndex((s) => s.id === id);
+  if (at < 0) return null;
+  const of = (s: SessionRef | undefined): SessionNeighbour | null => s
+    ? { id: s.id, agent: agentName(s.agent, s.health), title: oneLine(promptLabel(s)), at: s.lastTs ?? s.firstTs ?? null }
+    : null;
+  return { newer: of(list[at - 1]), older: of(list[at + 1]) };
+}
+
+/**
+ * The sessions History lists from a day back (dashboard.md §4.25ae *Go to a
+ * day*): those whose last moment, the one the list is ordered by and an
+ * ended row's day heading names (`lastTs`, else `firstTs`), is before `ms`
+ * (the start of the day after the one chosen, as the browser reckons it).
+ * A session with no time is kept: it sits at the list's end, undated, and
+ * the cut never hides it. A non-finite `ms` is no bound. Order kept. Pure.
+ */
+export function historyBefore<T extends Pick<SessionRef, "firstTs" | "lastTs">>(sessions: readonly T[], ms: number): T[] {
+  if (!Number.isFinite(ms)) return [...sessions];
+  return sessions.filter((s) => {
+    const t = Date.parse(s.lastTs ?? s.firstTs ?? "");
+    return !Number.isFinite(t) || t < ms;
+  });
+}
+
 /** The `?only=` that keeps the sessions where Mandu stepped in; any other
  *  value reads as off. */
 export const HISTORY_ONLY_STEPPED_IN = "stepped-in";
@@ -1119,11 +1522,28 @@ export const HISTORY_SCAN_BUDGET = 200;
  * secret masked before the AI saw it or read before it was marked, an
  * untrusted item masked (counted only where the level masks them), a step
  * blocked, a send with a real value filled in, a question still waiting, or
- * protection failed (the leak check's finding). Read off the row, so the
- * switch keeps exactly the rows whose counts line says something. Pure.
+ * protection failed (the leak check's finding). Read off the row; the
+ * switch keeps these and the rows marked amber for how the session ran
+ * (`historyFlagged`), and Home's last-stepped-in line only these. Pure.
  */
 export function steppedIn(row: Pick<HomeAgent, "secrets" | "untrusted" | "blocked" | "sent" | "waiting" | "holds">): boolean {
   return row.secrets.masked > 0 || row.secrets.early > 0 || row.untrusted > 0 || row.blocked > 0 || row.sent > 0 || row.waiting > 0 || !row.holds;
+}
+
+/**
+ * Whether History's switch keeps a row (dashboard.md §4.25ae *Only the
+ * sessions where Mandu stepped in*): the rows whose counts line says
+ * something, marks included, so `steppedIn`'s rows, a session that ran
+ * with protection off (§4.25 *A session that ran with protection off says
+ * so*: its amber dot, "protection was off" first), one where a protection
+ * did not start (`lessProtection`, §4.21 *The rows say it too*: its amber
+ * dot, "less protection than usual"; since 2026-11-04, Shoemaker #267) and
+ * an ended one whose changes to a secret file Mandu did not apply (§4.25b
+ * *Home and History say so*). `steppedIn` stays the narrower question
+ * Home's last-stepped-in line asks: none of these is ever named there. Pure.
+ */
+export function historyFlagged(row: Pick<HomeAgent, "secrets" | "untrusted" | "blocked" | "sent" | "waiting" | "holds" | "protectionOff" | "lessProtection" | "notApplied">): boolean {
+  return steppedIn(row) || row.protectionOff || row.lessProtection === true || (row.notApplied ?? 0) > 0;
 }
 
 /**
@@ -1175,23 +1595,124 @@ export function historyMatches<T extends Pick<SessionRef, "agent" | "health" | "
   const words = historyWords(q);
   if (!words.length) return [...sessions];
   return sessions.filter((s) => {
-    const label = (promptLabel(s) ?? "").replace(SYM_RE, "[masked]").replace(/\s+/g, " ");
-    const folder = s.cwd ? `${tildePath(s.cwd, home)} ${s.cwd}` : "";
-    const text = `${agentName(s.agent, s.health)} ${label} ${folder}`.toLowerCase();
+    const text = historyListing(s, home);
     return words.every((w) => text.includes(w));
   });
 }
 
+/** What `historyMatches` reads of a session, lower-cased: its agent's
+ *  name, its label as the row shows it (each masked item "[masked]") and
+ *  its folder, `~/…` under `home` and in full. Pure. */
+export function historyListing(s: Pick<SessionRef, "agent" | "health" | "label" | "labelFrom" | "cwd">, home = ""): string {
+  const label = (promptLabel(s) ?? "").replace(SYM_RE, "[masked]").replace(/\s+/g, " ");
+  const folder = s.cwd ? `${tildePath(s.cwd, home)} ${s.cwd}` : "";
+  return `${agentName(s.agent, s.health)} ${label} ${folder}`.toLowerCase();
+}
+
+/** Where a Found line's name opens its session (dashboard.md §4.25ae *By
+ *  a secret or a host*, the session page's `?go=`): a secret at Your
+ *  secrets, a send at its sent steps, a blocked send at its blocked steps. */
+export type FoundGo = "secrets" | "sent" | "blocked";
+
+/** A name a History row was found by, and where it came up. */
+export interface FoundName {
+  name: string;
+  go: FoundGo;
+}
+
+/** A host a send went to, as a row's Found line names it. */
+export function foundSend(host: string): string {
+  return `a send to ${host}`;
+}
+
+/** A host Mandu stopped every send to, as a row's Found line names it: the
+ *  session page says "Mandu blocked a request to …", so the line never
+ *  reads as if it went (dashboard.md §4.25ae, #301). */
+export function foundBlocked(host: string): string {
+  return `a blocked send to ${host}`;
+}
+
+/**
+ * The names a session can be found by beyond its listing (dashboard.md
+ * §4.25ae *By a secret or a host*), as `historyFactsMatch` reads them:
+ * each secret as its Your secrets card's first line names it (`kept`:
+ * masked before the AI saw it, read before it was marked, or not masked in
+ * an Off session; "STRIPE_KEY in ~/proj/.env", "the file ~/…/staging.conf")
+ * and each host a send went to or was stopped on its way to (`hosts`);
+ * `sent`, those of them a send went to (`kept.sent.names`, the sent steps
+ * alone), the others only blocked. Names, paths and hosts only, never a
+ * value; a `$MDU:` token, which no card name should hold, is spelled
+ * "[masked]" all the same. None when the facts were not counted, and none
+ * for a session whose leak check fired: its card claims nothing, so its
+ * listing alone finds it. Pure.
+ */
+export function historyFactNames(f: Pick<HomeSessionFacts, "kept" | "hosts"> | undefined): { secrets: string[]; hosts: string[]; sent: string[] } {
+  const k = f?.kept;
+  if (!k || k.flagged) return { secrets: [], hosts: [], sent: [] };
+  const clean = (n: string): string => n.replace(SYM_RE, "[masked]");
+  const secrets: string[] = [];
+  for (const n of [...k.masked.names, ...k.early.names, ...k.unmasked.names]) {
+    const c = clean(n);
+    if (c && !secrets.includes(c)) secrets.push(c);
+  }
+  const hosts: string[] = [];
+  for (const h of f?.hosts ?? []) {
+    const c = clean(h);
+    if (c && !hosts.includes(c)) hosts.push(c);
+  }
+  const went = new Set(k.sent.names.map(clean));
+  return { secrets, hosts, sent: hosts.filter((h) => went.has(h)) };
+}
+
+/**
+ * Whether a History search finds a session by its facts too (dashboard.md
+ * §4.25ae *By a secret or a host*): every word of `words` (historyWords)
+ * in its listing (`listing`, historyListing) or its secrets' and hosts'
+ * names (historyFactNames) between them, case aside. A name under the home
+ * folder is read as drawn (`~/…`) and in full, under `home`; a host is
+ * read alone. null: not found; else the names a word was found in, in
+ * order, each with where it came up (`go`): a secret at Your secrets, a
+ * host a send went to as "a send to <host>" (foundSend) at the sent steps,
+ * a host every send to was blocked as "a blocked send to <host>"
+ * (foundBlocked, #301) at the blocked steps: the row's Found line, each
+ * name a link there. A host both sent to and blocked is named once, as a
+ * send: what reached it matters most. A session its listing finds alone
+ * needs none of this (historyMatches). Names only, never a value: a search
+ * for a value finds nothing. Pure.
+ */
+export function historyFactsMatch(words: readonly string[], listing: string, f: Pick<HomeSessionFacts, "kept" | "hosts"> | undefined, home = ""): FoundName[] | null {
+  if (!words.length) return null;
+  const { secrets, hosts, sent } = historyFactNames(f);
+  if (!secrets.length && !hosts.length) return null;
+  const full = (n: string): string => (home && n.includes("~/") ? `${n} ${n.split("~/").join(`${home.replace(/\/+$/, "")}/`)}` : n);
+  const named: Array<FoundName & { text: string }> = [
+    ...secrets.map((n) => ({ name: n, go: "secrets" as const, text: full(n).toLowerCase() })),
+    ...hosts.map((h) => (sent.includes(h)
+      ? { name: foundSend(h), go: "sent" as const, text: h.toLowerCase() }
+      : { name: foundBlocked(h), go: "blocked" as const, text: h.toLowerCase() })),
+  ];
+  const all = `${listing} ${named.map((n) => n.text).join(" ")}`;
+  if (!words.every((w) => all.includes(w))) return null;
+  const found = named.filter((n) => words.some((w) => n.text.includes(w))).map(({ name, go }) => ({ name, go }));
+  return found.length ? found : null;
+}
+
 /** The History page's rows (`facts` by id; a session not counted keeps its
  *  listing's verdict; `waiting` and `masking` as Home's rows read them,
- *  `rowContext`). Pure. */
-export function buildHistoryViewModel(input: { total: number; page: readonly SessionRef[]; next: string | null; facts: Map<string, HomeSessionFacts>; waiting?: Map<string, number>; masking?: boolean; query?: { text: string; all: number }; only?: { through: number } }): HistoryVM {
+ *  `rowContext`; `found` by id, the names a row found by its facts was
+ *  found by, §4.25ae *By a secret or a host*). Pure. */
+export function buildHistoryViewModel(input: { total: number; page: readonly SessionRef[]; next: string | null; facts: Map<string, HomeSessionFacts>; waiting?: Map<string, number>; masking?: boolean; query?: { text: string; all: number; through?: number; of?: number }; only?: { through: number }; before?: { at: number; all: number }; found?: ReadonlyMap<string, readonly FoundName[]> }): HistoryVM {
   return {
     total: input.total,
-    rows: input.page.map((s) => homeAgentRow(s, input.facts.get(s.id), input.waiting?.get(s.id) ?? 0, input.masking === true)),
+    rows: input.page.map((s): HistoryRow => {
+      const row = homeAgentRow(s, input.facts.get(s.id), input.waiting?.get(s.id) ?? 0, input.masking === true);
+      const found = input.found?.get(s.id);
+      return found?.length ? { ...row, found: found.map((n) => ({ ...n })) } : row;
+    }),
     next: input.next,
     ...(input.query ? { query: input.query } : {}),
     ...(input.only ? { only: input.only } : {}),
+    ...(input.before ? { before: input.before } : {}),
   };
 }
 
@@ -1199,8 +1720,91 @@ export function buildHistoryViewModel(input: { total: number; page: readonly Ses
  *  update cache, its answer for that release. */
 function aboutOf(input: HomeInput): HomeAbout {
   const about = homeAbout(input.version);
-  if (input.update) about.update = aboutUpdate(about.version, input.update.cache, input.update.channel, input.nowMs);
+  if (input.update) about.update = aboutUpdate(about.version, input.update.cache, input.update.channel, input.nowMs, input.update.check);
   return about;
+}
+
+/** The failed sessions the hero names by name, newest first; the rest it counts. */
+export const FAILED_NAMED = 3;
+
+/**
+ * The product build's hero when protection failed in two or more sessions
+ * (dashboard.md §4.25, *Protection failed in several sessions*): where it
+ * happened, each place a link to that session's page. "3 items reached the
+ * AI unmasked in the last 24 hours, in Claude Code in ~/shop and Codex in
+ * ~/api. Open each to see which." Each place is the row's agent and its
+ * folder (`~/…` under `home`; the agent alone without one), newest first;
+ * two named alike are told apart by when they ended (or started, one still
+ * running). Past FAILED_NAMED: "and N more, each marked "protection failed"
+ * in the lists below" (Earlier never hides a failed row). `partial` (the
+ * window not wholly counted): "at least in", since a session left out may
+ * have failed too. Agent names and folders only, never a value. Pure.
+ */
+export function failedSessionParts(agents: readonly HomeAgent[], failedIds: readonly string[], hours: number, violations: number, home: string, partial: boolean): HomeHeroPart[] {
+  const failed = new Set(failedIds);
+  const { names, more } = namedSessionParts(agents.filter((a) => failed.has(a.id)), home);
+  return [
+    { kind: "text", text: `${violations} items reached the AI unmasked in the last ${hours} hours, ${partial ? "at least " : ""}in ` },
+    ...names,
+    { kind: "text", text: more > 0 ? ` and ${more} more, each marked "protection failed" in the lists below. Open each to see which.` : ". Open each to see which." },
+  ];
+}
+
+/**
+ * The sessions a hero sentence names (failedSessionParts,
+ * lessProtectionParts): the newest FAILED_NAMED of `rows` by their last
+ * step, each a link to its page, "A, B and C" (no "and" while `more` are
+ * left to count). Each is the row's agent and its folder (`~/…` under
+ * `home`, as code; the agent alone without one); two named alike are told
+ * apart by when they ended (or started, one still running). Agent names
+ * and folders only, never a value. Pure.
+ */
+function namedSessionParts(rows: readonly HomeAgent[], home: string): { names: HomeHeroPart[]; more: number } {
+  const at = (a: HomeAgent): number => {
+    const ms = a.lastAt ? Date.parse(a.lastAt) : NaN;
+    return Number.isFinite(ms) ? ms : -Infinity;
+  };
+  const named = [...rows].sort((a, b) => at(b) - at(a)).slice(0, FAILED_NAMED);
+  const place = (a: HomeAgent): string => (a.cwd ? `${a.agent} in ${tildePath(a.cwd, home)}` : a.agent);
+  const alike = (a: HomeAgent): boolean => named.some((b) => b !== a && place(b) === place(a));
+  const links: HomeHeroPart[] = named.map((a) => {
+    const parts: HomeHeroNamePart[] = a.cwd ? [{ kind: "text", text: `${a.agent} in ` }, { kind: "code", text: tildePath(a.cwd, home) }] : [{ kind: "text", text: a.agent }];
+    const ended = a.state === "idle";
+    const moment = ended ? a.lastAt : a.startedAt;
+    if (alike(a) && moment && Number.isFinite(Date.parse(moment))) {
+      parts.push({ kind: "text", text: ended ? ", ended " : ", started " }, { kind: "time", text: moment });
+    }
+    const text = parts.map((p) => (p.kind === "time" ? `${new Date(p.text).toISOString().slice(11, 16)} UTC` : p.text)).join("");
+    return { kind: "link", text, to: "agent", session: a.id, parts };
+  });
+  const more = rows.length - named.length;
+  const names: HomeHeroPart[] = [];
+  links.forEach((l, i) => {
+    if (i > 0) names.push({ kind: "text", text: i === links.length - 1 && more === 0 ? " and " : ", " });
+    names.push(l);
+  });
+  return { names, more };
+}
+
+/**
+ * The calm and waiting heroes' words for the running agents that lost a protection
+ * (dashboard.md §4.25, *A running agent with less protection than usual*):
+ * "Claude Code in ~/shop runs with less protection than usual: not all of
+ * Mandu's protections started for it." Running or waiting rows whose
+ * session counted a protection that did not start (`lessProtection`, §4.21);
+ * an ended one is left to its row. Past FAILED_NAMED: "and N more, each
+ * marked in Running now below". Empty when none. Agent names, folders and
+ * fixed words only, never the launch line. Pure.
+ */
+export function lessProtectionParts(agents: readonly HomeAgent[], home: string): HomeHeroPart[] {
+  const rows = agents.filter((a) => a.state !== "idle" && a.lessProtection);
+  if (rows.length === 0) return [];
+  const { names, more } = namedSessionParts(rows, home);
+  const one = rows.length === 1;
+  return [
+    ...names,
+    { kind: "text", text: `${more > 0 ? ` and ${more} more, each marked in Running now below,` : ""} ${one ? "runs" : "run"} with less protection than usual: not all of Mandu's protections started for ${one ? "it" : "each"}.` },
+  ];
 }
 
 export function buildHomeViewModel(input: HomeInput): HomeVM {
@@ -1213,10 +1817,10 @@ export function buildHomeViewModel(input: HomeInput): HomeVM {
   });
 
   // ── The window's counts ────────────────────────────────────────────────────
-  const only: HomeCountOwners = { secretsMasked: null, secretsEarly: null, blocked: null, sent: null };
-  const window = { hours: input.windowHours, sessions: inWindow.length, counted: 0, masked: 0, secretsMasked: 0, secretsEarly: 0, untrusted: 0, blocked: 0, sent: 0, waiting: 0, only };
+  const only: HomeCountOwners = { secretsMasked: null, secretsEarly: null, blocked: null, sent: null, off: null };
+  const window = { hours: input.windowHours, sessions: inWindow.length, counted: 0, masked: 0, secretsMasked: 0, secretsEarly: 0, untrusted: 0, blocked: 0, sent: 0, off: 0, waiting: 0, only };
   // Each count's sessions: its one session while only one holds it.
-  const holders = { secretsMasked: 0, secretsEarly: 0, blocked: 0, sent: 0 };
+  const holders = { secretsMasked: 0, secretsEarly: 0, blocked: 0, sent: 0, off: 0 };
   const held = (k: keyof HomeCountOwners, n: number, id: string): void => {
     if (n <= 0) return;
     holders[k] += 1;
@@ -1235,10 +1839,12 @@ export function buildHomeViewModel(input: HomeInput): HomeVM {
     window.untrusted += f.untrusted ?? 0;
     window.blocked += f.blocked;
     window.sent += f.sent;
+    if (f.off === true) window.off += 1;
     held("secretsMasked", f.secrets?.masked ?? 0, s.id);
     held("secretsEarly", f.secrets?.early ?? 0, s.id);
     held("blocked", f.blocked, s.id);
     held("sent", f.sent, s.id);
+    held("off", f.off === true ? 1 : 0, s.id);
     violations += f.violations;
   }
   // Partly counted, a session left out may hold a count too: never one.
@@ -1259,17 +1865,24 @@ export function buildHomeViewModel(input: HomeInput): HomeVM {
     const who = askedBy(v, byId);
     const held = heldNow(v, nowMs);
     const cwd = input.facts.get(v.sessions?.[v.sessions.length - 1] ?? "")?.cwd;
+    const askerEnded = ended(v.sessions?.[v.sessions.length - 1]);
+    // The card's own answers (Send without it too), which its short line
+    // on Home names (answersShort).
+    const words = describeAsk({ ...v, cardActions: sendWithoutActions(v), ...(held !== undefined ? { held } : {}) }, who, input.home);
     return {
       id: v.id,
-      ...describeAsk({ ...v, ...(held !== undefined ? { held } : {}) }, who, input.home),
+      // An ended asker's card never says to tell that agent to try again
+      // (dashboard.md §4.34 "After you answer").
+      ...(askerEnded ? endedAskWords(words) : words),
       askedAt: v.lastSeen,
       count: v.count,
       ...(held !== undefined ? { held } : {}),
-      ...(ended(v.sessions?.[v.sessions.length - 1]) ? { askerEnded: true as const } : {}),
+      ...(askerEnded ? { askerEnded: true as const } : {}),
       ...(cwd ? { askerCwd: cwd, askerAgent: who, askerSessions: new Set(v.sessions).size } : {}),
       sessions: v.sessions ?? [],
       agents,
       actions: sendWithoutActions(v),
+      reversible: answerHasReversal(v),
       mintable: v.mintable,
       ...holderCard(v, input.home),
     };
@@ -1302,6 +1915,11 @@ export function buildHomeViewModel(input: HomeInput): HomeVM {
   const notRunning = !panel.available && input.notRunning ? input.notRunning : null;
   const protection = { level, configured: input.configuredMode, connected: panel.available, ...(notRunning ? { notRunning: true as const } : {}) };
 
+  // The commands a sentence starts your agent with: the agents of your
+  // sessions under Mandu, then the last scan's (§4.25, *Protection is off
+  // when nothing runs*). Agent sessions only, never `agentOf` (drill and
+  // test sessions are no one's agent).
+  const start = startCommands(input.scanSessions, input.sessions.filter(isAgentSession).map((s) => s.agent));
   const running = agents.filter((a) => a.state !== "idle").length;
   const agentsPhrase =
     running === 0
@@ -1321,20 +1939,20 @@ export function buildHomeViewModel(input: HomeInput): HomeVM {
   // sentence said "Turn it back on under Rules": the switch moved to
   // Settings on 2026-10-05.
   let parts: HomeHeroPart[] | null = null;
+  // The calm verdicts' words after the running-agents phrase.
+  let calm: string | null = null;
   if (notRunning) {
     // Nothing of Mandu's runs (§4.25, *Protection is off when nothing
     // runs*): the person who only ran `mandu scan`, or one who stopped
     // Mandu. Not a fault to fix in Settings, so not "Not connected.": no
-    // agent is protected, said plainly, with the command that starts it
-    // (last-scan.ts PROTECT_COMMAND, the scan card's). Never "protected".
+    // agent is protected, said plainly, with the command that starts the
+    // agent you use (`start`, the scan card's too). Never "protected".
     verdict = "off";
     headline = "Protection is off: no agent runs with Mandu.";
     parts = [
       { kind: "text", text: "Your agents send what they read to the AI as it is, secrets included. To protect one, start it with " },
-      { kind: "code", text: PROTECT_COMMAND },
-      { kind: "text", text: " (or " },
-      { kind: "code", text: "mandu codex" },
-      { kind: "text", text: ")." },
+      ...startCommandParts(start),
+      { kind: "text", text: "." },
     ];
   } else if (!panel.available) {
     verdict = "unknown";
@@ -1351,17 +1969,23 @@ export function buildHomeViewModel(input: HomeInput): HomeVM {
     parts = input.dev !== false
       // One failed session: its own trace; several: the trace's list.
       ? [lead, { kind: "link", text: "Open the detailed trace", to: "trace", session: failedIds.length === 1 ? failedIds[0]! : null }, { kind: "text", text: " to see which." }]
-      // No developer view: the agent page of the one session, or each
-      // agent's row, which says "protection failed" (§4.25ad).
+      // No developer view: the agent page of the one session, or of each
+      // one, named (failedSessionParts, §4.25ad).
       : failedIds.length === 1
         ? [lead, { kind: "link", text: "Open that agent's page", to: "agent", session: failedIds[0]! }, { kind: "text", text: " to see which." }]
-        : [lead, { kind: "text", text: "Each agent where it happened says \"protection failed\" below, and its page shows which." }];
+        : failedSessionParts(agents, failedIds, input.windowHours, violations, input.home ?? "", window.counted < window.sessions);
   } else if (level === "off") {
     verdict = "off";
     headline = "Protection is off.";
+    // What off costs, never "untrusted content as-is": the Secrets mode the
+    // switch brings back does not mask that either (§4.25, the verdict ladder).
+    // On saved for the next start (Settings' switch, the top bar's "· on
+    // from the next start"): what is left to do, not what you just did.
     parts = [
-      { kind: "text", text: "The AI can read untrusted content as-is, and your secrets are not guarded. " },
-      { kind: "link", text: "Turn it back on in Settings", to: "settings" },
+      { kind: "text", text: "Your keys and secret files reach the AI as they are, and nothing stops them leaving this computer. " },
+      ...(savedOn(input.configuredMode)
+        ? [{ kind: "text", text: SAVED_ON_WORDS } as const, { kind: "link", text: SAVED_ON_LINK, to: "protection" } as const]
+        : [{ kind: "link", text: "Turn it back on in Settings", to: "settings" } as const]),
       { kind: "text", text: "." },
     ];
   } else if (waiting.length > 0 || changes > 0) {
@@ -1401,16 +2025,22 @@ export function buildHomeViewModel(input: HomeInput): HomeVM {
         ? `Protection is holding while you decide: what ${asks === 1 ? "it asks" : "each one asks"} for happens only if you allow it.${endedNote}`
         : "Your rules stay as they are until you answer.")
       + (level === "secrets" ? " Untrusted content is not masked in this mode." : "");
+    // A running agent that lost a protection is named after the verdict's
+    // own news (§4.25, *A running agent with less protection than usual*,
+    // #292): the agent most likely asking is the one running now. Ended
+    // ones are left to their rows; the headline stays.
+    const less = lessProtectionParts(agents, input.home ?? "");
+    if (less.length > 0) parts = [{ kind: "text", text: `${sentence} ` }, ...less];
   } else if (level === "secrets") {
     verdict = "secrets-only";
     headline = "Your secrets are guarded.";
     // Never "cannot leave": a binding sends a secret's real value to its own
     // host, and the session pages show those sends (dashboard.md §4.25).
-    sentence = `${agentsPhrase} Keys and secret files leave this computer only where a rule or your OK allows. Untrusted content is not masked in this mode.`;
+    calm = "Keys and secret files leave this computer only where a rule or your OK allows. Untrusted content is not masked in this mode.";
   } else if (window.masked === 0) {
     verdict = "quiet";
     headline = "You are protected.";
-    sentence = `${agentsPhrase} No untrusted content has reached the AI in the last ${input.windowHours} hours.`;
+    calm = `No untrusted content has reached the AI in the last ${input.windowHours} hours.`;
   } else {
     verdict = "protected";
     headline = "You are protected.";
@@ -1418,7 +2048,16 @@ export function buildHomeViewModel(input: HomeInput): HomeVM {
     // Frozen levels (copy only): never "nothing left your machine without
     // your OK", for the Secrets sentence's reason; injection guards no secret.
     const sent = level === "full" ? ", and keys and secret files left this computer only where a rule or your OK allowed" : "";
-    sentence = `${agentsPhrase} In the last ${input.windowHours} hours, ${what} before the AI saw it${sent}.`;
+    calm = `In the last ${input.windowHours} hours, ${what} before the AI saw it${sent}.`;
+  }
+  if (calm !== null) {
+    // A running agent that lost a protection is named right after the
+    // running phrase (§4.25, *A running agent with less protection than
+    // usual*): said in the sentence, never by regrading the level, as
+    // secretsPosture does. Ended ones are left to their rows (§4.21).
+    const less = lessProtectionParts(agents, input.home ?? "");
+    if (less.length > 0) parts = [{ kind: "text", text: `${agentsPhrase} ` }, ...less, { kind: "text", text: ` ${calm}` }];
+    else sentence = `${agentsPhrase} ${calm}`;
   }
   const sentenceParts: HomeHeroPart[] = parts ?? [{ kind: "text", text: sentence }];
 
@@ -1436,16 +2075,77 @@ export function buildHomeViewModel(input: HomeInput): HomeVM {
     answeredTotal: firstAnswered.total,
     agents,
     history: { total: input.historyTotal },
+    start,
     // Never a session on record: the setup card. It goes away with the first
     // live session (a drill or test session is not someone's first run).
     // Not running, the store on disk says whether one ever was.
     firstRun: input.historyTotal === 0 && !(notRunning?.everRan ?? false) ? buildFirstRun(level, input.configuredMode) : null,
     // Each cause named as its row here names it, with a link to its page.
     exposure: panel.available ? homeExposure(panel.humanPlane, agents) : null,
+    // Over every live session, not the window's: a route lost days ago and
+    // not fixed is still lost (the arbiter's newest believed record says so).
+    routeLost: homeRouteLost(input.sessions, panel.available ? panel.humanPlane : undefined),
     // What the newest launch left the agent's programs able to read: a host
     // condition, so the headline above stays as the level makes it.
     secretsPosture: homeSecretsPosture(inWindow, input.facts),
-    builtIn: builtInProtections(level, input.issuerBindings),
+    ...policyFileOf(input.policyFileStatus),
+    ...rulesVersionField(input.lawHash, panel),
+    builtIn: builtInProtections(level, input.issuerBindings, input.configuredMode, notRunning !== null),
     about: aboutOf(input),
   };
+}
+
+/** policy.yaml as Home carries it (dashboard.md §4.25 *An edit to
+ *  policy.yaml Mandu refused*): where it is, whether the protection service
+ *  took the last version of it, how many problems it found, and when it
+ *  refused it (epoch ms; null when not said). The problems themselves stay
+ *  on Rules: they can echo the file, so Home carries their count only. */
+export interface HomePolicyFile {
+  valid: boolean;
+  path: string;
+  problemCount: number;
+  refusedAt: number | null;
+}
+
+/** The file's status as the arbiter reports it (`{ path, found, valid,
+ *  problems, loadedAt, refusedAt }`) as Home carries it. undefined for no
+ *  status, one not in that shape, or one that names no file (rules kept in
+ *  memory: there is no file to fix, and Rules draws no line to link to).
+ *  Pure. */
+export function homePolicyFile(status: unknown): HomePolicyFile | undefined {
+  if (!status || typeof status !== "object" || Array.isArray(status)) return undefined;
+  const s = status as Record<string, unknown>;
+  if (typeof s["path"] !== "string" || s["path"] === "" || typeof s["valid"] !== "boolean") return undefined;
+  const problems = Array.isArray(s["problems"]) ? s["problems"].filter((p) => typeof p === "string" && p !== "") : [];
+  const at = s["refusedAt"];
+  return { valid: s["valid"], path: s["path"], problemCount: problems.length, refusedAt: typeof at === "number" && Number.isFinite(at) ? at : null };
+}
+function policyFileOf(status: unknown): { policyFile?: HomePolicyFile } {
+  const f = homePolicyFile(status);
+  return f ? { policyFile: f } : {};
+}
+
+/** The version of your rules (dashboard.md §4.25 *Rules follows a change
+ *  made elsewhere*): what an open Rules page compares on each Home poll to
+ *  read your rules again when they changed somewhere else. A digest of the
+ *  in-force document's version (`lawHash`: a rule made in Rules, by your
+ *  agent's policy tools, by Describe's Apply or by an edit to policy.yaml)
+ *  and of the answers kept in Rules (each standing answer's id, status and
+ *  when it was given: an Always allow or Block, given again or forgotten),
+ *  so it changes when either does and only then: a count of uses or a new
+ *  question waiting does not move it. Opaque, a hex digest: it holds no
+ *  path and no rule's words. undefined when the document's version is not
+ *  a string (not read, an older arbiter) or the queue was not read (an
+ *  answer could not be compared: absent, not a change). Pure. */
+export function rulesVersionOf(lawHash: unknown, panel: Pick<PolicyPanelVM, "available" | "verdictsKnown" | "queue">): string | undefined {
+  if (typeof lawHash !== "string" || lawHash === "" || !panel.available || !panel.verdictsKnown) return undefined;
+  const answers = panel.queue
+    .filter((v) => v.status !== "pending" && v.scope !== "once")
+    .map((v) => [v.id, v.status, v.resolvedAt ?? null])
+    .sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : String(a[0]) > String(b[0]) ? 1 : 0));
+  return createHash("sha256").update(JSON.stringify([lawHash, answers])).digest("hex").slice(0, 32);
+}
+function rulesVersionField(lawHash: unknown, panel: PolicyPanelVM): { rulesVersion?: string } {
+  const v = rulesVersionOf(lawHash, panel);
+  return v === undefined ? {} : { rulesVersion: v };
 }

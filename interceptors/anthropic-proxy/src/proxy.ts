@@ -35,6 +35,10 @@
  * response is committed, so the agent doesn't see "Server is temporarily limiting
  * requests" on every transient spike. After the attempt cap the real status is
  * relayed unchanged (no masking). See `upstreamWithRetry` / RetryOptions.
+ * A PLAN'S USAGE LIMIT is no spike: a 429 whose headers say the quota refused
+ * (`anthropic-ratelimit-unified-status: rejected`, its reset minutes away) or
+ * whose Retry-After is minutes long is relayed at once, and the turn's
+ * `tllm_call` carries what the headers said (`upstreamLimit`, src/rate-limit.ts).
  *
  * CLOUD MODELS AT A LOCAL UPSTREAM (plan 11 §8 item 3): when the upstream is a
  * main model the operator declared `local: true` (`upstreamLocal`, env
@@ -52,6 +56,7 @@
  */
 
 import { checkLiteralHost, type TlsMaterial, tlsOptions } from "./endpoint-tls.js";
+import { describeUpstreamLimit, parseUpstreamLimit, type UpstreamLimit } from "./rate-limit.js";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 
@@ -79,7 +84,6 @@ import { SseTextDeltaRepacker } from "./sse-text-repack.js";
 import { SseReserveExpander, ReserveEligibility } from "./sse-reserve-expand.js";
 import { parseReserveMax, RESERVE_MAX_ROWS } from "./reserve-block.js";
 import { reserveRequestPass, type ReserveRequestPass } from "./reserve-request.js";
-import { ChatTextRepacker, ResponsesTextRepacker } from "./text-repack.js";
 import { ViewMap, reverseMapRequestPaths } from "./view-map.js";
 import { gateToolUseInput } from "./fs-gate.js";
 import { labelWrittenPaths } from "./fs-label.js";
@@ -93,21 +97,24 @@ import { GateSurfaceCache, UNION_GATE_SURFACE, type GateSurface } from "./gate-s
 import { gateUploadToolUse, UploadPlans, UPLOAD_HOST, UPLOAD_HOSTS } from "./upload-gate.js";
 import { gateUnmappedUploadToolUse, possibleWriter, surfaceNamesTool, withheldPath } from "./unmapped-upload.js";
 import { dispatcherRefusalInput, refusedArg, refusedArgInput, refusedTool, refusedToolInput, unwrapDispatch } from "./dispatch.js";
-import { classifyRoute, classifyOpenAiRoute, type OpenAiRoute } from "./route.js";
+import {
+  classifyRoute, classifyOpenAiRoute, classifyGoogleRoute, classifyOllamaRoute, classifyVertexRoute, GOOGLE_ROUTE_PREFIX, OLLAMA_ROUTE_PREFIX,
+  OPENAI_ROUTE_PREFIX, upstreamRest, vertexOrigin,
+  type GoogleRoute, type OllamaRoute, type OpenAiRoute, type VertexRoute,
+} from "./route.js";
+import { ollamaShowRefusal } from "./ollama-wire.js";
 import { substituteAuthHeaders, upstreamDestination } from "./auth-substitution.js";
-import { OpenAiWireError, providerSideRefusal, shadowFor, type CallMemory, type OpenAiApi } from "./openai-wire.js";
-import { ChatStreamRewriter, ResponsesStreamRewriter, gateChatJson, gateResponsesJson, type CallGate, type ReleasedCall } from "./openai-sse.js";
+import { decodeRequestBody } from "./request-encoding.js";
+import type { CallMemory } from "./openai-wire.js";
+import type { CallGate, ReleasedCall } from "./openai-sse.js";
+import { CHAT_ADAPTER, GEMINI_ADAPTER, OLLAMA_ADAPTER, RESPONSES_ADAPTER, wireErrorBody, type WireAdapter, type WireFamily } from "./wire-adapter.js";
 import { ResponseIdSniffer, responseIdOfBody } from "./response-id.js";
 import { isCloudBackedModel } from "./cloud-model.js";
 import { REPLY_MEDIA_TOOL, type ReplyMediaResult } from "./reply-media.js";
 import {
   ANTHROPIC_WIRE,
-  CHAT_WIRE,
-  RESPONSES_WIRE,
   ReplyMediaFilter,
-  gateChatJsonReply,
   gateMessagesJsonReply,
-  gateResponsesJsonReply,
   type ReplyMediaStreamOptions,
 } from "./reply-media-stream.js";
 import type { MessagesRequest, Message, ToolResultBlock } from "./messages-types.js";
@@ -236,6 +243,43 @@ export interface ProxyOptions {
    *  HTTPS fetcher to that provider's base URL, as for the main upstream). */
   openaiFetcher?: (provider: string) => UpstreamFetcher;
   /**
+   * The Google Gemini providers this session routes through the proxy
+   * (model-wires.md §5): provider id → that provider's real base URL (e.g.
+   * `google` → `https://generativelanguage.googleapis.com/v1beta`). The
+   * agent's provider points at `<proxy>/_mandu/google/<id>`; requests there
+   * are gated (gemini-wire.ts, gemini-sse.ts) and sent to the base URL. The
+   * launcher sets it (MANDU_GOOGLE_UPSTREAMS); absent ⇒ every such path is
+   * refused.
+   */
+  googleUpstreams?: Record<string, string>;
+  /** Test seam: the upstream transport per routed Gemini provider. */
+  googleFetcher?: (provider: string) => UpstreamFetcher;
+  /**
+   * The session's Vertex AI provider (model-wires.md §4.1, "Vertex AI at the
+   * root"): OpenClaw's Vertex transport keeps only the origin of the
+   * provider's baseUrl, so its requests arrive at the proxy's root
+   * (`/v1/projects/{p}/locations/{l}/publishers/google/models/{m}:{op}`,
+   * route.ts classifyVertexRoute), gated as the Gemini wire and sent to
+   * `upstream` (an origin), or with null to Google's own Vertex host for the
+   * path's location. The launcher sets it (MANDU_VERTEX_UPSTREAMS); absent ⇒
+   * every such path is refused.
+   */
+  vertexUpstream?: { provider: string; upstream: string | null } | null;
+  /** Test seam: the upstream transport per Vertex origin. */
+  vertexFetcher?: (origin: string) => UpstreamFetcher;
+  /**
+   * The Ollama providers this session routes through the proxy on Ollama's
+   * native chat API (model-wires.md, "The Ollama wire"): provider id → that
+   * provider's real base URL (e.g. `ollama` → `http://127.0.0.1:11434`).
+   * The agent's provider points at `<proxy>/_mandu/ollama/<id>`; requests
+   * there are gated (ollama-wire.ts, ollama-ndjson.ts) and sent to the base
+   * URL. The launcher sets it (MANDU_OLLAMA_UPSTREAMS); absent ⇒ every such
+   * path is refused.
+   */
+  ollamaUpstreams?: Record<string, string>;
+  /** Test seam: the upstream transport per routed Ollama provider. */
+  ollamaFetcher?: (provider: string) => UpstreamFetcher;
+  /**
    * Self-describing identity served at `GET /_mandu/identity` so a launcher
    * can verify a listening proxy is THIS session's before adopting it (the
    * start-or-reuse safety check). Carries the security-relevant routing the
@@ -272,9 +316,6 @@ export interface ProxyIdentity {
    *  another launch's directory would place every relative path wrongly). */
   agentCwd?: string;
 }
-
-/** How an OpenAI-family route is spelled in the proxy's log. */
-const OPENAI_LOG_PREFIX = "/_mandu/openai/";
 
 /** The path the identity endpoint answers on (loopback admin, never forwarded). */
 export const IDENTITY_PATH = "/_mandu/identity";
@@ -316,6 +357,16 @@ export function upstreamBasePath(url: URL): string {
   return url.pathname.replace(/\/+$/, "");
 }
 const DEFAULT_MAX_BODY = 64 * 1024 * 1024; // 64 MiB
+/**
+ * The agents whose routes end a reply that writes a tool call as text
+ * (text-calls.ts; model-wires.md "Tool calls written as text"): OpenClaw,
+ * whose plain-text tool-call compat layer runs one on its LM Studio and xAI
+ * providers and on any provider plugin that uses it, and an agent the
+ * arbiter did not name (the union surface: fail-closed). Keyed on the
+ * agent, not the provider id: a provider of any id may be owned by a plugin
+ * that wraps its stream.
+ */
+const LINE_TEXT_CALL_AGENTS: ReadonlySet<string> = new Set(["openclaw-agent", "union"]);
 /** Ceiling for recording a call's delivered command (plan 13 D9 follow-up);
  *  a slower arbiter leaves the call unbound (masked, fail-closed). */
 const DELIVERED_COMMAND_TIMEOUT_MS = 5000;
@@ -735,9 +786,21 @@ export class AnthropicProxy {
   private readonly openaiTextCalls: ReadonlySet<string>;
   private readonly openaiFetcherFor: (provider: string) => UpstreamFetcher;
   private readonly openaiFetchers = new Map<string, UpstreamFetcher>();
-  /** Every call released on an OpenAI wire, by call id (openai-wire.ts
-   *  CONTINUATIONS): a Responses continuation's result is classified as the
-   *  tool that produced it. Bounded; oldest first out. */
+  /** Routed Gemini providers → base URL (ProxyOptions.googleUpstreams). */
+  private readonly googleUpstreams: ReadonlyMap<string, string>;
+  private readonly googleFetcherFor: (provider: string) => UpstreamFetcher;
+  private readonly googleFetchers = new Map<string, UpstreamFetcher>();
+  /** The session's Vertex AI provider (ProxyOptions.vertexUpstream). */
+  private readonly vertex: { provider: string; upstream: string | null } | null;
+  private readonly vertexFetcherFor: (origin: string) => UpstreamFetcher;
+  private readonly vertexFetchers = new Map<string, UpstreamFetcher>();
+  /** Routed Ollama providers → base URL (ProxyOptions.ollamaUpstreams). */
+  private readonly ollamaUpstreams: ReadonlyMap<string, string>;
+  private readonly ollamaFetcherFor: (provider: string) => UpstreamFetcher;
+  private readonly ollamaFetchers = new Map<string, UpstreamFetcher>();
+  /** Every call released on another wire (OpenAI, Gemini), by call id
+   *  (openai-wire.ts CONTINUATIONS): a Responses continuation's result is
+   *  classified as the tool that produced it. Bounded; oldest first out. */
   private readonly openaiCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
   private server?: Server;
 
@@ -778,6 +841,12 @@ export class AnthropicProxy {
     this.openaiUpstreams = new Map(Object.entries(opts.openaiUpstreams ?? {}));
     this.openaiTextCalls = new Set(opts.openaiTextCalls ?? []);
     this.openaiFetcherFor = opts.openaiFetcher ?? ((provider) => this.makeHttpsFetcher(this.openaiUpstreams.get(provider)!));
+    this.googleUpstreams = new Map(Object.entries(opts.googleUpstreams ?? {}));
+    this.googleFetcherFor = opts.googleFetcher ?? ((provider) => this.makeHttpsFetcher(this.googleUpstreams.get(provider)!));
+    this.ollamaUpstreams = new Map(Object.entries(opts.ollamaUpstreams ?? {}));
+    this.ollamaFetcherFor = opts.ollamaFetcher ?? ((provider) => this.makeHttpsFetcher(this.ollamaUpstreams.get(provider)!));
+    this.vertex = opts.vertexUpstream ?? null;
+    this.vertexFetcherFor = opts.vertexFetcher ?? ((origin) => this.makeHttpsFetcher(origin));
     this.gateSurfaces = new GateSurfaceCache(this.arbiter, { log: (m) => this.log(m) });
     this.fallbackSessionId =
       opts.sessionKey ?? `mp_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
@@ -999,6 +1068,28 @@ export class AnthropicProxy {
     const oa = classifyOpenAiRoute(method, path, body.length, new Set(this.openaiUpstreams.keys()));
     if (oa !== null) {
       await this.onOpenAiRequest(req, res, method, body, oa);
+      return;
+    }
+    // A Gemini provider routed through this proxy (route.ts
+    // classifyGoogleRoute; model-wires.md §4): the same gates again.
+    const go = classifyGoogleRoute(method, path, body.length, new Set(this.googleUpstreams.keys()));
+    if (go !== null) {
+      await this.onGoogleRequest(req, res, method, body, go);
+      return;
+    }
+    // Vertex AI at the root (route.ts classifyVertexRoute; model-wires.md
+    // §4.1): the session's one Vertex provider, the Gemini gates again. A
+    // Vertex resource path in a session that routes none is refused there.
+    const vx = classifyVertexRoute(method, path, body.length, this.vertex?.provider ?? null);
+    if (vx !== null) {
+      await this.onVertexRequest(req, res, method, body, vx);
+      return;
+    }
+    // An Ollama provider on its native chat API (route.ts
+    // classifyOllamaRoute; model-wires.md, "The Ollama wire"): the same gates.
+    const ol = classifyOllamaRoute(method, path, body.length, new Set(this.ollamaUpstreams.keys()));
+    if (ol !== null) {
+      await this.onOllamaRequest(req, res, method, body, ol);
       return;
     }
 
@@ -1227,15 +1318,27 @@ export class AnthropicProxy {
     };
   }
 
-  // ── OpenAI-family wires (agent-e2e-harness.md §9; openai-wire.ts) ────────
+  // ── Other wires (model-wires.md §2; wire-adapter.ts) ────────────────────
+  //
+  // One relay loop for every wire an adapter reads: Chat Completions and the
+  // Responses API under /_mandu/openai/<id> (agent-e2e-harness.md §9), Gemini
+  // under /_mandu/google/<id> (model-wires.md §4). The adapter reads the
+  // wire; the rewrite, the gate and the relay below are the core.
 
-  private openaiFetcher(provider: string): UpstreamFetcher {
-    let f = this.openaiFetchers.get(provider);
+  private providerFetcher(family: WireFamily, provider: string): UpstreamFetcher {
+    const cache = family === "google" ? this.googleFetchers : family === "ollama" ? this.ollamaFetchers : this.openaiFetchers;
+    let f = cache.get(provider);
     if (!f) {
-      f = this.openaiFetcherFor(provider);
-      this.openaiFetchers.set(provider, f);
+      f = family === "google" ? this.googleFetcherFor(provider)
+        : family === "ollama" ? this.ollamaFetcherFor(provider)
+          : this.openaiFetcherFor(provider);
+      cache.set(provider, f);
     }
     return f;
+  }
+
+  private providerUpstream(family: WireFamily, provider: string): string | undefined {
+    return (family === "google" ? this.googleUpstreams : family === "ollama" ? this.ollamaUpstreams : this.openaiUpstreams).get(provider);
   }
 
   private rememberOpenAiCall(c: ReleasedCall): void {
@@ -1248,78 +1351,191 @@ export class AnthropicProxy {
     }
   }
 
-  /** An OpenAI-shaped error (`{"error":{"message","type"}}`), the shape both
-   *  agents' OpenAI transports print. */
-  private refuseOpenAi(res: ServerResponse, status: number, message: string): void {
+  /** The error shape the wire family's clients print (wire-adapter.ts):
+   *  OpenAI's `{"error":{"message","type"}}`, Google's
+   *  `{"error":{"code","message","status"}}`. */
+  private refuseWire(res: ServerResponse, family: WireFamily, status: number, message: string): void {
     if (res.headersSent) return;
     res.writeHead(status, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: { type: status === 400 ? "invalid_request_error" : "mandu_fail_closed", message } }));
+    res.end(wireErrorBody(family, status, message));
+  }
+
+  /** An OpenAI-family route (route.ts classifyOpenAiRoute) as a wire request. */
+  private onOpenAiRequest(req: IncomingMessage, res: ServerResponse, method: string, body: Buffer, route: OpenAiRoute): Promise<void> {
+    return this.onWireRequest(req, res, method, body, {
+      family: "openai",
+      provider: route.provider,
+      rest: route.rest,
+      ...(route.kind === "refuse" ? { refuse: route.message! } : {}),
+      adapter: route.kind === "chat" ? CHAT_ADAPTER : route.kind === "responses" ? RESPONSES_ADAPTER : null,
+      stream: false,
+    });
+  }
+
+  /** A Gemini route (route.ts classifyGoogleRoute) as a wire request. */
+  private onGoogleRequest(req: IncomingMessage, res: ServerResponse, method: string, body: Buffer, route: GoogleRoute): Promise<void> {
+    return this.onWireRequest(req, res, method, body, {
+      family: "google",
+      provider: route.provider,
+      rest: route.rest,
+      ...(route.kind === "refuse" ? { refuse: route.message! } : {}),
+      adapter: route.kind === "generate" || route.kind === "stream" ? GEMINI_ADAPTER : null,
+      ...(route.model !== undefined ? { model: route.model } : {}),
+      stream: route.kind === "stream" && route.sse === true,
+    });
+  }
+
+  /** A Vertex AI route at the root (route.ts classifyVertexRoute) as a wire
+   *  request: the Gemini adapter, sent to the session's Vertex address or
+   *  Google's own host for the path's location (vertexOrigin). */
+  private onVertexRequest(req: IncomingMessage, res: ServerResponse, method: string, body: Buffer, route: VertexRoute): Promise<void> {
+    const origin = route.kind === "refuse" || this.vertex === null ? null : vertexOrigin(this.vertex.upstream, route.location ?? "");
+    let fetcher: UpstreamFetcher | undefined;
+    if (origin !== null) {
+      fetcher = this.vertexFetchers.get(origin);
+      if (!fetcher) { fetcher = this.vertexFetcherFor(origin); this.vertexFetchers.set(origin, fetcher); }
+    }
+    return this.onWireRequest(req, res, method, body, {
+      family: "google",
+      provider: route.provider,
+      rest: route.rest,
+      shown: route.rest.split("?")[0]!,
+      ...(route.kind === "refuse" || origin === null ? { refuse: route.message ?? "mandu: refusing a Vertex AI request with no address to send it to; nothing was sent." } : {}),
+      ...(fetcher !== undefined && origin !== null ? { fetcher, upstreamBase: origin } : {}),
+      adapter: route.kind === "generate" || route.kind === "stream" ? GEMINI_ADAPTER : null,
+      ...(route.model !== undefined ? { model: route.model } : {}),
+      stream: route.kind === "stream" && route.sse === true,
+    });
+  }
+
+  /** An Ollama route (route.ts classifyOllamaRoute) as a wire request. A
+   *  model lookup (`/api/show`) is relayed only when its body names one model
+   *  and nothing else (ollama-wire.ts ollamaShowRefusal). */
+  private onOllamaRequest(req: IncomingMessage, res: ServerResponse, method: string, body: Buffer, route: OllamaRoute): Promise<void> {
+    let refuse = route.kind === "refuse" ? route.message! : undefined;
+    if (route.kind === "show") {
+      const why = ollamaShowRefusal(body);
+      if (why !== null) {
+        refuse = `mandu: refusing POST /api/show for provider "${route.provider}": ${why}, so it is not a model lookup Mandu relays; nothing was sent.`;
+      }
+    }
+    return this.onWireRequest(req, res, method, body, {
+      family: "ollama",
+      provider: route.provider,
+      rest: route.rest,
+      ...(refuse !== undefined ? { refuse } : {}),
+      adapter: route.kind === "chat" ? OLLAMA_ADAPTER : null,
+      stream: false,
+    });
   }
 
   /**
-   * One request to a routed OpenAI-family provider: read it as the Messages
-   * request the gates know (openai-wire.ts), run the SAME request rewrite,
-   * write the result back onto the agent's own body, send it to the
-   * provider, and gate the tool calls in the answer (openai-sse.ts). Every
-   * failure before the send answers without sending: 400 for a request that
-   * cannot be read or must not go, 502 when the arbiter fails.
+   * One request to a routed provider on another wire: read it as the
+   * Messages request the gates know (the adapter's shadow), run the SAME
+   * request rewrite, write the result back onto the agent's own body, send it
+   * to the provider, and gate the tool calls in the answer. Every failure
+   * before the send answers without sending: 400 for a request that cannot be
+   * read or must not go, 502 when the arbiter fails. `adapter` null with no
+   * `refuse`: a bodyless read, relayed as is.
    */
-  private async onOpenAiRequest(req: IncomingMessage, res: ServerResponse, method: string, body: Buffer, route: OpenAiRoute): Promise<void> {
-    if (route.kind === "refuse") {
-      this.log(`FAIL-CLOSED refusing ${method} ${OPENAI_LOG_PREFIX}${route.provider}${route.rest.split("?")[0]}: not a route the proxy can mask`);
-      this.refuseOpenAi(res, 403, route.message!);
+  private async onWireRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    body: Buffer,
+    w: {
+      family: WireFamily; provider: string; rest: string; refuse?: string; adapter: WireAdapter | null; model?: string; stream: boolean;
+      /** A route that carries no provider prefix (Vertex AI at the root): the
+       *  path as logged, its transport and its address. */
+      shown?: string; fetcher?: UpstreamFetcher; upstreamBase?: string;
+    },
+  ): Promise<void> {
+    const prefix = w.family === "google" ? GOOGLE_ROUTE_PREFIX : w.family === "ollama" ? OLLAMA_ROUTE_PREFIX : OPENAI_ROUTE_PREFIX;
+    // The path without its query: a Gemini key may ride `key=`, never logged.
+    const shown = w.shown ?? `${prefix}${w.provider}${w.rest.split("?")[0]}`;
+    if (w.refuse !== undefined) {
+      this.log(`FAIL-CLOSED refusing ${method} ${shown}: not a route the proxy can mask`);
+      this.refuseWire(res, w.family, 403, w.refuse);
       return;
     }
-    const fetcher = this.openaiFetcher(route.provider);
-    if (route.kind === "relay") {
-      await this.forwardOpenAi(fetcher, method, route.rest, req.headers, body, res, null, this.openaiUpstreams.get(route.provider));
+    // A protocol upgrade (OpenClaw's ChatGPT transport tries a WebSocket
+    // first, model-wires.md §9.3): the frames of a socket are not a wire an
+    // adapter reads, so it is never relayed (Node hands an upgrade with no
+    // listener to this handler as a plain GET). OpenClaw falls back to SSE.
+    if (req.headers["upgrade"] !== undefined) {
+      this.log(`FAIL-CLOSED refusing ${method} ${shown}: a protocol upgrade (${String(req.headers["upgrade"])}) is not relayed`);
+      this.refuseWire(res, w.family, 403, `mandu: refusing a ${String(req.headers["upgrade"])} upgrade for provider "${w.provider}": the Mandu model proxy masks tool results only on plain HTTP requests, so it does not open a socket to the model provider. Nothing was sent.`);
       return;
     }
-    const api: OpenAiApi = route.kind;
+    const fetcher = w.fetcher ?? this.providerFetcher(w.family, w.provider);
+    const upstreamBase = w.upstreamBase ?? this.providerUpstream(w.family, w.provider);
+    if (w.adapter === null) {
+      await this.forwardWire(fetcher, method, upstreamRest(upstreamBase, w.rest), req.headers, body, res, null, w.family, upstreamBase);
+      return;
+    }
+    const adapter = w.adapter;
+    // A compressed body (OpenClaw's ChatGPT transport sends zstd,
+    // request-encoding.ts) is read decoded and sent on decoded; an encoding
+    // the proxy cannot undo is refused, nothing sent.
+    const decoded = decodeRequestBody(req.headers["content-encoding"], body, this.maxBodyBytes);
+    if (!decoded.ok) {
+      this.log(`FAIL-CLOSED refusing a request to provider ${w.provider}: ${decoded.message}`);
+      this.refuseWire(res, w.family, decoded.status, `mandu: refusing this request to provider "${w.provider}": ${decoded.message}. Nothing was sent.`);
+      return;
+    }
+    body = decoded.body;
+    const sendHeaders: IncomingMessage["headers"] = decoded.decoded
+      ? Object.fromEntries(Object.entries(req.headers).filter(([k]) => k.toLowerCase() !== "content-encoding"))
+      : req.headers;
     let parsed: Record<string, unknown>;
     try {
       const v: unknown = JSON.parse(body.toString("utf8"));
       if (v === null || typeof v !== "object" || Array.isArray(v)) throw new Error("not a JSON object");
       parsed = v as Record<string, unknown>;
     } catch (err) {
-      this.refuseOpenAi(res, 400, `mandu: unparseable ${api === "chat" ? "Chat Completions" : "Responses"} request body (${(err as Error).message}); nothing was sent`);
+      this.refuseWire(res, w.family, 400, `mandu: unparseable ${adapter.label} request body (${(err as Error).message}); nothing was sent`);
       return;
     }
-    const refusal = providerSideRefusal(api, parsed);
+    const refusal = adapter.refusal(parsed);
     if (refusal !== null) {
-      this.log(`refusing a request to provider ${route.provider}: ${refusal}`);
-      this.refuseOpenAi(res, 400, `mandu: refusing this request to provider "${route.provider}": ${refusal}. Nothing was sent.`);
+      this.log(`refusing a request to provider ${w.provider}: ${refusal}`);
+      this.refuseWire(res, w.family, 400, `mandu: refusing this request to provider "${w.provider}": ${refusal}. Nothing was sent.`);
       return;
     }
     let shadow;
     try {
-      shadow = shadowFor(api, parsed, { get: (id) => this.openaiCalls.get(id) } satisfies CallMemory);
+      shadow = adapter.shadow(parsed, {
+        memory: { get: (id) => this.openaiCalls.get(id) } satisfies CallMemory,
+        ...(w.model !== undefined ? { model: w.model } : {}),
+        stream: w.stream,
+      });
     } catch (err) {
-      if (err instanceof OpenAiWireError) {
-        this.log(`FAIL-CLOSED refusing a request to provider ${route.provider}: ${err.message}`);
-        this.refuseOpenAi(res, 400, `mandu: refusing this request to provider "${route.provider}": ${err.message}. Nothing was sent.`);
+      if (adapter.isReadError(err)) {
+        this.log(`FAIL-CLOSED refusing a request to provider ${w.provider}: ${(err as Error).message}`);
+        this.refuseWire(res, w.family, 400, `mandu: refusing this request to provider "${w.provider}": ${(err as Error).message}. Nothing was sent.`);
         return;
       }
       throw err;
     }
+    const model = adapter.modelOf(parsed, { ...(w.model !== undefined ? { model: w.model } : {}) });
     const surface = await this.gateSurfaces.get(this.sessionKey);
     let rewritten: RewriteResult;
     try {
       rewritten = await rewriteRequest(shadow.shadow, { ...this.rewriteOptions(surface), signal: clientGone(res) });
     } catch (err) {
       if (err instanceof RewriteAbandoned) {
-        this.log(`prompt filter: ${err.message} (provider ${route.provider})`);
+        this.log(`prompt filter: ${err.message} (provider ${w.provider})`);
         return;
       }
       if (err instanceof RewriteBlocked) {
-        this.log(`prompt filter BLOCKED a request to provider ${route.provider}: ${err.message}`);
+        this.log(`prompt filter BLOCKED a request to provider ${w.provider}: ${err.message}`);
         this.emitBlockedPrompt(req, err.report);
-        this.refuseOpenAi(res, 400, err.message);
+        this.refuseWire(res, w.family, 400, err.message);
         return;
       }
       if (err instanceof RewriteRefusal) {
         this.log(`FAIL-CLOSED refusing request: ${err.message}`);
-        this.refuseOpenAi(res, 502, err.message);
+        this.refuseWire(res, w.family, 502, err.message);
         return;
       }
       throw err;
@@ -1332,10 +1548,10 @@ export class AnthropicProxy {
       outBody = Buffer.from(JSON.stringify(shadow.apply(rewritten.request)), "utf8");
     } catch (err) {
       this.log(`FAIL-CLOSED: could not write the masked request back (${(err as Error).message})`);
-      this.refuseOpenAi(res, 502, "mandu: could not write the masked request back; nothing was sent");
+      this.refuseWire(res, w.family, 502, "mandu: could not write the masked request back; nothing was sent");
       return;
     }
-    this.log(`POST ${OPENAI_LOG_PREFIX}${route.provider}${route.rest.split("?")[0]}: ${rewritten.rewrites.length} tool result(s), ${rewritten.rewrites.filter((r) => r.symbolized).length} symbolized`);
+    this.log(`POST ${shown}: ${rewritten.rewrites.length} tool result(s), ${rewritten.rewrites.filter((r) => r.symbolized).length} symbolized`);
 
     const sessionId = this.sessionIdFor(req.headers);
     const ctx: EventContext = {
@@ -1344,18 +1560,24 @@ export class AnthropicProxy {
       batchId: this.batchIdFor(req.headers),
       tenant: this.tenantFor(req.headers),
     };
-    const model = typeof parsed["model"] === "string" ? (parsed["model"] as string) : "";
     void this.announceSession(ctx, req.headers, shadow.shadow.tools, model || null);
     for (const c of reverseRewrites) {
       this.safeEmit(makePathRewrite({ ctx, callId: c.callId, tool: c.tool, field: c.field, direction: "reverse", human: c.human, agent: c.agent }));
     }
     this.emitIngressEvents(ctx, rewritten);
-    await this.forwardOpenAi(fetcher, method, route.rest, req.headers, outBody, res, {
-      api,
-      textCalls: this.openaiTextCalls.has(route.provider),
-      stream: parsed["stream"] === true,
+    await this.forwardWire(fetcher, method, upstreamRest(upstreamBase, w.rest), sendHeaders, outBody, res, {
+      adapter,
+      textCalls: w.family === "openai" && this.openaiTextCalls.has(w.provider),
+      ...(adapter.toolNames ? { toolNames: new Set(adapter.toolNames(parsed)) } : {}),
+      // An OpenClaw session (or one whose agent the arbiter did not name):
+      // OpenClaw runs a tool call its model writes as text on some providers
+      // (text-calls.ts), so every route ends a reply that writes one.
+      ...(w.family === "openai" && LINE_TEXT_CALL_AGENTS.has(surface.spec)
+        ? { lineTextCalls: { toolNames: new Set((shadow.shadow.tools ?? []).map((t) => String((t as { name?: unknown }).name ?? ""))) } }
+        : {}),
+      stream: adapter.wantsStream(parsed, { stream: w.stream }),
       emit: { ctx, rewritten, forwardedText: outBody.toString("utf8"), model, agentSessionId: agentSessionIdOf(req.headers) },
-    }, this.openaiUpstreams.get(route.provider));
+    }, w.family, upstreamBase);
   }
 
   /**
@@ -1365,14 +1587,15 @@ export class AnthropicProxy {
    * rewriter, a buffered body parsed and rewritten whole (an answer that
    * cannot be read is a 502, never relayed).
    */
-  private async forwardOpenAi(
+  private async forwardWire(
     fetcher: UpstreamFetcher,
     method: string,
     rest: string,
     headers: IncomingMessage["headers"],
     body: Buffer,
     res: ServerResponse,
-    gated: { api: OpenAiApi; stream: boolean; emit: EmitState; textCalls?: boolean } | null,
+    gated: { adapter: WireAdapter; stream: boolean; emit: EmitState; textCalls?: boolean; toolNames?: ReadonlySet<string>; lineTextCalls?: { toolNames: ReadonlySet<string> } } | null,
+    family: WireFamily,
     upstreamBase?: string,
   ): Promise<void> {
     const sessionId = this.sessionIdFor(headers);
@@ -1386,7 +1609,7 @@ export class AnthropicProxy {
       upstream = await this.upstreamWithRetry({ method, path: rest, headers: fwdHeaders, body }, fetcher);
     } catch (err) {
       this.log(`upstream error: ${(err as Error).message}`);
-      this.refuseOpenAi(res, 502, `upstream request failed: ${(err as Error).message}`);
+      this.refuseWire(res, family, 502, `upstream request failed: ${(err as Error).message}`);
       return;
     }
     if (gated === null) {
@@ -1395,6 +1618,7 @@ export class AnthropicProxy {
       await this.finished(res);
       return;
     }
+    const adapter = gated.adapter;
     const emit = gated.emit;
     const seen: ReconstructedToolUse[] = [];
     const texts: string[] = [];
@@ -1411,6 +1635,8 @@ export class AnthropicProxy {
       onText: (t: string): void => { texts.push(t); },
       log: (m: string): void => this.log(m),
       ...(gated.textCalls ? { refuseTextCalls: true } : {}),
+      ...(gated.toolNames ? { toolNames: gated.toolNames } : {}),
+      ...(gated.lineTextCalls ? { lineTextCalls: gated.lineTextCalls } : {}),
     };
     const ctype = headerValue(upstream.headers, "content-type") ?? "";
     const isSse = upstream.status < 400 && (ctype.includes("text/event-stream") || gated.stream);
@@ -1428,24 +1654,22 @@ export class AnthropicProxy {
         // A 2xx answer carries the model's calls: it goes out only as read.
         try {
           const v: unknown = JSON.parse(buf.toString("utf8"));
-          if (v === null || typeof v !== "object" || Array.isArray(v)) throw new Error("not a JSON object");
-          const obj = v as Record<string, unknown>;
-          let changed = gated.api === "chat" ? await gateChatJson(obj, gate, opts) : await gateResponsesJson(obj, gate, opts);
+          let changed = await adapter.gateJson(v, gate, opts);
           // The reply-media gate over the answer's text (reply-media.ts).
           const mediaOpts = await this.replyMediaFor(sessionId, emit);
-          if (mediaOpts && (gated.api === "chat" ? await gateChatJsonReply(obj, mediaOpts) : await gateResponsesJsonReply(obj, mediaOpts))) changed = true;
-          if (changed) buf = Buffer.from(JSON.stringify(obj), "utf8");
-          // The answer's id as the agent gets it (no gate touches `id`), for
+          if (mediaOpts && (await adapter.gateJsonReply(v, mediaOpts))) changed = true;
+          if (changed) buf = Buffer.from(JSON.stringify(v), "utf8");
+          // The answer's id as the agent gets it (no gate touches it), for
           // `mandu scan`'s join (plan 17 §3 item 6, response-id.ts).
-          responseId = responseIdOfBody(obj);
+          responseId = adapter.responseIdWire === null ? undefined : responseIdOfBody(v, adapter.responseIdWire);
         } catch (err) {
           this.log(`FAIL-CLOSED: the provider's answer could not be read (${(err as Error).message})`);
           this.emitTllmCall(emit, seen, texts.join(""), { status: 502, error: "the provider's answer could not be read" });
-          this.refuseOpenAi(res, 502, `mandu: the model provider's answer could not be read (${(err as Error).message}); it was not relayed`);
+          this.refuseWire(res, family, 502, `mandu: the model provider's answer could not be read (${(err as Error).message}); it was not relayed`);
           return;
         }
       }
-      this.emitTllmCall(emit, seen, texts.join(""), { status: upstream.status, responseId });
+      this.emitTllmCall(emit, seen, texts.join(""), { status: upstream.status, responseId, limit: parseUpstreamLimit(upstream.status, upstream.headers) });
       res.writeHead(upstream.status, this.responseHeaders(upstream.headers, { dropContentLength: true }));
       res.end(buf);
       await Promise.allSettled(recorded);
@@ -1453,21 +1677,21 @@ export class AnthropicProxy {
     }
 
     res.writeHead(upstream.status, this.responseHeaders(upstream.headers, { dropContentLength: true }));
-    const rw = gated.api === "chat" ? new ChatStreamRewriter(gate, opts) : new ResponsesStreamRewriter(gate, opts);
-    // The text-delta token repacker, the OpenAI twin of the Messages one
+    const rw = adapter.streamRewriter(gate, opts);
+    // The text-delta token repacker, the twin of the Messages one
     // (text-repack.ts): a `$MDU:` token split across two text deltas
     // reaches the agent whole in one. After the gate, pure string work.
-    const repack = gated.api === "chat" ? new ChatTextRepacker() : new ResponsesTextRepacker();
+    const repack = adapter.textRepacker();
     // The reply-media gate (reply-media.ts), after the repacker. Resolved
     // inside the relay chain (its first link awaits it), so the stream's
     // listeners are attached at once and no upstream error goes unheard.
     let media: ReplyMediaFilter | null = null;
     const mediaReady = this.replyMediaFor(sessionId, emit).then((o) => {
-      media = o ? new ReplyMediaFilter(gated.api === "chat" ? CHAT_WIRE : RESPONSES_WIRE, o) : null;
+      media = o ? new ReplyMediaFilter(adapter.replyWire, o) : null;
     });
     // The response id, read off what the agent is sent, after every gate:
     // the id the agent keeps (response-id.ts). It never throws.
-    const ids = new ResponseIdSniffer(gated.api);
+    const ids = adapter.responseIdWire === null ? null : new ResponseIdSniffer(adapter.responseIdWire);
     const src = upstream.body;
     src.setEncoding("utf8");
     let broken = false;
@@ -1477,7 +1701,7 @@ export class AnthropicProxy {
       if (broken) return;
       try {
         const out = await fn();
-        ids.feed(out);
+        ids?.feed(out);
         if (out !== "") res.write(out);
       } catch (err) {
         // A rewriter fault ends the relay: nothing ungated goes out after it.
@@ -1498,7 +1722,7 @@ export class AnthropicProxy {
           const m = media as ReplyMediaFilter | null;
           return m ? m.feed(tail) + (await m.end()) : tail;
         });
-        this.emitTllmCall(emit, seen, texts.join(""), { status: upstream.status, responseId: ids.value() });
+        this.emitTllmCall(emit, seen, texts.join(""), { status: upstream.status, responseId: ids?.value() });
         res.end();
         resolve();
       });
@@ -1745,7 +1969,7 @@ export class AnthropicProxy {
     if (isSse) {
       await this.streamAndSniffSse(upstream.body, res, sessionId, emit, upstream.status);
     } else {
-      await this.bufferAndSniffJson(upstream.body, res, sessionId, emit, upstream.status);
+      await this.bufferAndSniffJson(upstream.body, res, sessionId, emit, upstream.status, upstream.headers);
     }
   }
 
@@ -2689,7 +2913,7 @@ export class AnthropicProxy {
    * buffered object BEFORE relay + sniff (the JSON twin of the SSE rewriter);
    * an unparseable body relays raw, unrewritten (conservative rule 3).
    */
-  private async bufferAndSniffJson(src: Readable, res: ServerResponse, sessionKey: string, emit?: EmitState, upstreamStatus?: number): Promise<void> {
+  private async bufferAndSniffJson(src: Readable, res: ServerResponse, sessionKey: string, emit?: EmitState, upstreamStatus?: number, upstreamHeaders?: UpstreamResponse["headers"]): Promise<void> {
     const chunks: Buffer[] = [];
     await new Promise<void>((resolve) => {
       src.on("data", (c: Buffer) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
@@ -2742,7 +2966,8 @@ export class AnthropicProxy {
       for (const t of tus) {
         this.safeEmit(makeToolUse({ ctx: emit.ctx, callId: t.id, name: t.name, input: t.input }));
       }
-      this.emitTllmCall(emit, tus, assistantText, { status: upstreamStatus, error: upstreamError, responseId });
+      const limit = upstreamStatus !== undefined && upstreamHeaders !== undefined ? parseUpstreamLimit(upstreamStatus, upstreamHeaders) : null;
+      this.emitTllmCall(emit, tus, assistantText, { status: upstreamStatus, error: upstreamError, responseId, limit });
     }
     // Pass the bytes through unchanged.
     res.end(buf);
@@ -2762,7 +2987,7 @@ export class AnthropicProxy {
     emit: EmitState,
     tools: ReconstructedToolUse[],
     assistantText: string,
-    upstream?: { status?: number; error?: string; responseId?: string | undefined },
+    upstream?: { status?: number; error?: string; responseId?: string | undefined; limit?: UpstreamLimit | null },
   ): void {
     // The symbols that landed in the forwarded prompt, for the input DualRepr.
     const inputSymbols: SymbolRef[] = [];
@@ -2808,8 +3033,8 @@ export class AnthropicProxy {
     // event so the dashboard EXPLAINS the blank instead of hiding it as a silent
     // empty turn (off the security path — the bytes already passed through).
     if (!outputText && upstream?.status !== undefined && upstream.status >= 400) {
-      const reason =
-        upstream.status === 429 ? "rate-limited" : upstream.status === 529 ? "overloaded" : "error";
+      const reason = upstream.limit ? describeUpstreamLimit(upstream.limit)
+        : upstream.status === 429 ? "rate-limited" : upstream.status === 529 ? "overloaded" : "error";
       outputText = `⚠ no model response — upstream HTTP ${upstream.status} (${reason})${
         upstream.error ? `: ${upstream.error}` : ""
       }`;
@@ -2840,6 +3065,10 @@ export class AnthropicProxy {
         // `X-Session-Id`), the join key where the agent keeps no response
         // id; read, never changed: the headers go upstream as they came.
         ...(emit.agentSessionId !== undefined ? { agentSessionId: emit.agentSessionId } : {}),
+        // The upstream's own word on a throttle (rate-limit.ts): which limit,
+        // until when. Header values only, held to their shapes; never an auth
+        // header, never the request or the answer's body.
+        ...(upstream?.limit ? { upstreamLimit: upstream.limit } : {}),
         outputText,
         violatedInvariant: survivor !== null,
         invariantDetail: survivor
@@ -2979,6 +3208,16 @@ export class AnthropicProxy {
     for (let attempt = 1; ; attempt++) {
       const resp = await fetcher(args);
       if (!RETRYABLE_STATUS.has(resp.status) || attempt >= this.retry.maxAttempts) {
+        return resp;
+      }
+      // A plan's quota (the weekly or five-hour limit refused, or a
+      // Retry-After of minutes) is no transient spike: relayed at once, so
+      // the agent shows the limit instead of a spinner while the retries
+      // run out (live 2026-10-28: twelve knocks on a weekly limit, three
+      // minutes of silence, the drill turn timed out). rate-limit.ts.
+      const limit = parseUpstreamLimit(resp.status, resp.headers);
+      if (limit?.hard) {
+        this.log(`upstream ${resp.status}: ${describeUpstreamLimit(limit)}; relayed at once (attempt ${attempt})`);
         return resp;
       }
       // Drain + discard the throttle body so the underlying connection is freed.

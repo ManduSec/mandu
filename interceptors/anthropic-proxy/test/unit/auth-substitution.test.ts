@@ -35,15 +35,22 @@ function source(host: string, values: Record<string, string>): AuthCredentialSou
   };
 }
 
-test("authHeaderSymbol: x-api-key holding exactly one placeholder, or Bearer <placeholder>; nothing else", () => {
+test("authHeaderSymbol: x-api-key, x-goog-api-key or api-key holding exactly one placeholder, or Bearer <placeholder>; nothing else", () => {
   assert.equal(authHeaderSymbol("x-api-key", SYM)?.symbol, SYM);
   assert.equal(authHeaderSymbol("X-Api-Key", SYM)?.render("v"), "v");
+  // The Gemini wire's key header (model-wires.md §4.4).
+  assert.equal(authHeaderSymbol("x-goog-api-key", SYM)?.symbol, SYM);
+  assert.equal(authHeaderSymbol("X-Goog-Api-Key", SYM)?.render("v"), "v");
+  // Azure OpenAI's key header (model-wires.md §9).
+  assert.equal(authHeaderSymbol("api-key", SYM)?.symbol, SYM);
+  assert.equal(authHeaderSymbol("Api-Key", SYM)?.render("v"), "v");
   assert.equal(authHeaderSymbol("authorization", `Bearer ${OSYM}`)?.symbol, OSYM);
   assert.equal(authHeaderSymbol("Authorization", `bearer ${OSYM}`)?.render("v"), "bearer v");
   for (const [n, v] of [
     ["x-api-key", `${SYM} `], ["x-api-key", `x${SYM}`], ["x-api-key", `${SYM}${SYM}`], ["x-api-key", "sk-ant-real"],
     ["authorization", SYM], ["authorization", `Basic ${SYM}`], ["authorization", `Bearer ${SYM} extra`],
-    ["x-goog-api-key", SYM], ["cookie", SYM], ["x-mandu-session-id", SYM], ["user-agent", SYM],
+    ["x-goog-api-key", `${SYM} `], ["x-goog-api-key", "AIzaSy-real"], ["x-goog-api-key", `Bearer ${SYM}`],
+    ["api-key", `${SYM} `], ["api-key", "azure-real-key"], ["api-key", `Bearer ${SYM}`], ["x-ms-api-key", SYM], ["cookie", SYM], ["x-mandu-session-id", SYM], ["user-agent", SYM],
   ] as const) {
     assert.equal(authHeaderSymbol(n, v), null, `${n}: ${v}`);
   }
@@ -85,6 +92,14 @@ test("substituteAuthHeaders: the key goes in the auth header for the bound host 
     assert.equal(hh["x-api-key"], SYM, why);
     assert.equal(r[0]?.restored, false, why);
   }
+  // Azure's `api-key`: put back for the bound host, kept for any other.
+  const az = source("res.openai.azure.com", { [SYM]: KEY });
+  const ha: Record<string, string | string[] | undefined> = { "api-key": SYM };
+  assert.deepEqual((await substituteAuthHeaders(ha, { host: "res.openai.azure.com", scheme: "https" }, az)).map((s) => [s.header, s.restored]), [["api-key", true]]);
+  assert.equal(ha["api-key"], KEY);
+  const hb: Record<string, string | string[] | undefined> = { "api-key": SYM };
+  await substituteAuthHeaders(hb, { host: "other.openai.azure.com", scheme: "https" }, az);
+  assert.equal(hb["api-key"], SYM, "an unbound Azure host keeps the placeholder");
   // An array-valued header is not read.
   const arr: Record<string, string | string[] | undefined> = { "x-api-key": [SYM, SYM] };
   assert.deepEqual(await substituteAuthHeaders(arr, dest, src), []);

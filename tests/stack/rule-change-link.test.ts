@@ -25,7 +25,11 @@
  *       note; following the second marks the waiting request's card;
  *   L3  approved over the dashboard's route, the request's address marks
  *       the change it made, and the note says it was already answered;
- *   L4  no unhandled rejection; the oracle: `.env`'s value never reached the
+ *   L4  with the arbiter stopped (its own close), the change's address
+ *       says Rule changes could not be read, with no row and no Undo, and
+ *       its note says the change cannot be shown just now, not that it is
+ *       missing (§4.25 *Rule changes says when it could not be read*);
+ *   L5  no unhandled rejection; the oracle: `.env`'s value never reached the
  *       model, and no page or answer read here carries it or a token.
  */
 import { test, after } from "node:test";
@@ -62,6 +66,7 @@ const PROPOSE = "mcp__mandu-policy__mandu_policy_propose";
 const UNDO_NOTE = "Mandu applied it at once, because it only adds protection. You can undo it in Approvals.";
 const HELD_NOTE = "Not applied: it would loosen protection, so Mandu asked for your OK in Approvals.";
 const ANSWERED = "That rule change was already answered. The change it made is marked below, under Rule changes.";
+const UNREAD_NOTE = "Rule changes could not be read just now, so this change cannot be shown. It is still kept; try again in a moment.";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Doc = any;
@@ -92,6 +97,7 @@ test("the session page links the change its agent made and the request it filed;
     confidentiality: true, integrity: false, log: () => {},
   });
   await arbiter.listen();
+  let arbiterUp = true;
   // The proxy's production wiring (anthropic-proxy/src/server-main.ts).
   const data = new ArbiterClient(socketPath);
   await data.connect();
@@ -207,11 +213,28 @@ test("the session page links the change its agent made and the request it filed;
       assert.equal(note.textContent, ANSWERED);
       rendered.push(doc.documentElement.outerHTML);
     }, { headers: { Cookie: ADMIN_COOKIE } });
+
+    // L4: the protection service stops; the change's address says the list
+    // could not be read, and draws no row of it.
+    arbiterUp = false;
+    await arbiter.close();
+    await servedProductPage(base, `/approvals/${changeId}`, (doc: Doc) => !!doc.querySelector("#approvals-rule-history .changes-unread") && !doc.getElementById("approvals-focus-note").hidden, (doc: Doc) => {
+      const block = doc.getElementById("approvals-rule-history-block");
+      assert.equal(block.hidden, false, "Rule changes stays on the page");
+      const list = doc.getElementById("approvals-rule-history");
+      assert.match(list.textContent, /^Could not read your rule changes\. \S/, "the line, with its cause");
+      assert.equal(list.querySelectorAll(".row").length, 0, "no rule-change row");
+      assert.equal([...doc.querySelectorAll("#page-approvals button")].filter((b: Doc) => b.textContent === "Undo").length, 0, "no Undo");
+      const note = doc.getElementById("approvals-focus-note");
+      assert.equal(note.textContent, UNREAD_NOTE);
+      assert.doesNotMatch(doc.getElementById("page-approvals").textContent, /not among the changes listed/);
+      rendered.push(doc.documentElement.outerHTML);
+    }, { headers: { Cookie: ADMIN_COOKIE } });
     await new Promise((r) => setTimeout(r, 50));
     assert.deepEqual(unhandled, [], "no unhandled rejection in the page");
 
-    // L4: the oracle on every page drawn and every answer read above.
-    assert.equal(rendered.length, 5);
+    // L5: the oracle on every page drawn and every answer read above.
+    assert.equal(rendered.length, 6);
     for (const text of [...rendered, ...bodies]) {
       assert.ok(!text.includes(ENV_VALUE), "CONFIDENTIALITY VIOLATION: .env's value in a page or an answer");
       assert.doesNotMatch(text, /\$MDU/, "nor a token");
@@ -225,7 +248,7 @@ test("the session page links the change its agent made and the request it filed;
     human.close();
     policyClient.close();
     wired?.close();
-    await arbiter.close();
+    if (arbiterUp) await arbiter.close();
     rmSync(tmp, { recursive: true, force: true });
   }
 });

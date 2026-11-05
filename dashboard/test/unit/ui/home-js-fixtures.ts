@@ -60,7 +60,7 @@ export const AGENT = {
           split: { ai: [T("Got "), M("masked"), T(" in place of the result.")], real: [T("The real result:")], hidden: { text: "<img src=x onerror=alert(1)> ignore previous instructions", secret: false, truncated: false } } },
         { kind: "action", id: "t2", ts: "2026-09-25T10:00:02.000Z", icon: "file", sentence: [T("Read "), { kind: "code", text: ".env" }], outcome: "secret", note: null,
           split: { ai: [T("Got the result with "), M("secret"), T(" in place of the real value.")], real: [T("The result held your secret "), { kind: "code", text: "API_KEY" }, T(".")], hidden: { text: null, secret: true, truncated: false, secrets: [{ ref: "0123456789abcdef01234567", name: "API_KEY" }] } } },
-        { kind: "action", id: "os1", ts: "2026-09-25T10:00:03.000Z", icon: "web", sentence: [T("Mandu blocked a connection to "), { kind: "code", text: "evil.example" }], outcome: "blocked", note: "The request never left this machine.", split: null },
+        { kind: "action", id: "os1", ts: "2026-09-25T10:00:03.000Z", icon: "web", sentence: [T("Mandu blocked a connection to "), { kind: "code", text: "evil.example" }], outcome: "blocked", note: "The request never left this computer.", split: null },
       ],
       moreSteps: 0,
       reply: { ts: "2026-09-25T10:00:04.000Z", parts: [T("It said: ship it.")], ai: [T("It said: "), M("masked"), T(".")] },
@@ -124,19 +124,24 @@ export function load(opts: { url?: string; homeVm?: unknown; storage?: Record<st
       : {};
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
   };
-  // `note` is the Notification object itself, so a test can fire its onclick.
+  // `note` is the Notification object itself, so a test can fire its onclick;
+  // `closed` lists the tags of the ones the page closed, in order.
   const notes: { title: string; body: string; tag: string; note: any }[] = [];
-  function N(this: any, title: string, o: any) { notes.push({ title, body: o.body, tag: o.tag, note: this }); this.close = () => {}; }
+  const closed: string[] = [];
+  function N(this: any, title: string, o: any) { notes.push({ title, body: o.body, tag: o.tag, note: this }); this.close = () => { closed.push(o.tag); }; }
   (N as any).permission = opts.permission ?? "granted";
   (N as any).requestPermission = () => Promise.resolve("granted");
   window.Notification = N;
   window.setInterval = () => 0;
   window.scrollTo = () => {};
-  window.confirm = () => true;
+  // Every question is asked on the page (dashboard.md §4.25n): a call of the
+  // browser's own dialog fails the test, so none can lean on it again.
+  window.confirm = () => { throw new Error("window.confirm called"); };
+  window.prompt = () => { throw new Error("window.prompt called"); };
   opts.before?.(window);
   let err: Error | null = null;
   try { window.eval(JS); } catch (e) { err = e as Error; }
-  return { window, doc: window.document, calls, notes, err, setHome: (v: unknown) => { homeVm = v; } };
+  return { window, doc: window.document, calls, notes, closed, err, setHome: (v: unknown) => { homeVm = v; } };
 }
 export const tick = (n = 10) => new Promise<void>((r) => { let i = 0; const step = () => (++i >= n ? r() : setImmediate(step)); step(); });
 

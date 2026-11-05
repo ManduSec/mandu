@@ -138,6 +138,13 @@ export interface ChangeRowVM {
    *  *A rule change and the agent that asked*). Null for anyone else, and
    *  for a change with no session recorded. */
   session: string | null;
+  /** A change your agent made (`agent`) or asked for and you approved
+   *  (`agent-approved`), with `named`: the sentence's words around "your
+   *  agent", so the page names the agent when Home knows `session` ("Claude
+   *  Code tightened your rules", dashboard.md §4.25 *A rule change and the
+   *  agent that asked*). Absent for anyone else. */
+  who?: AgentWho;
+  named?: NamedWords;
   rows: Part[][];
   createdAt: number;
   undone: boolean;
@@ -407,7 +414,7 @@ export function changeWarnings(edits: readonly unknown[]): Part[][] {
   return [
     ...farOwnModels(edits).map((m) => [
       c(m.name), t(" would count as your own model, but "), c(m.url),
-      t(" is not on this machine or a private network address. Files marked \u201cYour own AI only\u201d could then be sent there. Allow it only if you or your organization control that server."),
+      t(" is not on this computer or a private network address. Files marked \u201cYour own AI only\u201d could then be sent there. Allow it only if you or your organization control that server."),
     ]),
     ...plainHttpOwnModels(edits).map((m) => [
       c(m.name), t(" is at a plain http address on another computer ("), c(m.url),
@@ -420,7 +427,7 @@ export function changeWarnings(edits: readonly unknown[]): Part[][] {
 function promptActionWords(action: unknown): string {
   switch (action) {
     case "block": return " stops the prompt from being sent";
-    case "mask": return " is replaced by a placeholder the AI can still use";
+    case "mask": return " is masked, as a short code the AI can still use";
     case "redact": return " is removed before the AI reads it";
     case "log": return " is only recorded";
     case "pass": return " is sent as typed";
@@ -617,14 +624,55 @@ export function changeWho(ch: Pick<PolicyChangeRow, "via" | "requestedBy" | "pro
   return "you";
 }
 
+/** The two kinds of change the agent made or asked for, whose sentences
+ *  name it when the page knows its session. */
+export type AgentWho = "agent" | "agent-approved";
+/** A sentence's words around "your agent": the page puts the agent's name
+ *  between them ("Claude Code" + " tightened your rules"), never by matching
+ *  the English it was sent. */
+export interface NamedWords { before: string; after: string }
+/** The sentence with no name known: "Your agent …" or "… your agent …". */
+function agentSentence(w: NamedWords): string {
+  return w.before + (w.before ? "your agent" : "Your agent") + w.after;
+}
+
+/** The Settings card a change was made on, read from the ops of its edits
+ *  (dashboard.md §4.25i *Who, in one place*): null with no edits, edits from
+ *  more than one card, or an op of none of them. */
+export type SettingsCard = "models" | "labels" | "prompt";
+const SETTINGS_CARD_OPS: Record<SettingsCard, readonly string[]> = {
+  models: ["add-model", "update-model", "remove-model", "restore-model"],
+  labels: ["map-sensitivity-label", "unmap-sensitivity-label"],
+  prompt: ["set-prompt-filter", "set-prompt-action", "remove-prompt-action", "add-prompt-exception", "remove-prompt-exception"],
+};
+export function settingsCard(edits: readonly unknown[] | null | undefined): SettingsCard | null {
+  if (!Array.isArray(edits) || edits.length === 0) return null;
+  let card: SettingsCard | null = null;
+  for (const raw of edits) {
+    const op = raw && typeof raw === "object" ? (raw as Record<string, unknown>).op : undefined;
+    const of = (Object.keys(SETTINGS_CARD_OPS) as SettingsCard[]).find((k) => SETTINGS_CARD_OPS[k].includes(str(op)));
+    if (!of || (card !== null && card !== of)) return null;
+    card = of;
+  }
+  return card;
+}
+const SETTINGS_SENTENCE: Record<SettingsCard | "mixed", string> = {
+  models: "You changed your models in Settings",
+  labels: "You changed your sensitivity labels in Settings",
+  prompt: "You changed your prompt filters in Settings",
+  mixed: "You changed a setting in Settings",
+};
+
 export function toChangeRow(ch: PolicyChangeRow, view: PatternView = {}): ChangeRowVM {
   const who = changeWho(ch);
+  const named = who === "agent" ? { before: "", after: " tightened your rules" }
+    : who === "agent-approved" ? { before: "You approved a change ", after: " asked for" }
+    : null;
   const sentence =
-    who === "agent" ? "Your agent tightened your rules"
+    named ? agentSentence(named)
     : who === "scan-applied" ? "A rule Mandu suggested was applied from the terminal or by your agent"
-    : who === "agent-approved" ? "You approved a change your agent asked for"
     : who === "rules-page" ? "You changed a rule on the Rules page"
-    : who === "settings" ? "You changed your models in Settings"
+    : who === "settings" ? SETTINGS_SENTENCE[settingsCard(ch.edits) ?? "mixed"]
     : who === "describe" ? "You changed your rules with Describe a rule"
     : who === "you" ? (ch.via === "tighten" ? "You tightened your rules" : "You changed your rules")
     : who === "file" ? "policy.yaml was edited directly, not through Mandu"
@@ -636,10 +684,9 @@ export function toChangeRow(ch: PolicyChangeRow, view: PatternView = {}): Change
   const rows = ch.via === "undo" || !Array.isArray(ch.edits) || ch.edits.length === 0
     ? (ch.delta ?? []).map((d) => [t(d.direction === "relax" ? "Loosened: " : "Tightened: "), c(d.facet === "paths" ? tildePath(str(d.subject), view.home ?? "") : str(d.subject))])
     : (view.patterns === false ? hidePromptPatterns(ch.edits).edits : ch.edits).map((e) => editWords(e, view.home ?? ""));
-  const agent = who === "agent" || who === "agent-approved";
-  const session = agent && typeof ch.sessionKey === "string" && ch.sessionKey !== "" ? ch.sessionKey : null;
+  const session = named && typeof ch.sessionKey === "string" && ch.sessionKey !== "" ? ch.sessionKey : null;
   return {
-    id: ch.id, sentence, session, rows, createdAt: ch.createdAt, undone: ch.undoneAt !== null, undoable: ch.undoable === true,
+    id: ch.id, sentence, session, ...(named ? { who: who as AgentWho, named } : {}), rows, createdAt: ch.createdAt, undone: ch.undoneAt !== null, undoable: ch.undoable === true,
     ...(typeof ch.proposalId === "string" && ch.proposalId !== "" ? { proposalId: ch.proposalId } : {}),
   };
 }
@@ -657,21 +704,35 @@ export interface RuleOriginVM {
   /** The agent's session, for "See what the agent was doing"; null unless
    *  an agent asked for the change. */
   session: string | null;
+  /** The agent made the change (`agent`) or asked for it (`agent-approved`),
+   *  with the sentence's words around "your agent" (`named`), as on a Rule
+   *  changes row. Absent for anyone else. */
+  who?: AgentWho;
+  named?: NamedWords;
   /** A later edit, not recorded here, changed the rule since. */
   changedSince: boolean;
+  /** The change itself (`pc-…`), which the line links in Approvals at its
+   *  Rule changes row (`/approvals/<id>`); null when not recorded. */
+  changeId: string | null;
 }
 
 export const UNRECORDED_ORIGIN: RuleOriginVM = {
   recorded: false,
   sentence: "No record of who added this. It was already in policy.yaml before Mandu kept a record, or was written while Mandu was not running",
-  at: null, session: null, changedSince: false,
+  at: null, session: null, changedSince: false, changeId: null,
 };
+
+/** The origin words of a change the agent made or asked for. */
+function originNamed(who: ChangeWho, added: boolean): NamedWords | null {
+  if (who === "agent") return { before: "", after: added ? " added this. It only makes your rules stricter, so it did not need your OK" : " changed this. It only made your rules stricter, so it did not need your OK" };
+  if (who === "agent-approved") return { before: "", after: added ? " asked for this and you approved it" : " asked to change this and you approved it" };
+  return null;
+}
 
 function originSentence(who: ChangeWho, added: boolean): string {
   switch (who) {
-    case "agent": return added ? "Your agent added this. It only makes your rules stricter, so it did not need your OK" : "Your agent changed this. It only made your rules stricter, so it did not need your OK";
+    case "agent": case "agent-approved": return agentSentence(originNamed(who, added)!);
     case "scan-applied": return added ? "Mandu suggested this, and it was applied from the terminal or by your agent. It only makes your rules stricter, so it did not need your OK" : "Mandu suggested this change, and it was applied from the terminal or by your agent. It only made your rules stricter, so it did not need your OK";
-    case "agent-approved": return added ? "Your agent asked for this and you approved it" : "Your agent asked to change this and you approved it";
     case "rules-page": return added ? "You added this on the Rules page" : "You changed this on the Rules page";
     case "settings": return added ? "You added this in Settings" : "You changed this in Settings";
     case "describe": return added ? "You added this with Describe a rule" : "You changed this with Describe a rule";
@@ -702,14 +763,17 @@ export function ruleOrigins(changes: readonly PolicyChangeRow[]): Record<string,
     for (const item of ch.rules ?? []) {
       for (const id of item.rowIds) {
         if (id in out) continue;
+        const named = originNamed(who, item.added);
         out[id] = item.removed
           ? UNRECORDED_ORIGIN
           : {
               recorded: true,
               sentence: originSentence(who, item.added),
               at: ch.createdAt,
-              session: who === "agent" || who === "agent-approved" ? ch.sessionKey : null,
+              session: named ? ch.sessionKey : null,
+              ...(named ? { who: who as AgentWho, named } : {}),
               changedSince: !item.current,
+              changeId: ch.id,
             };
       }
     }

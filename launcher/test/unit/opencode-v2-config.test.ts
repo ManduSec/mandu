@@ -27,7 +27,7 @@ import {
   type OpencodeLayer,
 } from "../../src/opencode-config.js";
 import {
-  agentModelPlan, opencodeV2ModelPlan, opencodeV2ProviderVerdict, OPENAI_API_BASE, type OpencodeV2Input,
+  agentModelPlan, opencodeV2ModelPlan, opencodeV2ProviderVerdict, OPENAI_API_BASE, GEMINI_API_BASE, type OpencodeV2Input,
 } from "../../src/agent-model-route.js";
 import {
   buildOpencodeConfigDir, buildOpencodeWrapDoc, OPENCODE_DENY_EXECUTE, OPENCODE_RUN_FILE, opencodeConfigDirOf, opencodeLockdownEnv,
@@ -60,7 +60,7 @@ test("normalize: model references in both spellings, with the #variant and the o
   const n = normalizeOpencodeDoc({
     model: "anthropic/claude-sonnet-4-5#max",
     small_model: "openai/gpt-5-mini",
-    agent: { build: { model: "google/gemini-3" }, rev: { model: "xai/grok-4" } },
+    agent: { build: { model: "mistral/mistral-3" }, rev: { model: "xai/grok-4" } },
     mode: { plan: { model: "mistral/large" } },
     agents: { rev: { model: { providerID: "anthropic", model: "claude-opus-4-8", variant: "high" } } },
     command: { c1: { template: "x", model: "deepseek/chat" } },
@@ -70,7 +70,7 @@ test("normalize: model references in both spellings, with the #variant and the o
   assert.deepEqual(n.agents, {
     title: { ref: "openai/gpt-5-mini", where: "small_model" },
     plan: { ref: "mistral/large", where: "mode.plan.model" },
-    build: { ref: "google/gemini-3", where: "agent.build.model" },
+    build: { ref: "mistral/mistral-3", where: "agent.build.model" },
     rev: { ref: "anthropic/claude-opus-4-8#high", where: "agents.rev.model" }, // V2 wins per name
   });
   assert.deepEqual(n.commands, {
@@ -146,17 +146,17 @@ test("normalize: provider rules in OpenCode 2's order within a document (V1 list
 
 test("v2 plan: anthropic models in either spelling launch; argv -m replaces the main model; a wrapper or --help is not checked", () => {
   assert.deepEqual(plan(v2(layer("global", { model: "anthropic/claude-sonnet-4-5#max", agents: { r: { model: "anthropic/claude-opus-4-8" } } }))), { refusal: null, routes: [] });
-  assert.equal(refusal(v2(layer("project", { model: "google/gemini-3" })), ["opencode", "run", "-m", "anthropic/claude-sonnet-4-5", "hi"]), "");
-  assert.match(refusal(v2(), ["opencode", "run", "-m", "google/gemini-3#fast", "hi"]), /model google\/gemini-3#fast \(--model\)/);
-  assert.equal(refusal(v2(layer("project", { model: "google/gemini-3" })), ["opencode", "--help"]), "");
-  assert.equal(refusal(v2(layer("project", { model: "google/gemini-3" })), ["oc-wrapper.sh"]), "");
+  assert.equal(refusal(v2(layer("project", { model: "mistral/mistral-3" })), ["opencode", "run", "-m", "anthropic/claude-sonnet-4-5", "hi"]), "");
+  assert.match(refusal(v2(), ["opencode", "run", "-m", "mistral/mistral-3#fast", "hi"]), /model mistral\/mistral-3#fast \(--model\)/);
+  assert.equal(refusal(v2(layer("project", { model: "mistral/mistral-3" })), ["opencode", "--help"]), "");
+  assert.equal(refusal(v2(layer("project", { model: "mistral/mistral-3" })), ["oc-wrapper.sh"]), "");
   // opencode2 (only OpenCode 2 installs it) is OpenCode, not a wrapper
-  assert.match(refusal(v2(layer("project", { model: "google/gemini-3" })), ["/usr/bin/opencode2", "run", "hi"]), /refusing to launch opencode/);
+  assert.match(refusal(v2(layer("project", { model: "mistral/mistral-3" })), ["/usr/bin/opencode2", "run", "hi"]), /refusing to launch opencode/);
 });
 
 test("v2 plan: a model on a provider Mandu does not route is refused, from any layer, naming the key and the file", () => {
   const cases: Array<[OpencodeLayer, RegExp]> = [
-    [layer("project", { model: "google/gemini-3" }), /google\/gemini-3 \(model in \/project\/opencode\.json\)/],
+    [layer("project", { model: "mistral/mistral-3" }), /mistral\/mistral-3 \(model in \/project\/opencode\.json\)/],
     [layer("global", { agents: { rev: { model: "xai/grok-4#fast" } } }), /xai\/grok-4#fast \(agents\.rev\.model in \/global\/opencode\.json\)/],
     [layer("inline", { agent: { build: { model: "mistral/large" } } }, "OPENCODE_CONFIG_CONTENT"), /agent\.build\.model in OPENCODE_CONFIG_CONTENT/],
     [layer("project", { commands: { c: { template: "x", model: { providerID: "deepseek", model: "chat" } } } }), /deepseek\/chat \(commands\.c\.model/],
@@ -166,13 +166,13 @@ test("v2 plan: a model on a provider Mandu does not route is refused, from any l
     const r = refusal(v2(l));
     assert.match(r, re);
     assert.match(r, /^mandu: refusing to launch opencode with model /);
-    assert.match(r, /aisdk:@ai-sdk\/openai-compatible package and settings\.baseURL/, "the hint is in OpenCode 2's spelling");
+    assert.match(r, /aisdk:@ai-sdk\/openai-compatible or aisdk:@ai-sdk\/google package and settings\.baseURL/, "the hint is in OpenCode 2's spelling");
   }
 });
 
 test("v2 plan: the main model comes from the highest layer that sets it", () => {
-  assert.equal(refusal(v2(layer("global", { model: "google/gemini-3" }), layer("project", { model: "anthropic/claude-sonnet-4-5" }))), "");
-  assert.match(refusal(v2(layer("global", { model: "anthropic/claude-sonnet-4-5" }), layer("project", { model: "google/gemini-3" }))), /model in \/project/);
+  assert.equal(refusal(v2(layer("global", { model: "mistral/mistral-3" }), layer("project", { model: "anthropic/claude-sonnet-4-5" }))), "");
+  assert.match(refusal(v2(layer("global", { model: "anthropic/claude-sonnet-4-5" }), layer("project", { model: "mistral/mistral-3" }))), /model in \/project/);
 });
 
 test("v2 plan: openai and a declared OpenAI-compatible provider (either spelling) are ROUTED", () => {
@@ -196,7 +196,7 @@ test("v2 provider verdict: why a provider is not routed", () => {
   };
   assert.equal(why("anthropic"), "anthropic");
   assert.equal(why("openai"), "route");
-  assert.match(why("openrouter"), /only when providers\.openrouter names the aisdk:@ai-sdk\/openai-compatible package and settings\.baseURL/);
+  assert.match(why("openrouter"), /only when providers\.openrouter names the aisdk:@ai-sdk\/openai-compatible or aisdk:@ai-sdk\/google package and settings\.baseURL/);
   assert.match(why("x", { x: { package: "aisdk:@openrouter/ai-sdk-provider", baseURL: "https://x" } }), /uses the aisdk:@openrouter\/ai-sdk-provider package/);
   assert.match(why("x", { x: { package: "aisdk:@ai-sdk/openai-compatible" } }), /no base URL Mandu sends to \(settings\.baseURL/);
   assert.match(why("x", { x: { package: "aisdk:@ai-sdk/openai-compatible", baseURL: "http://lan:1/v1" } }), /no base URL/);
@@ -250,7 +250,7 @@ test("v2 plan: a config file it could not read is refused (it could hold any of 
 test("agentModelPlan: the OpenCode 2 input replaces the 1.x config read", () => {
   const cfg = { kind: "ok" as const, path: "/h/opencode.json", doc: { model: "anthropic/claude-sonnet-4-5" } };
   assert.equal(agentModelPlan("opencode", RUN, cfg).refusal, null);
-  assert.match(agentModelPlan("opencode", RUN, cfg, {}, v2(layer("project", { model: "google/gemini-3" }))).refusal ?? "", /google\/gemini-3/);
+  assert.match(agentModelPlan("opencode", RUN, cfg, {}, v2(layer("project", { model: "mistral/mistral-3" }))).refusal ?? "", /mistral\/mistral-3/);
 });
 
 // ── the routing Mandu writes for a 2.x launch ────────────────────────────────
@@ -496,13 +496,20 @@ test("opencodeV2Input: only for a 2.x launch; the `opencode <dir>` argument's pr
   try {
     const home = join(root, "home"), cwd = join(root, "cwd"), other = join(root, "other");
     mkdirSync(home); mkdirSync(cwd); mkdirSync(other);
-    writeFileSync(join(other, "opencode.json"), '{"model":"google/gemini-3"}');
+    writeFileSync(join(other, "opencode.json"), '{"model":"mistral/mistral-3"}');
     assert.equal(opencodeV2Input(["opencode", "run", "hi"], "1.18.13", {}, cwd, home), undefined);
     assert.deepEqual(opencodeV2Input(["opencode", "run", "hi"], "2.0.23", {}, cwd, home)?.layers.filter((l) => l.path.startsWith(root)), []);
     const withDir = opencodeV2Input(["opencode2", "../other"], null, {}, cwd, home);
     assert.ok(withDir?.layers.some((l) => l.path === join(other, "opencode.json")));
-    assert.match(opencodeV2ModelPlan(["opencode2", "../other"], withDir!).refusal ?? "", /google\/gemini-3 \(model in .*other\/opencode\.json\)/);
+    assert.match(opencodeV2ModelPlan(["opencode2", "../other"], withDir!).refusal ?? "", /mistral\/mistral-3 \(model in .*other\/opencode\.json\)/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("v2 provider verdict: the built-in google provider and an aisdk:@ai-sdk/google provider are routed (model-wires.md §5)", () => {
+  assert.deepEqual(opencodeV2ProviderVerdict("google", {}), { kind: "route", route: { id: "google", api: "google-generative-ai", upstream: GEMINI_API_BASE } });
+  assert.deepEqual(opencodeV2ProviderVerdict("gem", { gem: { package: "aisdk:@ai-sdk/google", baseURL: "https://gemini.corp.example/v1beta" } } as never),
+    { kind: "route", route: { id: "gem", api: "google-generative-ai", upstream: "https://gemini.corp.example/v1beta" } });
+  assert.equal(opencodeV2ProviderVerdict("vx", { vx: { package: "aisdk:@ai-sdk/google-vertex" } } as never).kind, "refuse");
 });

@@ -13,7 +13,7 @@ stateAxes("secrets"); // pure lists; the profile they feed is the secrets-mode e
 
 test("runtimeRegistryPaths: every entry an unconfined Mandu process reads, writes through or deletes from, dashboard.log and dashboard-<pid>.port(.tmp) included", () => {
   assert.deepEqual(runtimeRegistryPaths("/tmp/mandu-501/"), {
-    dirs: ["/tmp/mandu-501/dashboards", "/tmp/mandu-501/instances", "/tmp/mandu-501/logs", "/tmp/mandu-501/release-check", "/tmp/mandu-501/test", "/tmp/mandu-501/vm-guests"],
+    dirs: ["/tmp/mandu-501/attachments", "/tmp/mandu-501/dashboards", "/tmp/mandu-501/instances", "/tmp/mandu-501/logs", "/tmp/mandu-501/release-check", "/tmp/mandu-501/test", "/tmp/mandu-501/vm-guests"],
     names: ["/tmp/mandu-501/arbiter.sock", "/tmp/mandu-501/current", "/tmp/mandu-501/dashboard.log"],
     prefixes: ["/tmp/mandu-501/.current.tmp-", "/tmp/mandu-501/dashboard-"],
   });
@@ -32,7 +32,7 @@ test("scopeIdProblem: one folder name that is none of the registry's entries, th
   for (const id of ["a/b", "instances/x", "/x", "x/"]) assert.match(why(id), /holds a `\/`/, id);
   assert.match(why("x\0y"), /NUL/);
   for (const id of [".", ".."]) assert.match(why(id), /not a folder name/, id);
-  for (const id of ["instances", "current", "arbiter.sock", "dashboards", "dashboard.log", "vm-guests", "logs", "test", "human", "release-check", "Release-Check"]) {
+  for (const id of ["attachments", "Attachments", "instances", "current", "arbiter.sock", "dashboards", "dashboard.log", "vm-guests", "logs", "test", "human", "release-check", "Release-Check"]) {
     assert.match(why(id), /one of Mandu's own entries in the runtime folder/, id);
   }
   assert.match(why(".current.tmp-99"), /starting `\.current\.tmp-`/);

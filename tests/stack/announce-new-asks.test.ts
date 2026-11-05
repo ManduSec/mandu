@@ -23,6 +23,11 @@
  *   A4  the oracle: the region never holds a `$MDU` token, the secret's
  *       name or value, the host, nor the agent's reason.
  *
+ * The top bar's Approvals link is named for its count at each step (§4.25
+ * *The top bar's two marks*, 2026-10-26): A2 "Approvals, 1 waiting for
+ * your answer", A3 "Approvals, 2 waiting for your answer"; A4 holds its
+ * name and title to the same oracle.
+ *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON).
  */
 import { test, after } from "node:test";
@@ -92,6 +97,7 @@ test("served page: a new send question, then a rule change the agent asks for, a
   const base = `http://127.0.0.1:${await dashboard.listen(0)}`;
   try {
     const region = (doc: any) => doc.getElementById("top-announce");
+    const link = (doc: any) => doc.getElementById("nav-approvals-count").parentElement;
     const drawn = (doc: any) => doc.getElementById("top-status").children.length > 0;
     await servedProductPage(base, "/", drawn, async (doc) => {
       const w = doc.defaultView;
@@ -103,6 +109,8 @@ test("served page: a new send question, then a rule change the agent asks for, a
       // A1
       assert.equal(region(doc).getAttribute("aria-live"), "polite");
       assert.equal(region(doc).textContent, "", "nothing waits, nothing said");
+      assert.equal(link(doc).hasAttribute("aria-label"), false, "nothing waits: the link reads 'Approvals'");
+      assert.equal(link(doc).hasAttribute("title"), false);
 
       // A2: the real gate asks about a masked variable at an unbound host.
       const vars = await gate.registerEnvSecrets({ vars: [{ name: NAME, value: VALUE }], sessionKey: SESSION });
@@ -119,6 +127,9 @@ test("served page: a new send question, then a rule change the agent asks for, a
       await waitWhile(() => region(doc).textContent === "");
       lines.push(region(doc).textContent);
       assert.equal(lines[0], `${card!.agents[0] || "An agent"} needs your OK. 1 waiting in Approvals.`);
+      lines.push(link(doc).getAttribute("aria-label"), link(doc).title);
+      assert.equal(link(doc).getAttribute("aria-label"), "Approvals, 1 waiting for your answer");
+      assert.equal(link(doc).title, "Approvals, 1 waiting for your answer");
 
       // A3: the agent asks for a loosening rule change.
       const r = await gate.policyPropose({ edits: [{ op: "allow-connect", host: RULE_HOST }], reason: REASON, sessionKey: SESSION });
@@ -126,13 +137,17 @@ test("served page: a new send question, then a rule change the agent asks for, a
       poll();
       await waitWhile(() => region(doc).textContent === lines[0]);
       lines.push(region(doc).textContent);
-      assert.equal(lines[1], "Your agent asks to change a rule. 2 waiting in Approvals.");
+      assert.equal(lines[3], "Your agent asks to change a rule. 2 waiting in Approvals.");
+      lines.push(link(doc).getAttribute("aria-label"), link(doc).title);
+      assert.equal(link(doc).getAttribute("aria-label"), "Approvals, 2 waiting for your answer");
+      assert.equal(link(doc).title, "Approvals, 2 waiting for your answer");
 
-      // A4
+      // A4: the region's lines, and the link's names and titles.
+      assert.equal(lines.length, 6);
       for (const line of lines) {
-        assert.ok(!line.includes(VALUE), `CONFIDENTIALITY VIOLATION: the region carries the value: ${line}`);
+        assert.ok(!line.includes(VALUE), `CONFIDENTIALITY VIOLATION: the region or the link carries the value: ${line}`);
         assert.doesNotMatch(line, /\$MDU/, "no token");
-        for (const word of [NAME, HOST, RULE_HOST, "deploy step"]) assert.ok(!line.includes(word), `the region names ${word}: ${line}`);
+        for (const word of [NAME, HOST, RULE_HOST, "deploy step"]) assert.ok(!line.includes(word), `the region or the link names ${word}: ${line}`);
       }
     }, { headers: { Cookie: ADMIN_COOKIE }, beforeScripts: (w) => w.eval(DENIED) });
   } finally {

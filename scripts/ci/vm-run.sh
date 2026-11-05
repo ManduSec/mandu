@@ -7,6 +7,7 @@
 #                        [--out DIR] [--dry-run] [--run-id ID] [--source local|gitlab]
 #                        [--ref REF] [--selftest | --exec 'COMMAND']
 #                        [--network] [--ollama] [--credential K[,K]] [--lane L]
+#                        [--fixture F[,F]]
 #                        [--include-flaky] [--include-internet] [--timeout S]
 #                        [--demo-ids L] [--demo-sides L] [--demo-models L]
 #                        [--demo-repeat N] [--demo-jobs N] [--demo-agents L]
@@ -40,6 +41,11 @@
 #   --exec CMD   after the build, run CMD as `ci` in /work/mandu instead of the
 #                suites; what it leaves in release/ comes back under
 #                <results>/artifacts/release/ (the release jobs)
+#   --fixture F[,F]  start these fixtures of the image as root before the
+#                pipeline (or the shell): `k3s`, a one-node cluster off this
+#                machine for integration.live-kube-clients
+#                (docs/design/testing/live-clients.md §3). It turns the cpu
+#                controller on above the suites, so no other run takes it
 #
 # The nightly's options (continuous-integration.md §9); without them nothing below
 # changes:
@@ -126,7 +132,7 @@ KINDS="unit,component,stack,replay-drill,sandbox" NEED="" ONLY="" REV=HEAD WORKT
 VCPUS="${MANDU_CI_VCPUS:-32}" MEM="${MANDU_CI_MEM:-65536}" SHELL_MODE=0 KEEP=0 OUT="" DRY=0
 RUN_ID="" SOURCE=local REF="${CI_COMMIT_REF_NAME:-}" MODE=run EXEC=""
 TIMEOUT="${MANDU_CI_TIMEOUT:-2700}"
-NETWORK=0 OLLAMA=0 CRED="" LANE="" INC_FLAKY=0 INC_INTERNET=0
+NETWORK=0 OLLAMA=0 CRED="" LANE="" INC_FLAKY=0 INC_INTERNET=0 FIXTURES=""
 OLLAMA_HOST_ADDR="${MANDU_CI_OLLAMA_HOST:-127.0.0.1:11434}"
 OLLAMA_GUEST_ADDR="10.0.2.100:11434"
 
@@ -156,6 +162,7 @@ while [[ $# -gt 0 ]]; do
     --ollama) OLLAMA=1; shift ;;
     --credential) need "$@"; CRED="$2"; shift 2 ;;
     --lane) need "$@"; LANE="$2"; shift 2 ;;
+    --fixture) need "$@"; FIXTURES="$2"; shift 2 ;;
     --include-flaky) INC_FLAKY=1; shift ;;
     --include-internet) INC_INTERNET=1; shift ;;
     --timeout) need "$@"; TIMEOUT="$2"; shift 2 ;;
@@ -187,6 +194,7 @@ if [[ -n "$CRED" ]]; then
   [[ "$MODE" == shell || "$MODE" == exec ]] && { echo "vm-run: --credential is for the suites: refused with --shell and --exec" >&2; exit 2; }
 fi
 [[ $INC_INTERNET -eq 1 && $NETWORK -eq 0 ]] && { echo "vm-run: --include-internet needs --network" >&2; exit 2; }
+[[ -z "$FIXTURES" || "$FIXTURES" =~ ^(k3s)(,(k3s))*$ ]] || { echo "vm-run: --fixture: k3s (the fixtures the image has)" >&2; exit 2; }
 [[ -z "$LANE" || "$LANE" == subscription || "$LANE" == api-key ]] || { echo "vm-run: --lane: subscription or api-key" >&2; exit 2; }
 CRED_HAS_API=0; [[ ",$CRED," == *,api,* ]] && CRED_HAS_API=1
 if [[ -n "$CRED" && -n "$LANE" ]] && { [[ "$LANE" == api-key && $CRED_HAS_API -eq 0 ]] || [[ "$LANE" != api-key && $CRED_HAS_API -eq 1 ]]; }; then
@@ -232,7 +240,7 @@ JOBENV_TEXT="$(MANDU_CI_BUDGET="$BUDGET" MANDU_CI_MODE="$MODE" MANDU_CI_KINDS="$
   MANDU_CI_IMAGE="$IMAGE_NAME" MANDU_CI_EXEC_B64="$EXEC_B64" \
   MANDU_CI_NETWORK="$([[ $NETWORK -eq 1 ]] && echo 1)" MANDU_CI_OLLAMA="$([[ $OLLAMA -eq 1 ]] && echo "$OLLAMA_GUEST_ADDR")" \
   MANDU_CI_CREDENTIAL="$CRED" MANDU_CI_INCLUDE_FLAKY="$([[ $INC_FLAKY -eq 1 ]] && echo 1)" \
-  MANDU_CI_INCLUDE_INTERNET="$([[ $INC_INTERNET -eq 1 ]] && echo 1)" MANDU_CI_LANE="$LANE" ci_render_job_env)" || exit 2
+  MANDU_CI_INCLUDE_INTERNET="$([[ $INC_INTERNET -eq 1 ]] && echo 1)" MANDU_CI_LANE="$LANE" MANDU_CI_FIXTURES="$FIXTURES" ci_render_job_env)" || exit 2
 
 # ── the qemu command ───────────────────────────────────────────────────────
 WORK_BASE="${MANDU_CI_WORK:-$CACHE/runs}"

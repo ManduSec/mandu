@@ -8,7 +8,7 @@
  * and services/web/app.conf both found, two tick boxes read "Save app.conf",
  * two ⋯ "More about app.conf", two Skips in Changes to save "Skip the
  * suggestion for app.conf", and Not a secret asked "Mark app.conf as not a
- * secret?" of either. Now a row whose name another suggestion shares is
+ * secret?" of either (asked on the page since 2026-10-25). Now a row whose name another suggestion shares is
  * named by its path (old versions: "1 old version of <path>"); a row whose
  * name is its own keeps it.
  *
@@ -71,6 +71,13 @@ const button = (box: Doc, words: string) => [...box.querySelectorAll("button")].
 const byId = (doc: Doc, id: string) => doc.getElementById(id);
 const skipOf = (doc: Doc, id: string) => byId(doc, "files-pending-list").querySelector(`li[data-id="${id}"] button`);
 /** Enter (or Space) on a control that keeps working: it has the focus. */
+/** The question Not a secret asks in the opened row (dashboard.md §4.25n
+ *  *Rules asks on the page, not in a browser dialog*), its sentence focused. */
+function question(doc: Doc): string {
+  const words = detail(doc).querySelector(".ask-in-place-words");
+  assert.equal(doc.activeElement, words, "the question has the focus");
+  return words.textContent;
+}
 function enter(c: Doc): void {
   c.focus();
   c.click();
@@ -131,9 +138,11 @@ test("Not a secret on a same-named file asks of its path and says its path when 
   const { doc, window } = await opened([API, WEB, CI], {
     "POST suggestions/dismiss": (b: { id: string }) => (dismissed.push(b), { dismissed: b.id, status: "denied", ...listing([API, CI]) }),
   });
-  window.confirm = (q: string) => (asked.push(q), true);
+  window.confirm = () => { throw new Error("window.confirm called"); };
   enter(moreOf(doc, "pp-000002"));
   enter(button(detail(doc), "Not a secret"));
+  asked.push(question(doc));
+  enter(button(detail(doc), "Mark as not a secret"));
   await tick();
   assert.deepEqual(asked, ["Mark ~/proj/services/web/app.conf as not a secret? Mandu will not suggest it again, and the AI can still read it."]);
   assert.deepEqual(dismissed, [{ id: "pp-000002" }]);
@@ -148,9 +157,11 @@ test("Not a secret on a file whose name is its own asks and tells with that name
   const { doc, window } = await opened([API, WEB, CI], {
     "POST suggestions/dismiss": (b: { id: string }) => ({ dismissed: b.id, status: "denied", ...listing([API, WEB]) }),
   });
-  window.confirm = (q: string) => (asked.push(q), true);
+  window.confirm = () => { throw new Error("window.confirm called"); };
   enter(moreOf(doc, "pp-000003"));
   enter(button(detail(doc), "Not a secret"));
+  asked.push(question(doc));
+  enter(button(detail(doc), "Mark as not a secret"));
   await tick();
   assert.deepEqual(asked, ["Mark ci.conf as not a secret? Mandu will not suggest it again, and the AI can still read it."]);
   assert.equal(byId(doc, "rules-notice").textContent, "ci.conf is marked as not a secret. Mandu will not suggest it again.");

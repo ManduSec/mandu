@@ -35,7 +35,7 @@ import { describeBuild, ownArbiterBuild, parseBuild, versionVerdict, type BuildI
 import { NODE_FLOOR, nodeMeetsFloor } from "./node-floor.js";
 import { ndjsonCall } from "./secret-setup.js";
 import { Layout } from "./services/layout.js";
-import { describeSupervisor, disableCommand, OWN_STACK_NOTE, ownStackCommand, stackSupervisor, withStackFacts, type StackSupervisor } from "./stack-supervisor.js";
+import { describeSupervisor, disableCommand, OWN_STACK_NOTE, ownStackCommand, serveUpgradeFix, stackSupervisor, withStackFacts, type StackSupervisor } from "./stack-supervisor.js";
 // A cycle (subcommands dispatches here), used only at call time.
 import { residentPidsOn } from "./subcommands.js";
 import { launcherVersion } from "./update-check.js";
@@ -343,7 +343,16 @@ export function problemsOf(r: Omit<VersionReport, "problems">): Problem[] {
       ? `another build of Mandu ${s.version} (${describeBuild(s.build ?? { bundle: null, rev: null })}; this mandu's is ${describeBuild(s.ourBuild ?? { bundle: null, rev: null })})`
       : theirs;
     const from = s.codeDir ? `, running from ${s.codeDir}` : "";
-    if (s.supervisor && s.supervisor.arbiterOutside === true) {
+    const upgrade = s.supervisor ? serveUpgradeFix(s.supervisor) : null;
+    if (s.supervisor && upgrade !== null) {
+      // The shipped unit, on this mandu's own folder (runtime-instances.md
+      // §4.1d): its files were updated in place, its processes were not.
+      out.push({
+        id: "services-serve-not-upgraded",
+        problem: `the Mandu services running for you (arbiter pid ${s.pid ?? "?"}${from}) are ${what}: ${describeSupervisor(s.supervisor)} runs from this mandu's folder but still runs its earlier code.`,
+        fix: `${upgrade} (while a mandu session runs it restarts nothing; --wait waits for the sessions to end, --force restarts now)`,
+      });
+    } else if (s.supervisor && s.supervisor.arbiterOutside === true) {
       // Only the arbiter is old: the service's dashboard adopted an arbiter
       // someone else started (runtime-instances.md §4.1b).
       const ours = s.supervisor.runsOurCode === true;
@@ -397,7 +406,7 @@ export function problemsOf(r: Omit<VersionReport, "problems">): Problem[] {
     out.push({
       id: "node-too-old",
       problem: `Node ${r.node.version} (${r.node.path}) is older than Mandu needs (${r.node.floor}).`,
-      fix: "install Node 22.13 or newer (nvm install 22)",
+      fix: "install Node 22.15 or newer (nvm install 22)",
     });
   }
   return out;

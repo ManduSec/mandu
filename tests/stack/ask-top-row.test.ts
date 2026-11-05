@@ -28,6 +28,14 @@
  *       where it ends*): on Approvals, the rule change's and the waiting
  *       question's end at the moment, with no period after it; on Home,
  *       the short card's keeps its period before "Details in Approvals".
+ *   A4  Home's short card of the send says which answers last (dashboard.md
+ *       §4.34 *Home's card says which answers last*): on a line of its own
+ *       between the moment and "Details in Approvals", Allow once and Send
+ *       without it cover only the next such request, Always allow and Block
+ *       are kept for the variable and the host (as code) until changed
+ *       under Rules (a link to Your rules), each verb a button of the card;
+ *       `/api/home` sends the same words, the names and never a `$MDU` form
+ *       or a value; the expanded card on Approvals does not draw it.
  *
  * The oracle: no page or answer read here carries the key, the `.env`'s
  * value or the variable's value.
@@ -66,6 +74,8 @@ const SESSION = "ask-top-row-session";
  *  with nothing after the moment (§4.25u). */
 const CLOCK = String.raw`[A-Z][a-z]{2} \d{1,2}(?:, \d{4})?, \d{2}:\d{2}`;
 const MOMENT_ALONE = new RegExp(`^${CLOCK} · just now$`);
+/** Home's line on which of the send's answers last (A4). */
+const LASTING = "Allow once and Send without it cover only the next such request. Always allow and Block are kept for GITHUB_TOKEN and gist.github.com until you change them under Rules.";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Doc = any;
@@ -169,17 +179,32 @@ test("Approvals and Home over the real arbiter: a rule change your agent asked f
       for (const sel of ["#approvals-proposals .ask.proposal", "#approvals-waiting .ask.expanded"]) {
         assert.match(doc.querySelector(`${sel} .ask-sub`).textContent, MOMENT_ALONE, sel);
       }
+      // A4: the expanded card says it in full instead.
+      assert.equal(doc.querySelector("#approvals-waiting .ask.expanded .ask-answers"), null);
       pages.push(doc.documentElement.outerHTML);
     }, { css, ...signedIn });
 
     // A2: Home.
     await servedProductPage(base, "/", (doc: Doc) => !!doc.querySelector("#home-waiting .ask"), (doc: Doc) => {
       assert.match(headerOf(doc.querySelector("#home-waiting .ask")), /GITHUB_TOKEN/);
-      // A3: the link follows the moment, so the period stays.
-      assert.match(doc.querySelector("#home-waiting .ask .ask-sub").textContent, new RegExp(`${CLOCK} · just now\\. Details in Approvals$`));
+      // A3: the link follows the moment, so the period stays. A4: the line
+      // on which answers last sits between them.
+      assert.match(doc.querySelector("#home-waiting .ask .ask-sub").textContent, new RegExp(`${CLOCK} · just now\\. ${LASTING.replace(/[.]/g, "\\.")} Details in Approvals$`));
+      const line = doc.querySelector("#home-waiting .ask .ask-sub .ask-answers");
+      assert.equal(line.textContent, LASTING);
+      assert.deepEqual([...line.querySelectorAll("code")].map((c: Doc) => c.textContent), ["GITHUB_TOKEN", "gist.github.com"], "the names as code");
+      assert.match(line.querySelector("a").getAttribute("href"), /\/rules#your-rules$/, "Rules is a link to Your rules");
+      assert.equal(line.nextElementSibling.textContent, "Details in Approvals");
+      const buttons = [...doc.querySelectorAll("#home-waiting .ask .ask-actions button")].map((b: Doc) => b.textContent);
+      assert.deepEqual(buttons, ["Allow once", "Always allow", "Send without it", "Block"], "the line names the card's own buttons");
       pages.push(doc.documentElement.outerHTML);
     }, { css, ...signedIn });
 
+    // A4: the served answer carries the same words, the names only.
+    const served = (await call("GET", "/api/home")).body as { waiting: Array<{ answersShort?: string; answersShortParts?: unknown[] }> };
+    assert.equal(served.waiting.length, 1);
+    assert.equal(served.waiting[0]!.answersShort, LASTING);
+    assert.doesNotMatch(JSON.stringify(served.waiting[0]!.answersShortParts), /\$MDU/, "the name, never the masked form");
     // The oracle: no secret value in any page or answer read here.
     bodies.push(JSON.stringify((await call("GET", "/api/home")).body), JSON.stringify((await call("GET", "/api/policy/proposals?status=pending")).body));
     for (const text of [...pages, ...bodies]) {

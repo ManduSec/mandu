@@ -38,6 +38,14 @@ async function poll(doc: any): Promise<void> {
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const button = (root: any, label: string) => [...root.querySelectorAll("button")].find((b: any) => b.textContent === label) as any;
+/** A Let it through button of a note's row, then the question it asks in
+ *  the row (dashboard.md §4.25y): its own Let it through sends the answer. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function letThrough(row: any, label: string): Promise<void> {
+  button(row, label).click();
+  await tick();
+  button(row, "Let it through").click();
+}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const turnOf = (doc: any, id: string) => [...doc.querySelectorAll("#agent-story article.turn")].find((t: any) => t.dataset.turnId === id) as any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -361,7 +369,7 @@ test("Approvals › Answered earlier: a refused Block instead keeps its words wh
   setHome(home({ answered: [done("egr-8", "blocked"), done("egr-9", "blocked")] }));
   await poll(doc);
   const changed = byId(doc, "#approvals-answered .row", "egr-9");
-  assert.ok(button(changed, "Allow instead"), "the row says the new answer");
+  assert.ok(button(changed, "Always allow instead"), "the row says the new answer");
   assert.equal(wordsOn(changed), null, "and not the old words");
 });
 
@@ -487,7 +495,7 @@ test("the note under your message: a refused Let it through keeps its words on i
   const { doc } = load({ url: AGENT_PAGE, routes: { "GET home/agent?session=s1": () => page, [LET]: () => (++lets === 1 ? ADMIN_403 : { approval: { id: "egr-3" }, scope: "once" }) } });
   await tick();
   const [row] = noteRows(doc);
-  button(row, "Let it through in this message").click();
+  await letThrough(row, "Let it through in this message");
   await tick();
   assert.match(wordsOn(row), SIGN_IN);
   page = working(1);
@@ -498,7 +506,7 @@ test("the note under your message: a refused Let it through keeps its words on i
   assert.equal(button(again, "Let it through in this message").disabled, false, "and its buttons work");
   assert.equal(wordsOn(other), null, "the other finding has none");
   // Signed in now: the answer works, and the refusal's words go with it.
-  button(again, "Let it through in this message").click();
+  await letThrough(again, "Let it through in this message");
   await tick();
   assert.equal(wordsOn(again), null);
   assert.match(again.textContent, /Let through in this message\./);
@@ -508,7 +516,7 @@ test("the note under your message: a let-through that worked keeps its line, not
   let page: unknown = working(0);
   const { doc } = load({ url: AGENT_PAGE, routes: { "GET home/agent?session=s1": () => page, [LET]: { approval: { id: "egr-3" }, scope: "session" } } });
   await tick();
-  button(noteRows(doc)[0], "Let it through for this session").click();
+  await letThrough(noteRows(doc)[0], "Let it through for this session");
   await tick();
   // The agent did more, and its next request has not come yet: the server
   // still offers the buttons on the same event.
@@ -537,7 +545,7 @@ test("the note under your message: an answer that comes back after a redraw show
     ? new Promise((r) => { answer = r; })
     : stub(url, init));
   const [row] = noteRows(doc);
-  button(row, "Let it through in this message").click();
+  await letThrough(row, "Let it through in this message");
   await tick();
   page = working(1);
   await poll(doc);

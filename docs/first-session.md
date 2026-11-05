@@ -341,7 +341,8 @@ it (if you applied the rule while Codex ran).
 
 ## OpenClaw
 
-You need Node 24.16 or newer (OpenClaw requires it), a
+You need the Node your OpenClaw requires (24.16 or newer for OpenClaw 2026.9,
+24.22.1 or newer for 2026.10; OpenClaw refuses an older one), a
 [supported OpenClaw](../README.md#supported-agents-and-platforms), and
 OpenClaw set up on its own first: run `openclaw` without
 Mandu once for its setup assistant, with an Anthropic or OpenAI API key, and

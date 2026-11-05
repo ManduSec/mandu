@@ -154,7 +154,7 @@ test("a secret the real reply filter showed on the person's screen is 'shown to 
     assert.equal(r.status, 200);
     const page = (await r.json()) as AgentPageVM;
     const lines = page.secrets.secrets.flatMap((s) => s.lines.map((l) => sentence(l.parts)));
-    assert.ok(lines.some((l) => /^You saw its real value in the agent's repl(y|ies)\. The AI kept the placeholder\.$/.test(l)), lines.join(" | "));
+    assert.ok(lines.some((l) => /^You saw its real value in the agent's repl(y|ies)\. The AI kept the masked version\.$/.test(l)), lines.join(" | "));
     assert.ok(!lines.some((l) => /sent its real value/.test(l)), lines.join(" | "));
     assert.ok(!JSON.stringify(page).includes(KEY), "no value on the product page");
   } finally {

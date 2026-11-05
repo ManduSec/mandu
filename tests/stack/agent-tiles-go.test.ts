@@ -19,7 +19,11 @@
  *       the next; "3 waiting for you" focuses the first card in Needs your
  *       OK;
  *   A2  the oracle: the model never got the registered secret, and no page
- *       or route read here carries it or a token (`$MDU`).
+ *       or route read here carries it or a token (`$MDU`);
+ *   A3  the session's History row says "3 questions waiting for you" as a
+ *       link to `/agents/<id>?go=waiting`, named by its row; followed, the
+ *       session page lands on the first card in Needs your OK (§4.25ae
+ *       *History says what waits for you*).
  *
  * Axes: secrets (stated; the arbiter's confidentiality pinned ON). What is
  * under test is the served page; the stack supplies the real blocks, the
@@ -46,6 +50,7 @@ import type { AgentPageVM } from "../../dashboard/src/view-model/agent-page.js";
 import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { resolveCssVars, stylesAt } from "../../dashboard/test/unit/ui/css-flatten.js";
 import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
+import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
 import { stateAxes } from "../lib/axes.js";
 
 stateAxes("secrets"); // confidentiality ON, integrity OFF: the axis under test
@@ -186,6 +191,24 @@ test("a session page's blocked and waiting tiles take you to the blocked steps a
         noValue(doc.body.textContent, `the rendered session page at ${width}px`);
       }, { css: resolveCssVars(stylesAt(sheets, width)) });
     }
+
+    // ── A3: History's row links its waiting questions to Needs your OK ──
+    await servedProductPage(base, "/history", (doc) => !!doc.querySelector(`#history-list .row.agent[data-session="${session}"] a.agent-waiting-link`), async (doc) => {
+      const row = doc.querySelector(`#history-list .row.agent[data-session="${session}"]`);
+      const link = row.querySelector("a.agent-waiting-link");
+      assert.equal(link.textContent, "3 questions waiting for you");
+      assert.equal(link.getAttribute("href"), `/agents/${session}?go=waiting`);
+      assert.match(link.getAttribute("aria-label"), /^3 questions waiting for you: /, "named by its own words first, then its row");
+      assert.equal(row.querySelectorAll("a.agent-waiting-link").length, 1);
+      noValue(doc.body.textContent, "the rendered History page");
+      link.click();
+      await waitWhile(() => !doc.activeElement?.classList?.contains("ask"));
+      const card = doc.activeElement;
+      assert.ok(card.classList.contains("ask"), "the followed link lands on a waiting card");
+      assert.equal(card, doc.querySelector("#agent-waiting .ask"), "the first one in Needs your OK");
+      assert.equal(doc.defaultView.location.pathname + doc.defaultView.location.search, `/agents/${session}`, "`go` used once and dropped");
+      noValue(doc.body.textContent, "the session page the link opened");
+    });
 
     // ── A2: the oracle ──
     for (const body of seen) assert.ok(!body.includes(canary), "CONFIDENTIALITY VIOLATION: the model got the registered secret");

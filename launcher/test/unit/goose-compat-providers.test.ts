@@ -42,12 +42,15 @@ function gooseUrl(base: string, path: string): URL {
 const ep = (p: string, env: Record<string, string> = {}, c: GooseConfig = NO_CFG) => gooseCompatEndpoint(gooseCompatSpec(p)!, env, c);
 
 test("goose 1.53.0's defaults: each provider's own host, as the proxy reaches it (a loopback name as 127.0.0.1)", () => {
-  assert.deepEqual(GOOSE_COMPAT_PROVIDERS.map((c) => c.provider), ["litellm", "openrouter", "ollama", "xai", "tetrate"]);
+  assert.deepEqual(GOOSE_COMPAT_PROVIDERS.map((c) => c.provider), ["litellm", "openrouter", "ollama", "xai", "tetrate", "google"]);
   assert.deepEqual(ep("litellm"), { provider: "litellm", upstream: "http://127.0.0.1:4000", basePath: "v1/chat/completions" });
   assert.deepEqual(ep("openrouter"), { provider: "openrouter", upstream: "https://openrouter.ai" });
   assert.deepEqual(ep("ollama"), { provider: "ollama", upstream: "http://127.0.0.1:11434" });
   assert.deepEqual(ep("xai"), { provider: "xai", upstream: "https://api.x.ai/v1" });
   assert.deepEqual(ep("tetrate"), { provider: "tetrate", upstream: "https://api.router.tetrate.ai" });
+  // the Gemini API: Goose joins `v1beta/models/…` to the host (model-wires.md §5)
+  assert.deepEqual(ep("google"), { provider: "google", upstream: "https://generativelanguage.googleapis.com" });
+  assert.deepEqual(ep("google", { GOOGLE_HOST: "https://gemini.gw.example/" }), { provider: "google", upstream: "https://gemini.gw.example" });
 });
 
 test("the user's own host, env first then config, normalized as Goose does (ollama: http:// added, a bare loopback name gets 11434)", () => {
@@ -118,13 +121,14 @@ test("forced env: every provider's host key at its own proxy route, routed or no
   for (const routing of [GOOSE_DEFAULT_ROUTING, gooseRoutePlan(["goose", "session"], { GOOSE_PROVIDER: "litellm", LITELLM_BASE_PATH: "gw/chat/completions" }, NO_CFG).routing]) {
     const e = gooseForcedEnv(PROXY, PROXY, routing);
     for (const c of GOOSE_COMPAT_PROVIDERS) {
-      assert.equal(e[c.hostKey], `${PROXY}/_mandu/openai/${c.provider}`, c.hostKey);
+      const family = c.api === "google-generative-ai" ? "google" : "openai";
+      assert.equal(e[c.hostKey], `${PROXY}/_mandu/${family}/${c.provider}`, c.hostKey);
       assert.equal(e[c.hostKey], gooseCompatUrl(`${PROXY}/`, c.provider));
       assert.ok(!GOOSE_PROVIDER_FENCE.some((f) => f.key === c.hostKey), `${c.hostKey} is not fenced`);
       // every path Goose joins to it stays under the provider's route
       const u = gooseUrl(e[c.hostKey]!, c.path);
       assert.equal(u.origin, PROXY);
-      assert.ok(u.pathname.startsWith(`/_mandu/openai/${c.provider}/`), u.pathname);
+      assert.ok(u.pathname.startsWith(`/_mandu/${family}/${c.provider}/`), u.pathname);
     }
   }
   assert.equal(gooseForcedEnv(PROXY)["LITELLM_BASE_PATH"], "v1/chat/completions");
@@ -134,6 +138,10 @@ test("forced env: every provider's host key at its own proxy route, routed or no
   // the paths Goose sends reach `<upstream><path>` on the proxy's routes
   assert.equal(gooseUrl(gooseForcedEnv(PROXY)["OPENROUTER_HOST"]!, "api/v1/chat/completions").pathname, "/_mandu/openai/openrouter/api/v1/chat/completions");
   assert.equal(gooseUrl(gooseForcedEnv(PROXY)["XAI_HOST"]!, "chat/completions").pathname, "/_mandu/openai/xai/chat/completions");
+  assert.equal(gooseUrl(gooseForcedEnv(PROXY)["GOOGLE_HOST"]!, "v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse").pathname, "/_mandu/google/google/v1beta/models/gemini-2.5-flash:streamGenerateContent");
+  const gem = gooseRoutePlan(["goose", "session"], { GOOSE_PROVIDER: "google" }, NO_CFG);
+  assert.equal(gem.refusal, null);
+  assert.deepEqual(gooseOpenAiRoutes(gem.routing), [{ id: "google", api: "google-generative-ai", upstream: "https://generativelanguage.googleapis.com" }]);
 });
 
 test("declarative providers: one named like a routed Chat Completions provider is refused only when the launch uses that provider; an ollama-engine one on a routed key other than OLLAMA_HOST is refused", () => {

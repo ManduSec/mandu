@@ -75,9 +75,11 @@ test("every animation of either page stops, or holds still, under reduce motion"
     }
     assert.deepEqual(ANIMATED.filter((a) => a.infinite && a.sheet === "dev/dashboard.css").map((a) => a.sel).sort(), [".banner.violation", ".dot-starting", ".s-status-running"]);
   }
-  // The product's never-ending motion is the scan figure's (§4.25ai): its
-  // lanes' dots and the key and mask riding them, each stopped below.
-  assert.deepEqual(ANIMATED.filter((a) => a.infinite && a.sheet === "app.css").map((a) => a.sel).sort(), [".sf-lane", ".sf-ride", ".sf-ride-v"]);
+  // The product has no never-ending motion (WCAG 2.2.2): the scan figure's
+  // lanes' dots and the key and mask riding them play once, under 5 s
+  // (§4.25ai; the next test), and are stopped below.
+  for (const sel of [".sf-lane", ".sf-ride", ".sf-ride-v"]) assert.ok(sels.includes(sel), `the sweep finds ${sel}`);
+  assert.deepEqual(ANIMATED.filter((a) => a.infinite && a.sheet !== "dev/dashboard.css").map((a) => a.sel).sort(), []);
   for (const a of ANIMATED) {
     const blocks = reduceDecls(a.sheet, a.sel);
     const stops = blocks.some((b) => declValue(b, "animation") === "none" || declValue(b, "animation-name") === "none");
@@ -88,6 +90,56 @@ test("every animation of either page stops, or holds still, under reduce motion"
       assert.ok(stops || holds, `${a.sheet} ${a.sel}: an animation stops (\`animation: none\`) or holds still (\`steps(1, end)\`) under reduce motion`);
     }
   }
+});
+
+/** The seconds of a time token ("1.1s", "120ms"), else null. */
+const seconds = (tok: string): number | null => {
+  const m = /^(\d*\.?\d+)(m?s)$/.exec(tok);
+  return m ? Number(m[1]) / (m[2] === "ms" ? 1000 : 1) : null;
+};
+
+/** The body of `@keyframes name` in `css`, its stops as `{ stop: decls }`. */
+function keyframes(css: string, name: string): Record<string, string> {
+  const m = new RegExp(`@keyframes\\s+${name}\\s*\\{((?:[^{}]*\\{[^{}]*\\})*)\\s*\\}`).exec(stripComments(css));
+  assert.ok(m, `@keyframes ${name} is defined`);
+  const stops: Record<string, string> = {};
+  for (const [, sel, body] of m![1]!.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    for (const s of sel!.split(",")) stops[s.trim().replace(/^from$/, "0%").replace(/^to$/, "100%")] = body!.trim();
+  }
+  return stops;
+}
+
+test("no product animation runs past 5 s, and each ends on its resting frame (WCAG 2.2.2)", () => {
+  const product = SHEETS.filter(([name]) => name !== "dev/dashboard.css");
+  let seen = 0;
+  for (const [sheet, css] of product) {
+    for (const r of flattenCss(stripComments(css)).filter((x) => !isReduce(x.media))) {
+      const anim = declValue(r.block, "animation");
+      if (!anim || anim === "none") continue;
+      seen++;
+      const where = `${sheet} "${r.selectors.join(", ")}" (${anim})`;
+      const toks = anim.split(/\s+/);
+      const duration = toks.map(seconds).find((s) => s !== null) ?? null;
+      assert.ok(duration !== null, `${where}: states its duration`);
+      assert.ok(!toks.includes("infinite") && declValue(r.block, "animation-iteration-count") !== "infinite", `${where}: plays a finite number of times`);
+      const count = toks.map(Number).find((n) => Number.isFinite(n) && n > 0) ?? 1;
+      assert.ok(duration! * count <= 5, `${where}: ${duration} s × ${count} runs past 5 s`);
+    }
+  }
+  assert.ok(seen >= 3, `the sweep finds the scan figure's three animations (${seen})`);
+  // Each ends where the drawn element rests, so nothing jumps when it stops.
+  const app = SHEETS.find(([name]) => name === "app.css")![1];
+  for (const name of ["sf-ride", "sf-ride-v"]) {
+    const k = keyframes(app, name);
+    assert.equal(declValue(k["0%"] ?? "", "transform"), "none", `${name} starts where the key or mask rests`);
+    assert.equal(declValue(k["100%"] ?? "", "transform"), "none", `${name} ends where the key or mask rests`);
+  }
+  // The lanes' dots: the end offset is a whole number of dash periods, so the
+  // last frame is the first.
+  const dash = declValue(flattenCss(stripComments(app)).find((r) => r.selectors.includes(".sf-lane") && declValue(r.block, "stroke-dasharray"))!.block, "stroke-dasharray")!;
+  const period = dash.split(/\s+/).map(Number).reduce((a, b) => a + b, 0);
+  const offset = Number(declValue(keyframes(app, "sf-flow")["100%"] ?? "", "stroke-dashoffset"));
+  assert.ok(period > 0 && Number.isInteger(offset / period), `sf-flow ends at ${offset}, a whole number of ${period} px dash periods`);
 });
 
 test("every transition of either page ends at once under reduce motion; no reduce block brings one back", () => {

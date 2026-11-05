@@ -16,16 +16,22 @@
  * real file holding a value. The agent's own channel asks the real
  * policyPropose op to let its programs connect anywhere: a wide change,
  * held for the person. A real DashboardServer over the production adapter
- * serves Rules and Approvals, signed in, with the model picker as shipped
- * (not offered without MANDU_EXPERIMENTAL_POLICY_MODEL=1):
+ * serves Rules and Approvals, signed in. The model picker as shipped (not
+ * offered without MANDU_EXPERIMENTAL_POLICY_MODEL=1) is not drawn since
+ * 2026-10-31 (dashboard.md §4.25t), so its look is measured with the flag
+ * set, which the route reads per request:
  *
- *   F1  Rules, with Add a rule and Keys Mandu found opened, in the light
+ *   F0  as shipped the route says `offered: false`, its line one sentence,
+ *       and the served Rules page, Keys Mandu found opened, hides the
+ *       picker, its preview and its line, and draws no "not offered" words;
+ *   F1  Rules, the picker offered, with Add a rule and Keys Mandu found opened, in the light
  *       and the dark theme: every text box, search box, text area and menu
- *       of the page has a radius, a 1 px solid border in the line color,
- *       and one of the page's own backgrounds (a menu that cannot be
- *       changed has the held one, --panel-2); the scan box is drawn as
+ *       of the page has a radius, a 1 px solid border in the field's edge
+ *       color (--field-line, 3:1 on every ground; not the divider's
+ *       --line), and one of the page's own backgrounds (a menu that cannot
+ *       be changed has the held one, --panel-2); the scan box is drawn as
  *       the filter box, and the model menu as a choice menu in a row;
- *   F2  the line under the menu is the real route's, one sentence;
+ *   F2  the line under the menu is the real route's;
  *   F3  Approvals: the wide change's ALLOW box has the same look, and the
  *       height of the buttons beside it, in both themes;
  *   F4  the oracle: no page or answer read here carries the file's value
@@ -66,6 +72,7 @@ delete process.env.MANDU_EXPERIMENTAL_POLICY_MODEL; // the picker as shipped
 after(() => {
   resetCurrentPolicyForTests("claude-code");
   if (FLAG !== undefined) process.env.MANDU_EXPERIMENTAL_POLICY_MODEL = FLAG;
+  else delete process.env.MANDU_EXPERIMENTAL_POLICY_MODEL;
 });
 
 const VALUE = `sk_live_fieldsLookCanary_${process.pid}_0`;
@@ -97,7 +104,8 @@ function look(doc: Doc, el: Doc) {
 }
 /** The fields in `doc` that have no look of the page's, in `theme`. */
 function bare(doc: Doc, css: string, theme: "light" | "dark", fields: Doc[]): string[] {
-  const line = computedColor(doc, token(css, "--line", theme));
+  const line = computedColor(doc, token(css, "--field-line", theme));
+  assert.notEqual(line, computedColor(doc, token(css, "--line", theme)), `${theme}: a field's edge is not the divider's color`);
   const grounds = new Set(["--bg", "--panel", "--panel-2"].map((t) => computedColor(doc, token(css, t, theme))));
   return fields.filter((f) => {
     const l = look(doc, f);
@@ -160,10 +168,23 @@ test("the product page over the real arbiter: every text box and menu has the pa
       sheet.textContent = perSelector(resolveCssVars(stylesAt(sheets, width), theme));
     };
 
-    // ── F1, F2: Rules ──
+    // ── F0: Rules as shipped: the picker is not drawn ──
+    const shipped = JSON.parse(await read("/api/suggestions", CSRF_ADMIN)) as { model?: { offered: boolean; hint: string } };
+    assert.equal(shipped.model?.offered, false, "the picker as shipped: not offered");
+    assert.equal(shipped.model?.hint, NOT_OFFERED, "the route's line is one sentence");
+    await servedProductPage(base, "/rules", (doc: Doc) => !!doc.querySelector(`#files-tree .row.file-rule[data-path="${env}"]`), async (doc: Doc) => {
+      doc.getElementById("suggest-open").click();
+      await waitWhile(() => doc.getElementById("files-suggested-view").hidden || !doc.querySelector("#files-suggested-list .empty-row"));
+      for (const id of ["suggest-model", "suggest-model-preview", "suggest-model-status"]) assert.equal(doc.getElementById(id).hidden, true, `as shipped: #${id} is hidden`);
+      for (const c of doc.querySelectorAll("#suggest-model select, #suggest-model button") as Iterable<Doc>) assert.ok(c.closest("[hidden]"), `as shipped: #${c.id} cannot take the focus`);
+      assert.doesNotMatch(doc.getElementById("files-suggested-view").textContent, /not offered/, "as shipped: no line about a feature it does not have");
+      noValue(doc.body.textContent, "the rendered Rules page as shipped");
+    }, { headers: signedIn, css: "" });
+
+    // ── F1, F2: Rules, the picker offered ──
+    process.env.MANDU_EXPERIMENTAL_POLICY_MODEL = "1";
     const picker = JSON.parse(await read("/api/suggestions", CSRF_ADMIN)) as { model?: { offered: boolean; hint: string } };
-    assert.equal(picker.model?.offered, false, "the picker as shipped: not offered");
-    assert.equal(picker.model?.hint, NOT_OFFERED, "the route's line is one sentence");
+    assert.equal(picker.model?.offered, true, "with the flag the picker is offered");
     await servedProductPage(base, "/rules", (doc: Doc) => !!doc.querySelector(`#files-tree .row.file-rule[data-path="${env}"]`), async (doc: Doc) => {
       doc.getElementById("suggest-open").click();
       await waitWhile(() => doc.getElementById("files-suggested-view").hidden || !doc.getElementById("suggest-model-why").textContent);
@@ -172,7 +193,8 @@ test("the product page over the real arbiter: every text box and menu has the pa
       addRule.click();
       await waitWhile(() => !doc.querySelector("#files-list .row.file"));
       // ── F2 ──
-      assert.equal(doc.getElementById("suggest-model-why").textContent, NOT_OFFERED, "the page draws the route's line");
+      assert.equal(doc.getElementById("suggest-model").hidden, false, "offered: the picker is drawn");
+      assert.ok(doc.getElementById("suggest-model-why").textContent.startsWith(picker.model!.hint), "the page draws the route's line");
       for (const theme of ["light", "dark"] as const) {
         styled(doc, theme);
         const fields = [...doc.querySelectorAll(FIELDS)] as Doc[];
@@ -190,6 +212,7 @@ test("the product page over the real arbiter: every text box and menu has the pa
       }
       noValue(doc.body.textContent, "the rendered Rules page");
     }, { headers: signedIn, css: "" });
+    delete process.env.MANDU_EXPERIMENTAL_POLICY_MODEL;
 
     // ── F3: Approvals ──
     await servedProductPage(base, "/approvals", (doc: Doc) => !!doc.querySelector("#approvals-proposals .proposal-confirm"), async (doc: Doc) => {

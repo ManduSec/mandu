@@ -18,6 +18,12 @@
  *      bound and the secret is released there, and only there;
  *   4. "Not secret" from the second menu is the level `public`, a loosening
  *      like any other.
+ *
+ * And the served page (its own index.html and home.js in jsdom, signed in):
+ * the "Opens it" line is drawn only on the rule that names programs; a
+ * default `.env` (no `readers:`) draws none, the note under Files and
+ * folders says the default once, and opening its row still says "Programs
+ * that get the real file" (§4.25p *Opens it*). No page carries the value.
  */
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -31,7 +37,10 @@ import { resetCurrentPolicyForTests } from "../../arbiter/policy/compiled-policy
 import { makeApprovalsArbiter } from "../../dashboard/src/arbiter-adapter.js";
 import { DashboardServer } from "../../dashboard/src/server.js";
 import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
-import { ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { ADMIN_COOKIE, ADMIN_OPTS, CSRF_ADMIN } from "../../dashboard/test/unit/admin-session.js";
+import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
+import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
+import { pageFetch } from "../../dashboard/test/unit/page-fetch.js";
 import { stateAxes } from "../lib/axes.js";
 
 stateAxes("secrets"); // this suite states its axes (protection-modes.md §4)
@@ -54,6 +63,10 @@ test("two questions over the real arbiter: the second menu's choices bind, unbin
   const notesPath = join(ws, "notes.md");
   writeFileSync(envPath, `STRIPE_KEY=${SECRET}\n`);
   writeFileSync(notesPath, "notes\n");
+  // A .env whose rule names no program: the default.
+  mkdirSync(join(home, "shop"), { recursive: true });
+  const shopEnvPath = join(home, "shop", ".env");
+  writeFileSync(shopEnvPath, `SHOP_KEY=${SECRET}\n`);
 
   const dataSock = join(dir, "arbiter.sock");
   const adminSock = join(dir, "admin.sock");
@@ -63,6 +76,7 @@ test("two questions over the real arbiter: the second menu's choices bind, unbin
     "paths:",
     `  - { path: "${envPath}", level: no-model, recursive: false, bindings: [api.stripe.com], readers: [{ app: deploy, prints: nothing }], others: twin }`,
     `  - { path: "${notesPath}", level: any-model, recursive: false }`,
+    `  - { path: "${shopEnvPath}", level: no-model, recursive: false }`,
     "",
   ].join("\n"));
   const arbiter = new ArbiterServer({
@@ -86,11 +100,11 @@ test("two questions over the real arbiter: the second menu's choices bind, unbin
   const port = await server.listen(0);
   const base = `http://127.0.0.1:${port}`;
   const save = async (body: unknown) => {
-    const r = await fetch(`${base}/api/files/labels`, { method: "POST", headers: { ...CSRF_ADMIN, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const r = await pageFetch(`${base}/api/files/labels`, { method: "POST", headers: { ...CSRF_ADMIN, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return { status: r.status, body: (await r.json()) as any };
   };
   const panelRow = async (path: string) => {
-    const r = await fetch(`${base}/api/policy/panel`, { headers: CSRF_ADMIN });
+    const r = await pageFetch(`${base}/api/policy/panel`, { headers: CSRF_ADMIN });
     const raw = await r.text();
     assert.ok(!raw.includes(SECRET), "the panel never carries a value");
     return ((JSON.parse(raw) as any).panel.yourRules as any[]).find((x) => x.id === `lock:${path}`);
@@ -112,6 +126,28 @@ test("two questions over the real arbiter: the second menu's choices bind, unbin
     assert.equal(env.plain.opens, "deploy (your word) may open the real file. Other programs get a masked copy.");
     assert.equal((await egress("api.stripe.com")).allow, true, "bound: released at its host");
     assert.equal((await egress("paste.example")).allow, false, "anywhere else: not released");
+    assert.equal(env.plain.opensDefault, false, "a rule that names a program");
+    const shop = await panelRow(shopEnvPath);
+    assert.equal(shop.plain.opens, "Programs get a masked copy.", "the server still words the default");
+    assert.equal(shop.plain.opensDefault, true, "no readers: the default");
+
+    // 1b. The served page: the Opens it line only where the rule names a
+    //     program; the default said once; the opened row still in full.
+    const ruleRow = (doc: any, path: string) => doc.querySelector(`#files-tree .row.file-rule[data-path="${path}"]`);
+    await servedProductPage(base, "/rules", (doc: any) => !!ruleRow(doc, shopEnvPath) && !!ruleRow(doc, envPath), async (doc: any) => {
+      assert.match(ruleRow(doc, envPath).querySelector(".file-opens")?.textContent ?? "", /^Opens it deploy \(your word\) may open the real file\./);
+      assert.equal(ruleRow(doc, shopEnvPath).querySelector(".file-opens"), null, "the default .env: no Opens it line");
+      assert.equal(ruleRow(doc, notesPath).querySelector(".file-opens"), null, "nor the default notes");
+      const note = doc.getElementById("files-opens-note");
+      assert.equal(note.hidden, false, "the default, said once under the caption");
+      assert.match(note.textContent, /^A program that opens one of these files gets a masked copy, unless the file's rule names the program/);
+      ruleRow(doc, shopEnvPath).querySelector(".file-more").click();
+      const boxOf = () => doc.querySelector(`#files-tree .file-detail .file-why[data-path="${shopEnvPath}"]`);
+      await waitWhile(() => !boxOf()?.querySelector("dl"));
+      const lines = ([...boxOf().querySelectorAll("dt")] as any[]).map((dt) => `${dt.textContent}: ${dt.nextElementSibling.textContent}`);
+      assert.ok(lines.some((l) => l.startsWith("Programs that get the real file: ")), `the opened row says it in full: ${JSON.stringify(lines)}`);
+      assert.ok(!(doc.body.textContent ?? "").includes(SECRET), "the rendered page carries no value");
+    }, { headers: { Cookie: ADMIN_COOKIE } });
 
     // 2. Needs your OK: the same level, no hosts. A tightening, applied at once.
     const ask = await save({ changes: [{ path: envPath, level: "no-model", bindings: [], recursive: false }] });

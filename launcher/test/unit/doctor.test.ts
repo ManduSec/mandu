@@ -36,7 +36,7 @@ const wrapperFacts: DoctorFacts = {
 
 test("render: an install with no native bins states COOPERATIVE enforcement + the wrapper tier alone", () => {
   const out = renderDoctor(wrapperFacts);
-  assert.match(out, /Node\.js 22\.22\.1 \(22\.13\.0 or newer\)/);
+  assert.match(out, /Node\.js 22\.22\.1 \(22\.15\.0 or newer\)/);
   assert.match(out, /from the npm package:/);
   // every wrapper chokepoint reports its native supervisor as absent
   assert.match(out, /kernel connect guard: not installed \(net-supervisor\)/);
@@ -76,7 +76,7 @@ test("render: native bins PRESENT change the verdict: they attach WITHOUT root, 
 test("gatherFacts: assembles from the probes; node>=22 ok; kernel per-crate; arbiter reachability", async () => {
   const present = new Set(["/repo/interceptors/target/release/fs-supervisor"]);
   const deps: DoctorDeps = {
-    nodeVersion: () => "22.13.0",
+    nodeVersion: () => "22.15.0",
     gitVersion: () => "2.9.9",
     commandExists: (c) => c === "claude",
     socketReachable: async () => true,
@@ -89,7 +89,7 @@ test("gatherFacts: assembles from the probes; node>=22 ok; kernel per-crate; arb
   const facts = await gatherFacts({ MANDU_ARBITER_SOCK: "/tmp/a.sock" }, Layout.dev("/repo"), deps);
   assert.equal(facts.node.ok, true);
   assert.equal(facts.git, "2.9.9");
-  assert.deepEqual(facts.agents, { claude: true, codex: false });
+  assert.deepEqual(facts.agents, { claude: true, codex: false, others: [] });
   assert.equal(facts.layout.mode, "dev");
   assert.equal(facts.arbiter.sock, "/tmp/a.sock");
   assert.equal(facts.arbiter.reachable, true);
@@ -100,7 +100,7 @@ test("gatherFacts: assembles from the probes; node>=22 ok; kernel per-crate; arb
 
 test("gatherFacts: a native bin the resolver finds (the npm bundle's prebuilt, or PATH) marks its crate present", async () => {
   const deps: DoctorDeps = {
-    nodeVersion: () => "22.13.0",
+    nodeVersion: () => "22.15.0",
     gitVersion: () => null,
     commandExists: () => false,
     socketReachable: async () => false,
@@ -116,8 +116,8 @@ test("gatherFacts: a native bin the resolver finds (the npm bundle's prebuilt, o
   assert.equal(facts.kernel["fs-supervisor"], false);
 });
 
-test("gatherFacts: node below the 22.13.0 floor → node.ok false (22.12 included — node:sqlite is still flagged there)", async () => {
-  for (const tooOld of ["20.11.0", "22.12.0"]) {
+test("gatherFacts: node below the 22.15.0 floor → node.ok false (22.12 included — node:sqlite is still flagged there; 22.14, no zstd)", async () => {
+  for (const tooOld of ["20.11.0", "22.12.0", "22.14.0"]) {
   const deps: DoctorDeps = {
     nodeVersion: () => tooOld,
     gitVersion: () => null,
@@ -162,7 +162,7 @@ test("confinement row: no userns but the guard bin resolves → confined by the 
   assert.equal(c.bindGap, "apparmor-userns");
   const out = renderDoctor({ ...wrapperFacts, confinement: c });
   assert.match(out, /✓ credential files are protected \(posture: confined, by the guard alone\)/);
-  assert.match(out, /placeholder copy of each credential file/);
+  assert.match(out, /masked copy of each credential file/);
   assert.match(out, /protected by Mandu's file guard alone/);
   assert.match(out, /mount layer unavailable: Ubuntu restricts unprivileged user namespaces/);
   assert.match(out, /optional second layer: mandu setup/);
@@ -187,6 +187,37 @@ test("confinement row (§14.1 item 6): the bind would stop nested sandboxes → 
   assert.equal(probed, 0);
 });
 
+test("confinement row (packaging.md §3.1): a guard bin that cannot start here is no guard: gated, never `confined, by the guard alone`, and doctor says why", () => {
+  const guard = (name: string): string | null => (name === "mandu-net-guard" ? "/opt/mandu/dist/native/linux-x64/mandu-net-guard" : null);
+  const asked: string[] = [];
+  const blocked = (bin: string): boolean => { asked.push(bin); return false; };
+  // A Docker container: no bwrap, no userns, the bin there but refused.
+  const c = gatherConfinement(confDeps({ commandExists: () => false, nativeBin: guard, guardStarts: blocked }));
+  assert.deepEqual(asked, ["/opt/mandu/dist/native/linux-x64/mandu-net-guard"], "the probe asks about the bin the launch would use");
+  assert.equal(c.posture, "gated");
+  assert.equal(c.gap, "no-bwrap");
+  assert.equal(c.bindGap, undefined);
+  assert.equal(c.guardBlocked, true);
+  const out = renderDoctor({ ...wrapperFacts, confinement: c });
+  assert.match(out, /✗ credential files are NOT protected from programs the AI runs \(posture: gated\)/);
+  assert.doesNotMatch(out, /by the guard alone/, "the claim the container used to get");
+  assert.match(out, /Mandu's file guard is installed but cannot start here: .*pidfd_getfd.*A launch runs without it\./);
+  // A host that can mount: the bind alone, gap no-guard, the same line.
+  const b = gatherConfinement(confDeps({ usernsOk: () => true, nativeBin: guard, guardStarts: () => false }));
+  assert.equal(b.posture, "gated");
+  assert.equal(b.gap, "no-guard");
+  assert.equal(b.guardBlocked, true);
+  assert.match(renderDoctor({ ...wrapperFacts, confinement: b }), /cannot start here/);
+  // A guard that starts, or no probe in the fixture: unchanged.
+  assert.deepEqual(gatherConfinement(confDeps({ usernsOk: () => true, nativeBin: guard, guardStarts: () => true })), { posture: "confined" });
+  assert.deepEqual(gatherConfinement(confDeps({ usernsOk: () => true, nativeBin: guard })), { posture: "confined" });
+  // No bin, or the guard turned off: the probe is never run.
+  asked.length = 0;
+  gatherConfinement(confDeps({ usernsOk: () => true, guardStarts: blocked }));
+  gatherConfinement(confDeps({ usernsOk: () => true, nativeBin: guard, guardStarts: blocked }), { MANDU_NET_GUARD: "0" });
+  assert.deepEqual(asked, []);
+});
+
 test("confinement row: the guard is consulted only on Linux and only through the injected resolver", () => {
   let asked = 0;
   const mac = gatherConfinement(confDeps({ platform: () => "darwin", commandExists: (x) => x === SANDBOX_EXEC, nativeBin: () => { asked++; return "/x"; } }));
@@ -206,7 +237,7 @@ test("confinement row: sysctl=1 + probe fails → gated, AppArmor cause, `mandu 
   assert.match(out, /fix: mandu setup/);
   assert.match(out, /--require-confinement/);
   // gated never borrows the confined claim
-  assert.doesNotMatch(out, /placeholder copy of each credential file/);
+  assert.doesNotMatch(out, /masked copy of each credential file/);
 });
 
 test("confinement row: sysctl=1 but the probe PASSES (profile installed) + the guard → confined, no fix line", () => {
@@ -248,6 +279,22 @@ test("confinement row (finding 7): a guard the user turned off (env or config.to
   assert.equal(guardOptedOut({ MANDU_NET_GUARD: "0", MANDU_HOME: "/dev/null/mandu-test-home" }), true);
 });
 
+test("confinement row: launches without the egress gate (env or config.toml) say so under the posture; the gated sentence's egress clause does not hold", () => {
+  const withBin = { usernsOk: () => true, nativeBin: () => "/x" } as const;
+  assert.deepEqual(gatherConfinement(confDeps(withBin), { MANDU_NET_PROXY: "0" }), { posture: "confined", egressGateOff: true });
+  const cfg = confDeps({ ...withBin, readKnob: knobs({ "/cfg/config.toml": "net-proxy = false\n" }) });
+  assert.deepEqual(gatherConfinement(cfg, { MANDU_HOME: "/cfg" }), { posture: "confined", egressGateOff: true });
+  // env beats config; unset or empty is the default (the gate on)
+  assert.deepEqual(gatherConfinement(cfg, { MANDU_HOME: "/cfg", MANDU_NET_PROXY: "1" }), { posture: "confined" });
+  assert.deepEqual(gatherConfinement(confDeps(withBin), { MANDU_NET_PROXY: "" }), { posture: "confined" });
+
+  const confined = renderDoctor({ ...wrapperFacts, confinement: { posture: "confined", egressGateOff: true } });
+  assert.match(confined, /✗ the egress gate is off for launches \(MANDU_NET_PROXY=0 or net-proxy = false in config\.toml\): what programs the AI runs send is not checked for a secret\n/);
+  const gated = renderDoctor({ ...wrapperFacts, confinement: { posture: "gated", gap: "guard-off", egressGateOff: true } });
+  assert.match(gated, /not checked for a secret, so a credential file they read can be sent anywhere/);
+  assert.doesNotMatch(renderDoctor(wrapperFacts), /egress gate is off/);
+});
+
 test("confinement row: sysctl 0/absent + probe fails → gated, userns-off, the knob detail, no setup offer", () => {
   const c = gatherConfinement(confDeps({ readKnob: knobs({ [APPARMOR_USERNS_SYSCTL]: "0\n", [USERNS_CLONE_SYSCTL]: "0\n" }) }));
   assert.equal(c.gap, "userns-off");
@@ -266,7 +313,7 @@ test("confinement row: no bwrap → gated with the apt fix; the userns probe is 
 test("confinement row: macOS with /usr/bin/sandbox-exec → read-blocked", () => {
   const c = gatherConfinement(confDeps({ platform: () => "darwin", commandExists: (x) => x === SANDBOX_EXEC }));
   assert.deepEqual(c, { posture: "read-blocked" });
-  assert.match(renderDoctor({ ...wrapperFacts, confinement: c }), /a read fails instead of returning a placeholder/);
+  assert.match(renderDoctor({ ...wrapperFacts, confinement: c }), /a read fails instead of returning a masked copy/);
 });
 
 test("confinement row: macOS asks for /usr/bin/sandbox-exec by path; a bare `sandbox-exec` on PATH alone is gated", () => {
@@ -388,7 +435,7 @@ test("login rows (agent-login.ts): found names the source, missing names the fix
 test("gatherFacts: the login probe reads HOME from the env and only asks whether files exist", async () => {
   const asked: string[] = [];
   const deps: DoctorDeps = {
-    nodeVersion: () => "22.13.0",
+    nodeVersion: () => "22.15.0",
     gitVersion: () => null,
     commandExists: () => false,
     socketReachable: async () => false,
@@ -406,7 +453,7 @@ test("gatherFacts: the login probe reads HOME from the env and only asks whether
 
 test("goose login row (supported-agents.md §5.6.1): only with goose installed; the keyring is said to be out of reach; never a value", async () => {
   const base: DoctorDeps = {
-    nodeVersion: () => "22.13.0", gitVersion: () => null, socketReachable: async () => false,
+    nodeVersion: () => "22.15.0", gitVersion: () => null, socketReachable: async () => false,
     platform: () => "linux", usernsOk: () => false, readKnob: () => null, nativeBin: () => null,
     commandExists: (c) => c === "goose",
     fileExists: () => false,
@@ -459,7 +506,7 @@ test("goose login row (supported-agents.md §5.6.1): only with goose installed; 
 
 test("goose login row on macOS: the login Keychain is asked (existence only) and said to stay reachable", async () => {
   const base: DoctorDeps = {
-    nodeVersion: () => "22.13.0", gitVersion: () => null, socketReachable: async () => false,
+    nodeVersion: () => "22.15.0", gitVersion: () => null, socketReachable: async () => false,
     platform: () => "darwin", usernsOk: () => false, readKnob: () => null, nativeBin: () => null,
     commandExists: (c) => c === "goose",
     fileExists: () => false,
@@ -487,7 +534,7 @@ test("the default report speaks the product's words, not the architecture's (rel
 
 test("gatherFacts + render: codex installed on a stock Ubuntu with no bubblewrap → the ✗ Codex sandbox row with the apt fix", async () => {
   const deps: DoctorDeps = {
-    nodeVersion: () => "22.13.0",
+    nodeVersion: () => "22.15.0",
     gitVersion: () => "2.9.9",
     commandExists: (c) => c === "codex" || c === "claude",
     socketReachable: async () => false,
@@ -543,7 +590,7 @@ test("git sandbox row (write-protection.md): on names its bubblewrap; MANDU_GIT_
 
 test("gatherFacts: the git sandbox facts get doctor's env; off (MANDU_GIT_SANDBOX=0) or unavailable; asked on every platform, only when there is a git; never the host's without an injected probe", async () => {
   const base: DoctorDeps = {
-    nodeVersion: () => "22.13.0", gitVersion: () => "2.9.9", commandExists: () => false,
+    nodeVersion: () => "22.15.0", gitVersion: () => "2.9.9", commandExists: () => false,
     socketReachable: async () => false, fileExists: () => false, platform: () => "linux",
     usernsOk: () => true, readKnob: () => null, nativeBin: () => null,
   };
@@ -626,7 +673,7 @@ test("render on macOS: Claude Code's own sandbox ON is a ✓ (Mandu turns it off
 
 test("gatherFacts on macOS: the platform rides the facts; codex installed → Mandu turns its sandbox off (✓), off in config.toml (✓), an administrator's lock or a config that relies on it (✗)", async () => {
   const deps: DoctorDeps = {
-    nodeVersion: () => "22.13.0",
+    nodeVersion: () => "22.15.0",
     gitVersion: () => "2.9.9",
     commandExists: (c) => c === "codex" || c === "claude" || c === SANDBOX_EXEC,
     socketReachable: async () => false,
@@ -765,7 +812,7 @@ test("gatherFacts + render: the Yama row in the secrets section on Linux, read t
   const rt = mkdtempSync(join(tmpdir(), "mandu-doctor-yama-"));
   try {
     const deps = (platform: "linux" | "darwin", scope: string | null): DoctorDeps => ({
-      nodeVersion: () => "22.13.0", gitVersion: () => null, commandExists: () => false,
+      nodeVersion: () => "22.15.0", gitVersion: () => null, commandExists: () => false,
       socketReachable: async () => false, fileExists: () => false, platform: () => platform,
       usernsOk: () => true, readKnob: (p) => (p === YAMA_PTRACE_SCOPE ? scope : null), nativeBin: () => null,
     });
@@ -783,4 +830,22 @@ test("gatherFacts + render: the Yama row in the secrets section on Linux, read t
   } finally {
     rmSync(rt, { recursive: true, force: true });
   }
+});
+
+test("renderDoctor: Claude Code missing is optional (·) when another agent Mandu runs is installed, ✗ only when none is; its login row the same", async () => {
+  const deps: DoctorDeps = {
+    nodeVersion: () => "22.15.0", gitVersion: () => "2.9.9", commandExists: (c) => c === "openclaw",
+    socketReachable: async () => false, fileExists: () => false, platform: () => "linux", usernsOk: () => true,
+    readKnob: () => null, nativeBin: () => null,
+  };
+  const base = await gatherFacts({ HOME: "/home/u", MANDU_ARBITER_SOCK: "/tmp/a.sock" }, Layout.dev("/repo"), deps);
+  const oc = renderDoctor(base);
+  assert.match(oc, /· Claude Code is not installed \(only needed for `mandu claude`\)/);
+  assert.doesNotMatch(oc, /✗ Claude Code is not installed/);
+  assert.doesNotMatch(oc, /✗ claude login/);
+  assert.deepEqual(base.agents.others, ["openclaw"]);
+  const none = renderDoctor({ ...base, agents: { claude: false, codex: false, others: [] } });
+  assert.match(none, /✗ Claude Code is not installed: npm i -g @anthropic-ai\/claude-code/);
+  const withCodex = renderDoctor({ ...base, agents: { claude: false, codex: true, others: [] } });
+  assert.match(withCodex, /· Claude Code is not installed/);
 });

@@ -742,16 +742,33 @@ test("runDemo: --keep keeps the sandbox; an unknown option is a usage error", as
 
 test("findDemoGuard: Linux only, the launch's opt-out (MANDU_NET_GUARD=0), the launch's resolver; the stale note rides along", () => {
   const found = (): string => GUARD_BIN;
+  const starts = (): boolean => true;
   assert.deepEqual(findDemoGuard("darwin", {}, found), { absent: "linux-only" });
   assert.deepEqual(findDemoGuard("linux", { MANDU_NET_GUARD: "0" }, found), { absent: "turned-off" });
-  assert.deepEqual(findDemoGuard("linux", { MANDU_NET_GUARD: "" }, found, () => null), { bin: GUARD_BIN, stale: null }, "empty is unset, as in parse.ts");
+  assert.deepEqual(findDemoGuard("linux", { MANDU_NET_GUARD: "" }, found, () => null, starts), { bin: GUARD_BIN, stale: null }, "empty is unset, as in parse.ts");
   assert.deepEqual(findDemoGuard("linux", {}, () => null), { absent: "not-built" });
-  assert.deepEqual(findDemoGuard("linux", { MANDU_NET_GUARD: "1" }, found, () => null), { bin: GUARD_BIN, stale: null });
-  assert.deepEqual(findDemoGuard("linux", {}, found, () => "WARNING: stale"), { bin: GUARD_BIN, stale: "WARNING: stale" });
+  assert.deepEqual(findDemoGuard("linux", { MANDU_NET_GUARD: "1" }, found, () => null, starts), { bin: GUARD_BIN, stale: null });
+  assert.deepEqual(findDemoGuard("linux", {}, found, () => "WARNING: stale", starts), { bin: GUARD_BIN, stale: "WARNING: stale" });
+});
+
+test("findDemoGuard: a bin that cannot set up here (a Docker container's default seccomp profile) is no guard, and says so", () => {
+  const probed: string[] = [];
+  const probe = (bin: string): boolean => { probed.push(bin); return false; };
+  assert.deepEqual(findDemoGuard("linux", {}, () => GUARD_BIN, () => null, probe), { absent: "cannot-start" });
+  assert.deepEqual(probed, [GUARD_BIN], "the resolved bin itself is probed");
+  // Nothing to probe where there is no guard to use.
+  findDemoGuard("darwin", {}, () => GUARD_BIN, () => null, probe);
+  findDemoGuard("linux", { MANDU_NET_GUARD: "0" }, () => GUARD_BIN, () => null, probe);
+  findDemoGuard("linux", {}, () => null, () => null, probe);
+  assert.equal(probed.length, 1);
+  // The default probe is the bin run around `true` (probeGuardNotify): a
+  // path that is no program answers no.
+  assert.deepEqual(findDemoGuard("linux", {}, () => "/nonexistent/mandu-net-guard", () => null), { absent: "cannot-start" });
+  assert.match(wholeFileWhy("cannot-start"), /cannot start on this machine$/);
 });
 
 test("wholeFileWhy: one plain line per reason, no internals, fits the recording's 100 columns", () => {
-  for (const a of ["linux-only", "not-built", "turned-off", "kernel"] as GuardAbsence[]) {
+  for (const a of ["linux-only", "not-built", "turned-off", "cannot-start", "kernel"] as GuardAbsence[]) {
     const line = wholeFileWhy(a);
     assert.match(line, /^the keys show only under Mandu's guard, /);
     for (const word of ["arbiter", "proxy", "reply filter", "$MDU", "bytes", "seccomp", "net-guard"]) assert.ok(!line.includes(word), `${a}: names ${word}`);
@@ -860,6 +877,7 @@ const ABSENT: Array<[GuardAbsence, Sabotage]> = [
   ["linux-only", { guard: { absent: "linux-only" } }],
   ["not-built", { guard: { absent: "not-built" } }],
   ["turned-off", { guard: { absent: "turned-off" } }],
+  ["cannot-start", { guard: { absent: "cannot-start" } }],
   ["kernel", { guardDegrades: true }],
 ];
 

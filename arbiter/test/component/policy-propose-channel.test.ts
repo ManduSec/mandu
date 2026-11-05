@@ -40,11 +40,11 @@ paths:
     level: no-model
 `;
 
-async function rig(fn: (c: { data: ArbiterClient; admin: ArbiterClient; file: string }) => Promise<void>): Promise<void> {
+async function rig(fn: (c: { data: ArbiterClient; admin: ArbiterClient; file: string }) => Promise<void>, law = LAW): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "mandu-policy-propose-"));
   dirs.push(dir);
   const file = join(dir, "policy.yaml");
-  writeFileSync(file, LAW);
+  writeFileSync(file, law);
   const server = new ArbiterServer({
     socketPath: join(dir, "arbiter.sock"),
     adminSocketPath: join(dir, "admin.sock"),
@@ -107,6 +107,36 @@ test("data socket: a relaxation is only a proposal (law byte-identical); a tight
     assert.equal(history.find((c) => c.id === tight.changeId)?.undoable, false);
     assert.equal(history.find((c) => c.via === "proposal")?.undoable, true);
   });
+});
+
+// Live 2026-10-28 (policy-setup-repo on Codex): a `**` pattern bound to one
+// host made a lone strict lock on `.env` wait in the Inbox. A loser that only
+// releases is no overlap hazard (policy-delta.ts overlapHazard); one with
+// `others: deny` still is.
+const BOUND_LAW = `version: 1
+paths:
+  - path: "**/ws-*/bank/**"
+    level: no-model
+    bindings: [parktax.test]
+  - path: /tmp/w/ws-1/vault
+    level: no-model
+    readers: [vaultcli]
+    others: deny
+`;
+
+test("data socket: a strict lock beside a binding-only ** pattern applies at once; beside others: deny it waits", async () => {
+  await rig(async ({ data, file }) => {
+    const env = await data.policyPropose({ edits: [{ op: "lock-path", path: "/tmp/w/ws-1/.env", level: "no-model" }], sessionKey: "sess-1" });
+    assert.equal(env.applied, true, JSON.stringify(env));
+    assert.match(readFileSync(file, "utf8"), /ws-1\/\.env/);
+    const inBank = await data.policyPropose({ edits: [{ op: "lock-path", path: "/tmp/w/ws-1/bank/statement.md", level: "no-model" }], sessionKey: "sess-1" });
+    assert.equal(inBank.applied, true, "taking over from a binding releases nothing");
+    const bytes = readFileSync(file);
+    const inVault = await data.policyPropose({ edits: [{ op: "lock-path", path: "/tmp/w/ws-1/vault/token.md", level: "no-model" }], sessionKey: "sess-1" });
+    assert.equal(inVault.applied, false, "others: deny is stricter than a plain strict lock");
+    assert.ok("proposalId" in inVault);
+    assert.deepEqual(readFileSync(file), bytes, "the waiting proposal changed nothing");
+  }, BOUND_LAW);
 });
 
 test("§4.4 no-leak: an untrusted page's canary never reaches policyExplain, even when a steered agent copies it", async () => {

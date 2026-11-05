@@ -37,7 +37,7 @@ const WRITE_ONLY = new Set([
   "/api/secrets/label", "/api/secrets/derived", "/api/files/impact", "/api/files/move-page-rules",
   "/api/files/labels", "/api/suggestions/scan", "/api/suggestions/apply", "/api/suggestions/dismiss",
   "/api/suggestions/model/preview", "/api/suggestions/model/send", "/api/policy/rules",
-  "/api/policy/rules/change", "/api/policy/models/change", "/api/policy/prompt-filters/change",
+  "/api/policy/rules/change", "/api/policy/models/change", "/api/policy/prompt-filters/change", "/api/policy/prompt-filters/try",
   "/api/policy/sensitivity-labels/change", "/api/policy/models/test", "/api/policy/export-labels",
   "/api/policy/proposals/x", "/api/policy/changes/x/undo", "/api/policy/assistant",
   "/api/policy/assistant/try", "/api/policy/assistant/apply", "/api/policy/test-flow",

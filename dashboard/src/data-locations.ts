@@ -47,7 +47,7 @@ export const LOCATION_DESCRIPTIONS: Readonly<Record<ManduPathName, string>> = {
   "secrets-json": "API keys for Mandu's developer tools",
   "dashboard-env": "settings for a dashboard that runs as a service, including its login password",
   "state-root": "Mandu's lasting data; deleting it loses your approvals and history",
-  "symbol-db": "the placeholders the AI saw, the real values behind them, and your approvals",
+  "symbol-db": "the masked values the AI saw, the real values behind them, and your approvals",
   "symbol-db-test": "the same, for Mandu's own tests",
   "view-state": "Mandu's copies of your projects",
   "workspaces": "Mandu's copies of the projects you ran it in",
@@ -56,8 +56,9 @@ export const LOCATION_DESCRIPTIONS: Readonly<Record<ManduPathName, string>> = {
   "browser-profile": "the Chrome profile of the browser Mandu starts for your agent (mandu --browser): your logins on the sites it uses",
   "launch-logs": "what each launch said: its notices, warnings and helper messages (mandu log shows the latest); the last 20 launches",
   "dashboard-account": "your dashboard account: its username and a scrambled form of its password, never the password itself (mandu dashboard --set-password sets it)",
+  "serve-attachments": "the OpenClaw agents the Mandu service runs a model proxy for (mandu serve attach, mandu openclaw install)",
   "last-scan": "the last mandu scan of your agents' past sessions: which secrets reached the AI, by name and file, never a value",
-  "events": "session history, kept 90 days; it includes the real values behind placeholders",
+  "events": "session history, kept 90 days; it includes the real values behind masked ones",
   "events-test": "session history of Mandu's own tests",
   "runs-root": "test and evaluation results (developers)",
   "test-runs": "the test-run history the dashboard shows (developers)",
@@ -216,4 +217,21 @@ export function buildDataLocations(env: Env, home: string, stat: StatFn = realSt
     });
   }
   return { home: tilde(manduPath("mandu-home", e, home), home), locations };
+}
+
+/** A place in Mandu's folder other people on this computer can open: its
+ *  name and what it holds, never its path or mode (Home's warning card,
+ *  dashboard.md §4.25q *Home warns about open places*). */
+export interface OpenPlace {
+  name: ManduPathName;
+  holds: string;
+}
+
+/** The places Home warns about: the fold's note's own rule (home.js
+ *  renderDataLocations), every store in Mandu's folder that is there and
+ *  whose mode lets group or others in, developer stores included. Pure. */
+export function openPlacesOf(d: DataLocations): OpenPlace[] {
+  return d.locations
+    .filter((l) => l.where === "home" && l.exists && l.ownerOnly === false)
+    .map((l) => ({ name: l.name, holds: l.holds }));
 }

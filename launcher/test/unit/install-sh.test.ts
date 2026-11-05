@@ -45,7 +45,7 @@ test("dry run: a Node below the floor on PATH plans a verified pinned download; 
   const PATH = sandboxPath(root, { node: stubNode("v22.12.0") });
   const r = install(["--dry-run", "--prefix", join(root, "p"), "--bin-dir", join(root, "b")], { PATH, HOME: root });
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /v22\.12\.0, below Mandu's floor 22\.13\.0/);
+  assert.match(r.out, /v22\.12\.0, below Mandu's floor 22\.15\.0/);
   assert.match(r.out, new RegExp(`would run: .*node-v22\\.22\\.1-${OS}-${ARCH}\\.tar\\.gz`));
   assert.match(r.out, /would run: .*SHASUMS256\.txt/);
   assert.ok(!existsSync(join(root, "p")) && !existsSync(join(root, "b")), "a dry run changes nothing");
@@ -107,7 +107,7 @@ test("a --node-version below the floor is refused before anything runs", () => {
   const root = tmpDir("mdu-install-");
   const r = install(["--dry-run", "--node-version", "20.11.0"], { PATH: sandboxPath(root), HOME: root });
   assert.notEqual(r.code, 0);
-  assert.match(r.out, /below Mandu's floor 22\.13\.0/);
+  assert.match(r.out, /below Mandu's floor 22\.15\.0/);
 });
 
 test("the script is POSIX sh (dash parses it) and names its settings in --help", () => {
@@ -161,7 +161,7 @@ test("a PATH Node that later disappears: the wrapper falls back to the node on P
   const none = run(sys);
   assert.equal(none.status, 127);
   assert.match(none.stderr, /no Node to run on: .*nvm.* is gone and there is no node on PATH/);
-  assert.match(none.stderr, /install Node 22\.13\.0 or newer, or re-run the Mandu installer/);
+  assert.match(none.stderr, /install Node 22\.15\.0 or newer, or re-run the Mandu installer/);
 });
 
 /** A `uname` that reports Linux on `machine` (the installer reads -s and -m). */

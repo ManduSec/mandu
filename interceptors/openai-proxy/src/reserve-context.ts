@@ -9,7 +9,8 @@
  * PROVENANCE: NEW Mandu code (2026-09-30). Copied VERBATIM, with
  * reserve-block.ts, to interceptors/openai-proxy/src/ (Codex, §11.7);
  * tests/stack/reserve-layout-parity.test.ts holds the copies
- * equal. Change this copy and copy it out.
+ * equal. Change the anthropic-proxy copy, then run
+ * `node scripts/copies/module-copies.mjs generate`.
  *
  * Pure: no I/O, never throws. The streaming expander (sse-reserve-expand.ts)
  * keeps one LineContext per text content block, advances it over the

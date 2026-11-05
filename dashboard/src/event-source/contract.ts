@@ -52,6 +52,13 @@ export interface SessionRef {
    *  list then never calls the session "running" by recency
    *  (session-batches.ts `sessionStatus`, dashboard.md §4.10.4). */
   exited?: true;
+  /** The session's `mandu` launch is alive now: its scope run dir is there
+   *  and its launcher's pid lives (mandu-running.ts `liveLaunches`). Set by
+   *  the product pages' reads only (home-routes.ts `withLive`), on a copy,
+   *  never by a source. With no `exited`, the session is running however
+   *  long it has been quiet (session-batches.ts `sessionStatus`,
+   *  dashboard.md §4.10.4 *A live launch keeps R*). */
+  live?: true;
   /** Session HEALTH (session-health.ts, dashboard.md §4.21): the posture the
    *  session actually runs at — ok / degraded / broken — derived from the
    *  launcher's, the reply-filter's and the proxy's health events. Absent
@@ -240,7 +247,7 @@ export interface HumanPlaneStatus {
   since: number | null;
   /** The launches with no wall, oldest first: the launcher's pid, its mode
    *  and posture, the session it named (display only). */
-  launches: Array<{ pid: number; mode: string; posture: string; session?: string; begunAt?: number }>;
+  launches: Array<{ pid: number; mode: string; posture: string; session?: string; begunAt?: number; attachment?: string }>;
 }
 
 /** The arbiter's `sessionUpstream` answer (arbiter/ipc/protocol.ts

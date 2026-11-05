@@ -132,7 +132,7 @@ svg text.ok, svg tspan.ok { fill: var(--ok); }
     </table></div>
     <p class="note">No reader list: every program, the LLM included, reads the structured twin (keys raw, values as symbols), served by a bind mount or, where no bind can mount, by the guard injecting the twin's descriptor. Exception: a program in the built-in consumer table (psql for <code>~/.pgpass</code>, aws, gh, npm, docker, kubectl, ssh and git for <code>~/.ssh/id_*</code>, curl for <code>~/.netrc</code>, twine, cargo) is a default reader of its file: raw, tainted, pinned by path and hash on first use.</p>
     <p class="note">A reader list is exhaustive: listed apps read raw and are tainted; every other app is denied (EACCES), except a known consumer, whose open is held for the human (an Inbox row: allow / once / deny; EACCES after 60 s, the row stays pending). <code>others: twin</code> restores the twin for the rest. The LLM always reads the twin; in <code>full</code> mode an untrusted-lineage process is never a reader.</p>
-    <p class="note">Environment variables matching the secret shapes are replaced by symbols at launch and released at the wire only; a signing credential (SigV4) must stay in its file to have a reader path.</p>
+    <p class="note">Environment variables matching the secret shapes are replaced by symbols at launch and released at the wire only; a signing credential must stay in its file to have a reader path (an AWS key is the exception since 2026-10-24: the egress proxy re-signs SigV4 with the real key, aws-sigv4-resign.md).</p>
   </div>
   <div>
     <h3>Per app: what its output becomes once it is tainted</h3>

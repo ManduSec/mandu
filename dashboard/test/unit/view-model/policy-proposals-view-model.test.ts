@@ -32,6 +32,7 @@ import {
   relaxWords,
   toChangeRow,
   changeWho,
+  settingsCard,
   ruleOrigins,
   UNRECORDED_ORIGIN,
   type PolicyChangeRow,
@@ -450,7 +451,50 @@ test("history: a change your agent made or asked for carries its session, and no
   }
 });
 
-test("ruleOrigins: the newest change per row; the agent's session only for the agent; changed since; a removal reads as no record", () => {
+test("history and origins: a change your agent made or asked for says so in `who`, with the words around the agent (`named`); no one else's (§4.25 *A rule change and the agent that asked*)", () => {
+  const said = (w: { before: string; after: string }) => w.before + "Claude Code" + w.after;
+  const tight = toChangeRow(change({ via: "agent-tighten", requestedBy: "agent:s1", sessionKey: "s1" }));
+  assert.equal(tight.who, "agent");
+  assert.deepEqual(tight.named, { before: "", after: " tightened your rules" });
+  assert.equal(said(tight.named!), "Claude Code tightened your rules");
+  assert.equal(tight.sentence, "Your agent tightened your rules", "the server's sentence is unchanged");
+  const asked = toChangeRow(change({ via: "proposal", requestedBy: "dashboard", proposedBy: "agent:s1", sessionKey: "s1" }));
+  assert.equal(asked.who, "agent-approved");
+  assert.equal(said(asked.named!), "You approved a change Claude Code asked for");
+  assert.equal(asked.sentence, "You approved a change your agent asked for");
+  assert.equal(toChangeRow(change({ via: "agent-tighten", requestedBy: "agent:s1", sessionKey: null })).who, "agent", "who did it, with no session to name it by");
+  const rule = (over: Record<string, unknown>, added: boolean) => ruleOrigins([change({ ...over, rules: [{ rowIds: ["x"], added, removed: false, current: true }] })])["x"]!;
+  const words: Array<[Record<string, unknown>, boolean, string, string]> = [
+    [{ via: "agent-tighten", requestedBy: "agent:s1", sessionKey: "s1" }, true, "agent", "Claude Code added this. It only makes your rules stricter, so it did not need your OK"],
+    [{ via: "agent-tighten", requestedBy: "agent:s1", sessionKey: "s1" }, false, "agent", "Claude Code changed this. It only made your rules stricter, so it did not need your OK"],
+    [{ via: "proposal", requestedBy: "dashboard", proposedBy: "agent:s1", sessionKey: "s1" }, true, "agent-approved", "Claude Code asked for this and you approved it"],
+    [{ via: "proposal", requestedBy: "dashboard", proposedBy: "agent:s1", sessionKey: "s1" }, false, "agent-approved", "Claude Code asked to change this and you approved it"],
+  ];
+  for (const [over, added, who, named] of words) {
+    const o = rule(over, added);
+    assert.equal(o.who, who, named);
+    assert.equal(said(o.named!), named);
+    assert.equal(o.sentence, named.replace("Claude Code", "Your agent"), "the server's sentence: the same words, 'Your agent'");
+  }
+  // Anyone else's change: no who, no words to name an agent in.
+  for (const over of [
+    { via: "tighten", requestedBy: "rules-page" },
+    { via: "tighten", requestedBy: "human" },
+    { via: "proposal", requestedBy: "human:dashboard", proposedBy: "assistant" },
+    { via: "agent-tighten", requestedBy: "agent:s1", proposedBy: "mandu:scan" },
+    { via: "undo", requestedBy: "dashboard" },
+    { via: "disk", requestedBy: "file" },
+    { via: "proposal", requestedBy: "dashboard", proposedBy: "file" },
+  ] as const) {
+    const row = toChangeRow(change({ ...over, sessionKey: "s1" }));
+    assert.equal("who" in row || "named" in row, false, JSON.stringify(over));
+    const o = rule({ ...over, sessionKey: "s1" }, true);
+    assert.equal("who" in o || "named" in o, false, JSON.stringify(over));
+  }
+  assert.equal("who" in UNRECORDED_ORIGIN, false);
+});
+
+test("ruleOrigins: the newest change per row, its id; the agent's session only for the agent; changed since; a removal reads as no record", () => {
   const origins = ruleOrigins([
     change({ id: "pc-000001", createdAt: 10, via: "proposal", requestedBy: "dashboard", proposedBy: "agent:sess-9", sessionKey: "sess-9",
       rules: [{ rowIds: ["r-0001"], added: true, removed: false, current: true }, { rowIds: ["lock:/w/.env"], added: true, removed: false, current: false }] }),
@@ -459,10 +503,13 @@ test("ruleOrigins: the newest change per row; the agent's session only for the a
     change({ id: "pc-000002", createdAt: 20, via: "agent-tighten", requestedBy: "agent:sess-4", sessionKey: "sess-4",
       rules: [{ rowIds: ["r-0002"], added: true, removed: false, current: false }, { rowIds: ["connect:tcp:a.example:443"], added: true, removed: false, current: false }] }),
   ]);
-  assert.deepEqual(origins["r-0001"], { recorded: true, sentence: "Your agent asked for this and you approved it", at: 10, session: "sess-9", changedSince: false });
+  assert.deepEqual(origins["r-0001"], { recorded: true, sentence: "Your agent asked for this and you approved it", at: 10, session: "sess-9", who: "agent-approved", named: { before: "", after: " asked for this and you approved it" }, changedSince: false, changeId: "pc-000001" });
   assert.equal(origins["lock:/w/.env"]!.changedSince, true);
-  assert.deepEqual(origins["r-0002"], { recorded: true, sentence: "You changed this on the Rules page", at: 30, session: null, changedSince: false }, "the newest change wins, whatever the list order");
+  assert.equal(origins["lock:/w/.env"]!.changeId, "pc-000001", "changed since, still the change that wrote it (§4.25i: the link lands there)");
+  assert.deepEqual(origins["r-0002"], { recorded: true, sentence: "You changed this on the Rules page", at: 30, session: null, changedSince: false, changeId: "pc-000003" }, "the newest change wins, whatever the list order");
   assert.deepEqual(origins["connect:tcp:a.example:443"], UNRECORDED_ORIGIN, "removed by the newest change, yet the row exists: re-added by an unrecorded edit");
+  assert.equal(origins["connect:tcp:a.example:443"]!.changeId, null, "a removal links no change: the rule is not that change's");
+  assert.equal(UNRECORDED_ORIGIN.changeId, null, "no record, no change to link");
   assert.equal("r-0404" in origins, false);
   assert.deepEqual(ruleOrigins([change({ rules: undefined })]), {}, "an older arbiter names no rows");
   for (const o of Object.values(origins)) assert.doesNotMatch(o.sentence, FORBIDDEN);
@@ -548,7 +595,7 @@ test("a model change: the address in full; a warning and the typed confirmation 
   assert.deepEqual(changeWarnings([near, lan, outside, { op: "remove-model", name: "x" }]), [], "no warning on this machine, a local network, or for an outside model");
   const w = changeWarnings([far, named]).map(text);
   assert.equal(w.length, 2);
-  assert.match(w[0]!, /^lab would count as your own model, but http:\/\/203\.0\.113\.9:8000 is not on this machine or a private network address\. Files marked .Your own AI only. could then be sent there\. Allow it only if you or your organization control that server\.$/);
+  assert.match(w[0]!, /^lab would count as your own model, but http:\/\/203\.0\.113\.9:8000 is not on this computer or a private network address\. Files marked .Your own AI only. could then be sent there\. Allow it only if you or your organization control that server\.$/);
   for (const line of w) assert.doesNotMatch(line, FORBIDDEN, line);
   assert.equal(isOverBroad([far]), true, "your own model off this machine needs the typed ALLOW");
   assert.equal(isOverBroad([near, outside]), false);
@@ -567,6 +614,30 @@ test("history: a change made in Settings says so, as the asker or (older arbiter
   assert.equal(changeWho({ via: "proposal", requestedBy: "human:settings", proposedBy: "settings" }), "settings");
   assert.equal(changeWho({ via: "proposal", requestedBy: "human:settings" }), "settings");
   assert.equal(toChangeRow({ ...base, via: "proposal", requestedBy: "human:settings", proposedBy: "settings" }).sentence, "You changed your models in Settings");
+});
+
+test("history: a change made in Settings names its card from the ops of its edits; mixed, empty or unknown is a setting, never 'your models'", () => {
+  const base = { id: "pc-1", sessionKey: null, delta: [], proposalId: "pp-1", createdAt: 1, undoneAt: null, undoneBy: null, undoable: true };
+  const row = (edits: unknown[], older = false) => toChangeRow({ ...base, edits, via: "proposal", requestedBy: "human:settings", ...(older ? {} : { proposedBy: "settings" }) }).sentence;
+  const model = { op: "remove-model", name: "gw" };
+  const label = { op: "map-sensitivity-label", id: "0a1b", name: "Highly Confidential", level: "no-model" };
+  const prompt = { op: "set-prompt-action", category: "pii.card", action: "mask" };
+  assert.equal(row([model]), "You changed your models in Settings");
+  assert.equal(row([{ op: "add-model", name: "a", url: "https://a.example" }, { op: "update-model", name: "b", url: "https://b.example" }]), "You changed your models in Settings", "a model change that also moves another stays models");
+  assert.equal(row([label], true), "You changed your sensitivity labels in Settings", "an older arbiter: the approver's name, no proposedBy");
+  assert.equal(row([{ op: "unmap-sensitivity-label", id: "0a1b" }]), "You changed your sensitivity labels in Settings");
+  assert.equal(row([prompt]), "You changed your prompt filters in Settings");
+  for (const op of ["set-prompt-filter", "remove-prompt-action", "add-prompt-exception", "remove-prompt-exception"]) {
+    assert.equal(row([{ op, category: "pii.card", filter: "f" }]), "You changed your prompt filters in Settings", op);
+  }
+  assert.equal(row([]), "You changed a setting in Settings", "no edits");
+  assert.equal(row([model, label]), "You changed a setting in Settings", "two cards");
+  assert.equal(row([{ op: "lock-path", path: "/x", level: "no-model" }]), "You changed a setting in Settings", "an op of no Settings card");
+  assert.equal(row([null, "x"]), "You changed a setting in Settings", "edits that are not objects");
+  assert.equal(settingsCard([prompt, { op: "add-prompt-exception", category: "c" }]), "prompt");
+  assert.equal(settingsCard(undefined), null);
+  // Undo keeps its own sentence, whatever the edits.
+  assert.equal(toChangeRow({ ...base, edits: [label], via: "undo", requestedBy: "settings" }).sentence, "You undid an earlier change");
 });
 
 test("§4.6 a held change to policy.yaml: its own headline, no rows, what it would let; never called 'you' or the agent", () => {

@@ -1,0 +1,10 @@
+{
+  "id": "huggingface",
+  "name": "Hugging Face",
+  "formats": ["^hf_[0-9A-Za-z]{34}$"],
+  "shapes": ["hf_…"],
+  "hosts": ["huggingface.co", "router.huggingface.co"],
+  "docs": ["https://huggingface.co/docs/hub/security-tokens", "https://huggingface.co/docs/inference-providers/index"],
+  "examples": ["hf_{x*34}"],
+  "non_examples": ["hf_{x*33}", "api_org_{x*34}"]
+}

@@ -183,3 +183,14 @@ export function previewLineOf(agent: VersionedAgent, version: string | null): st
 
 /** Where a preview agent's problems are reported. Mirror of the launcher's. */
 export const ISSUES_URL = "https://github.com/mandusec/mandu/issues";
+
+/** The issue form a bug is reported with (`.github/ISSUE_TEMPLATE/`):
+ *  About Mandu's *Report a problem* opens it with its `version` field
+ *  filled in (dashboard.md §4.25 *About Mandu*). */
+export const BUG_REPORT_TEMPLATE = "bug_report.yml";
+
+/** Where a security problem is reported: GitHub's private vulnerability
+ *  report form, as SECURITY.md asks (never a public issue). The leak
+ *  check's *Report it privately* and About Mandu's *Report a security
+ *  problem* link it (dashboard.md §4.25). */
+export const SECURITY_REPORT_URL = "https://github.com/mandusec/mandu/security/advisories/new";

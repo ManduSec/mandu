@@ -139,7 +139,7 @@ test("Rules over the real arbiter: a read of the suggestions asked before Not a 
 
     const ready = (doc: Doc) => !!byId(doc, "suggest-open");
     await servedProductPage(relay.base, "/rules", ready, async (doc) => {
-      doc.defaultView.confirm = () => true;
+      doc.defaultView.confirm = () => { throw new Error("window.confirm called"); };
       // The page reads again when it is shown (its 10 s poll is inert here).
       const poll = () => doc.dispatchEvent(new doc.defaultView.Event("visibilitychange"));
       const keep = () => pages.push(doc.body.textContent ?? "");
@@ -156,6 +156,8 @@ test("Rules over the real arbiter: a read of the suggestions asked before Not a 
       // R2: Not a secret on staging.conf.
       enter(rowAt(doc, "deploy/staging.conf").querySelector(".file-more"));
       enter(button(doc.querySelector("#files-suggested-list .file-detail"), "Not a secret"));
+      // Asked on the page (dashboard.md §4.25n): Mark as not a secret posts.
+      enter(button(doc.querySelector("#files-suggested-list .file-detail"), "Mark as not a secret"));
       await waitWhile(() => rowAt(doc, "deploy/staging.conf") !== undefined || byId(doc, "rules-notice").textContent === "");
       assert.equal(rowAt(doc, "deploy/staging.conf"), undefined, "the row is gone");
       assert.equal(byId(doc, "rules-notice").textContent, "staging.conf is marked as not a secret. Mandu will not suggest it again.");

@@ -42,6 +42,12 @@
  * smuggled in a chunked HTTPS upload is now gated (was previously treated as an
  * empty body and bypassed). Bodies are re-originated with a computed Content-Length
  * (identity), never re-chunked.
+ *
+ * STREAMS (kube-wire-release.md §4.1): for a Kubernetes cluster of the launch's
+ * kubeconfig only, an upgrade (exec, attach, port-forward) is relayed both ways
+ * after its 101, each client chunk judged first (the blind tunnel's per-chunk
+ * rule and the tripwire), and a watch or `logs -f` response is relayed as it
+ * comes (`relayStream`). Every other response is buffered as above.
  */
 
 import { dialHostOf, guardDial, isBlockedDestinationError, type DialPolicy } from "./blocked-destinations.js";
@@ -49,8 +55,8 @@ import { TLSSocket, checkServerIdentity, connect as tlsConnect, createSecureCont
 import { isIP } from "node:net";
 import type { Duplex } from "node:stream";
 
-import type { Arbiter, ArbiterEvent, EgressRefusalKind } from "./arbiter-client.js";
-import { gateRequest, observeResponse, withheldPolicy, agentWithheld, heldForEvent, refusalKindOf, isModelService } from "./egress.js";
+import type { Arbiter, ArbiterEvent, EgressRefusalKind, KubeUpstream } from "./arbiter-client.js";
+import { gateRequest, observeResponse, withheldPolicy, agentWithheld, heldForEvent, refusalKindOf, isModelService, type SecretTaintVerdict } from "./egress.js";
 import { ensureCa, leafForHost, type CaMaterial } from "./ca.js";
 import { statedDestination } from "./destination.js";
 import type { ProcHolder } from "./conn-attr.js";
@@ -115,6 +121,11 @@ export interface MitmDeps {
    *  over verified TLS (against the route's own `ca`, servername the host).
    *  Absent, or undefined for a host: the real upstream. */
   route?: (host: string) => { host: string; port: number; ca?: string } | undefined;
+  /** kube-wire-release.md: how to dial the cluster at `host:port` (its own
+   *  CA, `tls-server-name`, the client certificate), or null for any other
+   *  host (proxy.ts `kubeUpstreamOf`, cached). A THROW fails the request
+   *  closed (502, nothing sent). Absent: every host is dialed as before. */
+  kubeUpstream?: (authority: string) => Promise<KubeUpstream | null>;
   /** Plan 10 §11.8, "Refused connections": report a refusal for these
    *  holders, `[]` when none was found (proxy.ts noteRefusal; bounded,
    *  never throws). Absent: none. */
@@ -145,6 +156,11 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 export interface ConnAttribution {
   holders: readonly ProcHolder[];
   current: () => ProcHolder[];
+  /** An upgraded stream's per-chunk check (kube-wire-release.md §4.1): a
+   *  fresh verdict for the processes holding the client's end, as a blind
+   *  tunnel judges each chunk (proxy.ts `tunnelRecheck`), at `destination`.
+   *  Absent: an upgraded stream is refused (it could not be judged). */
+  streamCheck?: (destination: string) => () => Promise<SecretTaintVerdict>;
 }
 
 /** The holders a decrypted request is judged against: those at the CONNECT
@@ -168,6 +184,31 @@ interface PooledUpstream {
   host: string;
   port: number;
   sock: TLSSocket;
+  /** `upstreamTlsOptions(...).poolKey`: how it was dialed (a cluster's client
+   *  certificate or not); reused only for a request dialed the same way. */
+  tlsKey: string;
+}
+
+/** The TLS options a Kubernetes cluster's dial adds (kube-wire-release.md):
+ *  its own CA as the only trust anchor (kubectl's rule), its
+ *  `tls-server-name`, `insecure-skip-tls-verify` as the user's own file says,
+ *  and the client certificate and key, but only for a request that carries
+ *  no Authorization header (a bearer token's request authenticates as that
+ *  token's user, never as the certificate's). `key` tells the pool how the
+ *  connection was dialed (`poolKey`). No profile: nothing added. Pure. */
+export function upstreamTlsOptions(
+  profile: KubeUpstream | null,
+  hasAuthorization: boolean,
+): { poolKey: string; ca?: string; servername?: string; insecure?: true; cert?: string; key?: string } {
+  if (profile === null) return { poolKey: "" };
+  const client = profile.client !== undefined && !hasAuthorization ? profile.client : undefined;
+  return {
+    poolKey: client ? "kube:client" : "kube",
+    ...(profile.ca ? { ca: profile.ca } : {}),
+    ...(profile.servername ? { servername: profile.servername } : {}),
+    ...(profile.insecure ? { insecure: true as const } : {}),
+    ...(client ? { cert: client.cert, key: client.key } : {}),
+  };
 }
 
 /** The materialized MITM engine: CA loaded once, per-host SecureContext cached. */
@@ -194,7 +235,7 @@ export class MitmEngine {
    *  starts trusts the CA by its key pin (`--ignore-certificate-errors-spki-list`,
    *  devtools-relay.md §6.4), which Chrome matches only against certificates
    *  the server sends. A client that trusts the CA anyway ignores the copy. */
-  private contextForHost(host: string): SecureContext {
+  contextForHost(host: string): SecureContext {
     let ctx = this.secureContexts.get(host);
     if (!ctx) {
       const leaf = leafForHost(this.ca, host);
@@ -424,6 +465,10 @@ export class MitmEngine {
       url: absoluteUrl,
       headers,
       bodyText: body.toString("utf8"),
+      // A SigV4 request signs these bytes and the Host sent upstream
+      // (aws-sigv4-resign.md).
+      bodyBytes: body,
+      hostHeader: connectAuthority(host, port),
       arbiter: this.deps.arbiter,
       // The scheme the value would travel in (plan 10 §11.13.1): decrypted
       // here, so HTTPS on both sides.
@@ -495,8 +540,11 @@ export class MitmEngine {
     // Forward the (possibly rewritten) request to the REAL upstream over TLS,
     // as the client wrote it (reoriginationHead: its header order and case,
     // ONE Host naming the CONNECT target).
-    const fwdPath = gate.rewritten ? rewrittenPath(gate.rewritten.url, path) : path;
-    const fwdBody = gate.rewritten ? Buffer.from(gate.rewritten.bodyText, "utf8") : body;
+    const fwdPath = gate.rewritten ? rewrittenPath(gate.rewritten.url, absoluteUrl, path) : path;
+    // The body's own bytes unless the release changed its text: a binary
+    // body (an S3 upload) read as UTF-8 and written back would not be the
+    // same bytes (aws-sigv4-resign.md §4).
+    const fwdBody = gate.rewritten && gate.rewritten.bodyText !== body.toString("utf8") ? Buffer.from(gate.rewritten.bodyText, "utf8") : body;
     // The model-host deny judges the path that is SENT: a value the gate put
     // back into the path could make it another one (fail-closed).
     if (modelPath && fwdPath !== path) {
@@ -533,8 +581,26 @@ export class MitmEngine {
     try {
       // A header the substitution left unsendable (a line break in a resolved
       // value) throws here: 502, nothing sent (fail-closed).
-      const head = reoriginationHead(method, fwdPath, gate.rewritten?.headers ?? headers, connectAuthority(host, port), sendBody.length);
-      upstream = await this.originate(host, port, head, sendBody, pool);
+      const sentHeaders = gate.rewritten?.headers ?? headers;
+      const head = reoriginationHead(method, fwdPath, sentHeaders, connectAuthority(host, port), sendBody.length);
+      // A Kubernetes cluster of the launch's kubeconfig (kube-wire-release.md)
+      // is dialed with its own CA and, for a request with no Authorization
+      // header, the real client certificate. An arbiter that cannot answer
+      // throws here: 502, nothing sent.
+      const profile = this.deps.kubeUpstream ? await this.deps.kubeUpstream(decideAt) : null;
+      const tlsOpts = upstreamTlsOptions(profile, headerValue(sentHeaders, "authorization") !== undefined);
+      if (profile?.clientWhy && !profile.client && headerValue(sentHeaders, "authorization") === undefined) {
+        this.deps.log(`MITM ${decideAt}: no client certificate presented: ${profile.clientWhy}`);
+      }
+      // A cluster's upgrade (exec, attach, port-forward) or stream (a watch,
+      // `logs -f`): relayed as it comes instead of buffered
+      // (kube-wire-release.md §4.1). The released credential rides the
+      // request head only; the connection ends with the stream.
+      const stream = profile !== null ? kubeStreamKind(method, fwdPath, sentHeaders) : null;
+      if (stream !== null) {
+        return await this.relayStream({ host, port, tls, head: withConnection(head, stream === "upgrade" ? "Upgrade" : "close"), body: sendBody, tlsOpts, kind: stream, decideAt, method, attribution, resolved: gate.resolved ?? [] });
+      }
+      upstream = await this.originate(host, port, head, sendBody, pool, tlsOpts);
     } catch (err) {
       if (isBlockedDestinationError(err)) {
         this.deps.emit("blocked", { method, destination: host, scheme: "https", reason: err.message });
@@ -599,12 +665,14 @@ export class MitmEngine {
     head: string,
     body: Buffer,
     pool: { current?: PooledUpstream },
+    tlsOpts: ReturnType<typeof upstreamTlsOptions> = { poolKey: "" },
   ): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer; upstreamClose: boolean }> {
     return new Promise((resolve, reject) => {
-      // Reuse the pooled upstream iff it targets the same host:port and is still
-      // writable; else discard it and dial fresh.
+      // Reuse the pooled upstream iff it targets the same host:port, was
+      // dialed the same way (a cluster's client certificate or not), and is
+      // still writable; else discard it and dial fresh.
       let reused: TLSSocket | undefined;
-      if (pool.current && pool.current.host === host && pool.current.port === port && !pool.current.sock.destroyed && pool.current.sock.writable) {
+      if (pool.current && pool.current.host === host && pool.current.port === port && pool.current.tlsKey === tlsOpts.poolKey && !pool.current.sock.destroyed && pool.current.sock.writable) {
         reused = pool.current.sock;
       } else if (pool.current && !pool.current.sock.destroyed) {
         pool.current.sock.destroy();
@@ -636,7 +704,7 @@ export class MitmEngine {
               if (!sock.destroyed) sock.destroy();
             } else {
               // Upstream kept it alive → pool for the next request on this client.
-              pool.current = { host, port, sock };
+              pool.current = { host, port, sock, tlsKey: tlsOpts.poolKey };
             }
             resolve({ status: res.status, headers: res.headers, body: res.body, upstreamClose: res.upstreamClose });
           })
@@ -655,51 +723,207 @@ export class MitmEngine {
         return;
       }
 
-      // A mock-sites host route (test infrastructure): the same verified TLS,
-      // to a loopback listener, trusting the route's own CA for `host`.
-      const route = this.deps.route?.(host);
-      // Dial only an address that passed the always-denied and this-machine
-      // checks (blocked-destinations.ts): a literal here (throws → the
-      // promise rejects, nothing dialed), a name in the lookup. A route's own
-      // loopback dial skips the this-machine check.
-      const policy: DialPolicy = {
-        allowMetadata: this.cfg.allowMetadata === true,
-        allowThisMachine: route !== undefined || this.cfg.allowThisMachine === true,
-      };
-      const dialOpts = guardDial(route?.host ?? host, route?.port ?? port, policy);
-      // An IPv6 literal (`[2001:db8::1]`, the CONNECT target) is dialed bare,
-      // sends no SNI (RFC 6066 has none for an address) and is verified
-      // against the certificate's IP entry for that address, a route's
-      // loopback dial included.
-      const bare = dialHostOf(host);
-      const literal = isIP(bare) !== 0;
-      const sock = tlsConnect(
-        {
-          host: dialHostOf(route?.host ?? host),
-          port: route?.port ?? port,
-          ...(literal ? { checkServerIdentity: (_name: string, cert: import("node:tls").PeerCertificate) => checkServerIdentity(bare, cert) } : { servername: host }),
-          ...(route?.ca ? { ca: route.ca } : {}),
-          ...dialOpts,
-          // UPSTREAM verification: default ON (system CA store). Only the TEST-ONLY
-          // insecureUpstream flag disables it — never default-on (documented loudly
-          // in server-main + README).
-          rejectUnauthorized: this.cfg.insecureUpstream ? false : true,
-        },
-        () => {
-          sendRequest(sock);
-          attachReader(sock);
-        },
-      );
-      // Nagle off: on a pooled (kept-alive) connection a request's last
-      // small segment otherwise waits for the ACK of the one before it,
-      // which the server delays (~40 ms) while it waits for the rest of
-      // the request (plan 13 D6, "The kept-alive floor").
-      sock.setNoDelay(true);
+      const sock = this.dialUpstream(host, port, tlsOpts, () => {
+        sendRequest(sock);
+        attachReader(sock);
+      });
       sock.setTimeout(30000, () => {
         sock.destroy(new Error("upstream TLS timeout"));
       });
       sock.on("error", reject);
     });
+  }
+
+  /**
+   * Dial the real upstream over verified TLS (throws, nothing dialed, for a
+   * destination the always-denied or this-machine checks refuse).
+   */
+  private dialUpstream(host: string, port: number, tlsOpts: ReturnType<typeof upstreamTlsOptions>, onConnect: () => void): TLSSocket {
+    // A mock-sites host route (test infrastructure): the same verified TLS,
+    // to a loopback listener, trusting the route's own CA for `host`.
+    const route = this.deps.route?.(host);
+    // Dial only an address that passed the always-denied and this-machine
+    // checks (blocked-destinations.ts): a literal here (throws → the
+    // promise rejects, nothing dialed), a name in the lookup. A route's own
+    // loopback dial skips the this-machine check.
+    const policy: DialPolicy = {
+      allowMetadata: this.cfg.allowMetadata === true,
+      allowThisMachine: route !== undefined || this.cfg.allowThisMachine === true,
+    };
+    const dialOpts = guardDial(route?.host ?? host, route?.port ?? port, policy);
+    // An IPv6 literal (`[2001:db8::1]`, the CONNECT target) is dialed bare,
+    // sends no SNI (RFC 6066 has none for an address) and is verified
+    // against the certificate's IP entry for that address, a route's
+    // loopback dial included.
+    const bare = dialHostOf(host);
+    const literal = isIP(bare) !== 0;
+    // A cluster's `tls-server-name` (kube-wire-release.md) is the SNI and
+    // the name verified, an address host included; its CA replaces the
+    // system store (and a route's CA: the route only says where to dial).
+    const named = tlsOpts.servername !== undefined;
+    const ca = tlsOpts.ca ?? route?.ca;
+    const sock = tlsConnect(
+      {
+        host: dialHostOf(route?.host ?? host),
+        port: route?.port ?? port,
+        ...(named ? { servername: tlsOpts.servername } : literal ? { checkServerIdentity: (_name: string, cert: import("node:tls").PeerCertificate) => checkServerIdentity(bare, cert) } : { servername: host }),
+        ...(ca ? { ca } : {}),
+        ...(tlsOpts.cert && tlsOpts.key ? { cert: tlsOpts.cert, key: tlsOpts.key } : {}),
+        ...dialOpts,
+        // UPSTREAM verification: default ON (system CA store). Only the TEST-ONLY
+        // insecureUpstream flag disables it — never default-on (documented loudly
+        // in server-main + README) — and a cluster whose kubeconfig entry
+        // says `insecure-skip-tls-verify: true` (the user's own choice for
+        // that host, kube-wire-release.md).
+        rejectUnauthorized: this.cfg.insecureUpstream || tlsOpts.insecure ? false : true,
+      },
+      onConnect,
+    );
+    // Nagle off: on a pooled (kept-alive) connection a request's last
+    // small segment otherwise waits for the ACK of the one before it,
+    // which the server delays (~40 ms) while it waits for the rest of
+    // the request (plan 13 D6, "The kept-alive floor"); a relayed stream
+    // forwards each chunk as it comes.
+    sock.setNoDelay(true);
+    return sock;
+  }
+
+  /**
+   * Relay one streamed exchange with a Kubernetes cluster (kube-wire-release.md
+   * §4.1): dial the cluster as `originate` would (fresh, never pooled), send
+   * the gated head, and write the response head back as soon as it comes.
+   *
+   *   - `101 Switching Protocols` to an upgrade: from then on the cluster's
+   *     bytes go to the client as they come, and each chunk the client sends
+   *     goes to the cluster only after a fresh verdict on the processes now
+   *     holding the client's end (`streamCheck`, the blind tunnel's rule) and
+   *     the verbatim tripwire; a refusal closes both ends. No `streamCheck`:
+   *     502 before anything is dialed (fail-closed).
+   *   - any other response (a watch, `logs -f`, a refused upgrade): its body
+   *     is relayed as it comes, framing and all, until its Content-Length or
+   *     the cluster's close (the request said `Connection: close`).
+   *
+   * Throws only before the response head reached the client (the caller
+   * answers 502); after that a failure closes the connection. Resolves
+   * false: the client connection ends with the stream.
+   */
+  private async relayStream(a: {
+    host: string; port: number; tls: TLSSocket; head: string; body: Buffer;
+    tlsOpts: ReturnType<typeof upstreamTlsOptions>; kind: "upgrade" | "stream";
+    decideAt: string; method: string; attribution: ConnAttribution | undefined; resolved: readonly string[];
+  }): Promise<boolean> {
+    const check = a.kind === "upgrade" ? a.attribution?.streamCheck?.(a.decideAt) : undefined;
+    if (a.kind === "upgrade" && check === undefined) {
+      throw new Error("an upgraded stream cannot be judged per chunk on this connection (fail-closed)");
+    }
+    const upstream = await new Promise<TLSSocket>((resolve, reject) => {
+      const sock: TLSSocket = this.dialUpstream(a.host, a.port, a.tlsOpts, () => resolve(sock));
+      sock.once("error", reject);
+      sock.setTimeout(30000, () => sock.destroy(new Error("upstream TLS timeout")));
+    });
+    this.deps.track(upstream);
+    let response: { head: Buffer; rest: Buffer };
+    try {
+      writeMessage(upstream, a.head, a.body);
+      response = await readResponseHead(upstream, MAX_STREAM_HEAD_BYTES);
+    } catch (err) {
+      upstream.destroy();
+      this.deps.untrack(upstream);
+      throw err;
+    }
+    const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(response.head.toString("latin1"))?.[1] ?? 0);
+    // A stream may be quiet for minutes (a watch, an idle shell): neither
+    // side's idle timer applies from here; either end's close ends it.
+    upstream.setTimeout(0);
+    a.tls.setTimeout(0);
+    const upgraded = a.kind === "upgrade" && status === 101;
+    this.deps.emit("forwarded", {
+      method: a.method, destination: a.host, scheme: "https", status, resolved: a.resolved,
+      stream: upgraded ? "upgrade" : "body",
+      note: upgraded ? "upgraded stream relayed both ways, each client chunk judged" : "response streamed as it came",
+    });
+    const done = new Promise<void>((resolve) => {
+      let left = 2;
+      const one = (): void => { left -= 1; if (left === 0) resolve(); };
+      upstream.once("close", one);
+      a.tls.once("close", one);
+    });
+    const closeBoth = (): void => {
+      if (!upstream.destroyed) upstream.destroy();
+      if (!a.tls.destroyed) a.tls.destroy();
+    };
+    upstream.on("error", closeBoth);
+    upstream.on("close", () => {
+      this.deps.untrack(upstream);
+      if (a.tls.destroyed) return;
+      // The stream is over: the client gets its end, and a client that does
+      // not close in turn is closed.
+      a.tls.end();
+      setTimeout(() => a.tls.destroy(), STREAM_CLOSE_GRACE_MS).unref();
+    });
+    a.tls.on("close", () => { if (!upstream.destroyed) upstream.destroy(); });
+
+    if (!upgraded) {
+      a.tls.write(streamedResponseHead(response.head));
+      const length = /\r\ncontent-length:[ \t]*(\d+)/i.exec(response.head.toString("latin1"))?.[1];
+      let left = length !== undefined ? Number(length) : Infinity;
+      const pass = (chunk: Buffer): void => {
+        if (left <= 0) return;
+        const out = chunk.length > left ? chunk.subarray(0, left) : chunk;
+        left -= out.length;
+        if (!a.tls.write(out)) { upstream.pause(); a.tls.once("drain", () => upstream.resume()); }
+        if (left <= 0) { upstream.destroy(); a.tls.end(); }
+      };
+      if (response.rest.length > 0) pass(response.rest);
+      upstream.on("data", pass);
+      upstream.on("end", () => a.tls.end());
+      upstream.resume();
+      await done;
+      return false;
+    }
+
+    a.tls.write(response.head);
+    if (response.rest.length > 0) a.tls.write(response.rest);
+    upstream.on("data", (chunk: Buffer) => {
+      if (!a.tls.write(chunk)) { upstream.pause(); a.tls.once("drain", () => upstream.resume()); }
+    });
+    upstream.on("end", () => a.tls.end());
+    upstream.resume();
+    // The client's side: pulled off the connection's reader (which already
+    // holds anything sent after the request head), one chunk at a time,
+    // each judged before it is written.
+    const r = readerFor(a.tls);
+    const refuse = async (reason: string): Promise<void> => {
+      this.deps.emit("blocked", { method: a.method, destination: a.host, scheme: "https", reason, note: "upgraded stream closed: a chunk was refused" });
+      this.deps.log(`MITM BLOCK stream ${a.decideAt}: ${reason}`);
+      if (this.deps.noteRefusal) await this.deps.noteRefusal(a.attribution ? requestHolders(a.attribution) : [], refusalKindOf(reason));
+      closeBoth();
+    };
+    for (;;) {
+      if (r.buf.length === 0) {
+        if (r.ended || a.tls.destroyed || upstream.destroyed) break;
+        await r.wait();
+        continue;
+      }
+      if (r.buf.length > this.deps.maxBodyBytes) { await refuse(`more than ${this.deps.maxBodyBytes} bytes waiting to be judged (fail-closed)`); break; }
+      const chunk = r.consume(r.buf.length);
+      let verdict: SecretTaintVerdict;
+      try {
+        verdict = await check!();
+      } catch (err) {
+        verdict = { action: "block", reason: `taint check failed: ${(err as Error).message} → block (fail-closed)`, withheld: [] };
+      }
+      if (verdict.action === "block") { await refuse(verdict.reason); break; }
+      const trip = this.deps.tripwire
+        ? await this.deps.tripwire({ url: `https://${a.decideAt}/`, headers: {}, bodyText: chunk.toString("utf8") }, a.decideAt)
+        : null;
+      if (trip) { await refuse(trip.reason); break; }
+      if (upstream.destroyed) break;
+      if (!upstream.write(chunk)) await new Promise<void>((resolve) => { upstream.once("drain", resolve); upstream.once("close", resolve); });
+    }
+    if (!upstream.destroyed) upstream.end();
+    await done;
+    return false;
   }
 
   /** Write a buffered upstream response back over the terminated TLS socket. We
@@ -871,6 +1095,7 @@ async function readHttpRequest(stream: Duplex, maxBodyBytes: number): Promise<Pa
   const headers: Record<string, string | string[] | undefined> = {};
   let contentLength = -1;
   let chunked = false;
+  let expectContinue = false;
   for (const line of lines) {
     const ci = line.indexOf(":");
     if (ci === -1) continue;
@@ -883,7 +1108,15 @@ async function readHttpRequest(stream: Duplex, maxBodyBytes: number): Promise<Pa
     else headers[k] = [existing, v];
     if (lk === "content-length") contentLength = Number(v) || 0;
     if (lk === "transfer-encoding" && /chunked/i.test(v)) chunked = true;
+    if (lk === "expect" && /^100-continue$/i.test(v)) expectContinue = true;
   }
+  // A client that asked to be told to go on (`Expect: 100-continue`: the AWS
+  // SDKs on every S3 upload) sends its body only after a 100 or a timeout of
+  // its own, and the proxy needs the whole body before the gate runs: it
+  // answers the 100 itself (reoriginationHead drops the header, so the
+  // upstream sends none of its own). Not for a body over the limit, which is
+  // refused unread.
+  if (expectContinue && (chunked || (contentLength > 0 && contentLength <= maxBodyBytes))) stream.write("HTTP/1.1 100 Continue\r\n\r\n");
 
   // ── 2. read the body ──
   // Per RFC 7230 §3.3.3: Transfer-Encoding chunked takes precedence over a
@@ -1048,8 +1281,19 @@ function wantsClose(headers: Record<string, string | string[] | undefined>): boo
   return v != null && /close/i.test(v);
 }
 
-/** Map the rewritten absolute URL back to an origin-form path for re-origination. */
-function rewrittenPath(rewrittenUrl: string, fallback: string): string {
+/** Map the rewritten absolute URL back to an origin-form path for
+ *  re-origination: the path as the client wrote it when the release left the
+ *  URL alone, else the rewritten URL's text after the same authority, never
+ *  re-parsed (a URL parser resolves `./` and `../` and re-encodes, and a SigV4
+ *  request signs the path as written: aws-sigv4-resign.md §4). A rewritten
+ *  URL under another authority falls back to the parser's reading. */
+function rewrittenPath(rewrittenUrl: string, absoluteUrl: string, fallback: string): string {
+  if (rewrittenUrl === absoluteUrl) return fallback;
+  if (absoluteUrl.endsWith(fallback)) {
+    const authority = absoluteUrl.slice(0, absoluteUrl.length - fallback.length);
+    const rest = rewrittenUrl.startsWith(authority) ? rewrittenUrl.slice(authority.length) : "";
+    if (rest.startsWith("/")) return rest;
+  }
   try {
     const u = new URL(rewrittenUrl);
     return u.pathname + u.search;
@@ -1080,9 +1324,86 @@ export function connectAuthority(host: string, port: number): string {
   return port === 443 ? h : `${h}:${port}`;
 }
 
+/** Above this a streamed response's head is refused (fail-closed). */
+const MAX_STREAM_HEAD_BYTES = 64 * 1024;
+
+/** How long a client may keep its end of a finished stream open. */
+const STREAM_CLOSE_GRACE_MS = 5_000;
+
+/**
+ * Which streamed exchange a request to a Kubernetes cluster is
+ * (kube-wire-release.md §4.1): `upgrade` for an HTTP/1.1 upgrade
+ * (`Connection: Upgrade` with an `Upgrade:` protocol: SPDY/3.1 or WebSocket,
+ * kubectl's exec, attach and port-forward), `stream` for a GET whose query
+ * asks for a watch or a follow (`watch=true|1`, `follow=true|1`: `get -w`,
+ * `logs -f`), null for any other request (buffered as before). Pure.
+ */
+export function kubeStreamKind(method: string, path: string, headers: Record<string, string | string[] | undefined>): "upgrade" | "stream" | null {
+  const connection = headerValue(headers, "connection") ?? "";
+  const upgrade = headerValue(headers, "upgrade");
+  if (upgrade !== undefined && upgrade.trim() !== "" && connection.split(",").some((t) => t.trim().toLowerCase() === "upgrade")) return "upgrade";
+  if (method.toUpperCase() !== "GET") return null;
+  const q = path.indexOf("?");
+  if (q < 0) return null;
+  const params = new URLSearchParams(path.slice(q + 1));
+  for (const name of ["watch", "follow"]) {
+    const v = params.get(name);
+    if (v !== null && /^(?:true|1)$/i.test(v)) return "stream";
+  }
+  return null;
+}
+
+/** A re-origination head with one `Connection:` line added (the head
+ *  `reoriginationHead` writes carries none). Pure. */
+export function withConnection(head: string, value: string): string {
+  return `${head.slice(0, -2)}Connection: ${value}\r\n\r\n`;
+}
+
+/** A streamed (not upgraded) response's head as the client gets it: the
+ *  cluster's head with its `Connection:` lines replaced by `Connection: close`
+ *  (the stream is the connection's last exchange). Pure. */
+export function streamedResponseHead(head: Buffer): Buffer {
+  const lines = head.toString("latin1").split("\r\n").slice(0, -2).filter((l, i) => i === 0 || !/^connection:/i.test(l));
+  return Buffer.from(`${lines.join("\r\n")}\r\nConnection: close\r\n\r\n`, "latin1");
+}
+
+/** Read a response head (through CRLFCRLF) off `sock`: the head and the
+ *  bytes after it, `sock` left paused. Rejects on a close before it, or a
+ *  head over `max`. */
+export function readResponseHead(sock: Duplex, max: number): Promise<{ head: Buffer; rest: Buffer }> {
+  return new Promise((resolve, reject) => {
+    let buf = Buffer.alloc(0);
+    const finish = (err: Error | null, out?: { head: Buffer; rest: Buffer }): void => {
+      sock.off("data", onData);
+      sock.off("end", onEnd);
+      sock.off("error", onError);
+      if (err) reject(err);
+      else resolve(out!);
+    };
+    const onData = (chunk: Buffer): void => {
+      buf = Buffer.concat([buf, chunk]);
+      const end = buf.indexOf("\r\n\r\n");
+      if (end >= 0) {
+        // Left paused: the caller resumes it once its own listener is on, so
+        // no byte after the head is dropped.
+        sock.pause();
+        finish(null, { head: buf.subarray(0, end + 4), rest: buf.subarray(end + 4) });
+        return;
+      }
+      if (buf.length > max) finish(new Error(`the upstream response head is over ${max} bytes (fail-closed)`));
+    };
+    const onEnd = (): void => finish(new Error("the upstream closed before its response head"));
+    const onError = (err: Error): void => finish(err);
+    sock.on("data", onData);
+    sock.once("end", onEnd);
+    sock.once("error", onError);
+  });
+}
+
 /** Headers of the client's own hop to the proxy, never forwarded: the
- *  upstream leg is the proxy's. */
-const HOP_BY_HOP = new Set(["proxy-connection", "proxy-authorization", "connection", "keep-alive", "transfer-encoding"]);
+ *  upstream leg is the proxy's. `expect`: the proxy answered the client's
+ *  `100-continue` itself and sends the whole body at once (readHttpRequest). */
+const HOP_BY_HOP = new Set(["proxy-connection", "proxy-authorization", "connection", "keep-alive", "transfer-encoding", "expect"]);
 
 /**
  * The HTTP/1.1 request head the TLS-inspected leg re-originates (request line

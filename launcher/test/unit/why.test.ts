@@ -623,7 +623,7 @@ test("renderWhyPath (plan 13 §4.9, 2026-10-04): a usual program that prints (gi
   const out = renderWhyPath(creds, "/h");
   assert.match(out, /readers +none listed; none of its usual programs reads it by default/);
   assert.match(out, /note +git, git-credential-store print the files they are pointed at, so they get the placeholder copy too, never the real file/);
-  assert.match(out, /over HTTPS a placeholder these programs send is put back at a bound host/);
+  assert.match(out, /on the wire a placeholder these programs send is put back at a bound host \(git: GIT_SSL_CAINFO; basic auth in a header\)/);
   assert.doesNotMatch(out, /read it by default: git/);
   // the ssh keys: ssh and ssh-add still read them; git and scp print
   const key = renderWhyPath({ ...creds, path: "/h/.ssh/id_ed25519", consumers: ["ssh", "git", "scp", "ssh-add"], consumersPrint: [false, true, true, false] }, "/h");

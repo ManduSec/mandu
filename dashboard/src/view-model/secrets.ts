@@ -190,6 +190,10 @@ export interface LabelRow {
    *  the product page words it as that one file (dashboard.md §4.25f *A rule
    *  on a file reads as a file*). Absent otherwise. */
   pathIsFile?: true;
+  /** A label (not a pattern) whose path has nothing on this computer
+   *  (server/path-kinds.ts): the product page says so under it (dashboard.md
+   *  §4.25f *A rule on nothing says so*). Absent otherwise. */
+  missing?: true;
   /** `path` is a gitignore-style PATTERN from policy.yaml (confidentiality.md
    *  §6.1), not one path: it is edited in the file, never removed from here. */
   pattern: boolean;
@@ -360,12 +364,13 @@ export function readersTextOf(listed: boolean, names: string[], others: "deny" |
   return `${names.join(", ")}; ${rest}`;
 }
 
-function toLabelRow(l: PathLabelWire, files: ReadonlySet<string>): LabelRow {
+function toLabelRow(l: PathLabelWire, files: ReadonlySet<string>, missing: ReadonlySet<string>): LabelRow {
   const level = typeof l.level === "string" ? l.level : "";
   const bindings = bindingsOf(l.bindings);
   const declassifies = l.declassifies === true;
   const recursive = l.recursive !== false;
   const isFile = recursive && l.glob !== true && files.has(String(l.path ?? ""));
+  const isMissing = l.glob !== true && missing.has(String(l.path ?? ""));
   return {
     path: String(l.path ?? ""),
     level,
@@ -377,6 +382,7 @@ function toLabelRow(l: PathLabelWire, files: ReadonlySet<string>): LabelRow {
     recursive,
     scope: recursive ? "subtree" : "exact",
     ...(isFile ? { pathIsFile: true as const } : {}),
+    ...(isMissing ? { missing: true as const } : {}),
     pattern: l.glob === true,
     source: String(l.source ?? "user"),
     updatedAt: typeof l.updatedAt === "number" ? l.updatedAt : 0,
@@ -424,12 +430,17 @@ function toDerivedRow(d: DerivedLabelWire): DerivedRow {
  *
  * Pure: same input ⇒ same output, no I/O, no clock. The route calls it and
  * ships the result; the unit tests call it and assert the three invariants.
- * `files`: the label paths that are files on disk (server/path-kinds.ts).
+ * `files`: the label paths that are files on disk, and `missing`: those with
+ * nothing on disk (server/path-kinds.ts).
  */
-export function toSecretsPanel(state: ConfidentialityStateWire, files: ReadonlySet<string> = new Set()): SecretsPanel {
+export function toSecretsPanel(
+  state: ConfidentialityStateWire,
+  files: ReadonlySet<string> = new Set(),
+  missing: ReadonlySet<string> = new Set(),
+): SecretsPanel {
   const enabled = state.enabled === true;
   const secrets = (Array.isArray(state.secrets) ? state.secrets : []).map(toSecretRow);
-  const labels = (Array.isArray(state.labels) ? state.labels : []).map((l) => toLabelRow(l, files));
+  const labels = (Array.isArray(state.labels) ? state.labels : []).map((l) => toLabelRow(l, files, missing));
   const derived = (Array.isArray(state.derived) ? state.derived : []).map(toDerivedRow);
   const tainted: TaintedProcessRow[] = (Array.isArray(state.taintedProcesses) ? state.taintedProcesses : []).map((t) => ({
     procKey: String(t.procKey ?? ""),

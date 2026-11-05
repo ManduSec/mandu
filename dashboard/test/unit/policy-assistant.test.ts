@@ -24,6 +24,12 @@
  *     applied directly for a tightening, and approved by the same click for
  *     a loosening; the arbiter's skew-guard re-file is denied and answered
  *     409; both POSTs need CSRF + the admin session;
+ *   - the channel line (dashboard.md, *Describe says which AI reads your
+ *     words*): each `via` from the env and a stubbed PATH probe through the
+ *     REAL inspect-mcp selector, each reason when there is none; the spawn
+ *     rule equals the CLI client's; the answer and the route's JSON hold
+ *     only the enum, never a planted key or address; no client is built and
+ *     no model is called; 501 where Suggest is, CSRF + the admin session;
  *   - models are read-only here (policy-surface.md §8.4.3a): the prompt
  *     says so, an answer carrying add-model / update-model / remove-model is
  *     a 422 before any preview, and Apply refuses one (422) before any
@@ -46,6 +52,9 @@ import {
   assistantSystemPrompt,
   helperReason,
   productionAssistantModel,
+  productionAssistantChannel,
+  channelOnly,
+  channelVia,
   modelEditProblems,
   assistantUserMessage,
   parseAssistantAnswer,
@@ -53,6 +62,7 @@ import {
   suggestRules,
   tryLine,
   tryProbe,
+  type AssistantChannel,
   type AssistantModel,
   type AssistantUnavailableReason,
   type PreviewResult,
@@ -115,7 +125,7 @@ function fakeArbiter(opts: { preview?: PreviewResult; previewOnApply?: PreviewRe
   return { arbiter, calls };
 }
 
-async function start(arbiter: PolicyDocArbiter, assistantModel: () => Promise<AssistantModel>, extra: { fileBrowserHome?: string } = {}) {
+async function start(arbiter: PolicyDocArbiter, assistantModel: () => Promise<AssistantModel>, extra: { fileBrowserHome?: string; assistantChannel?: () => Promise<AssistantChannel> } = {}) {
   const server = new DashboardServer({ source: fakeSource, policyDocArbiter: arbiter, assistantModel, log: () => {}, ...ADMIN_OPTS, ...extra });
   const port = await server.listen(0);
   return { base: `http://127.0.0.1:${port}`, close: () => server.close() };
@@ -531,5 +541,117 @@ test("the try route: probes the law now and WITH the whole suggestion; a row wit
     assert.equal((await post(srv.base, "/api/policy/assistant/try", { edits: EDITS, index: 9 })).status, 400);
   } finally {
     await srv.close();
+  }
+});
+
+// ── Which AI reads your words (dashboard.md, *Describe says which AI reads your words*) ──
+
+const PLANTED_KEY = "sk-ant-PLANTED-KEY-6f3a91";
+const PLANTED_URL = "https://planted-gateway.example:8443/v1";
+const onPath = (...bins: Array<"claude" | "codex">) => (b: "claude" | "codex") => bins.includes(b);
+
+test("the channel: each via from the env and the PATH probe, through the real selector", async () => {
+  const cases: Array<[NodeJS.ProcessEnv, (b: "claude" | "codex") => boolean, AssistantChannel, string]> = [
+    [{ ANTHROPIC_API_KEY: PLANTED_KEY }, onPath("claude", "codex"), { ready: true, via: "api" }, "a key"],
+    [{ ANTHROPIC_API_KEY: PLANTED_KEY, ANTHROPIC_BASE_URL: PLANTED_URL }, onPath(), { ready: true, via: "api-custom" }, "a key and a base URL"],
+    [{ ANTHROPIC_API_KEY: PLANTED_KEY, ANTHROPIC_BASE_URL: "https://api.anthropic.com/" }, onPath(), { ready: true, via: "api" }, "Anthropic's own address is not custom"],
+    [{}, onPath("claude"), { ready: true, via: "claude" }, "only claude"],
+    [{}, onPath("codex"), { ready: true, via: "codex" }, "only codex: the fallback the client spawns"],
+    [{}, onPath("claude", "codex"), { ready: true, via: "claude" }, "both"],
+    [{ MANDU_ULLM_MODEL: "gpt-5" }, onPath("claude", "codex"), { ready: true, via: "codex" }, "an OpenAI model picks codex"],
+    [{ MANDU_ULLM_BINARY: "codex" }, onPath("claude", "codex"), { ready: true, via: "codex" }, "the hint names codex"],
+    [{ ANTHROPIC_BASE_URL: PLANTED_URL }, onPath("claude"), { ready: true, via: "claude-custom" }, "the base URL re-points claude"],
+    [{ ANTHROPIC_BASE_URL: PLANTED_URL }, onPath("codex"), { ready: true, via: "codex" }, "codex is not handed the base URL"],
+    [{ MANDU_ULLM_MODE: "cli" }, onPath(), { ready: false, reason: "cli-missing" }, "cli with no binary"],
+    [{ MANDU_ULLM_MODE: "api" }, onPath("claude"), { ready: false, reason: "api-key-missing" }, "api with no key"],
+    [{}, onPath(), { ready: false, reason: "no-channel" }, "nothing at all"],
+    [{ ANTHROPIC_API_KEY: PLANTED_KEY, ANTHROPIC_BASE_URL: "http://127.0.0.1:4000" }, onPath(), { ready: false, reason: "other" }, "a refused loopback base URL"],
+  ];
+  for (const [env, probe, want, why] of cases) {
+    const got = await productionAssistantChannel(env, probe)();
+    assert.deepEqual(got, want, why);
+    const wire = JSON.stringify(got);
+    for (const planted of [PLANTED_KEY, PLANTED_URL, "planted-gateway", "127.0.0.1", "gpt-5"]) assert.ok(!wire.includes(planted), `${why}: ${wire}`);
+  }
+});
+
+test("the channel: a helper module that does not load is not-installed; the selection builds no client and calls no model", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mandu-helper-channel-"));
+  try {
+    assert.deepEqual(await productionAssistantChannel({ MANDU_ULLM_MODULE: pathToFileURL(join(dir, "nope.mjs")).href })(), { ready: false, reason: "not-installed" });
+    const mod = join(dir, "ullm.mjs");
+    const built = join(dir, "built");
+    writeFileSync(mod, [
+      `import { writeFileSync } from "node:fs";`,
+      `export function selectUllmConfig(env) { return { mode: "api", apiKey: env.ANTHROPIC_API_KEY, baseUrl: env.ANTHROPIC_BASE_URL, model: "secret-model-name" }; }`,
+      `export function isOnPath() { return false; }`,
+      `export function buildUllmClient() { writeFileSync(${JSON.stringify(built)}, "built"); return { complete() { writeFileSync(${JSON.stringify(built)}, "called"); } }; }`,
+    ].join("\n"));
+    const got = await productionAssistantChannel({ MANDU_ULLM_MODULE: pathToFileURL(mod).href, ANTHROPIC_API_KEY: PLANTED_KEY, ANTHROPIC_BASE_URL: PLANTED_URL })();
+    assert.deepEqual(got, { ready: true, via: "api-custom" });
+    assert.ok(!JSON.stringify(got).includes("secret-model-name"));
+    assert.throws(() => readFileSync(built), "no client built, no model called");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the channel: the binary named is the one the CLI client spawns (resolveCliBinary)", async () => {
+  const spec = ["..", "..", "..", "interceptors", "inspect-mcp", "src", "ullm-client.js"].join("/");
+  const { resolveCliBinary } = (await import(new URL(spec, import.meta.url).href)) as { resolveCliBinary(b: string, m: string): "claude" | "codex" };
+  for (const binary of ["auto", "claude", "codex"]) {
+    for (const model of [undefined, "claude-haiku-4-5", "gpt-5", "openai/gpt-4o", "o3", "sonnet"]) {
+      // The client resolves an unset model as its default, a Claude id.
+      const spawned = resolveCliBinary(binary, model ?? "claude-haiku-4-5");
+      assert.equal(channelVia({ mode: "cli", binary, model }), spawned, `${binary} / ${model}`);
+    }
+  }
+  assert.equal(channelVia({ mode: "nope" }), null);
+  assert.equal(channelVia(null), null);
+});
+
+test("channelOnly keeps the enum alone; anything else is other", () => {
+  assert.deepEqual(channelOnly({ ready: true, via: "claude", path: "/usr/bin/claude", apiKey: PLANTED_KEY }), { ready: true, via: "claude" });
+  assert.deepEqual(channelOnly({ ready: false, reason: "cli-missing", detail: PLANTED_URL }), { ready: false, reason: "cli-missing" });
+  assert.deepEqual(channelOnly({ ready: true, via: PLANTED_URL }), { ready: false, reason: "other" });
+  assert.deepEqual(channelOnly({ ready: false, reason: "made-up" }), { ready: false, reason: "other" });
+  assert.deepEqual(channelOnly(undefined), { ready: false, reason: "other" });
+});
+
+test("the channel route: the enum only, behind CSRF + the admin session; 501 where Suggest is; never a model call", async () => {
+  const get = (base: string, headers: Record<string, string> = CSRF_ADMIN) => fetch(base + "/api/policy/assistant/channel", { headers });
+  const { arbiter, calls } = fakeArbiter();
+  let modelAsked = 0;
+  const leaky = async () => ({ ready: true, via: "api-custom", apiKey: PLANTED_KEY, baseUrl: PLANTED_URL }) as unknown as AssistantChannel;
+  const srv = await start(arbiter, async () => { modelAsked++; throw new Error("unreached"); }, { assistantChannel: leaky });
+  try {
+    assert.equal((await get(srv.base, {})).status, 403, "no CSRF header");
+    assert.equal((await get(srv.base, { "X-Mandu-Control": "1" })).status, 403, "no admin session");
+    const r = await get(srv.base);
+    assert.equal(r.status, 200);
+    const text = await r.text();
+    assert.deepEqual(JSON.parse(text), { ready: true, via: "api-custom" });
+    assert.ok(!text.includes(PLANTED_KEY) && !text.includes("planted-gateway"), text);
+    assert.equal(modelAsked, 0);
+    assert.deepEqual(calls, [], "nothing read from the arbiter");
+  } finally {
+    await srv.close();
+  }
+  const thrower = await start(arbiter, model("{}"), { assistantChannel: async () => { throw new Error(PLANTED_URL); } });
+  try {
+    const r = await get(thrower.base);
+    const text = await r.text();
+    assert.deepEqual(JSON.parse(text), { ready: false, reason: "other" });
+    assert.ok(!text.includes("planted-gateway"));
+  } finally {
+    await thrower.close();
+  }
+  const { arbiter: old } = fakeArbiter();
+  delete (old as { policyExplain?: unknown }).policyExplain;
+  const srv501 = await start(old, model("{}"), { assistantChannel: async () => ({ ready: true, via: "api" }) });
+  try {
+    assert.equal((await get(srv501.base)).status, 501);
+  } finally {
+    await srv501.close();
   }
 });

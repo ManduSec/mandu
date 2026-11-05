@@ -72,6 +72,23 @@ const detail = (doc: Doc) => doc.querySelector("#files-suggested-list .file-deta
 const button = (box: Doc, words: string) => [...box.querySelectorAll("button")].find((b: Doc) => b.textContent === words);
 const byId = (doc: Doc, id: string) => doc.getElementById(id);
 
+/** Enter on Not a secret (`not`): the question it asks on the page
+ *  (dashboard.md §4.25n *Rules asks on the page, not in a browser
+ *  dialog*), its sentence focused and Escape closing it, then asked again;
+ *  returns its Mark as not a secret, which is what posts. */
+function ask(doc: Doc, not: Doc): Doc {
+  const window = doc.defaultView;
+  window.confirm = () => { throw new Error("window.confirm called"); };
+  const words = (d: Doc) => detail(d).querySelector(".ask-in-place-words");
+  enter(not);
+  assert.equal(doc.activeElement, words(doc), "the question's sentence has the focus");
+  doc.activeElement.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  assert.equal(words(doc), null, "Escape closes it");
+  const back = button(detail(doc), "Not a secret");
+  assert.equal(doc.activeElement, back, "and gives the focus back to Not a secret");
+  enter(back);
+  return button(detail(doc), "Mark as not a secret");
+}
 /** Enter on a button that goes off while it acts: Chromium drops its focus. */
 function press(btn: Doc): void {
   btn.focus();
@@ -175,13 +192,38 @@ test("Not a secret names its row; done, the row is gone and the focus goes to th
   enter(moreOf(doc, "pp-000002"));
   const not = button(detail(doc), "Not a secret");
   assert.equal(controlName(not), "Not a secret: staging.conf");
-  press(not);
+  press(ask(doc, not));
   await tick();
   assert.deepEqual(dismissed, [{ id: "pp-000002" }]);
   assert.equal(rowOf(doc, "pp-000002"), undefined, "the row is gone");
   assert.equal(doc.activeElement, byId(doc, "suggested-title"), "the card's heading, never <body>");
   assert.equal(doc.activeElement.getAttribute("tabindex"), "-1", "a heading is no Tab stop");
   assert.match(byId(doc, "rules-notice").textContent, /staging\.conf is marked as not a secret/);
+});
+
+test("Not a secret: a draw of the list while it asks draws the question again, the focus on its sentence; Mark as not a secret posts once", async () => {
+  const dismissed: unknown[] = [];
+  const { doc, window } = await opened({
+    "POST suggestions/dismiss": (b: { id: string }) => (dismissed.push(b), { dismissed: b.id, status: "denied", ...listing([CI, PROD], DONE) }),
+  });
+  window.confirm = () => { throw new Error("window.confirm called"); };
+  enter(moreOf(doc, "pp-000002"));
+  enter(button(detail(doc), "Not a secret"));
+  const first = detail(doc).querySelector(".ask-in-place-words");
+  assert.equal(doc.activeElement, first);
+  assert.equal(first.querySelector("code").textContent, "staging.conf");
+  // A tick on another row draws the list again from nothing.
+  untick(tickOf(doc, "pp-000001"));
+  const now = detail(doc).querySelector(".ask-in-place-words");
+  assert.ok(now && now !== first, "drawn again, still asking");
+  assert.equal(doc.activeElement, now, "the focus on the new sentence, never <body>");
+  // Enter again on the sentence, a line: nothing is sent.
+  now.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await tick();
+  assert.deepEqual(dismissed, []);
+  press(button(detail(doc), "Mark as not a secret"));
+  await tick();
+  assert.deepEqual(dismissed, [{ id: "pp-000002" }]);
 });
 
 test("Not a secret refused: the focus back on it, on again, described by the card's error line; the row stays", async () => {
@@ -191,13 +233,15 @@ test("Not a secret refused: the focus back on it, on again, described by the car
   enter(moreOf(doc, "pp-000002"));
   const not = button(detail(doc), "Not a secret");
   assert.equal(not.getAttribute("aria-describedby"), null, "described only once refused");
-  press(not);
+  press(ask(doc, not));
   await tick();
   assert.match(byId(doc, "suggest-error").textContent, /^Sign in first/);
   assert.ok(rowOf(doc, "pp-000002"), "still waiting");
-  assert.equal(doc.activeElement, not, "the button pressed");
-  assert.equal(not.disabled, false);
-  assert.equal(not.getAttribute("aria-describedby"), "suggest-error");
+  assert.equal(detail(doc).querySelector(".ask-in-place"), null, "the question is gone");
+  const again = button(detail(doc), "Not a secret");
+  assert.equal(doc.activeElement, again, "the button pressed first, never Mark as not a secret");
+  assert.equal(again.disabled, false);
+  assert.equal(again.getAttribute("aria-describedby"), "suggest-error");
 });
 
 /** Enter on Scan for keys, which goes off while it acts. Chromium drops the
@@ -343,7 +387,7 @@ test("a focus the person moves off the heading stays where they put it, also onc
   // Tab into the list, open a row, and press Not a secret: done, the focus
   // goes to the heading, as it always does.
   enter(moreOf(doc, "pp-000002"));
-  press(button(detail(doc), "Not a secret"));
+  press(ask(doc, button(detail(doc), "Not a secret")));
   await tick();
   assert.equal(rowOf(doc, "pp-000002"), undefined, "dismissed");
   assert.equal(doc.activeElement, heading(doc), "Not a secret done: the heading");
@@ -447,6 +491,8 @@ test("nothing is taken: a tick, ⋯ or Not a secret pressed with the focus elsew
   moreOf(doc, "pp-000002").click();
   assert.equal(doc.activeElement, root, "a ⋯ clicked without the focus");
   button(detail(doc), "Not a secret").click();
+  assert.equal(doc.activeElement, root, "its question asked without taking the focus");
+  button(detail(doc), "Mark as not a secret").click();
   await tick();
   assert.equal(rowOf(doc, "pp-000002"), undefined, "dismissed");
   assert.equal(doc.activeElement, root, "Not a secret clicked without the focus");

@@ -9,7 +9,8 @@
  * newest launch's `gated` posture reaches `/api/home` as `secretsPosture`
  * (the card under Home's headline) and a session's own reaches
  * `/api/home/agent`, both with the fix, signed in and signed out; a
- * `confined` launch carries none.
+ * `confined` launch carries none. The card says "masked", never
+ * "placeholder" (dashboard.md §4.25u).
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -125,11 +126,14 @@ test("Home: a gated newest launch reaches /api/home as the card's posture with `
     assert.equal(p.gap, "apparmor-userns");
     assert.equal(p.headline, "Programs your agent runs can still read your credential files.");
     assert.match(p.sentence, /programs the AI runs can still read your credential files/);
-    assert.doesNotMatch(p.sentence, /absent from the agent's world|placeholder copy of each credential file/, "never the confined claim");
+    assert.doesNotMatch(p.sentence, /absent from the agent's world|masked copy of each credential file/, "never the confined claim");
     assert.equal(p.fix, "mandu setup");
     assert.deepEqual(p.fixParts.filter((x: { kind: string }) => x.kind === "code").map((x: { text: string }) => x.text), ["mandu setup"]);
     assert.equal(p.note, null);
     namesNothing(p);
+    // The product's words (dashboard.md §4.25u): masked, never "placeholder".
+    assert.match(p.sentence, /^The AI sees your secrets masked /);
+    assert.doesNotMatch(JSON.stringify(p), /placeholder|this machine/i);
     const after = await read(confinedHome.base, "/api/home", admin);
     assert.equal(after.secretsPosture, null, "a confined newest launch: no card");
     assert.equal(home.headline, after.headline, "the headline is the same either way");

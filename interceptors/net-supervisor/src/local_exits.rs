@@ -183,6 +183,30 @@ pub fn is_host_binding(b: &str) -> bool {
     !b.starts_with("unix:") && !b.starts_with("mount:")
 }
 
+/// A holder's bindings as the guard specs its INET legs parse: each host
+/// binding (`host`, `host:port`, an IP/CIDR) with `:*` added when it names
+/// no port. A `*` binding, with or without a port, becomes no spec: it
+/// admits no network destination, as `arbiter/policy/host-bindings.ts` reads
+/// it (confidentiality.md §2.2, the binding table). Until 2026-10-27 it became
+/// `*:*`, which the spec parser reads as any host, so a holder of a file
+/// bound to `*` could connect anywhere (finding F-A).
+pub fn host_binding_specs(bindings: &[String]) -> Vec<String> {
+    bindings.iter().map(String::as_str).filter(|b| is_host_binding(b)).filter_map(binding_spec).collect()
+}
+
+fn binding_spec(binding: &str) -> Option<String> {
+    let b = binding.trim();
+    if b.starts_with('[') {
+        // [v6]:port or [v6]
+        return Some(if b.contains("]:") { b.to_string() } else { format!("{b}:*") });
+    }
+    let (host, spec) = match b.matches(':').count() {
+        1 => (b.split_once(':').map_or(b, |(h, _)| h), b.to_string()),
+        _ => (b, format!("{b}:*")),
+    };
+    (host.trim() != "*").then_some(spec)
+}
+
 /// Do a holder's bindings admit this mount destination? By equality only.
 pub fn mount_bound(bindings: &[String], dest: &str) -> bool {
     bindings.iter().any(|b| b.trim() == dest)
@@ -826,5 +850,35 @@ mod tests {
         assert_eq!(held_exit_phrase("other local users (/p/x)").0, "hold open for writing a file readable by");
         assert_eq!(held_exit_phrase("203.0.113.9:443/tcp").0, "hold a connection to");
         assert_eq!(held_exit_phrase(&format!("{OUTSIDE_RECEIVER} (pid 7, pipe:[9])")).1, "writes into a pipe or socket pair read by");
+    }
+
+    #[test]
+    fn a_host_binding_is_a_spec_and_a_star_binding_is_none() {
+        let specs = |b: &[&str]| host_binding_specs(&b.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(specs(&["example.com", "example.com:443", "10.1.2.3", "10.0.0.0/8", "[::1]", "[::1]:22"]),
+            vec!["example.com:*", "example.com:443", "10.1.2.3:*", "10.0.0.0/8:*", "[::1]:*", "[::1]:22"]);
+        assert_eq!(specs(&["unix:/run/x.sock", "mount:nfs4:nas:/x"]), Vec::<String>::new());
+        // F-A: `*` admits no network destination (host-bindings.ts), with or
+        // without a port and however it is spaced.
+        assert_eq!(specs(&["*", "*:443", " * ", "* :443"]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_holder_bound_to_star_reaches_no_destination() {
+        // The taint leg's own parse (`tainted_connect_refusal`,
+        // `bindings_admit`): a `*` binding admits nothing, and it does not
+        // void a host binding beside it.
+        use crate::guard::{parse_rules, Decision, Endpoint, GuardPolicy, NoResolver, Proto};
+        use std::net::{IpAddr, Ipv4Addr};
+        let decide = |bindings: &[&str], ip: [u8; 4], port: u16| {
+            let specs = host_binding_specs(&bindings.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+            let policy = GuardPolicy::new(parse_rules(&specs).unwrap());
+            policy.decide(&Endpoint { ip: IpAddr::V4(Ipv4Addr::from(ip)), port, proto: Proto::Tcp }, &NoResolver)
+        };
+        for b in [&["*"][..], &["*:443"][..]] {
+            assert_eq!(decide(b, [203, 0, 113, 9], 443), Decision::Deny, "{b:?}");
+        }
+        assert_eq!(decide(&["*", "203.0.113.9"], [203, 0, 113, 9], 443), Decision::Allow);
+        assert_eq!(decide(&["*", "203.0.113.9"], [198, 51, 100, 7], 443), Decision::Deny);
     }
 }

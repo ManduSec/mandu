@@ -131,6 +131,7 @@ test("Not a secret: a read asked before it that answers after it never brings th
   now = listing([CI, PROD], DONE);
   enter(moreOf(doc, "pp-000002"));
   enter(button(detail(doc), "Not a secret"));
+  enter(button(detail(doc), "Mark as not a secret"));
   await tick();
   assert.deepEqual(ids(doc), ["pp-000001", "pp-000003"], "the row is gone");
   assert.equal(doc.activeElement, byId(doc, "suggested-title"));
@@ -260,6 +261,7 @@ test("a poll made after Not a secret reads again rather than wait on the read as
   await poll(doc);
   enter(moreOf(doc, "pp-000002"));
   enter(button(detail(doc), "Not a secret"));
+  enter(button(detail(doc), "Mark as not a secret"));
   await tick();
   // Another scan filed a key meanwhile: the next poll finds it.
   now = listing([CI, PROD, NEW], DONE);
@@ -292,6 +294,7 @@ test("the read made after Not a secret is shared by the next poll, also once the
   await poll(doc);
   enter(moreOf(doc, "pp-000002"));
   enter(button(detail(doc), "Not a secret"));
+  enter(button(detail(doc), "Mark as not a secret"));
   await tick();
   const after = hold();
   const asked = reads();
@@ -315,6 +318,7 @@ test("a read that fails, asked before Not a secret and answering after it, says 
   await poll(doc);
   enter(moreOf(doc, "pp-000002"));
   enter(button(detail(doc), "Not a secret"));
+  enter(button(detail(doc), "Mark as not a secret"));
   await tick();
   before.refuse(503, { error: "the arbiter is not reachable", unreachable: true });
   await tick(30);

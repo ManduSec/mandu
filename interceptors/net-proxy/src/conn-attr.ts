@@ -563,6 +563,62 @@ export function socketInodeFor(clientSrc: Endpoint, proxyAddr: Endpoint, readTcp
   }
 }
 
+/** The uid column of the /proc/net/tcp{,6} row whose local end is `local`
+ *  and remote end `remote`, or null (no row). PURE. */
+export function socketUidFromTcpText(text: string, local: Endpoint, remote: Endpoint, littleEndian = HOST_LE): number | null {
+  const isRow = clientRowTest(local, remote);
+  for (const line of text.split("\n")) {
+    const row = parseProcNetTcpLine(line, littleEndian);
+    if (!row || !isRow(row)) continue;
+    const uid = Number.parseInt(line.trim().split(/\s+/)[7] ?? "", 10);
+    return Number.isInteger(uid) ? uid : null;
+  }
+  return null;
+}
+
+/**
+ * Who holds the far end of a TCP connection this process made to this
+ * machine (the database relay's dial of a local database; db-login-release
+ * md, security review 2026-10-24): the uid that owns that end's socket, and
+ * the processes holding it that this user may read. PURE given `deps`.
+ */
+export function farEndOwner(
+  conn: { localIp: string; localPort: number; remoteIp: string; remotePort: number },
+  deps: Pick<ProcDeps, "readTcp" | "readTcp6" | "listFds" | "readStat"> = liveProcDeps,
+): { uid: number | null; holders: ProcHolder[] } {
+  const far = { ip: conn.remoteIp, port: conn.remotePort };
+  const near = { ip: conn.localIp, port: conn.localPort };
+  let uid: number | null = null;
+  try {
+    uid = socketUidFromTcpText(deps.readTcp(), far, near) ?? (deps.readTcp6 ? socketUidFromTcpText(deps.readTcp6(), far, near) : null);
+  } catch {
+    uid = null;
+  }
+  let holders: ProcHolder[] = [];
+  try {
+    const inode = inodeFromTables(deps.readTcp, deps.readTcp6, far, near);
+    holders = inode === null ? [] : holdersOfInode(inode, deps);
+  } catch {
+    holders = [];
+  }
+  return { uid, holders };
+}
+
+/** Does process `pid` descend from `root` (its parent chain, read whole
+ *  up to 4096 steps, reaches it)? False on any read error. PURE given
+ *  `readStat`. */
+export function descendsFrom(pid: number, root: number, readStat: (pid: number) => string): boolean {
+  let at = pid;
+  for (let i = 0; i < 4096 && at > 1; i++) {
+    if (at === root) return true;
+    let ppid: number | null;
+    try { ppid = ppidFromStat(readStat(at)); } catch { return false; }
+    if (ppid === null) return false;
+    at = ppid;
+  }
+  return at === root;
+}
+
 /** The /proc reads `holdersAmong` makes (injectable for unit tests). */
 export interface TaintedScanDeps {
   /** /proc/<pid>/stat; throws an ENOENT-coded error when the process is gone. */

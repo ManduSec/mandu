@@ -19,7 +19,10 @@
  * pin is not called a secret, and no 8-character run of any planted value
  * reaches stdout, --json, --share, the socket reply or the arbiter's log.
  * The scan opens no network connection (every socket connect in the process
- * is watched); the second test runs the real CLI and its throwaway arbiter,
+ * is watched). Its kept record, served as the dashboard's `/api/scan`, links
+ * each key not in your files and the send of one to where its company
+ * replaces it (GitHub, OpenAI's conditional lead, Slack), your own none,
+ * with no value in the answer; the second test runs the real CLI and its throwaway arbiter,
  * in a network namespace with no route where the kernel lets an
  * unprivileged user make one. The third sends one exchange through each
  * real model proxy (production arbiter wiring) and scans transcripts that
@@ -191,6 +194,7 @@ test("mandu scan finds what reached the model, says where it lives and how, and 
   // No dashboard of this host's user is read either: the last line is the command.
   const deps = { ...realScanDeps, arbiter: async () => ({ sock, kind: "resident" as const, axisOn: true, stop: async () => {} }), keep: { ...realScanDeps.keep!, resident: async () => null }, dashboards: () => [] };
   const env = { HOME: home, MANDU_HOME: join(home, ".mandu"), PATH: process.env["PATH"] ?? "/usr/bin:/bin" };
+  let dash: DashboardServer | null = null;
   try {
     const run = async (args: string[]): Promise<{ code: number; out: string; err: string }> => {
       const out: string[] = [];
@@ -305,7 +309,34 @@ test("mandu scan finds what reached the model, says where it lives and how, and 
 
     assertNoValue("the arbiter's log", logs.join("\n"));
     assert.deepEqual([...new Set(connects)], [sock], "the scan connected to nothing but the arbiter's socket");
+
+    // ── the dashboard's Scan page: a key not in your files, and a send of
+    //    one, link where their company replaces such a key (dashboard.md
+    //    §4.25ai *A key links to where it is replaced*); your own none ──
+    const noSessions = { async listSessions() { return []; }, async readEvents() { return []; }, subscribe() { return () => {}; }, close() {} } as unknown as EventSource;
+    dash = new DashboardServer({ source: noSessions, fileBrowserHome: home, configEnv: env, log: () => {} });
+    const base = `http://127.0.0.1:${await dash.listen(0)}`;
+    const res = await pageFetch(`${base}/api/scan`);
+    const pageText = await res.text();
+    assert.equal(res.status, 200, pageText);
+    type Row = { title: string; replaceAt: Array<{ lead: string; page: string; url: string }> };
+    const sections = (JSON.parse(pageText) as { scan: { sections: Array<{ id: string; items: Row[] }> } }).scan.sections;
+    const lines = (id: string) => sections.find((x) => x.id === id)!.items.map((i) => [i.title, i.replaceAt.map((x) => `${x.lead}: ${x.page} <${x.url}>`)]);
+    assert.deepEqual(lines("looks"), [
+      ["ghp_…", ["If this key is still yours, replace it on GitHub: Personal access tokens <https://github.com/settings/tokens>"]],
+      ["sk-proj-…", ["If it is your OpenAI key, replace it on OpenAI: API keys <https://platform.openai.com/api-keys>"]],
+      ["xoxb-…", ["If this key is still yours, replace it on Slack: App settings <https://api.slack.com/apps>"]],
+    ], "the by-time GitHub key too: its owner is not known either");
+    assert.deepEqual(lines("yours").map(([, l]) => l), [[], []], "your own secrets: the wire names no detector");
+    assert.deepEqual(lines("sends-own"), [
+      ["STRIPE_KEY in ~/shop/.env → api.stripe.com", []],
+      ["xoxb-… → slack.com", ["If this key is still yours, replace it on Slack: App settings <https://api.slack.com/apps>"]],
+    ]);
+    assert.deepEqual(lines("sends-other").map(([, l]) => l), [[]]);
+    assertNoValue("the Scan page", pageText);
+
   } finally {
+    if (dash) await dash.close();
     net.Socket.prototype.connect = origConnect;
     await server.close();
     rmSync(dir, { recursive: true, force: true });
@@ -984,6 +1015,7 @@ test("the story's provider comes from the agents' own settings (a Bedrock settin
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sendItem = (JSON.parse(pageText) as any).scan.sections.find((s: { id: string }) => s.id === "sends-other").items.find((i: { title: string }) => i.title === "ghp_… → hooks.vendor.dev");
     assert.match(sendItem.story.find((s: { step: string }) => s.step === "went").text, / and the command sent it to https:\/\/…@hooks\.vendor\.dev\/in\?token=…&sig=…&page=…\.$/, "the Scan page names the send's URL, masked");
+    assert.deepEqual(sendItem.replaceAt.map((x: { lead: string; url: string }) => `${x.lead}: ${x.url}`), ["If this key is still yours, replace it on GitHub: https://github.com/settings/tokens"], "a key sent to a host Mandu cannot tie to it links where it is replaced");
     // The rows past the head and every row's examples come in pages
     // (dashboard.md §4.25ai *A long scan, in pages*): the oracle reads them all.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

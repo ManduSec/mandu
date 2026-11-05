@@ -78,11 +78,12 @@ import { adminUnavailableError } from "./server/http-util.js";
 import { DashboardSelf, gitShortRev } from "./self-status.js";
 import { registerDashboard, resolveOwnerPid, rewriteDashboardEntry, sweepDeadDashboards, unregisterDashboard } from "./registry.js";
 import { Supervisor } from "./supervisor/supervisor.js";
+import { servicePool, type AttachmentPool } from "./supervisor/attachment-pool.js";
 import { armTestOwnerWatch } from "./test-owner.js";
 import { startTimeoutFromEnv, testTenantPaths } from "./supervisor/supervisor-defs.js";
 import { ensurePrivateIfFallback, resolveRuntimeBase } from "./runtime-base.js";
 import { serveSignInChannel, signInDepsFor, signInSockPath, sweepDeadSignInSocks } from "./sign-in.js";
-import { manduNotRunning } from "./mandu-running.js";
+import { liveLaunches, manduNotRunning } from "./mandu-running.js";
 import { defaultEventDir } from "./event-dir.js";
 import { AccountFile, makeAccount, readAccount, writeAccount } from "./account.js";
 import { manduPath } from "./generated/mandu-paths.js";
@@ -322,8 +323,32 @@ async function main(): Promise<void> {
     });
     console.error("[dashboard] control plane enabled");
   } else {
+    if (process.env.MANDU_SERVE === "1") console.error("[dashboard] MANDU_SERVE=1 without the control plane: no attachment proxies run");
     console.error("[dashboard] control plane disabled (DASHBOARD_CONTROL=0)");
   }
+
+  // `mandu serve`'s proxy pool (openclaw-plugin.md §3.2): the service's unit
+  // sets MANDU_SERVE=1 on this process, its main process. One model proxy per
+  // declared attachment session, registered with the supervised arbiter;
+  // started once that arbiter is up (below), stopped on every exit path.
+  const pool: AttachmentPool | undefined = supervisor && process.env.MANDU_SERVE === "1"
+    ? servicePool(supervisor, {
+      runtimeBase: RUNTIME_BASE,
+      arbiterSock: ARBITER_SOCK,
+      declaredFile: manduPath("serve-attachments", process.env, homeOf(process.env)),
+      env: process.env,
+      // This install's launcher, for the secret registration (serve-secrets.ts).
+      launcher: INSTALLED ? [process.execPath, join(PKG_ROOT, "bin", "mandu.mjs")] : [join(REPO_ROOT, "launcher", "mandu-run.sh")],
+      log: (m) => console.error(`[dashboard] ${m}`),
+      // The route check's record (openclaw-plugin.md §3.6) on the admin
+      // channel, believed while the attachment holds the human plane
+      // exposed; `approvals` is bound below, once the arbiter is up.
+      updateAttachmentAdmin: (args) => {
+        if (!approvals) return Promise.reject(new Error("the arbiter is not connected"));
+        return approvals.updateAttachment(args);
+      },
+    })
+    : undefined;
 
   // Egress-approval queue: connect a arbiter client when a socket is configured
   // (the dashboard already resolves ARBITER_SOCK above and points its EventSource
@@ -398,6 +423,7 @@ async function main(): Promise<void> {
         // instances (no child pid) — anything started outside this dashboard
         // survives and is re-adopted by the successor.
         try {
+          await pool?.stop();
           await supervisor?.close();
         } catch (err) {
           console.error(`[dashboard] self-restart: shutdown error (continuing): ${(err as Error).message}`);
@@ -533,6 +559,16 @@ async function main(): Promise<void> {
     // Home tells "nothing of Mandu's runs" (protection off) from "an arbiter
     // that does not answer" (Not connected) over these paths (§4.25).
     manduNotRunning: () => manduNotRunning({ arbiterSock: ARBITER_SOCK, runtimeBase: RUNTIME_BASE, eventDir: defaultEventDir(process.env) }),
+    // Which sessions' launches are alive, so an agent quiet past the
+    // recency window stays running while its `mandu` launch is (§4.10.4).
+    liveLaunches: () => liveLaunches(RUNTIME_BASE),
+    // The Plugins page (§4.25aj): the pool's records under this stack's
+    // runtime directory, and this process's own pool under `mandu serve`.
+    plugins: {
+      runtimeBase: RUNTIME_BASE,
+      declaredFile: manduPath("serve-attachments", process.env, homeOf(process.env)),
+      ...(pool ? { pool: () => pool.list() } : {}),
+    },
     ...(testSource
       ? {
           testTenant: {
@@ -674,6 +710,10 @@ async function main(): Promise<void> {
       async (st) => {
         const up = st.filter((s) => s.state === "running").length;
         console.error(`[dashboard] autostart: ${up}/${st.length} services running`);
+        if (pool) {
+          console.error("[dashboard] attachment proxies: the pool runs (MANDU_SERVE=1)");
+          pool.start();
+        }
         // The approvals/secrets connect above necessarily FAILED on a
         // supervised cold boot (no arbiter existed yet); now that autostart
         // brought one up, retry and late-bind the surfaces. A few spaced
@@ -745,6 +785,9 @@ async function main(): Promise<void> {
   // (cancelAll), so exit cleanly on a signal instead of orphaning the arbiter.
   const bye = async (code = 0): Promise<void> => {
     if (registryEntry) unregisterDashboard(registryEntry);
+    // The pool first: its port files go before its proxies, and its
+    // attachments end while the arbiter still answers.
+    await pool?.stop().catch((err: unknown) => console.error(`[dashboard] attachment proxies: stop failed: ${(err as Error).message}`));
     await signIn?.close();
     await server.close();
     approvals?.close();

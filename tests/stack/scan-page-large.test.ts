@@ -16,6 +16,8 @@
  *   L2  opening the folded tier and pressing Show more reads its next page
  *       (`/api/scan/section/named?after=25`), and the rows follow on;
  *   L3  *Find one* asks the server and finds a row the head never sent;
+ *       its status line says "1 of <the heading's count> values matches
+ *       …", and a query that finds none says so there;
  *   L4  a row's *Details and examples* reads its examples
  *       (`/api/scan/item/<id>`) and draws them;
  *   L5  the oracle: no 8-character run of the planted value in the page.
@@ -157,6 +159,15 @@ test("the Scan page over a real-scale scan: drawn within budget from a small hea
     await until(`${sec("named")}.querySelectorAll(".scan-item").length === 1`, "the one match");
     assert.equal(await evaluate(`${sec("named")}.querySelector(".scan-item .scan-item-title").textContent`), "DB_PASSWORD_634=…");
     assert.ok((await reads()).some((r) => r.path.startsWith("/api/scan/section/named?after=0&q=db_password_634%3D")), "the query went to the server");
+    // Its status line says how many match, of the heading's count, and that none does.
+    const count = /\(([\d,]+)\)/.exec(String(await evaluate(`${sec("named")}.querySelector("h2").textContent`)))![1];
+    const line = `document.getElementById("scan-find-count-named")`;
+    await until(`${line}.textContent === ${JSON.stringify(`1 of ${count} values matches \u201cDB_PASSWORD_634=\u201d.`)}`, "the find's count");
+    assert.equal(await evaluate(`${line}.getAttribute("role") + " " + ${line}.hidden + " " + ${sec("named")}.querySelector("input.scan-filter").getAttribute("aria-describedby")`), "status false scan-find-count-named");
+    await evaluate(`(() => { const i = ${sec("named")}.querySelector("input.scan-filter"); i.value = "no-such-value-here"; i.dispatchEvent(new Event("input")); })()`);
+    await until(`${line}.textContent === ${JSON.stringify(`No value of ${count} matches \u201cno-such-value-here\u201d.`)} && ${sec("named")}.querySelector(".empty")?.textContent === "None matches."`, "the find's no-match line");
+    await evaluate(`(() => { const i = ${sec("named")}.querySelector("input.scan-filter"); i.value = "DB_PASSWORD_634="; i.dispatchEvent(new Event("input")); })()`);
+    await until(`${sec("named")}.querySelectorAll(".scan-item").length === 1`, "the one match again");
 
     // ── L4: a row's examples, read when opened ──
     await evaluate(`${sec("named")}.querySelector(".scan-item details.scan-more > summary").click()`);

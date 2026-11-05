@@ -186,10 +186,18 @@ test("hostListingFs: reads the folder as the host has it; a symlinked folder is 
     assert.deepEqual(plainLsListingPaths("statement-2026-09.md", "ls link", fs), [join(tmp, "link")]);
     assert.deepEqual(plainLsListingPaths("statement-2026-09.md", "ls bank/", fs), [join(tmp, "bank")]);
     assert.equal(hostListingFs(null, "/h").resolve("bank"), null);
-    // a name that is not UTF-8: the folder is never matched
+    // a name that is not UTF-8: the folder is never matched. A filesystem
+    // that refuses such a name (APFS on macOS: EILSEQ) cannot hold one, so
+    // there is nothing to match there.
     mkdirSync(join(tmp, "latin1"));
-    writeFileSync(Buffer.from(`${join(tmp, "latin1")}/caf\xe9`, "latin1"), "");
-    assert.equal(fs.entry(join(tmp, "latin1")), null);
+    let written = true;
+    try {
+      writeFileSync(Buffer.from(`${join(tmp, "latin1")}/caf\xe9`, "latin1"), "");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EILSEQ") throw err;
+      written = false;
+    }
+    if (written) assert.equal(fs.entry(join(tmp, "latin1")), null);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

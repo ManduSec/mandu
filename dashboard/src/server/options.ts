@@ -8,7 +8,7 @@ import { type EventSource } from "../event-source.js";
 import { type Supervisor } from "../supervisor/supervisor.js";
 import { type DashboardSelfStatus } from "../self-status.js";
 import { type ProbeDeps } from "../model-probe.js";
-import { type AssistantModel } from "../policy-assistant.js";
+import { type AssistantChannel, type AssistantModel } from "../policy-assistant.js";
 import { type ApprovalsArbiter } from "./approval-routes.js";
 import { type SecretsArbiter } from "./secrets-routes.js";
 import { type PostureArbiter } from "./arbiter-surfaces.js";
@@ -67,6 +67,11 @@ export interface DashboardServerOptions {
    *  the quarantined model factory. Default: inspect-mcp's U-LLM selector
    *  (api / cli, never the proxy); no channel ⇒ the route answers 503. */
   assistantModel?: () => Promise<AssistantModel>;
+  /** TEST SEAM for the line that names the helper's channel (dashboard.md,
+   *  *Describe says which AI reads your words*): which channel Suggest rules
+   *  would use. Default: the same selection as `assistantModel`'s default,
+   *  with no client built. */
+  assistantChannel?: () => Promise<AssistantChannel>;
   /** TEST SEAM for Settings › Models "Test connection" (dashboard.md §4.25l):
    *  the TCP connect and the model listing. Default: real sockets, 3 s. */
   modelProbeDeps?: ProbeDeps;
@@ -88,6 +93,15 @@ export interface DashboardServerOptions {
    * Absent: never asked, so an unreadable list is "Not connected.".
    */
   manduNotRunning?: () => { everRan: boolean } | null;
+  /**
+   * The scope ids of the `mandu <agent>` launches alive now
+   * (mandu-running.ts `liveLaunches` over the runtime base). The live
+   * tenant's Home, History, Approvals and session page read it once per
+   * build, so an agent quiet past the five-minute recency window still
+   * counts as running while its launch is alive (dashboard.md §4.10.4, *A
+   * live launch keeps R*). Display only. Absent: the recency rule alone.
+   */
+  liveLaunches?: () => ReadonlySet<string>;
   /**
    * Source-IP allowlist for NON-loopback clients (server-main resolves
    * DASHBOARD_ALLOW_HOSTS to this). Loopback is always allowed; any other
@@ -197,6 +211,14 @@ export interface DashboardServerOptions {
    * live rather than blanking the page.
    */
   testTenant?: TenantSurfaces;
+  /**
+   * The Plugins page's sources (dashboard.md §4.25aj, server/plugin-routes.ts):
+   * the stack's runtime directory (the pool's records and port files), the
+   * declared file, and this process's own pool when it runs one (`mandu
+   * serve`). Each defaults from `configEnv` (runtime-base.ts, the path
+   * table); without `pool` the page reads the pool's records only.
+   */
+  plugins?: { runtimeBase?: string; declaredFile?: string; pool?: () => import("../supervisor/attachment-pool.js").PoolEntry[] };
   log?: (msg: string) => void;
 }
 

@@ -16,8 +16,10 @@
  * index.html and home.js in jsdom, signed in) draws:
  *
  *   R1  the listing: the card carries A's session, signed in and signed out;
- *   R2  Approvals: the card names the agent and folder that asked, "Claude
- *       Code wants to change a rule" and "· from Claude Code in ~/proj"
+ *   R2  Approvals: the heading reads "Rule changes Claude Code asked for
+ *       (1)", the words naming the agent, not its folder, and a count of the
+ *       one change waiting; the card names the agent and folder that asked,
+ *       "Claude Code wants to change a rule" and "· from Claude Code in ~/proj"
  *       (each session's turn names its folder, as Claude Code's system
  *       prompt does; B works in ~/blog); its "See what the agent was
  *       doing" is addressed to `/agents/<A>`; a click opens A's page, whose *Needs your OK*
@@ -167,7 +169,9 @@ test("the agent page of the agent that asked links its rule change, and the chan
       const sub = cardOf(doc, id).querySelector(".ask-sub");
       assert.match(sub.textContent, / · from Claude Code in ~\/proj$/, "A's folder, not B's, with no period");
       assert.equal(sub.querySelector(".ask-from code").textContent, "~/proj", "the folder is code");
-      assert.equal(doc.getElementById("approvals-proposals-head").textContent, "Rule changes your agent asked for", "the heading is unchanged");
+      assert.equal(doc.getElementById("approvals-proposals-words").textContent, "Rule changes Claude Code asked for", "the heading names the agent of the one session that asked, not its folder");
+      assert.equal(doc.getElementById("approvals-proposals-head").textContent, "Rule changes Claude Code asked for (1)", "and counts the one change waiting (§4.25 *Rule changes count their cards*)");
+      assert.equal(doc.getElementById("approvals-proposals-count").textContent.trim(), "(1)");
       // R2: the card links the agent that asked.
       const to = cardOf(doc, id).querySelector("a.ask-link");
       assert.ok(to, "the card links the agent that asked");

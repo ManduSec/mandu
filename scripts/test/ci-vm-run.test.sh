@@ -99,6 +99,13 @@ while IFS= read -r l; do
 done <<<"$JOB"
 check "every job.env line is KEY=value in boot.sh's grammar, with a key boot.sh reads" "[[ -n \"\$boot_keys\" && $bad -eq 0 ]]"
 
+# the fixtures (live-clients.md §3): named in job.env, only those the image has
+FX="$(dry --fixture k3s)"
+check "--fixture k3s: MANDU_CI_FIXTURES=k3s in job.env (none without it)" "grep -q '^#   MANDU_CI_FIXTURES=k3s\$' <<<\"\$FX\" && [[ -z \$(jv MANDU_CI_FIXTURES) ]]"
+dry --fixture bogus >/dev/null; fxrc=$?
+check "--fixture of a fixture the image does not have is refused" "[[ $fxrc -eq 2 ]]"
+check "boot.sh runs the image's fixture-k3s.sh (never the checkout's), and keeps its logs" "grep -q '\"\$LIB_DIR/fixture-k3s.sh\" /run/mandu-ci-fixtures/k3s' '$REPO/scripts/ci/guest/boot.sh' && grep -q 'logs/fixtures' '$REPO/scripts/ci/guest/boot.sh'"
+
 # modes
 E="$(dry --exec 'bash scripts/ci/release-pack.sh v0.1.0 && echo "a b"')"
 b64="$(grep '^#   MANDU_CI_EXEC_B64=' <<<"$E" | cut -d= -f2-)"
@@ -475,28 +482,34 @@ R="$(MANDU_CI_CLAUDE_CREDENTIAL="$T/cred/claude-credential.json" "$F/scripts/ci/
 check "a credential file others can read is refused the same way" "[[ $rc -eq 2 ]] && grep -q 'chmod 600' <<<\"\$R\""
 chmod 600 "$T/cred/claude-credential.json"
 
-# nightly.sh --weekly: the api-key lane's rotation, one agent a night (§9.8),
-# over a manifest of this fixture's own (suites.mjs list --agents).
+# nightly.sh --weekly: the weekly rotation, one agent a night (§9.8), over a
+# manifest of this fixture's own (suites.mjs list --agents --weekly): OpenCode
+# and Goose on the api-key lane, OpenClaw (2026-10-26) on the subscription
+# lane with the Codex sign-in alone, its entries `weekly` (never in a
+# nightly kind run).
 mkdir -p "$F/tests"
 cat > "$F/tests/suites.mjs" <<'EOF'
 const e = (id, agent) => ({ id, kind: "live-drill", axis: "secrets", cwd: ".", cmd: ["true"], needs: [agent, "anthropic-api-key"],
   timeout: 5, parallel: false, gate: null, select: null, flaky: null, internet: false, platforms: ["linux"], env: {}, credential: "api-key", agent });
-export const entries = [e("drill.conf.opencode", "opencode"), e("drill.conf.opencode2", "opencode2"), e("drill.conf.openclaw", "openclaw"), e("drill.conf.goose", "goose")];
+const oc = (id) => ({ ...e(id, "openclaw"), needs: ["openclaw", "chatgpt-login"], credential: "subscription", weekly: "openclaw" });
+export const entries = [e("drill.conf.opencode", "opencode"), e("drill.conf.opencode2", "opencode2"), oc("drill.conf.openclaw"), oc("drill.conf.openclaw-plugin"), e("drill.conf.goose", "goose")];
 export default entries;
 EOF
 APIF="$T/cred/api-keys.json"
-WK() { MANDU_CI_API_CREDENTIAL="$APIF" MANDU_CI_WEEKDAY="$1" "$F/scripts/ci/nightly.sh" --lane api-key --weekly --dry-run 2>&1; }
+WK() { MANDU_CI_API_CREDENTIAL="$APIF" MANDU_CI_CODEX_CREDENTIAL="$XF" MANDU_CI_WEEKDAY="$1" "$F/scripts/ci/nightly.sh" --lane api-key --weekly --dry-run 2>&1; }
 W1="$(WK 1)"; w1=$?
 check "nightly.sh --weekly on a Monday: OpenCode, both generations, and nothing else" \
-  "[[ $w1 -eq 0 ]] && grep -q 'weekly API-key rotation, weekday 1: opencode (2 entries)' <<<\"\$W1\" && grep -q 'drill.conf.opencode,drill.conf.opencode2' <<<\"\$W1\" && ! grep -q 'openclaw\|goose' <<<\"\$(grep -v rotation <<<\"\$W1\")\""
-W3="$(WK 3)"; W5="$(WK 5)"
-check "nightly.sh --weekly: Wednesday OpenClaw, Friday Goose" \
-  "grep -q 'weekday 3: openclaw (1 entries)' <<<\"\$W3\" && grep -q 'drill.conf.openclaw' <<<\"\$W3\" && grep -q 'weekday 5: goose (1 entries)' <<<\"\$W5\""
+  "[[ $w1 -eq 0 ]] && grep -q 'weekly rotation, weekday 1: opencode, the api-key lane (2 entries)' <<<\"\$W1\" && grep -q 'drill.conf.opencode,drill.conf.opencode2' <<<\"\$W1\" && ! grep -q 'openclaw\|goose' <<<\"\$(grep -v rotation <<<\"\$W1\")\""
+W3="$(WK 3)"; w3=$?; W5="$(WK 5)"
+check "nightly.sh --weekly: Wednesday OpenClaw on the subscription lane, the Codex sign-in alone, its weekly entries; Friday Goose" \
+  "[[ $w3 -eq 0 ]] && grep -q 'weekday 3: openclaw, the subscription lane (2 entries)' <<<\"\$W3\" && grep -q 'drill.conf.openclaw,drill.conf.openclaw-plugin' <<<\"\$W3\" && [[ \$(jline MANDU_CI_CREDENTIAL \"\$W3\") == codex && \$(jline MANDU_CI_LANE \"\$W3\") == subscription && -z \$(jline MANDU_CI_OLLAMA \"\$W3\") ]] && grep -q 'weekday 5: goose, the api-key lane (1 entries)' <<<\"\$W5\""
 W2="$(WK 2)"; w2=$?
 check "nightly.sh --weekly on another night: runs nothing and exits 0" \
   "[[ $w2 -eq 0 ]] && grep -q 'runs no agent tonight (weekday 2' <<<\"\$W2\" && ! grep -q qemu <<<\"\$W2\""
-WS="$(MANDU_CI_CLAUDE_CREDENTIAL="$T/cred/claude-credential.json" "$F/scripts/ci/nightly.sh" --lane subscription --weekly --dry-run 2>&1)"; ws=$?
-check "nightly.sh --weekly outside the api-key lane is refused" "[[ $ws -eq 2 ]] && grep -q 'the api-key lane' <<<\"\$WS\""
+WS="$(MANDU_CI_CODEX_CREDENTIAL="$T/cred/no-codex.json" MANDU_CI_WEEKDAY=3 "$F/scripts/ci/nightly.sh" --lane subscription --weekly --dry-run 2>&1)"; ws=$?
+check "nightly.sh --weekly on Wednesday without a Codex sign-in on the host: refused, nothing runs" "[[ $ws -eq 2 ]] && grep -q 'weekly OpenClaw night rides it' <<<\"\$WS\""
+NW="$(node "$F/scripts/suites.mjs" list --kind live-drill --lane subscription --ids 2>&1)"
+check "a weekly entry stays out of a nightly kind run" "! grep -q openclaw <<<\"\$NW\""
 WB="$(WK 9)"; wb=$?
 check "nightly.sh --weekly with a weekday outside 1-7 is refused" "[[ $wb -eq 2 ]]"
 rm -f "$F/tests/suites.mjs"

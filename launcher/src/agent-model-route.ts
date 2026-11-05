@@ -81,22 +81,167 @@
  * wrapper, the contract parse.ts applies to every wrapper target.
  */
 import { basename } from "node:path";
+import * as zlib from "node:zlib";
+import { compareAgentVersions, parseAgentVersion } from "./agent-versions.js";
 import { readOpenclawArgv } from "./openclaw-argv.js";
+import { configAzureEndpointEnv } from "./attachment-contract.js";
 import {
   normalizeOpencodeDoc, opencodePackageName,
   type OcNormalized, type OcProvider, type OpencodeLayer,
 } from "./opencode-config.js";
+import {
+  activeMemoryRefs, collectModelKeys, openclawRouteIgnoredWhy, providerOf, type ModelRef,
+} from "./openclaw-model-refs.js";
+// The models an OpenClaw config names and its openrouter bypass live in
+// openclaw-model-refs.ts (shared with the dashboard's route check).
+export {
+  OPENCLAW_OPENROUTER_BASEURL_SINCE, isOpenrouterId, openclawModelRefs, openclawOpenrouterId, openclawOpenrouterKey,
+  openclawOpenrouterReach, openclawOpenrouterUnlisted, type ModelRef, type OpenrouterReach,
+} from "./openclaw-model-refs.js";
 
 type Json = Record<string, unknown>;
 
-/** The two OpenAI wires the model proxy reads (anthropic-proxy openai-wire.ts). */
-export type OpenAiApi = "openai-responses" | "openai-completions";
+/** The OpenAI wires the model proxy reads (anthropic-proxy openai-wire.ts).
+ *  OpenClaw's `azure-openai-responses` and `openai-chatgpt-responses` apis
+ *  are the Responses wire at Azure OpenAI and at the ChatGPT backend
+ *  (model-wires.md §9): the same adapter, each with its own path, query and
+ *  key header. */
+export type OpenAiApi = "openai-responses" | "openai-completions" | AzureApi | ChatgptApi;
 
-/** One OpenAI-family provider routed through the session's model proxy. */
+/** OpenClaw's Azure OpenAI api (the Responses wire; key in `api-key`). */
+export type AzureApi = "azure-openai-responses";
+/** OpenClaw's ChatGPT sign-in api (the Responses wire at `…/codex/responses`). */
+export type ChatgptApi = "openai-chatgpt-responses";
+
+/** The ChatGPT backend's Responses base: OpenClaw's
+ *  `openai-chatgpt-responses` canonicalizes every chatgpt.com address to it
+ *  and POSTs `<base>/responses` (its OpenAI-SDK transport), or
+ *  `<base minus /codex>/codex/responses` (@openclaw/ai's own transport); the
+ *  proxy takes either below it (route.ts upstreamRest). */
+export const CHATGPT_BACKEND_BASE = "https://chatgpt.com/backend-api/codex";
+
+/** The variables OpenClaw's Azure client reads its endpoint from BEFORE the
+ *  provider's baseUrl (@openclaw/ai `resolveAzureConfig`, 2026.7.1-2 to
+ *  2026.10.7; pi-ai 0.57.1 the same): set, every Azure call goes there,
+ *  around the route (model-wires.md §9.1). */
+export const AZURE_ENDPOINT_ENV = ["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_RESOURCE_NAME"] as const;
+
+/** The Gemini wire the model proxy reads (anthropic-proxy gemini-wire.ts,
+ *  model-wires.md §4); OpenClaw's name for it. */
+export type GoogleApi = "google-generative-ai";
+
+/** Vertex AI's Gemini models, OpenClaw's name for it (model-wires.md §4.1,
+ *  "Vertex AI at the root"): the Gemini wire on Vertex resource paths, which
+ *  OpenClaw sends to the ORIGIN of the provider's baseUrl. */
+export type VertexApi = "google-vertex";
+
+/** Ollama's native chat API (anthropic-proxy ollama-wire.ts, model-wires.md
+ *  "The Ollama wire"); OpenClaw's name for it. */
+export type OllamaApi = "ollama";
+
+/** Every non-Anthropic wire a route may name. */
+export type RouteApi = OpenAiApi | GoogleApi | VertexApi | OllamaApi;
+
+/** A traditional Azure OpenAI host (OpenClaw's `isTraditionalAzureOpenAIHost`). */
+function traditionalAzureHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h.endsWith(".openai.azure.com") || h.endsWith(".cognitiveservices.azure.com");
+}
+
+/**
+ * Where the proxy sends a route of `api` whose base URL (routableUpstream's
+ * form, no trailing slash) is `base`, so that `<upstream><the path OpenClaw
+ * sends below the route>` is the URL OpenClaw would have called itself
+ * (model-wires.md §9). Azure: OpenClaw's own normalization (a traditional
+ * Azure host with no path, or `/openai`, means `/openai/v1`); the proxy is
+ * sent `/responses?api-version=…`. ChatGPT: the backend's `/codex` base for
+ * any chatgpt.com address (OpenClaw canonicalizes those), a base ending in
+ * `/codex/responses` cut to its `/codex`, any other as is (OpenClaw's two
+ * transports join `/responses` or `/codex/responses` to it; the proxy's
+ * upstreamRest takes either). Every other wire: as is. Pure.
+ */
+export function wireUpstream(api: RouteApi, base: string): string {
+  let u: URL;
+  try { u = new URL(base); } catch { return base; }
+  if (api === "azure-openai-responses") {
+    const path = u.pathname.replace(/\/+$/, "");
+    if (traditionalAzureHost(u.hostname) && (path === "" || path === "/openai")) return `${u.origin}/openai/v1`;
+    return base;
+  }
+  if (api === "openai-chatgpt-responses") {
+    if (u.hostname.toLowerCase() === "chatgpt.com") return CHATGPT_BACKEND_BASE;
+    return base.replace(/\/codex\/responses$/, "/codex");
+  }
+  return base;
+}
+
+/**
+ * Why an Azure base URL cannot be routed, or null: an Azure AI Foundry
+ * OpenAI-v1 endpoint (`*.services.ai.azure.com` or
+ * `*.api.cognitive.microsoft.com` ending in `/openai/v1`), which OpenClaw
+ * calls with the plain OpenAI client (a bearer, no `api-version`); behind the
+ * route, whose address is not that host, OpenClaw would call it with the
+ * Azure client instead (an `api-key` header, `?api-version=v1`): not the
+ * request the user's endpoint was set up for (model-wires.md §9.1). Pure.
+ */
+export function azureRouteProblem(base: string): string | null {
+  let u: URL;
+  try { u = new URL(base); } catch { return null; }
+  const h = u.hostname.toLowerCase();
+  if (!(h.endsWith(".services.ai.azure.com") || h.endsWith(".api.cognitive.microsoft.com"))) return null;
+  const path = u.pathname.replace(/\/+$/, "");
+  if (!(path === "/openai/v1" || path.endsWith("/openai/v1"))) return null;
+  return "its baseUrl is an Azure AI Foundry OpenAI-v1 endpoint, which OpenClaw calls with the plain OpenAI client; behind Mandu's route " +
+    "OpenClaw would call it with the Azure OpenAI client instead (an api-key header and an api-version query), so Mandu does not route it " +
+    "(use the resource's https://<name>.openai.azure.com address)";
+}
+
+/** Where an OpenClaw config's own `env` block sets one of
+ *  AZURE_ENDPOINT_ENV (attachment-contract.ts configAzureEndpointEnv, which
+ *  the route check reads too). Pure. */
+export const openclawConfigAzureEnv = configAzureEndpointEnv;
+
+/** Whether a route speaks the Gemini wire (the proxy serves it under
+ *  `/_mandu/google/<id>`, its upstream goes in MANDU_GOOGLE_UPSTREAMS). */
+export function isGoogleApi(api: RouteApi): api is GoogleApi {
+  return api === "google-generative-ai";
+}
+
+/** Whether a route is the session's Vertex AI provider (the proxy serves it
+ *  at its root, its upstream goes in MANDU_VERTEX_UPSTREAMS). */
+export function isVertexApi(api: RouteApi): api is VertexApi {
+  return api === "google-vertex";
+}
+
+/** A Vertex route's upstream when the user names no address of their own:
+ *  Google's own Vertex host for each request's location, spelled as
+ *  OpenClaw's built-in google-vertex provider spells it. Not a URL: it goes
+ *  to the proxy as null (MANDU_VERTEX_UPSTREAMS). */
+export const VERTEX_GOOGLE_HOSTS = "https://{location}-aiplatform.googleapis.com";
+
+/** The first OpenClaw release whose google-vertex model calls go to the
+ *  origin of the provider's baseUrl, measured on the real binary: OpenClaw
+ *  2026.3.x sends them through `@google/genai` with no base URL (pi-ai's
+ *  google-vertex provider), to Google's Vertex host whatever the baseUrl;
+ *  OpenClaw's own Vertex transport, which takes the configured origin,
+ *  arrived in 2026.4.29 (read from the dists) and is measured from 2026.7.1-2
+ *  (model-wires.md §4.1; a numeric suffix is a respin of the release, not a
+ *  prerelease: agent-versions.ts). A release before it, or one the launch
+ *  could not read, is refused. */
+export const OPENCLAW_VERTEX_BASEURL_SINCE = "2026.7.1";
+
+/** Whether a route speaks Ollama's native chat API (the proxy serves it
+ *  under `/_mandu/ollama/<id>`, its upstream goes in MANDU_OLLAMA_UPSTREAMS). */
+export function isOllamaApi(api: RouteApi): api is OllamaApi {
+  return api === "ollama";
+}
+
+/** One non-Anthropic provider (an OpenAI-family one, or a Gemini one since
+ *  2026-10-25) routed through the session's model proxy. */
 export interface OpenAiRoute {
   /** The agent's provider id (also the proxy path segment). */
   id: string;
-  api: OpenAiApi;
+  api: RouteApi;
   /** The provider's own base URL, where the proxy sends the gated request. */
   upstream: string;
   /** The agent runs a tool call the model WRITES in its text on this route
@@ -106,10 +251,122 @@ export interface OpenAiRoute {
   textCalls?: boolean;
 }
 
+/**
+ * The model proxy's route tables for a launch (anthropic-proxy server-main):
+ * MANDU_OPENAI_UPSTREAMS for the OpenAI-family routes, MANDU_GOOGLE_UPSTREAMS
+ * for the Gemini ones, each a JSON object of provider id → base URL, or
+ * explicitly undefined (UNSET) when the launch routes none, so an ambient
+ * value cannot add a route. Pure.
+ */
+export function routeUpstreamsEnv(routes: readonly OpenAiRoute[]): {
+  MANDU_OPENAI_UPSTREAMS: string | undefined; MANDU_GOOGLE_UPSTREAMS: string | undefined; MANDU_VERTEX_UPSTREAMS: string | undefined;
+  MANDU_OLLAMA_UPSTREAMS: string | undefined;
+} {
+  const table = (rs: readonly OpenAiRoute[]): string | undefined =>
+    rs.length > 0 ? JSON.stringify(Object.fromEntries(rs.map((r) => [r.id, r.upstream === VERTEX_GOOGLE_HOSTS ? null : r.upstream]))) : undefined;
+  return {
+    MANDU_OPENAI_UPSTREAMS: table(routes.filter((r) => !isGoogleApi(r.api) && !isVertexApi(r.api) && !isOllamaApi(r.api))),
+    MANDU_GOOGLE_UPSTREAMS: table(routes.filter((r) => isGoogleApi(r.api))),
+    // The session's one Vertex provider (the proxy serves it at its root):
+    // null for Google's own host per location.
+    MANDU_VERTEX_UPSTREAMS: table(routes.filter((r) => isVertexApi(r.api)).slice(0, 1)),
+    MANDU_OLLAMA_UPSTREAMS: table(routes.filter((r) => isOllamaApi(r.api))),
+  };
+}
+
+/**
+ * The key variables an OpenClaw or OpenCode launch that routes a Gemini
+ * provider leaves unmasked in the agent's environment, as the arbiter leaves
+ * ANTHROPIC_API_KEY and OPENAI_API_KEY and the launch leaves a routed Goose
+ * provider's (goose-route.ts gooseRoutedKeyVars): the agent's own model
+ * credential, which its Google client sends to the model proxy, which
+ * relays it to the provider. Masked, the agent would send the placeholder
+ * and every turn would fail authentication (found by the real OpenCode
+ * 1.18.13 against a scripted Gemini upstream, 2026-10-25). Read from the
+ * clients: OpenCode's `@ai-sdk/google` reads GOOGLE_GENERATIVE_AI_API_KEY
+ * (its catalog also names GEMINI_API_KEY), OpenClaw's google provider
+ * GEMINI_API_KEY. None when the launch routes no Gemini provider. Pure.
+ */
+export function googleRoutedKeyVars(target: string, routes: readonly OpenAiRoute[] | undefined): string[] {
+  const out: string[] = [];
+  if ((routes ?? []).some((r) => isGoogleApi(r.api))) {
+    if (target === "opencode") out.push("GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY");
+    if (target === "openclaw") out.push("GEMINI_API_KEY");
+  }
+  // OpenClaw's google-vertex provider in Vertex AI express mode reads its key
+  // from GOOGLE_CLOUD_API_KEY (its provider manifest); with ADC it sends an
+  // OAuth bearer it mints itself, which no variable carries.
+  if (target === "openclaw" && (routes ?? []).some((r) => isVertexApi(r.api))) out.push("GOOGLE_CLOUD_API_KEY");
+  return out;
+}
+
+/**
+ * The key variable an OpenClaw launch that routes an Ollama provider leaves
+ * unmasked (OpenClaw's ollama and ollama-cloud providers read
+ * OLLAMA_API_KEY), as googleRoutedKeyVars does for Gemini: the agent sends it
+ * to the model proxy, which relays it to the provider. None when the launch
+ * routes no Ollama provider. Pure.
+ */
+export function ollamaRoutedKeyVars(target: string, routes: readonly OpenAiRoute[] | undefined): string[] {
+  if (!(routes ?? []).some((r) => isOllamaApi(r.api))) return [];
+  return target === "openclaw" ? ["OLLAMA_API_KEY"] : [];
+}
+
+/**
+ * The key variable an OpenClaw launch that routes an Azure OpenAI provider
+ * leaves unmasked (as googleRoutedKeyVars does for Gemini): OpenClaw's Azure
+ * client reads AZURE_OPENAI_API_KEY when the provider names no apiKey, sends
+ * it to the model proxy in `api-key`, and the proxy relays it to the
+ * provider. Masked, every turn would fail authentication. Pure.
+ */
+export function azureRoutedKeyVars(target: string, routes: readonly OpenAiRoute[] | undefined): string[] {
+  return target === "openclaw" && (routes ?? []).some((r) => r.api === "azure-openai-responses") ? ["AZURE_OPENAI_API_KEY"] : [];
+}
+
+/** Whether this Node.js has zstd (22.15 and later, which is Mandu's floor
+ *  since 2026-10-26; a launch below the floor is refused before this runs,
+ *  so the probe is the backstop of a from-source run). Mandu's model proxy
+ *  decodes a zstd request body only where it has (anthropic-proxy
+ *  request-encoding.ts). */
+export const NODE_HAS_ZSTD = typeof (zlib as unknown as Record<string, unknown>)["zstdDecompressSync"] === "function";
+
+/**
+ * Why the built-in `openai` provider on OpenClaw's ChatGPT sign-in cannot be
+ * routed on a Node.js without zstd, or null (model-wires.md §9.3):
+ * OpenClaw's ChatGPT transport zstd-compresses that provider's request
+ * body, and a proxy that cannot decode it refuses every turn (415, nothing
+ * sent). Said before anything starts instead of as a wall of refused turns.
+ * Pure.
+ */
+export function chatgptZstdProblem(routes: ReadonlyArray<{ id: string; api: string }>, hasZstd: boolean): string | null {
+  if (hasZstd || !routes.some((r) => r.id === "openai" && r.api === "openai-chatgpt-responses")) return null;
+  return `OpenClaw zstd-compresses the requests of its built-in openai provider on a ChatGPT sign-in, and the Node.js running Mandu ` +
+    `(${process.version}) has no zstd, so Mandu's model proxy could not read them and would refuse every turn; run Mandu on Node.js 22.15 or later`;
+}
+
 /** OpenAI's API base, the built-in `openai` provider's in both agents. */
 export const OPENAI_API_BASE = "https://api.openai.com/v1";
 
-const OPENAI_APIS: ReadonlySet<string> = new Set<OpenAiApi>(["openai-responses", "openai-completions"]);
+/** The Gemini API base, the built-in `google` provider's in OpenClaw and
+ *  OpenCode (both join `/models/{model}:…` to it). */
+export const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+
+/** OpenClaw's built-in Ollama providers and their own addresses: a local
+ *  Ollama (`ollama`) and Ollama Cloud (`ollama-cloud`), both on its native
+ *  chat API (`api: "ollama"`). */
+export const OLLAMA_BUILTIN_BASES: Readonly<Record<string, string>> = {
+  ollama: "http://127.0.0.1:11434",
+  "ollama-cloud": "https://ollama.com",
+};
+
+/** The address an Ollama provider's chat requests go to, as OpenClaw joins
+ *  `/api/chat` to its base URL: with a trailing `/v1` dropped (OpenClaw
+ *  strips it, the OpenAI-compatible path users often configure). Pure. */
+export function ollamaUpstreamOf(base: string): string {
+  return base.replace(/\/+$/, "").replace(/\/v1$/i, "");
+}
+
+const ROUTED_APIS: ReadonlySet<string> = new Set<RouteApi>(["openai-responses", "openai-completions", "google-generative-ai", "ollama", "azure-openai-responses", "openai-chatgpt-responses"]);
 
 /** A provider id the proxy path and MANDU_OPENAI_UPSTREAMS accept. */
 const ROUTABLE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -147,21 +404,95 @@ export function openclawProviderVerdict(p: string, doc: Json): ProviderVerdict {
   const providers = isObj(models["providers"]) ? models["providers"] : {};
   const entry = isObj(providers[p]) ? providers[p] : undefined;
   if (!ROUTABLE_ID_RE.test(p)) return { kind: "refuse", why: "its provider id is not a plain name" };
+  // A provider whose calls go where OpenClaw decides at run time (GitHub
+  // Copilot): no route the launcher writes holds (openclaw-model-refs.ts).
+  const ignored = openclawRouteIgnoredWhy(p);
+  if (ignored !== null) return { kind: "refuse", why: ignored };
+  // Vertex AI (model-wires.md §4.1): OpenClaw's own google-vertex provider.
+  if (p.toLowerCase() === "google-vertex" || entry?.["api"] === "google-vertex") return openclawVertexVerdict(p, entry);
   if (entry === undefined) {
     if (p === "openai") return { kind: "route", route: { id: p, api: "openai-responses", upstream: OPENAI_API_BASE } };
-    return { kind: "refuse", why: `Mandu routes an OpenAI-compatible provider only when models.providers.${p} names its baseUrl and api ("openai-completions" or "openai-responses")` };
+    // The built-in `google` provider speaks the Gemini API (model-wires.md §5).
+    if (p === "google") return { kind: "route", route: { id: p, api: "google-generative-ai", upstream: GEMINI_API_BASE } };
+    // The built-in Ollama providers speak Ollama's native chat API
+    // (model-wires.md, "The Ollama wire").
+    const ollamaBase = OLLAMA_BUILTIN_BASES[p];
+    if (ollamaBase !== undefined) return { kind: "route", route: { id: p, api: "ollama", upstream: ollamaBase } };
+    return { kind: "refuse", why: `Mandu routes an OpenAI-compatible, Gemini or Ollama provider only when models.providers.${p} names its baseUrl and api ("openai-completions", "openai-responses", "google-generative-ai" or "ollama")` };
   }
   const api = entry["api"];
-  if (api === undefined && p !== "openai") {
-    return { kind: "refuse", why: `models.providers.${p} names no api, and Mandu routes only "openai-completions" and "openai-responses"` };
+  const ollamaBuiltin = OLLAMA_BUILTIN_BASES[p];
+  if (api === undefined && p !== "openai" && p !== "google" && ollamaBuiltin === undefined) {
+    return { kind: "refuse", why: `models.providers.${p} names no api, and Mandu routes only "openai-completions", "openai-responses", "google-generative-ai" and "ollama"` };
   }
-  const apiName = typeof api === "string" ? api : "openai-responses";
-  if (!OPENAI_APIS.has(apiName)) return { kind: "refuse", why: `models.providers.${p} uses api "${String(api)}", which Mandu does not route` };
-  const base = entry["baseUrl"] === undefined && p === "openai" ? OPENAI_API_BASE : routableUpstream(entry["baseUrl"]);
+  // OpenClaw's Ollama providers default to its native chat API.
+  const apiName = typeof api === "string" ? api : p === "google" ? "google-generative-ai" : ollamaBuiltin !== undefined ? "ollama" : "openai-responses";
+  if (!ROUTED_APIS.has(apiName)) return { kind: "refuse", why: `models.providers.${p} uses api "${String(api)}", which Mandu does not route` };
+  const builtInBase = p === "openai" && apiName === "openai-chatgpt-responses" ? CHATGPT_BACKEND_BASE
+    : p === "openai" && apiName !== "google-generative-ai" && apiName !== "ollama" && apiName !== "azure-openai-responses" ? OPENAI_API_BASE
+    : p === "google" && apiName === "google-generative-ai" ? GEMINI_API_BASE
+      : ollamaBuiltin !== undefined && apiName === "ollama" ? ollamaBuiltin : undefined;
+  const base = entry["baseUrl"] === undefined && builtInBase !== undefined ? builtInBase : routableUpstream(entry["baseUrl"]);
   if (base === null) {
     return { kind: "refuse", why: `models.providers.${p}.baseUrl is missing or not a URL Mandu sends to (https, or http to 127.0.0.1)` };
   }
-  return { kind: "route", route: { id: p, api: apiName as OpenAiApi, upstream: base } };
+  if (apiName === "azure-openai-responses") {
+    const problem = azureRouteProblem(base);
+    if (problem !== null) return { kind: "refuse", why: `models.providers.${p}: ${problem}` };
+  }
+  return { kind: "route", route: { id: p, api: apiName as RouteApi, upstream: apiName === "ollama" ? ollamaUpstreamOf(base) : wireUpstream(apiName as RouteApi, base) } };
+}
+
+/**
+ * OpenClaw's google-vertex provider (Vertex AI's Gemini models; model-wires.md
+ * §4.1, "Vertex AI at the root"). OpenClaw's Vertex transport (2026.4.29 and
+ * later) sends `<origin of baseUrl>/v1/projects/{p}/locations/{l}/publishers/
+ * google/models/{m}:streamGenerateContent?alt=sse`: the launcher points the
+ * provider's baseUrl at the proxy's origin and hands the proxy the user's own
+ * address (an origin), or, with no baseUrl or one carrying `{location}`
+ * (which OpenClaw replaces with Google's own host per location), Google's
+ * hosts (VERTEX_GOOGLE_HOSTS). Only OpenClaw's own id is routed: the proxy
+ * serves one Vertex provider per session (the request carries no provider
+ * id), and the bundled google plugin's Vertex transport is measured for that
+ * provider. Its api must be `google-vertex` or unset. The release must take
+ * the configured origin (openclawVertexVersionRefusal).
+ */
+function openclawVertexVerdict(p: string, entry: Json | undefined): ProviderVerdict {
+  if (p !== "google-vertex") {
+    return { kind: "refuse", why: `models.providers.${p} uses api "google-vertex"; Mandu routes Vertex AI only as OpenClaw's own google-vertex provider (models.providers.google-vertex)` };
+  }
+  const api = entry?.["api"];
+  if (api !== undefined && api !== "google-vertex") {
+    return { kind: "refuse", why: `models.providers.google-vertex names api ${JSON.stringify(api)}; Mandu routes OpenClaw's Vertex AI provider on api "google-vertex" (or none)` };
+  }
+  const base = entry?.["baseUrl"];
+  const route = (upstream: string): ProviderVerdict => ({ kind: "route", route: { id: p, api: "google-vertex", upstream } });
+  if (base === undefined || (typeof base === "string" && base.includes("{location}"))) return route(VERTEX_GOOGLE_HOSTS);
+  const u = routableUpstream(base);
+  if (u === null) {
+    return { kind: "refuse", why: "models.providers.google-vertex.baseUrl is not a URL Mandu sends to (https, or http to 127.0.0.1)" };
+  }
+  return route(new URL(u).origin);
+}
+
+/**
+ * The launch's refusal of a Vertex route on an OpenClaw release that sends
+ * Vertex calls to Google whatever the provider's baseUrl (before
+ * OPENCLAW_VERTEX_BASEURL_SINCE), or on one the launch could not read
+ * (fail-closed); null when no route is Vertex or the release takes the
+ * route. Pure.
+ */
+export function openclawVertexVersionRefusal(routes: readonly OpenAiRoute[], version: string | null | undefined): string | null {
+  if (!routes.some((r) => isVertexApi(r.api))) return null;
+  const v = parseAgentVersion(version ?? null);
+  const since = parseAgentVersion(OPENCLAW_VERTEX_BASEURL_SINCE)!;
+  const ok = v !== null && compareAgentVersions(v, since) >= 0 && !(v.prerelease !== null && v.parts.every((n, i) => n === since.parts[i]));
+  if (ok) return null;
+  return (
+    `mandu: refusing to launch openclaw with a google-vertex model: ${v !== null ? `OpenClaw ${v.raw}` : "an OpenClaw release Mandu could not read"} ` +
+    "sends Vertex AI calls to Google's own host whatever the provider's baseUrl, so they would go around Mandu's model proxy " +
+    `with tool results unmasked. Update OpenClaw to ${OPENCLAW_VERTEX_BASEURL_SINCE} or later, choose another model, or run openclaw without mandu.`
+  );
 }
 
 /** The OpenCode auth types by provider (its auth.json: "api", "oauth", "wellknown"). */
@@ -173,12 +504,13 @@ export function opencodeProviderVerdict(p: string, doc: Json, auth: OpencodeAuth
   if (!ROUTABLE_ID_RE.test(p)) return { kind: "refuse", why: "its provider id is not a plain name" };
   const providers = isObj(doc["provider"]) ? doc["provider"] : {};
   const entry = isObj(providers[p]) ? providers[p] : undefined;
-  const npm = entry && typeof entry["npm"] === "string" ? entry["npm"] : p === "openai" ? "@ai-sdk/openai" : undefined;
-  if (npm !== "@ai-sdk/openai" && npm !== "@ai-sdk/openai-compatible") {
+  const npm = entry && typeof entry["npm"] === "string" ? entry["npm"] : BUILT_IN_PACKAGES[p];
+  const api = npm === undefined ? undefined : ROUTED_PACKAGES[npm];
+  if (api === undefined) {
     return {
       kind: "refuse",
       why: entry === undefined
-        ? `Mandu routes an OpenAI-compatible provider only when provider.${p} names the @ai-sdk/openai-compatible package and options.baseURL`
+        ? `Mandu routes an OpenAI-compatible or Gemini provider only when provider.${p} names the @ai-sdk/openai-compatible or @ai-sdk/google package and options.baseURL`
         : `provider.${p} uses ${npm === undefined ? "no npm package" : `the ${npm} package`}, which Mandu does not route`,
     };
   }
@@ -189,12 +521,14 @@ export function opencodeProviderVerdict(p: string, doc: Json, auth: OpencodeAuth
     };
   }
   const options = entry && isObj(entry["options"]) ? entry["options"] : {};
-  const raw = options["baseURL"] ?? entry?.["api"] ?? (p === "openai" ? OPENAI_API_BASE : undefined);
+  // @ai-sdk/google with no base URL talks to the Gemini API, as the built-in
+  // `google` provider does.
+  const raw = options["baseURL"] ?? entry?.["api"] ?? (p === "openai" ? OPENAI_API_BASE : api === "google-generative-ai" ? GEMINI_API_BASE : undefined);
   const base = routableUpstream(raw);
   if (base === null) {
     return { kind: "refuse", why: `provider.${p} has no base URL Mandu sends to (options.baseURL: https, or http to 127.0.0.1)` };
   }
-  return { kind: "route", route: { id: p, api: npm === "@ai-sdk/openai" ? "openai-responses" : "openai-completions", upstream: base } };
+  return { kind: "route", route: { id: p, api, upstream: base } };
 }
 
 /** What the launcher read of the agent's own config file. */
@@ -202,12 +536,6 @@ export type AgentUserConfig =
   | { kind: "absent" }
   | { kind: "unreadable"; path: string; reason: string }
   | { kind: "ok"; path: string; doc: Json };
-
-export interface ModelRef {
-  ref: string;
-  /** where it came from, e.g. "agents.defaults.model.primary" or "--model" */
-  where: string;
-}
 
 const HELP_OR_VERSION = new Set(["-h", "--help", "-V", "-v", "--version"]);
 const ROUTED_PROVIDER = "anthropic";
@@ -232,43 +560,6 @@ function flagValue(args: readonly string[], short: boolean): string | undefined 
   return v;
 }
 
-/** A `model` value: a "provider/model" string, or `{ primary, fallbacks }`. */
-function refsOfModelValue(v: unknown, where: string, out: ModelRef[]): void {
-  if (typeof v === "string") { if (v.trim() !== "") out.push({ ref: v.trim(), where }); return; }
-  if (!isObj(v)) return;
-  if (typeof v["primary"] === "string" && v["primary"].trim() !== "") out.push({ ref: v["primary"].trim(), where: `${where}.primary` });
-  if (Array.isArray(v["fallbacks"])) {
-    v["fallbacks"].forEach((f, i) => { if (typeof f === "string" && f.trim() !== "") out.push({ ref: f.trim(), where: `${where}.fallbacks[${i}]` }); });
-  }
-}
-
-/**
- * Every value under a key named exactly `model` in `node`, recursively
- * (per-agent, sub-agent, heartbeat, compaction models all use that key).
- * Keys with other names (`imageModel`, `imageGenerationModel`, the
- * `models` allowlist) are not conversation models and are skipped, and so is
- * `memorySearch` (its `model` is an embedding model id; its provider is a
- * separate key). Compaction and memory-flush models DO read the conversation.
- */
-function collectModelKeys(node: unknown, where: string, out: ModelRef[]): void {
-  if (Array.isArray(node)) { node.forEach((n, i) => collectModelKeys(n, `${where}[${i}]`, out)); return; }
-  if (!isObj(node)) return;
-  for (const [k, v] of Object.entries(node)) {
-    const at = where ? `${where}.${k}` : k;
-    if (k === "model") refsOfModelValue(v, at, out);
-    else if (k !== "models" && k !== "memorySearch") collectModelKeys(v, at, out);
-  }
-}
-
-/** The provider a reference names, resolving an OpenClaw alias through
- *  `agents.defaults.models` (`{ "anthropic/claude-sonnet-4-6": { alias: "sonnet" } }`). */
-function providerOf(ref: string, aliases: Json | undefined): string | null {
-  if (ref.includes("/")) return ref.slice(0, ref.indexOf("/")).trim().toLowerCase();
-  for (const [full, entry] of Object.entries(aliases ?? {})) {
-    if (isObj(entry) && entry["alias"] === ref && full.includes("/")) return full.slice(0, full.indexOf("/")).trim().toLowerCase();
-  }
-  return null;
-}
 
 /** The first `$include` key in `node`, as a dotted path, or null. OpenClaw
  *  splices the named files in at load time (its "split config" feature);
@@ -288,36 +579,25 @@ function includePath(node: unknown, where: string): string | null {
   return null;
 }
 
-/** Active Memory's recall model references (they read the conversation). */
-function activeMemoryRefs(doc: Json, out: ModelRef[]): void {
-  const plugins = isObj(doc["plugins"]) ? doc["plugins"] : {};
-  const entries = isObj(plugins["entries"]) ? plugins["entries"] : {};
-  const am = isObj(entries["active-memory"]) ? entries["active-memory"] : {};
-  const cfg = isObj(am["config"]) ? am["config"] : {};
-  for (const k of ["model", "modelFallback"]) {
-    const v = cfg[k];
-    if (typeof v === "string" && v.trim() !== "") out.push({ ref: v.trim(), where: `plugins.entries.active-memory.config.${k}` });
-  }
-}
 
 type Judged = ModelRef & { provider: string | null; verdict: ProviderVerdict };
 
 /** The routed-provider hint of a refusal, in the config spelling the agent reads. */
-const OPENCODE1_HINT = "an OpenAI-compatible provider declared with the @ai-sdk/openai-compatible package and options.baseURL";
-const OPENCODE2_HINT = "an OpenAI-compatible provider declared with the aisdk:@ai-sdk/openai-compatible package and settings.baseURL";
+const OPENCODE1_HINT = "an OpenAI-compatible or Gemini provider declared with the @ai-sdk/openai-compatible or @ai-sdk/google package and options.baseURL";
+const OPENCODE2_HINT = "an OpenAI-compatible or Gemini provider declared with the aisdk:@ai-sdk/openai-compatible or aisdk:@ai-sdk/google package and settings.baseURL";
 
 function refuseLines(agent: string, bad: readonly Judged[], hint?: string): string {
   const shown = bad.slice(0, 4).map((b) => `${b.ref} (${b.where})`).join(", ");
   const more = bad.length > 4 ? ` and ${bad.length - 4} more` : "";
   const whys = [...new Set(bad.slice(0, 4).map((b) => b.verdict.kind === "refuse" ? b.verdict.why : ""))].filter((w) => w !== "");
   const configHint = hint ?? (agent === "openclaw"
-    ? "an OpenAI-compatible provider declared in models.providers with its baseUrl and api \"openai-completions\" or \"openai-responses\""
+    ? "an OpenAI-compatible, Azure OpenAI, Gemini or Ollama provider declared in models.providers with its baseUrl and api \"openai-completions\", \"openai-responses\", \"azure-openai-responses\", \"openai-chatgpt-responses\", \"google-generative-ai\" or \"ollama\""
     : OPENCODE1_HINT);
   return (
     `mandu: refusing to launch ${agent} with model ${shown}${more}: ` +
     (whys.length > 0 ? `${whys.join("; ")}. ` : "") +
     `Mandu protects ${agent} by routing its model provider through Mandu's model proxy, and a model it does not ` +
-    "route would receive tool results unmasked. Choose an anthropic/… or openai/… model, or " + configHint +
+    "route would receive tool results unmasked. Choose an anthropic/…, openai/… or google/… model, or " + configHint +
     (bad.some((b) => b.provider === null) ? "; write a bare model id as <provider>/<id>" : "") +
     `, or run ${agent} without mandu.`
   );
@@ -347,6 +627,17 @@ export interface ModelPlan {
   routes: OpenAiRoute[];
 }
 
+
+
+/** The `--model` an `openclaw agent` argv names (null: none, or not
+ *  `agent`, or an argv the launcher cannot read as OpenClaw's). */
+export function openclawCliModel(argv: readonly string[]): ModelRef | null {
+  const oc = readOpenclawArgv(argv);
+  if (!oc || oc.sub !== "agent") return null;
+  const v = flagValue(oc.rest, false);
+  return v === undefined || v.trim() === "" ? null : { ref: v.trim(), where: "--model" };
+}
+
 /** OpenClaw: the refusal message, or null when every model it can run is routed. */
 export function openclawModelRefusal(argv: readonly string[], cfg: AgentUserConfig): string | null {
   return openclawModelPlan(argv, cfg).refusal;
@@ -356,7 +647,7 @@ const NONE: ModelPlan = { refusal: null, routes: [] };
 const refused = (refusal: string): ModelPlan => ({ refusal, routes: [] });
 
 /** OpenClaw: the refusal, or the OpenAI-family providers to route. */
-export function openclawModelPlan(argv: readonly string[], cfg: AgentUserConfig): ModelPlan {
+export function openclawModelPlan(argv: readonly string[], cfg: AgentUserConfig, opts: { hasZstd?: boolean } = {}): ModelPlan {
   const oc = readOpenclawArgv(argv);
   if (!oc) return NONE; // a wrapper: --target vouches for it
   if ([...oc.globals, oc.sub, ...oc.rest].some((a) => HELP_OR_VERSION.has(a)) || oc.sub === "help") return NONE;
@@ -415,6 +706,32 @@ export function openclawModelPlan(argv: readonly string[], cfg: AgentUserConfig)
   const judged = judge(effective, aliases, (p) => openclawProviderVerdict(p, doc));
   const bad = judged.filter((j) => j.verdict.kind === "refuse");
   if (bad.length > 0) return refused(refuseLines("openclaw", bad));
+  // Azure OpenAI (model-wires.md §9.1): OpenClaw's Azure client reads
+  // AZURE_OPENAI_BASE_URL / AZURE_OPENAI_RESOURCE_NAME before the provider's
+  // baseUrl. The launch pins AZURE_OPENAI_BASE_URL at the route (agent-config
+  // writeAgentConfig), which outranks the config's `env` block only where
+  // that block is not read first: a config that sets them is refused, and so
+  // is a second Azure provider (one variable serves every Azure provider).
+  const azure = routesOf(judged).filter((r) => r.api === "azure-openai-responses");
+  if (azure.length > 0) {
+    const set = openclawConfigAzureEnv(doc);
+    if (set.length > 0) {
+      return refused(
+        `mandu: refusing to launch openclaw: your config sets ${set.join(", ")}, and OpenClaw's Azure OpenAI client sends every ` +
+        `Azure call there instead of to the provider's baseUrl, around Mandu's model proxy. Remove it (models.providers.${azure[0]!.id}.baseUrl names the endpoint), ` +
+        "or run openclaw without mandu.",
+      );
+    }
+    if (azure.length > 1) {
+      return refused(
+        `mandu: refusing to launch openclaw with more than one Azure OpenAI provider (${azure.map((r) => r.id).join(", ")}): OpenClaw's ` +
+        "Azure client takes one endpoint variable for all of them, which Mandu pins at one provider's route. Keep one Azure provider in this run, " +
+        "or run openclaw without mandu.",
+      );
+    }
+  }
+  const zstd = chatgptZstdProblem(routesOf(judged), opts.hasZstd ?? NODE_HAS_ZSTD);
+  if (zstd !== null) return refused(`mandu: refusing to launch openclaw: ${zstd}.`);
   if (primary === undefined || primary.trim() === "") {
     return refused(
       "mandu: refusing to launch openclaw with no model configured: OpenClaw would run its built-in default model, " +
@@ -473,10 +790,18 @@ export interface OpencodeV2Input {
   unreadable: ReadonlyArray<{ path: string; reason: string }>;
 }
 
-/** The npm packages Mandu routes, and the wire each speaks. */
-const OPENAI_PACKAGES: Readonly<Record<string, OpenAiApi>> = {
+/** The npm packages Mandu routes, and the wire each speaks (both OpenCode
+ *  generations). */
+const ROUTED_PACKAGES: Readonly<Record<string, RouteApi>> = {
   "@ai-sdk/openai": "openai-responses",
   "@ai-sdk/openai-compatible": "openai-completions",
+  "@ai-sdk/google": "google-generative-ai",
+};
+
+/** OpenCode's built-in providers Mandu routes, by the package each loads. */
+const BUILT_IN_PACKAGES: Readonly<Record<string, string>> = {
+  openai: "@ai-sdk/openai",
+  google: "@ai-sdk/google",
 };
 
 /** One provider's endpoint settings merged across the layers (each field
@@ -497,13 +822,13 @@ export function opencodeV2ProviderVerdict(p: string, providers: OpencodeV2Provid
   if (entry?.canonical !== undefined) {
     return { kind: "refuse", why: `providers.${p}.canonical makes it a copy of another provider, which Mandu does not route` };
   }
-  const pkg = opencodePackageName(entry?.package) ?? (p === "openai" ? "@ai-sdk/openai" : undefined);
-  const api = pkg === undefined ? undefined : OPENAI_PACKAGES[pkg];
+  const pkg = opencodePackageName(entry?.package) ?? BUILT_IN_PACKAGES[p];
+  const api = pkg === undefined ? undefined : ROUTED_PACKAGES[pkg];
   if (api === undefined) {
     return {
       kind: "refuse",
       why: entry?.package === undefined
-        ? `Mandu routes an OpenAI-compatible provider only when providers.${p} names the aisdk:@ai-sdk/openai-compatible package and settings.baseURL`
+        ? `Mandu routes an OpenAI-compatible or Gemini provider only when providers.${p} names the aisdk:@ai-sdk/openai-compatible or aisdk:@ai-sdk/google package and settings.baseURL`
         : `providers.${p} uses the ${entry.package} package, which Mandu does not route`,
     };
   }
@@ -513,7 +838,7 @@ export function opencodeV2ProviderVerdict(p: string, providers: OpencodeV2Provid
       why: "OpenCode is signed in to OpenAI with a ChatGPT account, and that login sends requests to chatgpt.com whatever the base URL; sign in with an API key (`opencode auth login`) to use it under Mandu",
     };
   }
-  const base = routableUpstream(entry?.baseURL ?? (p === "openai" ? OPENAI_API_BASE : undefined));
+  const base = routableUpstream(entry?.baseURL ?? (p === "openai" ? OPENAI_API_BASE : api === "google-generative-ai" ? GEMINI_API_BASE : undefined));
   if (base === null) {
     return { kind: "refuse", why: `providers.${p} has no base URL Mandu sends to (settings.baseURL: https, or http to 127.0.0.1)` };
   }

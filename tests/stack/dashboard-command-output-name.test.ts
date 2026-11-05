@@ -166,7 +166,7 @@ function assertNamedNothing(d: Awaited<ReturnType<typeof readDashboard>>, sessio
   assert.equal(d.turn.summary, "Mandu hid 1 secret from the AI.");
   // Your secrets names the same item by the same reason, from the note of
   // the step that minted it: the file as the model wrote it, as code.
-  assert.deepEqual((d.secrets.secrets ?? []).map((x) => words(x.what)), [`Output of a ${tool} step whose command named your secret file ./.env`]);
+  assert.deepEqual((d.secrets.secrets ?? []).map((x) => words(x.what)), [`Output of ${/^[aeiou]/i.test(tool) ? "an" : "a"} ${tool} step whose command named your secret file ./.env`]);
   assert.deepEqual(d.secrets.secrets![0]!.what.filter((p) => p.kind === "code").map((p) => p.text), [tool, "./.env"]);
   for (const piece of COMMAND_PIECES) assert.ok(!words(d.secrets.secrets![0]!.what).includes(piece), `the card names a piece of the command: ${piece}`);
   // No name anywhere on the page is a piece of the command.

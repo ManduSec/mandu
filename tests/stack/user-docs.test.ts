@@ -89,6 +89,38 @@ test("the front page says secrets mode does not mask untrusted text, and stays a
   assert.ok(lines <= 240, `README.md is ${lines} lines; move detail into docs/ (docs/README.md)`);
 });
 
+// The developer view (/dev/) is not in a public install, and the product page
+// calls its approvals page Approvals: the user docs name only places a public
+// install has. docs/development.md is for contributors and keeps its mentions.
+// "Inbox" is case-sensitive, so an email task's "the inbox" passes; /dev/null,
+// /dev/kvm and /dev/shm are device paths, not pages.
+const NOT_IN_A_PUBLIC_INSTALL: ReadonlyArray<[string, RegExp]> = [
+  ["the developer view", /developer[\s-]+view/gi],
+  ["the developer dashboard", /developer[\s-]+dashboard/gi],
+  ["a developer-view page", /\/dev\/(?:rules|sessions)\b/g],
+  ["the detailed trace", /detailed\s+trace/gi],
+  ['"the Inbox" (the page is Approvals)', /\bInbox\b/g],
+];
+
+test("the user docs send no one to the developer view", () => {
+  const problems: string[] = [];
+  for (const doc of USER_DOCS) {
+    if (doc === "docs/development.md") continue;
+    const md = readFileSync(join(REPO, doc), "utf8");
+    for (const [what, re] of NOT_IN_A_PUBLIC_INSTALL) {
+      // Over the whole file, so a phrase broken across lines is found too.
+      for (const m of md.matchAll(re)) problems.push(`${doc}:${md.slice(0, m.index).split("\n").length} names ${what}`);
+    }
+  }
+  assert.deepEqual(problems, []);
+  // The patterns pass the device paths and the email task the docs do name.
+  for (const [, re] of NOT_IN_A_PUBLIC_INSTALL) {
+    for (const ok of ["/dev/null", "/dev/kvm", "/dev/shm", "go through the inbox"]) {
+      assert.equal([...ok.matchAll(re)].length, 0, `${re} matches ${ok}`);
+    }
+  }
+});
+
 test("the first-session tour has a section for every supported agent that starts it under mandu", () => {
   const tour = readFileSync(join(REPO, "docs/first-session.md"), "utf8");
   const sections = new Map<string, string>();

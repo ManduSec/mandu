@@ -1,0 +1,10 @@
+{
+  "id": "slack",
+  "name": "Slack",
+  "formats": ["^xox[bp]-[0-9A-Za-z-]{20,250}$"],
+  "shapes": ["xoxb-…", "xoxp-…"],
+  "hosts": ["slack.com"],
+  "docs": ["https://docs.slack.dev/apis/web-api/"],
+  "examples": ["xoxb-{x*30}", "xoxp-{x*40}"],
+  "non_examples": ["xoxa-{x*24}", "xoxb-{x*19}"]
+}

@@ -24,6 +24,17 @@
  *   P6  the families that name nothing in their cells: one text part each;
  *   P7  no part is shared: cells built from the same names, and the
  *       sentence, each have their own parts.
+ *   P8  a send of a secret to a host says what Always allow and Block keep
+ *       doing (§4.34, *A send question says what its standing answers
+ *       keep doing*): the secret's name (or "this secret") and the host as
+ *       code, any agent, the answer covering no other secret or host, Rules
+ *       a link; only the halves the card offers; no other family has it.
+ *   P9  its short form for Home's compact card (§4.34, *Home's card says
+ *       which answers last*): the one-time answers the card offers cover
+ *       only the next such request, the standing ones are kept for this
+ *       secret (or a file's secrets, or "this secret") and this host until
+ *       changed under Rules; each verb as the card labels it; only beside
+ *       P8's line, with an answer list holding both kinds.
  *
  * Pure: describeAsk over queue rows, no I/O.
  */
@@ -41,8 +52,9 @@ const text = (parts: HomeTextPart[]): string => parts.map((p) => p.text).join(""
 const codes = (parts: HomeTextPart[]): string[] => parts.filter((p) => p.kind === "code").map((p) => p.text);
 
 type Row = Parameters<typeof describeAsk>[0];
-const ask = (row: Partial<Row>, home = HOME): AskWords =>
+const askRow = (row: Partial<Row>, home = HOME): AskWords =>
   describeAsk({ where: "network", subject: KEY, target: "api.stripe.com", reason: "", ...row }, "Claude Code", home);
+const ask = askRow;
 
 /** P1 for one card, then its cells' names. */
 function cells(w: AskWords): { why: string[]; aiNow: string[]; ifAllowed: string[] } {
@@ -181,4 +193,113 @@ test("P7: no part is shared: three cells built from the same names, and the sent
     assert.equal(new Set(all).size, all.length, `${text(w.sentence)}: every part its own object`);
   }
   assert.equal(text(cards[0]!.sentence), "Claude Code wants to send a request to evil.example after reading ~/memos/q3.md, STRIPE_KEY and 3 more");
+});
+
+test("P8: a send of a secret says what Always allow and Block keep doing, for this secret and this host only", () => {
+  const BOTH = [{ approve: true, label: "Allow once", scope: "once" as const }, { approve: true, label: "Always allow" }, { approve: false, label: "Block" }];
+  const line = (w: AskWords): string => {
+    const parts = w.ifStandingParts!;
+    assert.ok(Array.isArray(parts) && parts.length > 0, "the line is sent");
+    assert.equal(parts.map((p) => p.text).join(""), w.ifStanding, "the parts are exactly the string");
+    assert.deepEqual(parts.at(-2), { kind: "link", text: "Rules", to: "your-rules" }, "Rules is a link to Your rules");
+    return w.ifStanding!;
+  };
+  const named = ask({ origin: `${HOME}/mandu-try/.env`, actions: BOTH });
+  assert.equal(line(named),
+    "Mandu remembers it for STRIPE_KEY and api.stripe.com only. Always allow: from now on, any agent's request that sends it to api.stripe.com goes with the real secret filled in, without asking. Block: those requests are refused without asking. Your answer does not cover other secrets or other hosts. You can change it under Rules.");
+  assert.deepEqual(codes(named.ifStandingParts!.filter((p): p is HomeTextPart => p.kind !== "link")), ["STRIPE_KEY", "api.stripe.com", "api.stripe.com"]);
+  // The developer view lists no answers: the send's usual both.
+  assert.equal(ask({ origin: `${HOME}/mandu-try/.env` }).ifStanding, named.ifStanding);
+  // A secret with no name says "this secret".
+  assert.match(line(ask({ actions: BOTH })), /^Mandu remembers it for this secret and api\.stripe\.com only\. /);
+  // Only Always allow, only Block: that half alone, its own subject.
+  const allowOnly = line(ask({ actions: [BOTH[0]!, BOTH[1]!] }));
+  assert.match(allowOnly, /Always allow: from now on/);
+  assert.doesNotMatch(allowOnly, /Block/);
+  const blockOnly = line(ask({ actions: [BOTH[0]!, BOTH[2]!, { approve: false, label: "Send without it", scope: "once", strip: true }] }));
+  assert.match(blockOnly, /only\. Block: from now on, any agent's request that sends it to api\.stripe\.com is refused without asking\. Your answer/);
+  assert.doesNotMatch(blockOnly, /Always allow/);
+  // No standing answer (Allow once, Send without it): no line.
+  assert.equal(ask({ actions: [BOTH[0]!, { approve: false, label: "Send without it", scope: "once", strip: true }] }).ifStandingParts, undefined);
+  // Not a secret, or no host: no line.
+  assert.equal(ask({ subject: "$MDU:WebFetch[1a2b].content", actions: BOTH }).ifStanding, undefined);
+  assert.equal(ask({ target: "", actions: BOTH }).ifStanding, undefined);
+  // The other families keep their own words.
+  const env = `${HOME}/ws/app/.env`;
+  for (const row of [
+    { where: "exec", subject: "exec-program:get.example", target: "(stdin)" },
+    { where: "exec", subject: KEY, target: "echo $MDU" },
+    { where: "file", subject: `open:/usr/bin/cat#${HEX}`, target: `${HOME}/proj/.env` },
+    { where: "file", subject: "fs:DesignSync:upload", target: `${HOME}/proj/.env` },
+    { where: "network", subject: "prompt:card-number#1", target: "" },
+    { where: "model context", subject: KEY, target: "", origin: `${HOME}/app/.env` },
+    { subject: "session-net:s-1", target: "evil.example" },
+    { subject: `holder-send:${JSON.stringify({ session: null, files: [env] })}`, target: "hooks.slack.com", holderSources: [{ path: env, level: "no-model", bindings: [], blocks: true, always: true }] },
+  ] as Array<Partial<Row>>) {
+    const w = ask({ ...row, actions: BOTH });
+    assert.equal(w.ifStanding, undefined, String(row.subject));
+    assert.equal(w.ifStandingParts, undefined, String(row.subject));
+  }
+  // Product vocabulary only.
+  assert.doesNotMatch(named.ifStanding!, /placeholder|symbol|binding|\$MDU/i);
+});
+
+test("P9: Home's short line says which of the card's answers cover the next request and which are kept, for this secret and host", () => {
+  const ONCE = { approve: true, label: "Allow once", scope: "once" as const };
+  const ALWAYS = { approve: true, label: "Always allow" };
+  const WITHOUT = { approve: false, label: "Send without it", scope: "once" as const, strip: true as const };
+  const BLOCK = { approve: false, label: "Block" };
+  // A row as Home builds it: the panel's answers, and the card's own (with
+  // Send without it, home.ts sendWithoutActions).
+  const ask = (row: Partial<Row>): AskWords => askRow({ ...row, ...(row.cardActions ? { actions: row.cardActions.filter((a) => a.strip !== true) } : {}) });
+  const line = (w: AskWords): string => {
+    const parts = w.answersShortParts!;
+    assert.ok(Array.isArray(parts) && parts.length > 0, "the line is sent");
+    assert.equal(parts.map((p) => p.text).join(""), w.answersShort, "the parts are exactly the string");
+    assert.deepEqual(parts.at(-2), { kind: "link", text: "Rules", to: "your-rules" }, "Rules is a link to Your rules");
+    assert.equal(parts.at(-1)!.text, ".");
+    assert.ok(w.ifStanding !== undefined, "only beside the full line");
+    return w.answersShort!;
+  };
+  const four = ask({ origin: `${HOME}/mandu-try/.env`, cardActions: [ONCE, ALWAYS, WITHOUT, BLOCK] });
+  assert.equal(line(four),
+    "Allow once and Send without it cover only the next such request. Always allow and Block are kept for STRIPE_KEY and api.stripe.com until you change them under Rules.");
+  assert.deepEqual(codes(four.answersShortParts!.filter((p): p is HomeTextPart => p.kind !== "link")), ["STRIPE_KEY", "api.stripe.com"]);
+  // Without Send without it: Allow once alone.
+  assert.equal(line(ask({ origin: `${HOME}/mandu-try/.env`, cardActions: [ONCE, ALWAYS, BLOCK] })),
+    "Allow once covers only the next such request. Always allow and Block are kept for STRIPE_KEY and api.stripe.com until you change them under Rules.");
+  // One standing answer: it alone, "is … it".
+  assert.equal(line(ask({ origin: `${HOME}/mandu-try/.env`, cardActions: [ONCE, WITHOUT, BLOCK] })),
+    "Allow once and Send without it cover only the next such request. Block is kept for STRIPE_KEY and api.stripe.com until you change it under Rules.");
+  // A file's card names the file's secrets; a secret with no name, "this secret".
+  const fileCard = ask({ subject: "$MDU:nomodel_Read[3c4d]", origin: `${HOME}/app/.env`, fileValues: 3, cardActions: [ONCE, ALWAYS, WITHOUT, BLOCK] });
+  assert.match(line(fileCard), /are kept for the secrets in ~\/app\/\.env and api\.stripe\.com until you change them under Rules\.$/);
+  assert.deepEqual(codes(fileCard.answersShortParts!.filter((p): p is HomeTextPart => p.kind !== "link")), ["~/app/.env", "api.stripe.com"]);
+  assert.match(line(ask({ cardActions: [ONCE, ALWAYS, BLOCK] })), /are kept for this secret and api\.stripe\.com until/);
+  // Each verb as the server labels it, as the buttons are.
+  assert.match(line(ask({ cardActions: [ONCE, { approve: true, label: "Allow from now on" }, BLOCK] })), /^Allow once covers only the next such request\. Allow from now on and Block are kept/);
+  // No line: no answer list (the developer view), no standing answer, no
+  // one-time answer, not a secret, no host.
+  assert.equal(ask({ origin: `${HOME}/mandu-try/.env` }).answersShort, undefined);
+  assert.equal(ask({ origin: `${HOME}/mandu-try/.env`, actions: [ONCE, ALWAYS, BLOCK] }).answersShort, undefined, "the panel's answers alone: the developer view");
+  assert.equal(ask({ cardActions: [ONCE, WITHOUT] }).answersShortParts, undefined);
+  assert.equal(ask({ cardActions: [ALWAYS, BLOCK] }).answersShortParts, undefined);
+  assert.equal(ask({ subject: "$MDU:WebFetch[1a2b].content", cardActions: [ONCE, ALWAYS, BLOCK] }).answersShort, undefined);
+  assert.equal(ask({ target: "", cardActions: [ONCE, ALWAYS, BLOCK] }).answersShort, undefined);
+  // Not for a held message, a program's send of the files it holds (its
+  // "Allow this session" lasts the session), nor any other family.
+  const env = `${HOME}/ws/app/.env`;
+  for (const row of [
+    { where: "network", subject: "prompt:card-number#1", target: "", cardActions: [{ approve: true, scope: "once" as const, prompt: "send" as const, label: "Send as written" }, { approve: true, prompt: "send" as const, label: "Send as written for this session" }, { approve: false, prompt: "mask" as const, label: "Send masked" }] },
+    { subject: `holder-send:${JSON.stringify({ session: "s-1", files: [env] })}`, target: "hooks.slack.com", holderSources: [{ path: env, level: "no-model", bindings: [], blocks: true, always: true }], cardActions: [ONCE, { approve: true, label: "Allow this session" }, BLOCK] },
+    { subject: "session-net:s-1", target: "evil.example", cardActions: [ONCE, BLOCK] },
+    { where: "file", subject: `open:/usr/bin/cat#${HEX}`, target: `${HOME}/proj/.env`, cardActions: [ONCE, ALWAYS, BLOCK] },
+    { where: "exec", subject: KEY, target: "echo $MDU", cardActions: [ONCE, ALWAYS, BLOCK] },
+  ] as Array<Partial<Row>>) {
+    const w = ask(row);
+    assert.equal(w.answersShort, undefined, String(row.subject));
+    assert.equal(w.answersShortParts, undefined, String(row.subject));
+  }
+  // Product vocabulary only.
+  assert.doesNotMatch(four.answersShort!, /placeholder|symbol|binding|\$MDU/i);
 });

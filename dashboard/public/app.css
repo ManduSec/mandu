@@ -101,6 +101,39 @@ code.code-whole { white-space: nowrap; }
   padding: 1px 7px;
   line-height: 1.4;
 }
+/* The count while every question it counts is from a session that has
+   ended and no rule change waits (dashboard.md §4.25 *The top bar's two
+   marks*): nothing is held up until you answer, so the same filled pill
+   in grey, never the amber nor the Rules link's ring. --panel on --ink-4
+   reads 5.3:1 light, 5.6:1 dark. */
+.count.ended { background: var(--ink-4); }
+/* The Rules link's mark: how many levels chosen on Rules wait to be saved
+   (dashboard.md §4.25n *The top bar says when Rules has changes not
+   saved*). A ring in the link's own ink, never the count's amber fill, so
+   the two never read as one thing: the count asks for an answer, the mark
+   only says a change waits. As tall as the count (the 1px edge for its 1px
+   padding), narrower, and 4 px from its word: with both shown the links
+   fit a 320 px phone. Under forced colors the edge is drawn in the link's
+   system color. */
+#nav a[data-page-link="rules"] { gap: 4px; }
+.unsaved-mark {
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 4px;
+  line-height: 1.4;
+}
+/* While Mandu refuses your last edit to policy.yaml the same slot shows "!"
+   in a warn ring (dashboard.md §4.25 *An edit to policy.yaml Mandu
+   refused*): the warn ink and edge, still no fill, so it never reads as the
+   count's amber pill. At least as wide as a one-digit ring (a digit's 7 px,
+   its padding and its edge), "!" centred, so the links need no more room.
+   On the current page the "!" takes the link's ink: the warn reads 4.13:1
+   on the light current page's ground, under AA for its 12 px; the ring
+   keeps the warn there (3:1 for an edge). */
+.unsaved-mark.refused { color: var(--warn); border-color: var(--warn); min-width: 17px; text-align: center; }
+#nav a[aria-current="page"] .unsaved-mark.refused { color: inherit; }
 .top-status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-3); white-space: nowrap; min-width: 0; }
 .top-status .dim { overflow: hidden; text-overflow: ellipsis; }
 /* While protection is not plainly on, the words link Settings › Protection
@@ -110,34 +143,65 @@ code.code-whole { white-space: nowrap; }
    its layout (the top bar's #top-announce, dashboard.md §4.25 *A new
    question is announced on the page*). */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+/* Skip to the page (dashboard.md §4.25 *A page change moves the focus*):
+   the first Tab stop, clipped like .sr-only until it has the focus, then
+   over the top bar at the window's top left, above the help notes (20).
+   Out of the flow either way and outside #top, so the bar keeps its height. */
+.skip-link:not(:focus) { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.skip-link:focus {
+  position: fixed; top: 8px; left: 8px; z-index: 30;
+  padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); color: var(--ink); font-size: 15px; text-decoration: underline;
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 .top-status-link { display: flex; align-items: center; gap: 8px; min-width: 0; color: inherit; text-decoration: none; }
 .top-status-link:hover, .top-status-link:focus-visible { color: inherit; text-decoration: underline; }
-/* Up to 719 px the six page links take a row of their own under the brand
-   and the status: beside them, at 641 px, they ran 22 px past the bar with
-   Scan (dashboard.md §4.25 *The page links fit a small phone*). From 500 px
-   the row holds all six with up to 99 waiting (450 px at 500, of 460). The
-   row still scrolls if it must. */
-@media (max-width: 719px) {
+/* Up to 829 px the seven page links take a row of their own under the brand
+   and the status, and the Home word is hidden: the brand above them links
+   Home too (dashboard.md §4.25 *The page links fit a small phone*, *Plugins
+   joins the links*). Beside the brand and the status the seven fit from
+   830 px. From 540 px the row holds the six shown with up to 99 waiting
+   and up to 99 changes not saved (800 and 520 px until the Rules link's
+   mark, 2026-10-25). The row still scrolls if it must. */
+@media (max-width: 829px) {
   .top-inner { height: auto; flex-wrap: wrap; row-gap: 4px; column-gap: 12px; padding-top: 10px; padding-bottom: 10px; }
   #nav { order: 3; flex-basis: 100%; gap: 2px; overflow-x: auto; }
   #nav a { padding: 6px 10px; }
+  #nav a[data-page-link="home"] { display: none; }
   .top-status { margin-left: auto; }
 }
-/* Narrower than 500 px they are two rows of three, each link centred in its
-   column: one row of six needed 380 px at 375 with one waiting, and five
-   already filled a 320 px phone's 288 px row. As columns they need 262 px
-   there with two digits waiting, 269 with three. */
-@media (max-width: 499px) {
+/* Narrower than 540 px they are two rows of three, each link centred in its
+   column: Approvals, Rules and Settings over History, Scan and Plugins. One
+   row of the six needs 488 px with two digits waiting and two not saved,
+   more than a 530 px window's row. As columns they need 262 px with two
+   digits waiting, 283 with one not saved too, of a 320 px phone's 288. */
+@media (max-width: 539px) {
   #nav { display: grid; grid-template-columns: repeat(3, auto); }
   #nav a { justify-content: center; }
 }
-/* From 720 px the links share the bar with the brand and the status. Until
-   840 px they sit closer, 7 px a side and 2 px apart, each at least 50 px
-   (Scan's word is 34): six at 14 px a side leave "Protection unknown" 6 px
-   at 840 px. */
-@media (min-width: 720px) and (max-width: 839px) {
+/* From 830 px the seven links share the bar with the brand and the status.
+   Until 970 px they sit closer, 7 px a side and 2 px apart, each at least
+   50 px (Scan's word is 34): seven at 14 px a side need 970 px beside
+   "Protection unknown" with two digits waiting and two not saved. */
+@media (min-width: 830px) and (max-width: 969px) {
   #nav { gap: 2px; }
   #nav a { padding: 8px 7px; min-width: 50px; justify-content: center; }
+}
+/* From 830 px, where the bar is one 64 px row, it stays at the top of the
+   window while the page scrolls under its opaque ground: the Approvals
+   count and the protection status are the page's live signals
+   (dashboard.md §4.25 *The bar stays in sight on a wide window*). Above
+   the cards and the Rules page's bar of changes to save (5), under the
+   help notes (20). The window keeps its 65 px and 8 px more above what it
+   scrolls into view: a jump, a Tab's control (home.js `barRoom` reads the
+   same room). Narrower, the bar is two or three rows and scrolls away, so
+   it never takes a phone's screen, and the window keeps only the 8 px: a
+   marked turn's ring is not cut off at the screen's top edge (2026-10-31).
+   This rule comes first, so the wide window's 73 px replaces it. */
+html { scroll-padding-top: 8px; }
+@media (min-width: 830px) {
+  #top { position: sticky; top: 0; z-index: 10; }
+  html { scroll-padding-top: 73px; }
 }
 .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--ink-4); flex-shrink: 0; }
 .dot.ok { background: var(--ok); }
@@ -211,9 +275,13 @@ details.more > :not(summary) { margin-top: 8px; }
 .choice-line { display: flex; align-items: center; gap: 8px; }
 /* A choice inside a list row (a prompt filter's action, a label's level),
    and Keys Mandu found's model menus. */
-:where(.card .row) select, :where(.suggest-model) select { height: 32px; padding: 0 28px 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font-size: 13px; }
+:where(.card .row) select, :where(.suggest-model) select { height: 32px; padding: 0 28px 0 10px; border-radius: 8px; border: 1px solid var(--field-line); background: var(--panel); color: var(--ink); font-size: 13px; }
 /* Rules, while protection is off: the rules are kept, not enforced. */
 .rules-off { margin: 0; padding: 12px 16px; border: 1px solid var(--warn-line); border-radius: 10px; background: var(--warn-bg); color: var(--ink-2); font-size: 14px; }
+/* The refused edit of policy.yaml: its problems as a short list in the same
+   warning box (dashboard.md §4.25 *Rules says where your rules file is*). */
+.rules-refused-problems { margin: 6px 0 0; padding-left: 20px; }
+.rules-refused-problems li { overflow-wrap: anywhere; }
 .block-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .block-head a { font-size: 14px; }
 .muted { font-weight: 400; color: var(--ink-4); }
@@ -279,6 +347,20 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
 [data-tone="bad"] > h2 > .tone-mark, [data-tone="bad"] > .scan-fold h2 .tone-mark, .scan-card[data-tone="bad"] h2 .tone-mark, #page-scan[data-tone="bad"] h1 .tone-mark { background: var(--bad); }
 [data-tone="ok"] > h2 > .tone-mark, [data-tone="ok"] > .scan-fold h2 .tone-mark, .scan-card[data-tone="ok"] h2 .tone-mark, #page-scan[data-tone="ok"] h1 .tone-mark { background: var(--ok); }
 [data-tone="warn"] > h2 > .tone-mark, [data-tone="warn"] > .scan-fold h2 .tone-mark { background: var(--warn); }
+/* Home's card folded to one line (§4.25ai *A card with nothing to act on
+   folds*): Fold beside *See the whole scan →*; folded, the line in the
+   card's own frame, its ✓ green after a clean scan, Show at its end. */
+.scan-card-acts { display: inline-flex; align-items: baseline; gap: 8px 16px; flex-wrap: wrap; }
+.scan-card-acts .linkish, .scan-folded .linkish { font-size: 14px; }
+.scan-card[data-folded="yes"] { padding-top: 12px; padding-bottom: 12px; }
+.scan-card p.scan-folded { margin: 0; max-width: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.scan-folded .tone-mark { margin-right: 4px; color: var(--ok); }
+.scan-folded .tone-mark svg { stroke-width: 3; }
+.scan-card[data-tone="ok"] #home-scan-folded-text, .scan-card[data-tone="ok"] #home-scan-folded-text a { color: var(--ok); font-weight: 600; }
+#home-scan-head[hidden], #home-scan-folded[hidden] { display: none; }
+/* History's scan line (§4.25ai): the ✗ of Home's card, small, in red. */
+#history-scan .tone-mark { margin-right: 4px; }
+#history-scan[data-tone="bad"] .tone-mark { color: var(--bad); }
 .scan-safe { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 0; padding: 10px 14px; border-radius: 10px; background: var(--ok-bg); color: var(--ok); font-weight: 600; max-width: 80ch; }
 .scan-card p.scan-safe { color: var(--ok); margin-top: 10px; }
 .scan-card p.scan-flow { max-width: none; }
@@ -287,6 +369,43 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
 .scan-safe .tone-mark { margin: 2px 0 0; flex: none; }
 .scan-fig .scan-safe { max-width: none; margin-top: 12px; }
 .scan-safe .tone-mark svg { stroke-width: 3; }
+/* The Plugins page (dashboard.md §4.25aj): the service's line, then a host
+   per block with a card per attached agent, colored from the server's tone
+   with a mark beside the words (§4.25ai *Color with meaning*). The service
+   not running with nothing attached is plain: no colour, no mark. */
+.plugins-service[data-tone="ok"] h2 { color: var(--ok); }
+.plugins-service[data-tone="warn"] h2 { color: var(--warn); }
+.plugins-service p, .plugins-covers { margin: 0; max-width: 72ch; color: var(--ink-2); }
+.plugins-setup p { margin: 0; color: var(--ink-2); }
+.plugins-setup-steps { margin: 6px 0 0; padding-left: 22px; display: grid; gap: 4px; }
+.plugin-card { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 12px; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.plugin-card[data-tone="ok"] { border-color: var(--ok-line); border-left-color: var(--ok); }
+.plugin-card[data-tone="warn"] { border-color: var(--warn-line); border-left-color: var(--warn); }
+.plugin-card[data-tone="bad"] { border-color: var(--bad-line); border-left-color: var(--bad); }
+.plugin-card p { margin: 0; max-width: 72ch; color: var(--ink-2); }
+.plugin-state { margin: 0; font-size: 17px; }
+.plugin-state .tone-mark { width: 1.15em; height: 1.15em; border-radius: 50%; color: var(--panel); vertical-align: -0.16em; }
+.plugin-state .tone-mark svg { width: 70%; height: 70%; stroke-width: 3; }
+.plugin-card[data-tone="ok"] .plugin-state { color: var(--ok); }
+.plugin-card[data-tone="ok"] .plugin-state .tone-mark { background: var(--ok); }
+.plugin-card[data-tone="warn"] .plugin-state { color: var(--warn); }
+.plugin-card[data-tone="warn"] .plugin-state .tone-mark { background: var(--warn); }
+.plugin-card[data-tone="bad"] .plugin-state { color: var(--bad); }
+.plugin-card[data-tone="bad"] .plugin-state .tone-mark { background: var(--bad); }
+.plugin-facts { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; font-size: 14px; }
+.plugin-facts dt { color: var(--ink-3); }
+.plugin-facts dd { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.plugin-facts dd[data-tone="bad"] { color: var(--bad); }
+.plugin-facts dd[data-tone="ok"] { color: var(--ok); }
+.plugin-posture strong { color: var(--ink); }
+.plugin-notice { padding: 12px 16px; }
+.plugin-notice .posture-title { color: var(--ink); font-weight: 600; }
+.plugin-notice p + p { margin-top: 6px; }
+.plugin-links { font-size: 14px; }
+@media (max-width: 499px) {
+  .plugin-facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .plugin-facts dd { margin-bottom: 6px; }
+}
 /* The small flows (Home's card, each of your secrets): chips in a row that
    wraps, the last one red (the real value) or green (only the mask). */
 .scan-flows { margin-top: 10px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; align-items: center; }
@@ -369,18 +488,22 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
 .sf-mark-m { fill: none; stroke: var(--panel); stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; }
 .scan-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 /* Motion, CSS only: the dots flow along the lanes, the key and the mask
-   ride them. None when the person asked for reduced motion. */
-.sf-lane { animation: sf-flow 1.1s linear infinite; }
-.sf-ride { animation: sf-ride 2.6s ease-in-out infinite alternate; }
-.sf-ride-v { animation: sf-ride-v 2.6s ease-in-out infinite alternate; }
+   ride them. It plays once on arrival, under 5 s, then holds still on its
+   resting frame (WCAG 2.2.2: nothing beside the text moves for good): four
+   runs of the flow end at -16, two periods of the 0 8 dash; the ride goes
+   out and back to the key's and the mask's own place. None when the person
+   asked for reduced motion. */
+.sf-lane { animation: sf-flow 1.1s linear 4; }
+.sf-ride { animation: sf-ride 4.8s ease-in-out 1; }
+.sf-ride-v { animation: sf-ride-v 4.8s ease-in-out 1; }
 @media (prefers-reduced-motion: reduce) {
   .sf-lane { animation: none; }
   .sf-ride { animation: none; }
   .sf-ride-v { animation: none; }
 }
 @keyframes sf-flow { to { stroke-dashoffset: -16; } }
-@keyframes sf-ride { from { transform: translateX(-10px); } to { transform: translateX(10px); } }
-@keyframes sf-ride-v { from { transform: translateY(-8px); } to { transform: translateY(8px); } }
+@keyframes sf-ride { 0%, 100% { transform: none; } 25% { transform: translateX(-10px); } 75% { transform: translateX(10px); } }
+@keyframes sf-ride-v { 0%, 100% { transform: none; } 25% { transform: translateY(-8px); } 75% { transform: translateY(8px); } }
 /* A row's tone: its left edge, its badge and its steps that say it. */
 .scan-item[data-tone="bad"] { border-left: 4px solid var(--bad); }
 .scan-item[data-tone="warn"] { border-left: 4px solid var(--warn); }
@@ -402,17 +525,26 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
 .scan-section[data-tone="ok"] > h2, .scan-section[data-tone="ok"] .scan-fold-title { color: var(--ok); }
 .scan-section h2 .tone-mark { color: var(--panel); }
 #scan-risk-block[data-tone="warn"] h2 { color: var(--warn); }
+/* Before any scan its step is the first line of #scan-end, one block gap
+   under the sentence, with no paragraph margin on top (§4.25ai *Before any
+   scan, the step comes first*). */
+#scan-step { margin: 0; }
 .scan-items .empty[data-tone="ok"] { color: var(--ok); font-weight: 600; }
 .scan-card .block-head { margin-bottom: 4px; }
 .scan-card h2 { margin: 0; }
 .scan-card p { margin: 6px 0 0; max-width: 72ch; color: var(--ink-2); }
 .scan-card p.note { color: var(--ink-3); }
 .scan-top { margin: 8px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+/* Empty before any scan and after one where nothing left: not drawn, so
+   the line under it keeps the card's 6 px (§4.25ai *Home's card*). */
+.scan-top:empty { display: none; }
 .scan-top li { overflow-wrap: anywhere; }
 .scan-top-how { display: block; font-size: 13px; }
 /* A finding's file opens in Rules (§4.25ai), the session card's link (.secret-rule). */
 .scan-rule { margin-top: 4px; }
 .scan-top .scan-rule { margin-top: 0; font-size: 13px; }
+/* A key links to where its company replaces it (§4.25ai), under the story. */
+.scan-replace { margin: 6px 0 0; font-size: 14px; color: var(--ink-2); max-width: 80ch; overflow-wrap: anywhere; }
 .scan-notes { margin: 6px 0 0; padding-left: 20px; }
 .scan-section { margin-top: 24px; }
 .scan-section h2 { margin: 0 0 4px; }
@@ -440,6 +572,21 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
 .scan-examples li { overflow-wrap: anywhere; }
 .scan-example-head { color: var(--ink-3); font-size: 13px; display: block; }
 .scan-example-mandu { font-size: 12px; }
+/* Where the real value is now (§4.25ai): one row a place, its tone on the
+   "now" line, the chat histories' sessions linked. */
+.scan-where { margin: 6px 0 10px; }
+.scan-where-rows { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.scan-where-row { border-left: 3px solid var(--line); padding: 2px 0 2px 10px; overflow-wrap: anywhere; }
+.scan-where-row[data-tone="bad"] { border-left-color: var(--bad); }
+.scan-where-row[data-tone="warn"] { border-left-color: var(--warn); }
+.scan-where-row[data-tone="ok"] { border-left-color: var(--ok); }
+.scan-where-name { font-weight: 600; margin-right: 6px; }
+.scan-where-how { font-size: 13px; color: var(--ink-2); }
+.scan-where-now { font-size: 13px; }
+.scan-where-row[data-tone="bad"] .scan-where-now { color: var(--bad); }
+.scan-where-row[data-tone="warn"] .scan-where-now { color: var(--warn); }
+.scan-where-row[data-tone="ok"] .scan-where-now { color: var(--ok); }
+.scan-where-advice { font-size: 13px; margin-top: 6px; }
 .scan-risk { margin: 0; padding-left: 20px; font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
 
 /* ── Hero ────────────────────────────────────────────────────────────────── */
@@ -507,12 +654,23 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
    words*). The min-width keeps it at least that wide, or the card's width. */
 .ask-top { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; min-width: min(100%, 380px); }
 .ask-body { flex: 1 1 320px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.ask-sentence { font-size: 16px; font-weight: 500; }
+/* A short card's words keep 520 px beside its answers (dashboard.md §4.25
+   *A short question's words keep 520 px*): where the row is narrower than
+   the icon, the gap, 520 px, a gap and the answers, the answers go under the
+   words. Never more than the row less the icon and the gap, so the icon stays
+   beside the words wherever the row is 380 px or wider; never less than the
+   320 px basis, so a phone's card (a row under 380 px) is as before. A full
+   card (`.ask.expanded`) has its answers in its foot, not in this row. */
+.ask:not(.expanded) > .ask-top > .ask-body { flex-basis: max(320px, min(520px, 100% - 60px)); }
+/* A waiting card's headline is its heading (dashboard.md §4.25u, *Each
+   question and rule change is a heading*): the h3 or h4 looks as the line did, never a
+   heading's margin or balanced wrap. */
+.ask-sentence { margin: 0; font-size: 16px; font-weight: 500; text-wrap-style: auto; }
 .ask-sub { font-size: 14px; color: var(--ink-3); }
 /* A held message's deadline under its found text (dashboard.md §4.34). */
 .ask-hold { font-size: 14px; color: var(--ink-3); }
-/* A card's answers. The row never shrinks (beside the words on a wide card,
-   the words give way), so it was as wide as all its buttons on one line and
+/* A card's answers. The row never shrinks (a short card's words keep 520 px
+   beside it, or it goes under them: the rule above), so it was as wide as all its buttons on one line and
    its wrap never happened: a held message's four answers ran 365 px past the
    card at 390 px and pushed the page sideways (dashboard.md §4.25 *A
    question's buttons wrap inside its card*). Never wider than its row, so
@@ -542,13 +700,19 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
 .ask-source-always { white-space: normal; text-align: left; }
 /* The "?" help next to a "masked" mention (dashboard.md §4.25u): a real
    button that opens a short note under it; never hover-only. The note
-   resets the label's caps so it reads as a sentence. */
-.help { position: relative; display: inline-block; vertical-align: middle; }
+   resets the label's caps so it reads as a sentence. The circle is drawn
+   18 px, but a tap lands on a 24 px square around it (WCAG 2.2 2.5.8): an
+   invisible `::before`, 4 px past the padding box, out of the flow so no
+   line moves; and 3 px more before it, so that square stops short of a
+   link it follows, as on Home's counts line (§4.25u *A help button is a
+   24 px target*). */
+.help { position: relative; display: inline-block; vertical-align: middle; margin-left: 3px; }
 .help-btn {
-  width: 18px; height: 18px; padding: 0; border-radius: 50%;
+  position: relative; width: 18px; height: 18px; padding: 0; border-radius: 50%;
   border: 1px solid var(--line); background: var(--panel); color: var(--ink-3);
   font: 600 11px/16px var(--sans); letter-spacing: 0; text-transform: none; cursor: pointer;
 }
+.help-btn::before { content: ""; position: absolute; inset: -4px; }
 .help-btn:hover, .help-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 .help-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .help-pop {
@@ -561,6 +725,14 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
 .help-pop[hidden] { display: none; }
 /* Home card → the same question on Approvals (/approvals/<id>), marked there. */
 .ask-sub .ask-details { white-space: nowrap; }
+/* Home's line on which answers last (§4.34): its own line, before the link. */
+.ask-sub .ask-answers { display: block; margin: 2px 0; }
+/* A short ended card on Approvals (§4.25 *An ended question is short on
+   Approvals*): What each answer does sits where Home's link does, and reads
+   as one; open, the full card's cells and notes stack under its line. */
+.ask-sub .ask-more { display: inline; font: inherit; white-space: nowrap; cursor: pointer; }
+.ask.ask-open { flex-direction: column; align-items: stretch; }
+.ask-more-box { display: flex; flex-direction: column; gap: 20px; }
 .ask.focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .row.answered.focus { box-shadow: inset 4px 0 0 var(--accent); background: var(--panel-2); }
 #approvals-focus-note { margin-bottom: 24px; }
@@ -575,7 +747,7 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
    buttons beside it (§4.25r *Every field has the page's look*). */
 .proposal-confirm {
   height: 40px; max-width: 220px; padding: 0 12px; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
+  border: 1px solid var(--field-line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
 }
 .proposal-confirm:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Under 16 px, iOS Safari zooms the page when the box takes the focus, so
@@ -583,6 +755,15 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
    takes any case*). The line under the foot says when a word does not count. */
 @media (max-width: 640px) { .proposal-confirm { font-size: 16px; } }
 .confirm-hint { flex-basis: 100%; font-size: 14px; color: var(--ink-2); }
+/* Why a wide rule change asks for ALLOW: on Approvals a line of its own,
+   close above the foot it explains (the card's 20 px gap halved); the foot
+   then reads as every card's, the link left and the box with the answers
+   right. With no link, the box takes the left margin, so the answers stay
+   right; on a phone the row wraps from the left, as before (dashboard.md
+   §4.25 *The request's card*). */
+.wide-why { font-size: 14px; }
+.proposal > .wide-why { margin-bottom: -10px; }
+@media (min-width: 641px) { .proposal-foot > .proposal-confirm:first-child { margin-left: auto; } }
 .proposal-notice { font-size: 14px; color: var(--ink-2); }
 /* A text link in a column is as wide as its words (§4.25 *Page frame*):
    a click beside it does nothing, and its focus ring hugs the words. */
@@ -594,6 +775,12 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
 .answer-line { padding: 12px 16px; border: 1px solid var(--line); border-left: 4px solid var(--ink-4); border-radius: 12px; background: var(--panel); font-size: 14px; color: var(--ink-2); overflow-wrap: anywhere; }
 .answer-line strong { color: var(--ink); }
 .answer-line .answer-change { white-space: nowrap; }
+/* Approvals' heading over the questions from sessions that have ended
+   (dashboard.md §4.25 *A question from a session that has ended*): smaller
+   than the block's h2, a little air above it to part it from the cards an
+   agent waits on, its one line in the note's tone. */
+.ask-group-head { display: flex; flex-direction: column; gap: 4px; padding-top: 12px; }
+.ask-group-head h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink-2); }
 
 .btn {
   height: 40px;
@@ -609,7 +796,9 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
 .btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .btn.primary:hover { opacity: 0.9; }
 .btn.small { height: 32px; padding: 0 12px; font-size: 13px; }
-.btn[disabled] { opacity: 0.5; cursor: default; }
+/* aria-disabled: greyed but keeps the focus, as a label's Save waiting for
+   a change (home.js syncLabelSave). */
+.btn[disabled], .btn[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 /* A text button: an action inside a sentence ("Browse all files to label
    one"), which reads as the page's links do. Zero specificity, so one with a
    class of its own (.rule-source-btn, .file-open, .crumb …) keeps that look. */
@@ -643,7 +832,9 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
 .row.agent:hover { background: var(--bg); }
 /* History's day headings (dashboard.md §4.25ae *Sessions sit under their
    day*): an h2 for a screen reader, drawn as a slim line between the rows,
-   no card of its own; the page's other headings keep their size. */
+   no card of its own; the page's other headings keep their size. Answered
+   earlier draws the same as an h3 (§4.34 *Answers sit under their day*),
+   and so does Rule changes (§4.25 *Changes sit under their day*). */
 .history-day { margin: 0; padding: 8px 24px; font-size: 13px; font-weight: 600; color: var(--ink-3); background: var(--bg); border-bottom: 1px solid var(--line-2); }
 .history-day:last-child { border-bottom: none; }
 /* A Home row's prompt, with its counts on the line under it: the row's
@@ -654,6 +845,9 @@ h1 .tone-mark svg, h2 .tone-mark svg { width: 70%; height: 70%; stroke-width: 3;
    wrap, never cut, and without a lone last word where the browser can. */
 .agent-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .agent-counts { text-wrap: pretty; }
+/* History's "Found here: …" under a row a search found by a secret or a host
+   (§4.25ae *By a secret or a host*): a long path breaks, never overflows. */
+.history-found { overflow-wrap: anywhere; }
 /* An agent outside the tested versions / with tools Mandu does not know
    (supported-agents.md §3): a warning mark by its name opens the sentence.
    The table clips its corners, so it lets an open note overflow. */
@@ -671,13 +865,25 @@ h1 .help { margin-left: 4px; vertical-align: 6px; }
    path breaks inside its chip, never cut: until 2026-10-08 they kept one
    ellipsized line beside a 110px time column, so a phone read "…your secret
    GITHUB_…" above Block instead (dashboard.md §4.25, Approvals). */
-.row.answered { grid-template-columns: minmax(0, 1fr) 150px 110px; }
+.row.answered { grid-template-columns: minmax(0, 1fr) 150px minmax(var(--reversal-floor, 110px), max-content); }
+/* The button that changes an answer is one line inside its border: until
+   2026-11-02 its column was 110 px, and "Always allow instead" (#202) and
+   "Allow this session instead" (#226) wrapped there, "instead" drawn across
+   and under the button's bottom edge. The column is at least its floor, so
+   the rows line up, and grows to its button where a label is wider still
+   (another font); Answered earlier's floor fits its longest label in the
+   page's font (178 px), Rule changes keeps 110 px for its Undo
+   (dashboard.md §4.25 *One line in its button*). */
+#approvals-answered { --reversal-floor: 180px; }
+.row.answered > .btn { white-space: nowrap; }
 .answered-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .answered-what code { overflow-wrap: anywhere; }
 .answered-when { font-size: 13px; }
 .row.answered > .ask-error { grid-column: 1 / -1; }
 .row.rule { grid-template-columns: 28px minmax(0, 1fr) 260px 32px; gap: 12px; padding: 8px 16px; }
 .row.rule.open { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+/* A menu's choice made with a browsing key waits for Enter: the line under its row (home.js deliberateMenu). */
+.row > .menu-wait { grid-column: 1 / -1; font-size: 13px; }
 /* A send rule with an end: its menu or words, and "until Dec 1, 09:00" under them. */
 .rule-effect { display: grid; gap: 2px; justify-items: start; min-width: 0; }
 /* A rule's subject chip is as wide as its words, and a long host breaks
@@ -740,13 +946,17 @@ h1 .help { margin-left: 4px; vertical-align: 6px; }
 #rules-block > .block-head h2 { margin-right: auto; }
 .rules-find {
   flex: 0 1 260px; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
+  border: 1px solid var(--field-line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
 }
 .rules-find:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (max-width: 560px) { .rules-find { order: 3; flex: 1 1 100%; } }
 .rules-find-none p { margin: 0 0 6px; font-size: 14px; color: var(--ink-2); }
 .rules-find-none p.dim { color: var(--ink-3); }
-.rules-find-none[hidden], .rules-group[hidden], .files-heads[hidden], .files-tree[hidden] { display: none; }
+.rules-find[hidden], .rules-find-none[hidden], .rules-group[hidden], .files-missing[hidden], .files-opens-note[hidden], .files-heads[hidden], .files-tree[hidden] { display: none; }
+/* Under Files and folders: the rules on a path where nothing is (§4.25f),
+   and the Opens it default said once (§4.25p). */
+.files-missing, .files-opens-note { font-size: 13px; overflow-wrap: anywhere; }
+.files-missing .link-btn { font: inherit; display: inline; }
 /* An answer Kept in Rules opened that Rules no longer keeps (dashboard.md §4.25). */
 .rules-answer-note { margin: 0 0 8px; color: var(--ink-2); }
 .rules-rest { display: flex; flex-direction: column; gap: 12px; }
@@ -756,6 +966,12 @@ h1 .help { margin-left: 4px; vertical-align: 6px; }
 .glossary dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 10px 0 0; }
 .glossary dt { font-weight: 600; color: var(--ink); }
 .glossary dd { margin: 0; }
+/* What the counts mean sits under the session's tiles, at their own gap
+   (12px), not the page's 32px between blocks. */
+.glossary.count-meanings { margin: -20px 0 0; }
+/* History's sits under the search (12px), 16px above the list, as the
+   search sits when it is not there. */
+.glossary.count-meanings.history-meanings { margin: -4px 0 -16px; }
 @media (max-width: 760px) { .glossary dl { grid-template-columns: 1fr; gap: 2px; } .glossary dd { margin-bottom: 8px; } }
 .rules-notice { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; font-size: 14px; color: var(--ink-2); }
 .row.service { grid-template-columns: 180px minmax(0, 1fr) 120px; }
@@ -767,6 +983,17 @@ h1 .help { margin-left: 4px; vertical-align: 6px; }
 .service-line .service-state { color: var(--ink-2); font-weight: 500; }
 .service-line .service-btn { margin-left: 6px; vertical-align: middle; }
 .service-line .note { margin: 4px 0 0; }
+/* Turning protection off: the box under the row's columns, its sentence,
+   the OFF box with Turn off and Cancel, and the hint line when the word does
+   not count (dashboard.md §4.25 *Turning protection off asks on the page*).
+   The box is 16 px at every width, so iOS Safari never zooms the page. */
+.protect-confirm { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 8px; background: var(--warn-bg); font-size: 14px; min-width: 0; }
+.protect-confirm[hidden] { display: none; }
+.protect-confirm p { margin: 0; color: var(--ink); }
+.protect-confirm-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.protect-confirm .proposal-confirm { font-size: 16px; flex: 1 1 160px; min-width: 0; }
+.protect-confirm-actions { display: flex; gap: 8px; }
+.protect-confirm .confirm-hint { flex-basis: auto; }
 /* Settings › Protection service: Restart's inline question under the row. */
 .service-confirm { padding: 14px 24px; background: var(--warn-bg); border-bottom: 1px solid var(--line-2); font-size: 14px; }
 .service-confirm p { margin: 0 0 10px; color: var(--ink); }
@@ -789,6 +1016,17 @@ h1 .help { margin-left: 4px; vertical-align: 6px; }
    grid cell with its label pushed right, it read as a text field. */
 .row > .btn.right { justify-self: end; text-align: center; }
 .row .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A session row's prompt with its folder (home.js promptLine): one line on
+   which the prompt is what gets cut, so the folder that tells two sessions
+   of one agent apart stays in sight. The folder never shrinks below its
+   width while it fits half the line; past that it is cut at its start
+   ("…backend/services", right to left around its left-to-right bdi), so
+   the last names, the ones that name the project, stay (dashboard.md §4.25
+   *The folder stays in sight*). */
+.prompt-line { display: flex; min-width: 0; overflow: hidden; white-space: nowrap; }
+.prompt-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.prompt-in { flex: none; white-space: pre; }
+.prompt-folder { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
 .outcome { display: flex; align-items: center; gap: 6px; font-weight: 500; }
 .outcome.ok { color: var(--ok); }
 .outcome.bad { color: var(--bad); }
@@ -813,8 +1051,11 @@ h1 .help { margin-left: 4px; vertical-align: 6px; }
   transition: background 120ms;
 }
 .switch[aria-checked="true"] { background: var(--ok); }
+/* The knob is the panel's color: white in the light theme, a dark knob on
+   the track in the dark one, where white read 2.15:1 on --ok (dashboard.md
+   §4.25k *A switch's knob reads 3:1 on its track*). */
 .switch .knob {
-  position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 999px; background: #fff;
+  position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 999px; background: var(--panel);
   transition: left 120ms;
 }
 .switch[aria-checked="true"] .knob { left: 21px; }
@@ -823,11 +1064,24 @@ h1 .help { margin-left: 4px; vertical-align: 6px; }
 .switch[disabled], .switch[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 .plain-list { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; }
 @media (max-width: 760px) { .plain-list { grid-template-columns: 1fr; } }
+/* Built-in protections (dashboard.md §4.25z) is one list read top to bottom,
+   at every width: two columns left a mode's third sentence beside an empty
+   cell. Its folds' own lists (.issuer-list, .builtin-kinds) keep theirs, and
+   the card's width, so no cap here. */
+#builtin-list { grid-template-columns: minmax(0, 1fr); }
 /* Built-in protections' issuer item (dashboard.md §4.25z): the whole row, so
    its "Which companies" fold opens under the sentence, its list compact. */
 #builtin-list > .builtin-issuers { grid-column: 1 / -1; }
 .builtin-issuers .issuer-list { font-size: 13px; gap: 4px 24px; }
 .builtin-issuers .issuer-change { margin: 6px 0 0; font-size: 13px; }
+/* Its "Which files" fold (§4.25z): the whole row too, the kinds compact and
+   the home folder's places one wrapped run of code. */
+#builtin-list > .builtin-files { grid-column: 1 / -1; }
+.builtin-files .builtin-kinds { font-size: 13px; gap: 4px 24px; }
+.builtin-files .builtin-files-head { margin: 10px 0 4px; font-weight: 500; color: var(--ink-2); }
+.builtin-files .builtin-places, .builtin-files .builtin-files-note, .builtin-files .builtin-files-change { margin: 6px 0 0; font-size: 13px; }
+.builtin-files .builtin-places { line-height: 1.7; }
+.builtin-files code { overflow-wrap: anywhere; }
 
 /* ── Agent page ──────────────────────────────────────────────────────────── */
 /* "Back to home" sits in .page-head's column: only as wide as its words. */
@@ -887,10 +1141,27 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
 /* "What happened" (§4.25b): one card per turn; a step whose two views differ
    splits into "what the AI saw" | "what really happened". */
 .story { display: flex; flex-direction: column; gap: 16px; }
+/* Newer and older sessions (dashboard.md §4.25b): one line under What
+   happened, Newer at its start, Older at its end; each its own line when
+   they do not fit side by side. A long prompt is cut, the agent and time kept. */
+.agent-neighbours { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 14px; }
+.agent-neighbours[hidden] { display: none; }
+.agent-neighbours .neighbour { display: inline-flex; align-items: baseline; gap: 0 4px; max-width: 100%; min-width: 0; white-space: nowrap; }
+.agent-neighbours .neighbour.older { margin-left: auto; }
+.agent-neighbours .neighbour-side { font-weight: 600; }
+.agent-neighbours .neighbour-title { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
 .turn { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .turn-head { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 12px; padding: 16px 24px; background: var(--panel-2); border-bottom: 1px solid var(--line-2); }
 .turn-head .time { color: var(--ink-4); font-family: var(--mono); font-size: 12px; padding-top: 3px; }
+/* A turn's time is the link to that turn (§4.25 *A turn's time links to that turn*): quiet until pointed at, with a ring on keyboard focus. */
+.turn-head .time .turn-link { color: inherit; text-decoration: none; border-radius: 3px; }
+.turn-head .time .turn-link:hover { color: var(--accent-ink); text-decoration: underline; }
+.turn-head .time .turn-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; color: var(--accent-ink); }
 .turn-q .note { color: var(--ink-3); font-size: 13px; }
+/* A turn's line is its heading (dashboard.md §4.25, *Each turn and each
+   secret card is a heading*): the h3 looks as the line did, never a
+   heading's size, weight or balanced wrap. */
+.turn-title { color: var(--ink-3); font-size: 13px; font-weight: inherit; text-wrap-style: auto; }
 .turn-q .q-text { font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .turn-q .q-out { margin-top: 6px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--code-bg); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .linkish { border: none; background: none; padding: 0; font: inherit; font-size: 13px; color: var(--accent); cursor: pointer; }
@@ -950,6 +1221,10 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
 .code-copy { position: absolute; top: 5px; right: 5px; height: 24px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink-2); font-family: var(--sans); font-size: 12px; font-weight: 500; line-height: 22px; white-space: nowrap; cursor: pointer; user-select: none; }
 .code-copy:hover { border-color: var(--ink-4); }
 .code-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A command Mandu asks you to run (§4.25b): its Copy sits inline right
+   after the code, small, so the command wraps as before and a one-line
+   note on a phone keeps its words. */
+.code-copy.run-copy { position: static; display: inline-block; height: 20px; margin-left: 4px; padding: 0 6px; line-height: 18px; font-size: 12px; vertical-align: baseline; }
 .code-copy-said { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; user-select: none; }
 .mask-chip { display: inline-block; padding: 0 8px; margin: 0 1px; border-radius: 999px; font-family: var(--sans); font-size: 12px; font-weight: 600; line-height: 18px; background: var(--ok-bg); color: var(--ok); box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 40%, transparent); vertical-align: 1px; cursor: help; }
 .mask-chip.secret { background: var(--warn-bg); color: var(--warn); }
@@ -976,6 +1251,17 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
 .prompt-meanings dd { margin: 0; }
 @media (max-width: 560px) { .prompt-meanings { grid-template-columns: 1fr; } }
 .prompt-exception-form { margin-top: 12px; }
+/* Try a message: the person's own text with what Mandu found marked. */
+.prompt-try { margin-top: 16px; }
+.prompt-try-form textarea { font: inherit; font-size: 14px; padding: 8px 12px; border: 1px solid var(--field-line); border-radius: 8px; background: var(--bg); color: var(--ink); resize: vertical; min-height: 64px; width: 100%; box-sizing: border-box; }
+.prompt-try-form textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.prompt-try-form .note { margin: 0; }
+.prompt-try-answer { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; font-size: 13px; color: var(--ink-2); }
+.prompt-try-said { margin: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; color: var(--ink); }
+.prompt-try-mark { background: var(--warn-bg); color: inherit; border-bottom: 2px solid var(--warn); border-radius: 2px; }
+.prompt-try-lines { margin: 0; padding-left: 18px; }
+.prompt-try-lines li { margin: 2px 0; }
+.prompt-try-off, .prompt-try-except { margin: 0; color: var(--ink-3); }
 .files summary { cursor: pointer; color: var(--accent); font-size: 13px; }
 .files ul { margin: 6px 0 0; padding-left: 18px; columns: 2; column-gap: 24px; font-size: 13px; }
 .toggle-row { padding: 8px 24px 8px 60px; }
@@ -1030,9 +1316,24 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
 .history-search label { font-size: 14px; font-weight: 600; color: var(--ink-2); }
 .history-search input[type="search"] {
   flex: 1 1 220px; min-width: 0; height: 34px; padding: 0 10px; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
+  border: 1px solid var(--field-line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
 }
 .history-search input[type="search"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Under 500 px the box takes its own line, under its label, so its hint
+   reads whole: at 390 px History's, beside the label, read "What you
+   asked, the agent or the fo" (§4.25ae *On a phone, the box under its
+   label*). Every Find box carries these classes. */
+@media (max-width: 499px) { .history-search input[type="search"] { flex-basis: 100%; } }
+/* Go to a day (§4.25ae): the native date box beside the search, with its
+   label and, while a day is set, Show the newest; under 500 px the search
+   box takes its line, so this one wraps under it. */
+.history-go-day { flex: 0 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.history-search input[type="date"] {
+  height: 34px; padding: 0 8px; border-radius: 8px; max-width: 100%;
+  border: 1px solid var(--field-line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
+}
+.history-search input[type="date"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.history-go-day .btn[hidden] { display: none; }
 .history-only { flex-basis: 100%; display: flex; align-items: center; gap: 8px; }
 .history-only .switch { margin-top: 0; flex: none; }
 .history-search .history-only label { font-weight: 400; cursor: pointer; }
@@ -1051,7 +1352,7 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
 .secret-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 12px; }
 .secret-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 20px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .secret-head { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
-.secret-what { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.secret-what { font-size: inherit; font-weight: 600; overflow-wrap: anywhere; min-width: 0; text-wrap-style: auto; }
 .secret-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--ink-2); }
 .secret-line { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: start; overflow-wrap: anywhere; }
 .secret-line svg { margin-top: 3px; color: var(--ink-4); }
@@ -1064,6 +1365,51 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
 .secret-limits { font-size: 13px; }
 /* A card that names a file links it to Rules (§4.25b *A card opens its file in Rules*). */
 .secret-rule { font-size: 14px; }
+/* On a session card its link and its Show its steps sit on one row that
+   wraps, 16 px apart, 8 px between rows (§4.25b *A card shows its steps*):
+   a bare space left them 3 px apart, a thumb on the link's end pressed the
+   button. Only the card's: the Scan page's .scan-rule keeps its look. */
+.secret-card > .secret-rule { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+/* A card's Show its steps (§4.25b *A card shows its steps*) draws a line
+   above the story, a .story-more in the body's ink, since it says what the
+   story shows now; a print drops it with the controls. */
+.story-secret { color: var(--ink-2); }
+/* Its Next step / Previous step (§4.25b *Step by step*): the step the last
+   press went to has an outline on top of the filter's bar, also while it
+   has the focus (a marked step drops its focus outline), and the line says
+   where it is. */
+.step.secret-at, .step.shown.secret-at:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+.secret-where { font-size: 13px; color: var(--ink-3); white-space: nowrap; }
+.secret-where:empty { display: none; }
+/* Where it went (§4.25b): one row a fact, a dot on the side of the wall it
+   is on; the AI's rows sit one step in, behind the wall. */
+.secret-path-head { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); margin-top: 4px; }
+.secret-path { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.path-node { position: relative; display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 10px; padding-bottom: 10px; font-size: 14px; color: var(--ink-2); overflow-wrap: anywhere; }
+.path-node:not(:last-child)::before { content: ""; position: absolute; left: 6px; top: 16px; bottom: 0; width: 2px; background: var(--line); }
+.path-node.ai { margin-left: 24px; }
+.path-dot { width: 12px; height: 12px; margin-top: 4px; border-radius: 50%; background: var(--ink-3); box-sizing: border-box; }
+.path-node.ai .path-dot { background: var(--panel); border: 2px solid var(--ok); }
+.path-node.good:not(.ai) .path-dot { background: var(--ok); }
+.path-node.warn .path-dot { background: var(--warn); }
+.path-caption { display: flex; flex-wrap: wrap; gap: 0 6px; align-items: baseline; }
+.path-label { font-weight: 600; color: var(--ink); }
+.path-side { font-size: 12px; color: var(--ink-3); }
+.secret-earlier { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: start; font-size: 14px; color: var(--bad); background: var(--bad-bg); border-radius: 8px; padding: 8px 10px; overflow-wrap: anywhere; }
+.secret-earlier svg { margin-top: 3px; }
+.secret-earlier-link { white-space: nowrap; }
+.secret-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag.unchecked { color: var(--warn); border-color: var(--warn); }
+.recorded-block { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.recorded-title { margin: 0; font-size: 16px; }
+/* The files the AI read as they were, each with Protect it (§4.25b *Files the
+   AI read as they were*): path, time and link on one line, the path breaking
+   at its slashes as a card's file does. */
+.read-as-is { margin-top: 8px; }
+.read-as-is-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--ink-2); }
+.read-as-is-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.read-as-is-path { overflow-wrap: anywhere; }
+.read-as-is-at { color: var(--ink-3); font-size: 13px; }
 /* Opened for an ask (dashboard.md §4.25h): the note, and the marked step. */
 .focus-note { padding: 12px 16px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; background: var(--panel); color: var(--ink-2); font-size: 14px; }
 .focus-note.missing { border-left-color: var(--ink-4); }
@@ -1072,6 +1418,11 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
    blocked step keeps its colour (§4.25b, *A time opens its step*). */
 .step.shown { box-shadow: inset 4px 0 0 var(--accent); }
 .step.shown:focus { outline: none; }
+/* The turn its address names (§4.25 *A turn's time links to that turn*): an
+   accent edge round the card, which its head's own background cannot hide
+   as it would an inset bar. */
+.turn.shown { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.turn.shown:focus { outline: none; }
 .focus-tag { margin-top: 4px; color: var(--accent-ink); font-size: 12px; font-weight: 600; }
 @media (max-width: 760px) {
   .turn-head { grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 12px 16px; }
@@ -1079,6 +1430,9 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
   .cols-head { display: none; }
   .step.wide, .half-body { grid-template-columns: 24px minmax(0, 1fr); }
   .step.wide .tag, .half-body .tag { grid-column: 2; justify-self: start; }
+  /* A reply's or an untagged step's empty tag slot would wrap onto a row
+     of its own and add a gap under the words (§4.25b *On a phone*). */
+  .step.wide > span:empty:last-child, .half-body > span:empty:last-child { display: none; }
   .step.wide, .toggle-row, .routine, .routine-more, .routine-list { padding-left: 16px; padding-right: 16px; }
   .step.split { grid-template-columns: minmax(0, 1fr); }
   .half, .half.saw { padding: 12px 16px; }
@@ -1090,17 +1444,24 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
 
 /* ── Lock form ───────────────────────────────────────────────────────────── */
 .describe-form { display: flex; flex-direction: column; gap: 12px; }
-.describe-form textarea { font: inherit; font-size: 15px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: inherit; resize: vertical; min-height: 72px; width: 100%; box-sizing: border-box; }
+.describe-form textarea { font: inherit; font-size: 15px; padding: 10px 12px; border: 1px solid var(--field-line); border-radius: 10px; background: var(--panel); color: inherit; resize: vertical; min-height: 72px; width: 100%; box-sizing: border-box; }
+/* Under the box: the count past 1,800 and the line for a paste cut at
+   2,000 (dashboard.md *Describe what you want*). Both empty, the form's
+   gap is as before; the live line stays in the tree, empty. */
+.describe-limit { margin-top: -12px; font-size: 13px; }
+.describe-limit > span { display: block; margin-top: 6px; }
+.describe-limit > span:empty { margin-top: 0; }
+.describe-limit > span[hidden] { display: none; }
 .describe-result { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
 .describe-result .suggestion { display: flex; flex-direction: column; gap: 12px; }
 .suggestion-rows li.loosens { font-weight: 500; }
 .tag-loosens { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-line); vertical-align: 1px; }
 .describe-problems { margin: 0; padding-left: 20px; font-size: 14px; color: var(--ink-2); }
-.describe-done { font-size: 15px; }
+.describe-done { font-size: 15px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .lock-form { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; border: none; margin: 0; padding: 0; min-width: 0; }
 .field > span, .field legend { font-weight: 600; font-size: 14px; padding: 0; margin-bottom: 6px; }
-.field input[type="text"] { height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-family: var(--mono); font-size: 14px; }
+.field input[type="text"] { height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--field-line); background: var(--bg); color: var(--ink); font: inherit; font-family: var(--mono); font-size: 14px; }
 .field input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .choice { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: var(--ink-2); padding: 6px 0; cursor: pointer; }
 .choice input { margin-top: 3px; accent-color: var(--ok); }
@@ -1109,9 +1470,15 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
 .choice.disabled { cursor: not-allowed; opacity: 0.6; }
 .choice-hint { margin: -2px 0 6px 26px; font-size: 13px; color: var(--ink-3); }
 .choice-hint[hidden] { display: none; }
-.field select { height: 40px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px; }
+.field select { height: 40px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--field-line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px; }
 .field .field-hint { font-weight: 400; font-size: 13px; color: var(--ink-3); margin: 0; }
 .model-form { margin-bottom: 12px; }
+/* A field a refused Save names (dashboard.md §4.25l): a thicker edge in the
+   refusal's colour (≥ 5:1 on the field, light and dark), which a forced
+   palette keeps by its width; a box, an outline. */
+.model-form .field [aria-invalid="true"] { border: 2px solid var(--bad); padding-left: 11px; }
+.model-form .field select[aria-invalid="true"] { padding-left: 7px; }
+.model-form .choice input[aria-invalid="true"] { outline: 2px solid var(--bad); outline-offset: 2px; }
 .row.service.model-row { grid-template-columns: 160px minmax(0, 1fr) minmax(120px, 220px) auto; }
 .model-row .model-plain-http { grid-column: 1 / -1; color: var(--warn); }
 .model-row .model-admin, .label-row > .model-admin { grid-column: 1 / -1; font-size: 13px; color: var(--ink-3); }
@@ -1128,7 +1495,7 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
    row's border and Save and Remove stacked. The notes under a row span it. */
 .row.service.label-row, .row.service.prompt-kind, .row.service.appearance-row, .row.service.notify-row { grid-template-columns: 180px minmax(0, 1fr) fit-content(50%); }
 .row.service .model-actions, .row.service .notify-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
-.row.service .model-actions input[type="text"] { height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; }
+.row.service .model-actions input[type="text"] { height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--field-line); background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; }
 .row.service > .ask-error, .label-row > .field-hint { grid-column: 1 / -1; }
 .label-row > .field-hint { margin: 0; font-size: 13px; color: var(--ink-3); }
 /* A prompt filter exception reads as one sentence ("An email address
@@ -1145,6 +1512,13 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
   .row.service.model-row, .row.service.label-row, .row.service.prompt-kind, .row.service.prompt-exception, .row.service.appearance-row, .row.service.notify-row { grid-template-columns: 1fr; }
   .row.service .model-actions, .row.service .notify-actions { justify-content: flex-start; }
 }
+/* Settings › Notifications' "Notify me about" menu, under the row's words in
+   their column, so the row's two buttons keep a line of their own at 390 px
+   (dashboard.md §4.25 *Only protection problems*). */
+.notify-words { min-width: 0; }
+.notify-kind { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 8px; font-size: 13px; color: var(--ink-2); }
+.notify-kind[hidden] { display: none; }
+.notify-kind select { max-width: 100%; }
 /* Settings › Notifications' Send a test: what happened, under the row (dashboard.md §4.25). */
 .notify-test-result { margin: 8px 0 0; color: var(--ink-2); }
 .model-test { grid-column: 1 / -1; margin: 4px 0 0; padding: 0 0 0 20px; font-size: 14px; color: var(--ink-2); }
@@ -1156,7 +1530,13 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
 .form-actions .ask-error { margin-right: auto; }
 
 /* ── Notifications offer ─────────────────────────────────────────────────── */
-.notify-offer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border: 1px dashed var(--line); border-radius: 10px; font-size: 14px; color: var(--ink-3); }
+.notify-offer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 12px 16px; border: 1px dashed var(--line); border-radius: 10px; font-size: 14px; color: var(--ink-3); }
+/* The words take the room; No thanks and Turn on stay together, under the
+   words on a phone (dashboard.md §4.25 *No thanks on Home's offer*). */
+.notify-offer > span { flex: 1 1 260px; min-width: 0; }
+.notify-offer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* No thanks' line, in the offer's place for this load. */
+.notify-offer-later { padding: 12px 16px; }
 
 /* "Try it" on a suggested rule (policy-surface.md §8.5.2) */
 .suggestion-rows .try-row { margin-left: 8px; }
@@ -1166,7 +1546,7 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
 .files-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .files-bar input[type="text"] {
   flex: 1 1 280px; min-width: 0; height: 40px; padding: 0 12px; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  border: 1px solid var(--field-line); background: var(--bg); color: var(--ink);
   font-family: var(--mono); font-size: 14px;
 }
 .files-bar input[type="text"]:focus, .files-tools input[type="search"]:focus, .files-suggest-bar input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -1180,7 +1560,7 @@ button.tile:hover .go, button.tile:focus-visible .go { visibility: visible; }
 .files-tools { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
 .files-tools input[type="search"] {
   flex: 1 1 200px; min-width: 0; height: 34px; padding: 0 10px; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
+  border: 1px solid var(--field-line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px;
 }
 .files-note { margin: 0; padding: 8px 12px; border-left: 3px solid var(--warn-line); background: var(--warn-bg); color: var(--ink-2); font-size: 13px; border-radius: 4px; }
 .files-note[hidden], .files-self[hidden], .files-pending[hidden], .files-confirm[hidden] { display: none; }
@@ -1265,6 +1645,28 @@ html:not(:has(#files-pending:focus-within)) { scroll-padding-bottom: var(--bar-r
 .files-move[hidden], .files-impact[hidden], .files-confirm-files[hidden] { display: none; }
 /* A refused move says why on its own line (home.js renderMoveNotice). */
 .files-move > .ask-error { flex-basis: 100%; }
+/* A question asked on the page, in the row or box it was pressed in
+   (dashboard.md §4.25n *Rules asks on the page, not in a browser dialog*):
+   its sentence, then the button that does it and Cancel. A change that makes
+   protection weaker is drawn as the warning Changes to save draws. */
+.ask-in-place { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--panel-2); border-radius: 4px; font-size: 14px; color: var(--ink); }
+.ask-in-place.weaker { border-left-color: var(--bad); background: var(--bad-bg); }
+.ask-in-place-words { flex-basis: 100%; margin: 0; }
+.ask-in-place-words code { overflow-wrap: anywhere; }
+.ask-in-place-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.files-move > .ask-in-place { flex-basis: 100%; }
+.rules-rows > .ask-in-place { padding: 10px 16px 12px calc(16px + 28px + 12px); border-radius: 0; border-bottom: 1px solid var(--line-2); }
+.rules-rows > .ask-in-place:last-child { border-bottom: none; }
+.file-detail-main > .ask-in-place { margin: 4px 0; }
+/* A Settings question (dashboard.md §4.25n): what the change opens as a
+   list, each warning its own line, under the row it was pressed in or
+   above the buttons of its form; Let it through's, inside the note's row. */
+.ask-in-place-more { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; }
+.ask-in-place-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 2px; }
+.ask-in-place-list code, .ask-in-place-more .proposal-warn code { overflow-wrap: anywhere; }
+.table > .ask-in-place { padding: 10px 24px 12px; border-radius: 0; border-bottom: 1px solid var(--line-2); }
+.table > .ask-in-place:last-child { border-bottom: none; }
+.prompt-note-item > .ask-in-place { flex-basis: 100%; }
 .file-link-note { margin-top: 4px; font-size: 12px; color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .file-why-btn { display: block; margin-top: 2px; padding: 0; border: none; background: none; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer; }
 .file-why-btn:hover { text-decoration: underline; }
@@ -1330,7 +1732,7 @@ html:not(:has(#files-pending:focus-within)) { scroll-padding-bottom: var(--bar-r
    (§4.25p, *The browser names its menus*). */
 .files-heads.browse-heads { grid-template-columns: 20px minmax(0, 1fr) 240px 230px 32px; }
 .files-heads.browse-heads::before { content: ""; }
-.file-opens { font-size: 13px; overflow-wrap: anywhere; }
+.file-opens, .file-missing { font-size: 13px; overflow-wrap: anywhere; }
 .q-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; align-items: flex-start; }
 .q-cap { display: none; font-size: 12px; font-weight: 600; color: var(--ink-4); }
 .file-opens-k { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-4); }
@@ -1342,6 +1744,13 @@ html:not(:has(#files-pending:focus-within)) { scroll-padding-bottom: var(--bar-r
 .label-pick[data-send="values"] .label-dot { background: var(--warn); border-color: var(--warn); }
 .label-pick.send-pick[data-from="values"] .label-dot { background: none; border: 2.5px solid var(--warn); }
 .file-values, .file-values-how { margin: 2px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+/* dashboard.md §4.25n, a file's row names your answers about it: the
+   line wraps between its answers; each effect keeps its mark and colour.
+   The line under it names the sends that wait, each a link to Approvals. */
+.file-answers, .file-waiting { margin: 2px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.file-answer { display: inline-block; max-width: 100%; }
+.file-answers .outcome { display: inline-flex; gap: 2px; vertical-align: bottom; }
+.file-answer-link, .file-waiting-link { color: var(--accent); }
 .label-pick.send-pick[data-from] select { color: var(--ink-3); font-weight: 400; }
 .label-pick.send-pick[data-from="ask"] .label-dot { background: none; border: 2.5px solid var(--bad); }
 .label-pick.send-pick[data-from="hosts"] .label-dot { background: none; border: 2.5px solid var(--warn); }
@@ -1364,7 +1773,7 @@ button.file-warn-mark { padding: 0; border: 0; background: none; font: inherit; 
 .label-pick { position: relative; display: inline-flex; align-items: center; justify-self: start; max-width: 100%; min-width: 0; }
 .label-pick select {
   appearance: none; -webkit-appearance: none; max-width: 100%; height: 34px; padding: 0 30px 0 28px;
-  border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+  border: 1px solid var(--field-line); border-radius: 8px; color: var(--ink); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
   background: var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%238a8a92' stroke-width='1.5' fill='none'/%3E%3C/svg%3E") no-repeat right 10px center;
   text-overflow: ellipsis;
 }
@@ -1433,7 +1842,7 @@ button.file-warn-mark { padding: 0; border: 0; background: none; font: inherit; 
    look*): until 2026-10-16 the browser drew them, square and grey. */
 .files-suggest-bar input[type="text"] {
   flex: 1 1 220px; min-width: 0; height: 34px; padding: 0 10px; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 13px;
+  border: 1px solid var(--field-line); background: var(--bg); color: var(--ink); font: inherit; font-size: 13px;
 }
 .files-suggest-bar #suggest-status { flex: 1 1 100%; font-size: 13px; }
 .files-suggest-bar .suggest-home { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--ink-2); white-space: nowrap; }
@@ -1511,6 +1920,7 @@ button.file-warn-mark { padding: 0; border: 0; background: none; font: inherit; 
   .row.rule .file-more { grid-column: 3; grid-row: 1; }
   .row.rule > .label-pick, .row.rule > .outcome, .row.rule > .sub, .row.rule > .rule-effect { grid-column: 2 / -1; }
   .rule-detail { padding-left: 16px; }
+  .rules-rows > .ask-in-place { padding-left: 16px; }
   .files-selected .level-buttons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -1540,6 +1950,33 @@ button.file-warn-mark { padding: 0; border: 0; background: none; font: inherit; 
 .by-who-more, .by-who-none { color: var(--ink-3); font-size: 13px; }
 /* A program's files that are as any other program's (§4.25aa *Only what differs*). */
 .by-who-rest { margin: 0; }
+/* Check a host (§4.25aa *Check a host*): a box and Check on one row, the
+   answer's sentences under it as the card's quiet lines. */
+.host-check { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 8px; }
+.host-check-title { margin: 0; font-size: 15px; }
+.host-check .note { margin: 0; }
+.host-check-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.host-check-row input[type="text"] {
+  flex: 1 1 220px; min-width: 0; max-width: 360px; height: 36px; padding: 0 12px; border-radius: 8px;
+  border: 1px solid var(--field-line); background: var(--bg); color: var(--ink);
+  font-family: var(--mono); font-size: 14px;
+}
+.host-check-row input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.host-check-answer:empty { display: none; }
+.host-check-answer .secret-lines { overflow-wrap: anywhere; }
+.host-check-answer .secret-lines code { font-size: 13px; }
+/* Files made from your secrets (§4.25aa): a file a line, its words after
+   it; the path breaks at its slashes (longName). */
+.made-from-list { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--ink-2); overflow-wrap: anywhere; }
+.made-from-list code { font-size: 13px; }
+.made-from-level { font-weight: 600; }
+/* Three or more files in one folder: one row, its files indented under it
+   once opened (§4.25aa *Many rows*). */
+.made-from-folder-head .btn { margin-left: 4px; }
+.made-from-folder-list { margin-left: 8px; padding-left: 12px; border-left: 2px solid var(--line); }
+.made-from-folder-list[hidden] { display: none; }
+.made-from-folder > .row.dim { margin: 8px 0 0 22px; }
+.host-check-answer .by-who-link { display: inline; font: inherit; text-align: left; cursor: pointer; }
 @media (max-width: 640px) {
   .row.by-who-row { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px 16px; }
   .by-who-tabs [role="tab"] { padding: 8px 10px; }
@@ -1560,6 +1997,8 @@ button.file-warn-mark { padding: 0; border: 0; background: none; font: inherit; 
   #nav a[aria-current="page"] { text-decoration-line: underline; text-decoration-color: Highlight; text-decoration-thickness: 2px; text-underline-offset: 6px; }
   /* The 1px edge narrows the box the knob is placed in: 1px less each way
      keeps the knob on the pixels it has without forced colors. */
+  /* The refused Rules mark in the link's system color, as the ring of changes not saved. */
+  .unsaved-mark.refused, #nav a[aria-current="page"] .unsaved-mark.refused { color: inherit; border-color: currentColor; }
   .switch { border: 1px solid ButtonText; background: ButtonFace; }
   .switch .knob { top: 2px; left: 2px; background: ButtonText; }
   .switch[aria-checked="true"] { border-color: Highlight; background: Highlight; }
@@ -1572,4 +2011,33 @@ button.file-warn-mark { padding: 0; border: 0; background: none; font: inherit; 
   /* A count tile that goes to its steps: its edge in Highlight on hover and
      keyboard focus, as the accent edge was. */
   button.tile:hover, button.tile:focus-visible { border-color: Highlight; }
+  /* The turn its address names: its edge in Highlight (the shadow is not drawn). */
+  .turn.shown { border-color: Highlight; }
+  /* The step a secret's Next step went to. */
+  .step.secret-at, .step.shown.secret-at:focus { outline-color: Highlight; }
+}
+
+/* A printed session page (Ctrl+P, Save as PDF; dashboard.md §4.25b, *A
+   printed session is whole*): the record alone. What only works on a screen
+   is left out: the top bar, the back link, the detailed-trace link, the
+   switch, Latest turn, help buttons, every control button of the page
+   (a count tile and a step's time are content, and stay) and the Newer and
+   Older links to other sessions (#agent-neighbours, with its rule). A long reply
+   prints whole even where the browser fires no `beforeprint` (home.js
+   printOpen opens the folded steps and clipped questions); links print as
+   their words; a step, a turn's head and a card are not split across pages
+   where they fit, and the two columns keep their heads. A value hidden on
+   screen stays hidden: nothing here shows what the page holds hidden. */
+@media print {
+  .run-copy, .skip-link, #top, #as-public, #page-agent .back, #agent-trace, #agent-only-row, #agent-secret-only, #page-agent .help,
+  #page-agent button:not(.tile):not(.step-link), #page-agent .reply-fold-row, #page-agent .toggle-row,
+  #page-agent .routine-more, #page-agent details.files > summary, #agent-neighbours { display: none !important; }
+  body { background: none; }
+  #page-agent .reply-text.folded { max-height: none; overflow: visible; -webkit-mask-image: none; mask-image: none; }
+  #page-agent a { color: inherit; text-decoration: none; }
+  #page-agent .step, #page-agent .turn-head, #page-agent .turn-summary, #page-agent .ask,
+  #page-agent .secret-card, #page-agent .tile, #page-agent .story-more { break-inside: avoid; }
+  #page-agent .cols-head, #page-agent .half-label, #page-agent .turn-head { break-after: avoid; }
+  #page-agent .mask-chip, #page-agent .tag { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  #page-agent .step.secret-at { outline: none !important; }
 }

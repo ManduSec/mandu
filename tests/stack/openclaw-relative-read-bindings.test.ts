@@ -82,9 +82,10 @@ function openclawDeclassify(sock: string, scope: string): PluginAgentTool {
   return tool!;
 }
 
-function post(port: number, session: string, messages: unknown[]): Promise<{ status: number; body: string }> {
-  const tools = ["read", "web_fetch", "declassify_symbol"].map((name) => ({ name, input_schema: { type: "object" } }));
-  const body = JSON.stringify({ model: "claude-haiku-4-5", stream: true, max_tokens: 512, tools, messages });
+function post(port: number, session: string, messages: unknown[], opts: { sideCall?: boolean } = {}): Promise<{ status: number; body: string }> {
+  // A side call (OpenClaw's own model call, e.g. a summary) has no tools.
+  const tools = opts.sideCall ? [] : ["read", "web_fetch", "declassify_symbol"].map((name) => ({ name, input_schema: { type: "object" } }));
+  const body = JSON.stringify({ model: "claude-haiku-4-5", stream: true, max_tokens: 512, ...(tools.length > 0 ? { tools } : {}), messages });
   return new Promise((resolve, reject) => {
     const r = httpRequest({ host: "127.0.0.1", port, method: "POST", path: "/v1/messages", headers: { "content-type": "application/json", "x-mandu-session-id": session } },
       (res) => { let b = ""; res.on("data", (c) => (b += String(c))); res.on("end", () => resolve({ status: res.statusCode ?? 0, body: b })); });
@@ -128,7 +129,7 @@ function deliveredUrls(sse: string): Map<string, string> {
   return out;
 }
 
-async function scenario(agentCwd: "launch" | "none", read: "twin" | "bytes"): Promise<{ bindings: string[]; urls: Map<string, string>; wireBefore: string }> {
+async function scenario(agentCwd: "launch" | "none", read: "twin" | "bytes", opts: { sideCall?: boolean } = {}): Promise<{ bindings: string[]; tainted: boolean; urls: Map<string, string>; wireBefore: string; sideCallSent?: string }> {
   const tmp = mkdtempSync(join(tmpdir(), "mandu-oc-relbind-"));
   const ws = join(tmp, "ws-df5643da29");
   mkdirSync(join(ws, "memo"), { recursive: true });
@@ -155,10 +156,15 @@ async function scenario(agentCwd: "launch" | "none", read: "twin" | "bytes"): Pr
     assert.ok(typeof twin === "string" && ANYMODEL_RE.test(twin), `registered: ${reg.reason}`);
 
     const seen: string[] = [];
+    let agentCalls = 0;
     const upstream: UpstreamFetcher = async ({ body }) => {
-      seen.push(body.toString("utf8"));
-      // The third model call (after the declassify) is the fetch turn.
-      const sse = seen.length === 2 ? fetchTurn(["https://example.com", "https://httpbin.org/get?note=hello"]) : buildTextSse("ok", { deltas: 1 });
+      const text = body.toString("utf8");
+      seen.push(text);
+      // The agent's second call (after the declassify) is the fetch turn; a
+      // side call (no tools) answers text.
+      const agentCall = Array.isArray((JSON.parse(text) as { tools?: unknown }).tools);
+      if (agentCall) agentCalls += 1;
+      const sse = agentCall && agentCalls === 2 ? fetchTurn(["https://example.com", "https://httpbin.org/get?note=hello"]) : buildTextSse("ok", { deltas: 1 });
       return { status: 200, headers: { "content-type": "text/event-stream" }, body: Readable.from([Buffer.from(sse, "utf8")]) };
     };
     proxy = new AnthropicProxy({
@@ -188,6 +194,17 @@ async function scenario(agentCwd: "launch" | "none", read: "twin" | "bytes"): Pr
     assert.ok(text.includes(CANARY), `the declassify releases the memo: ${text.slice(0, 200)}`);
     const wireBefore = seen.join("\n");
 
+    // OpenClaw's side call: its own summary of the turn, which repeats the
+    // memo (live 2026-10-26, the sandbox tier). The prompt filter masks the
+    // repeat (a mint of its own); with the integrity axis off that mint is
+    // no untrusted datum, so it must not suspend the bound release.
+    let sideCallSent: string | undefined;
+    if (opts.sideCall) {
+      const before = seen.length;
+      assert.equal((await post(port, session, [{ role: "user", content: `Summarize the conversation so far.\n\nuser asked for the memo; tool said: ${BRIEF.trim()} (then the user asked to fetch)` }], { sideCall: true })).status, 200);
+      sideCallSent = seen.slice(before).join("\n");
+    }
+
     // Turn 3: the declassify result goes back; the model fetches two hosts.
     history.push(
       { role: "assistant", content: [{ type: "tool_use", id: "toolu_decl", name: "declassify_symbol", input: { symbol: held, reason: "authorized" } }] },
@@ -197,7 +214,7 @@ async function scenario(agentCwd: "launch" | "none", read: "twin" | "bytes"): Pr
     assert.equal(fetchTurnResp.status, 200);
     const state = await launcher.sessionState(session);
     assert.equal(state.high, true, "the declassify raised the session");
-    return { bindings: state.bindings, urls: deliveredUrls(fetchTurnResp.body), wireBefore };
+    return { bindings: state.bindings, tainted: state.untrustedTainted, urls: deliveredUrls(fetchTurnResp.body), wireBefore, ...(sideCallSent !== undefined ? { sideCallSent } : {}) };
   } finally {
     if (proxy) await proxy.close().catch(() => {});
     for (const c of clients) c.close();
@@ -233,4 +250,19 @@ test("OpenClaw with no launch directory: the twin's own token reaches the model,
   assert.deepEqual(r.bindings, ["example.com"]);
   assert.equal(r.urls.get("toolu_wf_0"), "https://example.com");
   assert.ok((r.urls.get("toolu_wf_1") ?? "").includes(SENTINEL), `CONFIDENTIALITY VIOLATION: an unbound host was reached: ${[...r.urls]}`);
+});
+
+test("OpenClaw: a side call that repeats the declassified memo is masked, and the memo's bound host is still released (secrets axes, explicit)", async () => {
+  // Live 2026-10-26 (conf-declassify-confines-session, the plugin's sandbox
+  // tier): the side call's mask set the session's untrusted-taint bit, and
+  // example.com then asked (`session:high-tainted-bound`) where the wrapper
+  // sent it. With the integrity axis off the filter's own mint is trusted.
+  const r = await scenario("launch", "twin", { sideCall: true });
+  assert.ok(!r.wireBefore.includes(CANARY), "CONFIDENTIALITY VIOLATION: the memo reached the model before the declassify");
+  assert.ok(r.sideCallSent !== undefined && r.sideCallSent !== "", "the side call reached the model");
+  assert.ok(!r.sideCallSent!.includes(CANARY), `the premise: the side call's repeat of the memo is masked: ${r.sideCallSent!.slice(0, 400)}`);
+  assert.equal(r.tainted, false, "Mandu's own mask is no untrusted datum while the integrity axis is off");
+  assert.deepEqual(r.bindings, ["example.com"]);
+  assert.equal(r.urls.get("toolu_wf_0"), "https://example.com", `utility: the memo's bound host passes after the side call: ${[...r.urls]}`);
+  assert.ok((r.urls.get("toolu_wf_1") ?? "").includes(SENTINEL), `CONFIDENTIALITY VIOLATION: a HIGH session reached an unbound host: ${[...r.urls]}`);
 });

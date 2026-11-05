@@ -497,7 +497,7 @@ export function renderWhyPath(a: WhyPathAnswer, home: string, send?: { host: str
     else L.push("  readers    none: every program the agent runs gets the placeholder copy");
     L.push(`  others     ${a.others === "deny" ? "programs not listed are refused" : a.others === "ask" ? `programs not listed are held for your OK (${APPROVE_HINT})` : "programs not listed get the placeholder copy"}`);
     L.push(...withheldLines(a.withheld ?? [], tilde(a.path, home)));
-    if (a.wire) L.push(`  over HTTPS ${a.wire.served ? "a placeholder these programs send is put back at a bound host" : `these programs need the real file (${a.wire.why})`}`);
+    if (a.wire) L.push(`  on the wire ${a.wire.served ? `a placeholder these programs send is put back at a bound host (${a.wire.why})` : `these programs need the real file (${a.wire.why})`}`);
     L.push(...mayGoLines(a));
     for (const v of a.verdicts) if (v.kind !== "write") L.push(`  decided    ${programWords(v)} opening it: ${v.status} (${v.scope})${staleWords(v)}`);
   }

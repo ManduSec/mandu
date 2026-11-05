@@ -3,16 +3,22 @@
  * both model proxies (guarantees.md §3, "A tool that uploads a local file by
  * its path"; supported-agents.md §2, "The upload residuals").
  *
- * Mandu-new (no reference origin). A COPY of
- * interceptors/anthropic-proxy/src/unmapped-upload-core.ts, kept byte-equal
- * below the marker line (no cross-package import; this package's unit test
- * pins the two equal). The leg for Codex (which tools it runs for, the code
- * cells, which earlier calls of a turn count as writers) is this package's
- * unmapped-upload.ts; what is shared lives here: finding the local paths a
- * tool's input names, asking the arbiter's `fileUploadDecision` about each
- * in its UNMAPPED form, withholding a held path (it becomes a path under
- * Mandu's denied namespace, which names no file), the window rule's verdict,
- * and the notices the model reads. Fail-closed throughout.
+ * Mandu-new (no reference origin). The leg itself is described in
+ * unmapped-upload.ts (this package's: which tools it runs for, which earlier
+ * calls of a turn count as writers). What is shared lives here: finding the
+ * local paths a tool's input names, asking the arbiter's
+ * `fileUploadDecision` about each in its UNMAPPED form, withholding a held
+ * path (it becomes a path under Mandu's denied namespace, which names no
+ * file), the window rule's verdict for a path judged after a possible writer
+ * of the same turn, and the notices the model reads. Fail-closed: no
+ * answer, more path-like strings than the bound, or a value nested past the
+ * depth bound withholds the path.
+ *
+ * Each package's leg is its own unmapped-upload.ts (Codex's also runs for
+ * the code cells). ONE MODULE, TWO COPIES (no cross-package import): the
+ * source is interceptors/anthropic-proxy/src/unmapped-upload-core.ts; change
+ * it, then run `node scripts/copies/module-copies.mjs generate`. Its one
+ * import is the package's arbiter-client.ts types, which both name alike.
  *
  * Pure but for the arbiter call; never throws.
  */

@@ -29,7 +29,8 @@
  * symbol") cannot regress through this engine.
  */
 
-import { withoutGrepExclusions } from "./exclusion-flags.js";
+import { isVerifiedMemoryTail, memoryContentMatches, withoutVerifiedMemoryTail, type MemoryVerifier } from "./nested-memory.js";
+import { SEARCH_EXCLUSION_SHELL_TOOLS, withoutSearchExclusions } from "./exclusion-flags.js";
 import type { NamedTwin } from "./named-twins.js";
 import {
   createPolicyEngine,
@@ -53,6 +54,7 @@ import { OPENCLAW_AGENT_INBOUND_SPEC, openclawReadRenderingText } from "./opencl
 import { OPENCODE_INBOUND_SPEC, opencodeReadRenderingText } from "./opencode-inbound.js";
 import { GOOSE_INBOUND_SPEC } from "./goose-inbound.js";
 import { isOwnWriteNotice, type OwnWriteNoticeAgent } from "./own-write-notice.js";
+import { isGitNoContentReport, isReadMissingFileNotice, isShellPathErrorOutput, isWriteRefusalNotice } from "./tool-error-notice.js";
 import { compilePolicy, expandListsInDocument, swapCurrentPolicy } from "./compiled-policy.js";
 import { isManduInspectTool } from "./inspect-tool.js";
 import { classifyManduPolicyResult, isManduPolicyTool } from "./policy-tool.js";
@@ -74,6 +76,7 @@ import {
   isReadDedupNotice,
   classifyReadHarnessNotice,
   isHarnessTokenBudgetReminder,
+  withoutHarnessBudgetTail,
   classifyHarnessTokenBudgetReminder,
   isCodexExecEnvelope,
   classifyCodexExecEnvelope,
@@ -323,6 +326,17 @@ export interface ClassifyResult {
    *  `namedFiles` / `placedFiles` only when `dir` is not a directory when
    *  the mark is learned. Arbiter-side only, like `namedFiles`. */
   ifCdFailed?: { dir: string; namedFiles: string[]; placedFiles: string[] };
+  /** Set by the arbiter's classify op on a result it calls public: the
+   *  object ids the result reports git could not read that Mandu locked
+   *  (tool-error-notice.ts lockedObjectsIn). The model proxy explains them
+   *  in one note (confidentiality.md §7.1, "git's report on a history
+   *  rewrite"). ABSENT when none. */
+  lockedObjects?: string[];
+  /** Set by the arbiter's classify op on a result it calls public: the
+   *  work-tree paths git reports it could not remove for EACCES
+   *  (tool-error-notice.ts unlinkDeniedPathsIn), a protected file's
+   *  read-only copy; the proxy's note says so. ABSENT when none. */
+  protectedCopies?: string[];
   /** Set by the arbiter's classify op, never by the policy: `value-backstop`
    *  when the level is the value backstop's raise of a verdict the policy
    *  called public (plan 15 §13.11, "What a raised row registers"). ABSENT
@@ -354,6 +368,16 @@ export interface ClassifyResult {
    *  itself. Explains only: never lowers or raises the level. ABSENT when
    *  no token has one. */
   namedTwins?: NamedTwin[];
+  /** Set by the arbiter's classify op, never by the policy
+   *  (twin-write-targets.ts, plan 10 §4.1 "The model is told at the
+   *  call"): the path tokens, as the model wrote them in the call's own
+   *  input, that the call WRITES (a shell command's redirection, `tee`, a
+   *  `cp` destination, `sed -i`, …; a Write / Edit / MultiEdit's
+   *  `file_path`) and that name a registered secret file Mandu serves a
+   *  twin of, so the model proxy can say the change stays in the
+   *  placeholder copy. Explains only: never lowers or raises the level.
+   *  ABSENT when there is none, and with the confidentiality axis off. */
+  twinWrites?: string[];
 }
 
 /** Where a symbol sits in an outgoing network request (plan 10 §11.13.1,
@@ -361,12 +385,16 @@ export interface ClassifyResult {
  *  own credential header (the net-proxy: the `Authorization` value, the
  *  decoded pair of `Basic` included, never `Proxy-Authorization`; the model
  *  proxy: the provider auth header it fills, `x-api-key` or `Authorization:
- *  Bearer`); `url` = the request URL or its host; `header` = any other
- *  header; `body` = the body. */
-export type RequestPosition = "authorization" | "url" | "header" | "body";
+ *  Bearer`; for a SigV4 request the net-proxy also counts its
+ *  `X-Amz-Security-Token`); `url` = the request URL or its host; `header` =
+ *  any other header; `body` = the body; `signature` = nowhere in the
+ *  request: the net-proxy signs the request it sends with the value (the
+ *  AWS secret access key of a SigV4 request it re-signs,
+ *  aws-sigv4-resign.md), so only an HMAC made with it leaves. */
+export type RequestPosition = "authorization" | "url" | "header" | "body" | "signature";
 
 /** Every {@link RequestPosition}, in the order the gate names them. */
-export const REQUEST_POSITIONS: readonly RequestPosition[] = ["authorization", "url", "header", "body"];
+export const REQUEST_POSITIONS: readonly RequestPosition[] = ["authorization", "url", "header", "body", "signature"];
 
 /** Egress desymbolization request: a symbol about to be resolved to raw value. */
 export interface DesymbolizationRequest {
@@ -390,8 +418,10 @@ export interface DesymbolizationRequest {
    * knows it (the net-proxy: `http` on its plain leg, `https` on its
    * TLS-inspected leg). A wire-twin credential declared for https is never
    * put back without `https` here (plan 10 §11.13.1, 2026-10-03; absent ⇒
-   * refused, fail-closed). */
-  scheme?: "http" | "https";
+   * refused, fail-closed). `postgres` (2026-10-24, db-login-release.md): the
+   * net-proxy's database relay, a database login; the one scheme a
+   * `.pgpass` wire grant is put back in; `mysql` likewise for `~/.my.cnf`. */
+  scheme?: "http" | "https" | "postgres" | "mysql";
   /** For `network`: EVERY place in the request the symbol sits, when the
    * caller knows it (the net-proxy reads the whole request; the model
    * proxy's key put-back writes one auth header). A credential whose release
@@ -678,6 +708,22 @@ export interface EngineBackedPolicyOptions {
    */
   ownTextTwin?: (path: string) => string | null;
   /**
+   * The text of a project-notes file Claude Code attaches to a Read's result
+   * (nested-memory.ts: `CLAUDE.md` / `CLAUDE.local.md` at an absolute path)
+   * as it is on disk now, or null (no such file, not a regular file, too
+   * large). For the notes leg (confidentiality.md §7.1, "Project notes
+   * attached to a Read"): a block whose text is exactly that file's, and
+   * that text no secret, reaches the model with the Read. Omitted ⇒ the
+   * rule never fires.
+   */
+  memoryFileText?: (path: string) => string | null;
+  /** Is this object id (40 or 64 lowercase hex) in Mandu's locked set (plan
+   *  14 §11.1 R2): a protected version the object twins keep unreadable?
+   *  For the report of an object the agent's git could not read
+   *  (tool-error-notice.ts isGitNoContentReport). Absent: no such report
+   *  is released. */
+  lockedObject?: (id: string) => boolean;
+  /**
    * The HOME the launcher of a session recorded on the human plane (plan 10
    * §11.13, the arbiter's `beginLaunch` record), for the confidentiality
    * derivation: the catalog's `~` places of it count as well as the
@@ -830,11 +876,46 @@ export function createEngineBackedPolicy(
     }
     return null;
   };
+  /** A Claude Code `Read` result as the read-twin legs judge it: past the
+   *  token-budget reminder Claude Code appends to every tool_result
+   *  (claude-code-inbound.ts withoutHarnessBudgetTail: exactly that
+   *  digits-only shape, any other tail stays and fails the content test).
+   *  The proxy classifies the whole result, tail included, so without this a
+   *  twin's rendering never matched live and every Read of a structured or
+   *  document twin reached the model as ONE whole-file placeholder (live
+   *  drills 2026-10-26: demo-tax-extension, demo-dog-sitter-text). */
+  const claudeReadValue = (value: string, req?: ClassifyRequest): string => {
+    const budget = withoutHarnessBudgetTail(value);
+    if (budget.stripped || req === undefined) return budget.body;
+    return withoutVerifiedMemoryTail(value, memoryVerifierFor(req)).body;
+  };
+  // The notes leg (nested-memory.ts; confidentiality.md §7.1, "Project
+  // notes attached to a Read"): a notes block counts as the runtime's only
+  // when its text is the file's on disk now AND that text, classified as a
+  // Read of that path in the same session, is no secret (and, with the
+  // integrity axis on, trusted). One level deep: a notes file's own
+  // classification never consults notes again.
+  let memoryDepth = 0;
+  const memoryVerifierFor = (req: ClassifyRequest): MemoryVerifier => (path, content) => {
+    if (!opts.memoryFileText || memoryDepth > 0) return false;
+    const file = opts.memoryFileText(path);
+    if (file === null || !memoryContentMatches(content, file)) return false;
+    memoryDepth++;
+    try {
+      const r = policy.classify({
+        tool: "Read", value: file, boundary: "model_context", origin: path, params: { file_path: path },
+        ...(req.sessionKey !== undefined ? { sessionKey: req.sessionKey } : {}),
+      });
+      return !isSecret(r.confidentiality ?? "public") && (!integrityEnabled || r.trust === "TRUSTED");
+    } finally {
+      memoryDepth--;
+    }
+  };
   const isStructuredTwinRead = (req: ClassifyRequest): boolean => {
     if (!twinRendering) return false;
     const r = builtinRead(req);
     if (r === null) return false;
-    if (r.agent === "claude-code") return isStructuredTwinReadRendering(req.value, twinRendering(r.path), symbolAllocated);
+    if (r.agent === "claude-code") return isStructuredTwinReadRendering(claudeReadValue(req.value, req), twinRendering(r.path), symbolAllocated);
     return r.text !== null && isStructuredTwinText(r.text, twinRendering(r.path), symbolAllocated);
   };
   const wholeFileTwin = opts.wholeFileTwin;
@@ -854,7 +935,7 @@ export function createEngineBackedPolicy(
     const twin = wholeFileTwin(r.path);
     if (twin === null) return false;
     const token = r.agent === "claude-code"
-      ? (getToolInboundSpec(req.tool, req.sessionKey, sessionSpecs) === CLAUDE_CODE_INBOUND_SPEC.Read ? claudeReadWholeFileToken(req.value, twin.terminator) : null)
+      ? (getToolInboundSpec(req.tool, req.sessionKey, sessionSpecs) === CLAUDE_CODE_INBOUND_SPEC.Read ? claudeReadWholeFileToken(claudeReadValue(req.value, req), twin.terminator) : null)
       : wholeFileTwinTextToken(r.text);
     return token !== null && token === twin.token;
   };
@@ -869,7 +950,7 @@ export function createEngineBackedPolicy(
     const r = builtinRead(req);
     if (r === null) return false;
     const text = r.agent === "claude-code"
-      ? (getToolInboundSpec(req.tool, req.sessionKey, sessionSpecs) === CLAUDE_CODE_INBOUND_SPEC.Read ? claudeReadRenderingText(req.value) : null)
+      ? (getToolInboundSpec(req.tool, req.sessionKey, sessionSpecs) === CLAUDE_CODE_INBOUND_SPEC.Read ? claudeReadRenderingText(claudeReadValue(req.value, req)) : null)
       : r.text;
     if (text === null || text === undefined) return false;
     return isOwnTextTwinText(text, ownTextTwin(r.path));
@@ -1093,14 +1174,14 @@ export function createEngineBackedPolicy(
     let namedFiles = label.files;
     if (!inboundSpecNamesInput(req.tool, req.sessionKey, sessionSpecs)) {
       // exclusion-flags.md: a shell tool's command field (`command` /
-      // Codex's `cmd`) with each `--exclude-dir=NAME` word of one plain
-      // grep blanked, as labelForClassify reads it; every other string, and
+      // Codex's `cmd`) with each exclusion word of a grep or rg segment
+      // blanked, as labelForClassify reads it; every other string, and
       // every other tool's, as is.
-      const shellTool = ["Bash", "bash", "shell", "exec_command", "local_shell", "exec"].includes(req.tool);
+      const shellTool = SEARCH_EXCLUSION_SHELL_TOOLS.has(req.tool);
       const blankCommand = (x: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
         if (x === undefined || !shellTool) return x;
         const out = { ...x };
-        for (const k of ["command", "cmd"]) if (typeof out[k] === "string") out[k] = withoutGrepExclusions(out[k] as string);
+        for (const k of ["command", "cmd"]) if (typeof out[k] === "string") out[k] = withoutSearchExclusions(out[k] as string);
         return out;
       };
       const inputs = [blankCommand(req.params), blankCommand(req.paramsHuman)].filter((x) => x !== undefined);
@@ -1114,7 +1195,7 @@ export function createEngineBackedPolicy(
     return { label, namedFiles, wide: null };
   };
 
-  return {
+  const policy = {
     classify(req: ClassifyRequest): ClassifyResult {
       // TRUST sees the request EXACTLY as it arrived — `originHuman` is invisible
       // here, by construction. A spelling translation must never be able to move a
@@ -1160,6 +1241,23 @@ export function createEngineBackedPolicy(
       // wins), whole-result only. Anything appended, a near-match, another
       // tool: the path-derived level below stands. The value backstop in the
       // arbiter's classify op still runs on this verdict (raise-only).
+      // Claude Code's project notes attached to a Read (nested-memory.ts;
+      // confidentiality.md §7.1, "Project notes attached to a Read"): the
+      // tail the proxy asks about on its own, ENTIRELY runtime blocks with a
+      // verified notes block among them, is the notes file's own non-secret
+      // text and the budget count: public. With the integrity axis on its
+      // trust stands as classified (the proxy keeps an untrusted tail out).
+      if (
+        !req.field &&
+        getToolInboundSpec(req.tool, req.sessionKey, sessionSpecs) === CLAUDE_CODE_INBOUND_SPEC.Read &&
+        isVerifiedMemoryTail(req.value, memoryVerifierFor(req))
+      ) {
+        return {
+          ...base,
+          reason: `${base.reason}; project notes: the value is Claude Code's notes block(s) for a CLAUDE.md whose text on disk it is, no secret in it (confidentiality §7.1)`,
+          confidentiality: "public",
+        };
+      }
       if (
         !req.field &&
         getToolInboundSpec(req.tool, req.sessionKey, sessionSpecs) === CLAUDE_CODE_INBOUND_SPEC.Read &&
@@ -1170,6 +1268,36 @@ export function createEngineBackedPolicy(
           reason: `${base.reason}; read dedup notice: the value is exactly Claude Code's "file unchanged" answer, no file byte in it → public (confidentiality §7.1)`,
           confidentiality: "public",
         };
+      }
+      // A tool's own error about a path (confidentiality.md §7.1, "A tool's
+      // error about a secret path", 2026-10-26): Read's "File does not
+      // exist" for a path that is not there, a shell's ENOENT/EACCES report
+      // on a path the command names, a Write refused by the kernel. Masked at
+      // the path's level, the model never learned the file was missing or
+      // the write failed (live: demo-staging-admin-request guessed on, and
+      // demo-local-health-summary told the human a refused write was done).
+      // Exact shapes whose free spans are the model's own bytes or the
+      // runtime's framing (tool-error-notice.ts), under the claude-code
+      // spec's own entry, whole-result only. The value backstop in the
+      // arbiter's classify op still runs (raise-only).
+      if (!req.field) {
+        const spec = getToolInboundSpec(req.tool, req.sessionKey, sessionSpecs);
+        const own = req.params as Record<string, unknown> | undefined;
+        const human = (req.paramsHuman ?? req.params) as Record<string, unknown> | undefined;
+        const which =
+          spec === CLAUDE_CODE_INBOUND_SPEC.Read && isReadMissingFileNotice(req.value, human) ? "Read's missing-file answer"
+          : spec === CLAUDE_CODE_INBOUND_SPEC.Bash && isShellPathErrorOutput(req.value, own) ? "a shell's report on a path the command names"
+          : spec === CLAUDE_CODE_INBOUND_SPEC.Bash && isGitNoContentReport(req.value, own, opts.lockedObject) ? "the repository tool's own report (progress, refs, removed paths the command names, objects Mandu locked)"
+          : (spec === CLAUDE_CODE_INBOUND_SPEC.Write || spec === CLAUDE_CODE_INBOUND_SPEC.Edit || spec === CLAUDE_CODE_INBOUND_SPEC.MultiEdit) &&
+              isWriteRefusalNotice(req.value, own) ? `${req.tool}'s refused write`
+          : null;
+        if (which !== null) {
+          return {
+            ...base,
+            reason: `${base.reason}; tool error: the value is exactly ${which}, no file byte in it → public (confidentiality §7.1)`,
+            confidentiality: "public",
+          };
+        }
       }
       // A write's own notice (plan 15 §13.10, confidentiality.md §7.1 "The
       // write notice"): Claude Code's Write, OpenCode's (1 and 2), Goose's
@@ -1306,6 +1434,7 @@ export function createEngineBackedPolicy(
       return snapshotActivePolicy(categories);
     },
   };
+  return policy;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1357,9 +1486,24 @@ export { destinationMatchesBindings } from "./host-bindings.js";
  */
 export function wireSchemeRefusal(
   req: Pick<DesymbolizationRequest, "boundary" | "destination" | "scheme">,
-  required: "https" | "any" | null,
+  required: "https" | "any" | "postgres" | "mysql" | null,
 ): DesymbolizationDecision | null {
-  if (req.boundary !== "network" || required !== "https" || req.scheme === "https") return null;
+  if (req.boundary !== "network") return null;
+  // A database password a `.pgpass` line binds to its database
+  // (db-login-release.md, security review 2026-10-24): put back only in that
+  // database's login, which only the relay states. Over HTTP(S) to the same
+  // host and port it would leave in a request the egress proxy forwards as
+  // written: plain HTTP carries it in cleartext.
+  if (required === "postgres" || required === "mysql") {
+    if (req.scheme === required) return null;
+    return {
+      allow: false,
+      requiresApproval: false,
+      reason: `a database password bound by its own password file is put back only in that database's login (the relay), never in ${req.scheme ? `an ${req.scheme.toUpperCase()} request` : "a request whose scheme the caller did not state"}${req.destination ? ` to '${req.destination}'` : ""} (db-login-release.md)`,
+      ruleRef: ruleRef("egress:secret-db-login-only"),
+    };
+  }
+  if (required !== "https" || req.scheme === "https") return null;
   const how = req.scheme === "http" ? "a plain-HTTP request" : "a request whose scheme the caller did not state";
   return {
     allow: false,
@@ -1372,6 +1516,7 @@ export function wireSchemeRefusal(
 /** How a refusal names each position. */
 const POSITION_WORDS: Readonly<Record<RequestPosition, string>> = {
   authorization: "Authorization header", url: "URL", header: "other headers", body: "body",
+  signature: "request signature (the key the proxy signs with)",
 };
 
 /**

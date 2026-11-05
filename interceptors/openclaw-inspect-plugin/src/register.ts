@@ -45,6 +45,13 @@ import { resolvePluginConfig } from "./plugin-config.js";
 import { createInspectSymbolPluginTool, INSPECT_TOOL_NAME } from "./inspect-tool.js";
 import { createDeclassifySymbolPluginTool, DECLASSIFY_TOOL_NAME } from "./declassify-tool.js";
 import type { OpenClawPluginApiLike } from "./openclaw-api.js";
+import { attachmentSession } from "./attachment-session.js";
+import { HookArbiterAdapter, NO_RELEASE, type HookArbiter, type RealHookArbiterClient, type ReplyReleaser } from "./hook-arbiter.js";
+import { registerAttachmentHooks } from "./hooks.js";
+import { compileTamperPolicy, type TamperContext } from "./tamper-policy.js";
+import { registerSandboxTier, type SandboxTierConfig, type SandboxTierDeps } from "./sandbox/backend.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 /** Injectable seams (tests). Production callers pass nothing. */
 export interface RegisterOptions {
@@ -57,6 +64,39 @@ export interface RegisterOptions {
   connectArbiter?: (sockPath: string) => Promise<Arbiter>;
   /** UllmClient factory from the selected config. Default: buildUllmClient. */
   buildUllm?: (config: UllmConfig) => UllmClient;
+  /** Async arbiter factory for the attachment hooks. Default: the same real
+   *  IPC connection as the tools, behind HookArbiterAdapter. */
+  connectHookArbiter?: (sockPath: string) => Promise<HookArbiter>;
+  /** The reply release (hook-arbiter.ts). Default NO_RELEASE: no arbiter op
+   *  decides a chat destination yet, so every placeholder stays. */
+  releaser?: ReplyReleaser;
+  /** How long the reply hook waits on the arbiter (hooks.ts default 3 s). */
+  replyTimeoutMs?: number;
+  /** Registers the confined-commands tier (sandbox/backend.ts). Default: the real one. */
+  registerSandbox?: (tier: SandboxTierConfig, deps: SandboxTierDeps) => unknown;
+}
+
+/** The tamper policy's paths, from the plugin config and the Gateway's own
+ *  environment (tamper-policy.ts). Exported for the tests. */
+export function tamperContextFrom(
+  cfg: { arbiterSock: string; manduPaths: readonly string[] },
+  env: NodeJS.ProcessEnv,
+): TamperContext {
+  const home = env["HOME"] || homedir();
+  const stateDir = env["OPENCLAW_STATE_DIR"] || join(home, ".openclaw");
+  const manduPaths = new Set<string>([
+    env["MANDU_HOME"] || join(home, ".mandu"),
+    ...(env["MANDU_RUNTIME_DIR"] ? [env["MANDU_RUNTIME_DIR"]] : []),
+    ...(env["XDG_RUNTIME_DIR"] ? [join(env["XDG_RUNTIME_DIR"], "mandu")] : []),
+    ...cfg.manduPaths,
+    cfg.arbiterSock,
+  ]);
+  return {
+    home,
+    manduPaths: [...manduPaths].filter((p) => p.startsWith("/")),
+    openclawConfigPath: env["OPENCLAW_CONFIG_PATH"] || join(stateDir, "openclaw.json"),
+    openclawStateDir: stateDir,
+  };
 }
 
 /**
@@ -76,27 +116,77 @@ export function registerInspectPlugin(
   // 1. Config — throws on a missing arbiter socket (fail loud, fail closed).
   const cfg = resolvePluginConfig(api.pluginConfig, env);
 
-  // 2. U-LLM transport — the SAME fail-closed selection the MCP entrypoint
-  // runs (api needs a key, cli needs a binary on PATH, auto tries both), with
-  // assertNonProxyBaseUrl's loopback refusal inside. Throws on no transport.
-  const ullmConfig = selectUllmConfig(cfg.ullmEnv, opts.cliAvailable ?? isOnPath);
-  const ullm = (opts.buildUllm ?? buildUllmClient)(ullmConfig);
+  // An attachment's session is `openclaw:<agentId>` unless the installer
+  // named it (it writes the same string as the proxy's session).
+  const scopeId = cfg.scopeId ?? (cfg.attachment ? attachmentSession(cfg.agentId) : undefined);
 
   // 3. Lazy, memoized arbiter connection (registration must not await). A
   // failed connect clears the memo so a later call can retry — one transient
   // outage must not brick the tool for the gateway's whole lifetime — and the
-  // in-flight call that hit it REFUSES fail-closed (inspect-tool.ts).
-  const connect = opts.connectArbiter ?? connectRealArbiter;
-  let arbiterPromise: Promise<Arbiter> | null = null;
-  const getArbiter = (): Promise<Arbiter> => {
-    if (arbiterPromise === null) {
-      arbiterPromise = connect(cfg.arbiterSock).catch((err: unknown) => {
-        arbiterPromise = null;
+  // in-flight call that hit it REFUSES fail-closed (inspect-tool.ts). The
+  // tools and the hooks share ONE real connection (the data socket).
+  let rawPromise: Promise<RealArbiterClient & RealHookArbiterClient> | null = null;
+  const getRaw = (): Promise<RealArbiterClient & RealHookArbiterClient> => {
+    if (rawPromise === null) {
+      rawPromise = connectRealClient(cfg.arbiterSock).catch((err: unknown) => {
+        rawPromise = null;
         throw err;
       });
     }
-    return arbiterPromise;
+    return rawPromise;
   };
+  const memo = <T>(connect: () => Promise<T>): (() => Promise<T>) => {
+    let p: Promise<T> | null = null;
+    return () => {
+      if (p === null) {
+        p = connect().catch((err: unknown) => {
+          p = null;
+          throw err;
+        });
+      }
+      return p;
+    };
+  };
+  const getArbiter = memo<Arbiter>(() =>
+    opts.connectArbiter ? opts.connectArbiter(cfg.arbiterSock) : getRaw().then((c) => new ArbiterClientAdapter(c)));
+
+  // 2b. The attachment hooks FIRST (openclaw-plugin.md §3.5, §3.6): they
+  // need no U-LLM, and a Gateway that cannot inspect must still refuse a
+  // tamper call and still check its replies.
+  if (cfg.attachment) {
+    const getHookArbiter = memo<HookArbiter>(() =>
+      opts.connectHookArbiter ? opts.connectHookArbiter(cfg.arbiterSock) : getRaw().then((c) => new HookArbiterAdapter(c)));
+    registerAttachmentHooks(api, {
+      policy: compileTamperPolicy(tamperContextFrom(cfg, env)),
+      agentId: cfg.agentId,
+      getArbiter: getHookArbiter,
+      releaser: opts.releaser ?? NO_RELEASE,
+      logger: api.logger,
+      ...(opts.replyTimeoutMs !== undefined ? { arbiterTimeoutMs: opts.replyTimeoutMs } : {}),
+    });
+  }
+
+  // 2c. The confined-commands tier (openclaw-plugin.md §10): OpenClaw's
+  // `mandu` sandbox backend. Its SDK seam is imported after this registrar
+  // returns; a release without it leaves the hooks and tools as they are.
+  if (cfg.attachment && cfg.sandbox) {
+    (opts.registerSandbox ?? registerSandboxTier)(cfg.sandbox, { env, arbiterSock: cfg.arbiterSock, logger: api.logger });
+  }
+
+  // 2. U-LLM transport — the SAME fail-closed selection the MCP entrypoint
+  // runs (api needs a key, cli needs a binary on PATH, auto tries both), with
+  // assertNonProxyBaseUrl's loopback refusal inside. Throws on no transport.
+  // In an attachment a missing transport drops inspect_symbol (logged as an
+  // error) rather than the whole plugin: the hooks above must stay.
+  let ullmConfig: UllmConfig | null = null;
+  let ullm: UllmClient | null = null;
+  try {
+    ullmConfig = selectUllmConfig(cfg.ullmEnv, opts.cliAvailable ?? isOnPath);
+    ullm = (opts.buildUllm ?? buildUllmClient)(ullmConfig);
+  } catch (err) {
+    if (!cfg.attachment) throw err;
+    api.logger.error(`[mandu-inspect] ${INSPECT_TOOL_NAME} not registered: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // 4. One triage-verdict cache per plugin registration (= per gateway
   // process). Keyed by symbol token — tokens are unique, so sharing the map
@@ -117,15 +207,18 @@ export function registerInspectPlugin(
   // The factory runs per tool resolution; the session/scope key threads the
   // configured scopeId first (matching the proxy's scope for the run), then
   // OpenClaw's own sessionKey, then a fixed fallback.
-  api.registerTool((ctx) =>
-    createInspectSymbolPluginTool(async () => ({
-      arbiter: await getArbiter(),
-      ullm,
-      sessionId: cfg.scopeId ?? ctx?.sessionKey ?? "openclaw-inspect",
-      triageCache,
-      endpointUllm,
-    })),
-  );
+  if (ullm !== null) {
+    const client = ullm;
+    api.registerTool((ctx) =>
+      createInspectSymbolPluginTool(async () => ({
+        arbiter: await getArbiter(),
+        ullm: client,
+        sessionId: scopeId ?? ctx?.sessionKey ?? "openclaw-inspect",
+        triageCache,
+        endpointUllm,
+      })),
+    );
+  }
 
   // 6. declassify_symbol (rung 3, agent-e2e-harness.md §8.5): the same lazy
   // arbiter, NON-optional like inspect_symbol. Its session is the configured
@@ -136,25 +229,29 @@ export function registerInspectPlugin(
   // refuses (declassify-tool.ts), fail closed.
   api.registerTool(() =>
     createDeclassifySymbolPluginTool(async () => {
-      if (cfg.scopeId === undefined) {
+      if (scopeId === undefined) {
         throw new Error(
           "no Mandu scope configured (plugins.entries.mandu-inspect.config.scopeId or env MANDU_SCOPE_ID); " +
             "a release that cannot be watermarked on the gated session cannot be confined",
         );
       }
-      return { arbiter: await getArbiter(), sessionId: cfg.scopeId };
+      return { arbiter: await getArbiter(), sessionId: scopeId };
     }),
   );
 
+  const facts = [
+    ...(ullmConfig !== null ? [`ullm=${ullmConfig.mode}${ullmConfig.mode === "cli" ? ` binary=${ullmConfig.binary}` : ""}`] : []),
+    `arbiter=${cfg.arbiterSock}`,
+    ...(cfg.attachment ? [`attached as ${scopeId}`] : []),
+    ...(cfg.attachment && cfg.sandbox ? ["sandbox backend mandu"] : []),
+  ];
   api.logger.info(
-    `[mandu-inspect] ${INSPECT_TOOL_NAME} + ${DECLASSIFY_TOOL_NAME} registered (ullm=${ullmConfig.mode}` +
-      `${ullmConfig.mode === "cli" ? ` binary=${ullmConfig.binary}` : ""}` +
-      `, arbiter=${cfg.arbiterSock})`,
+    `[mandu-inspect] ${ullmConfig !== null ? `${INSPECT_TOOL_NAME} + ` : ""}${DECLASSIFY_TOOL_NAME} registered (${facts.join(", ")})`,
   );
 }
 
 /**
- * Default arbiter factory: dynamically import the REAL arbiter IPC client
+ * Default arbiter connection: dynamically import the REAL arbiter IPC client
  * (arbiter/ipc/client.ts — the arbiter is the single owner of the symbol
  * table; interceptors never open the DB), connect, and adapt it to the narrow
  * `Arbiter` interface via inspect-mcp's ArbiterClientAdapter (which also
@@ -162,11 +259,11 @@ export function registerInspectPlugin(
  * Kept out of the static import graph so this package typechecks standalone,
  * mirroring server-main.ts `loadArbiterClient`.
  */
-async function connectRealArbiter(sockPath: string): Promise<Arbiter> {
+async function connectRealClient(sockPath: string): Promise<RealArbiterClient & RealHookArbiterClient> {
   const mod = (await import(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     "../../../arbiter/ipc/client.js" as any
-  )) as { ArbiterClient: new (sock: string) => RealArbiterClient };
+  )) as { ArbiterClient: new (sock: string) => RealArbiterClient & RealHookArbiterClient };
   const client = new mod.ArbiterClient(sockPath);
   await client.connect();
   // A GUEST MUST NOT CHANGE ITS HOST'S LIFECYCLE. This client lives inside the
@@ -177,5 +274,5 @@ async function connectRealArbiter(sockPath: string): Promise<Arbiter> {
   // connection stays fully usable; unref only stops it COUNTING toward keeping
   // the loop alive. See ArbiterClient.unref.
   client.unref?.();
-  return new ArbiterClientAdapter(client);
+  return client;
 }

@@ -26,6 +26,8 @@
  * pages (last-scan-pages.ts). Mandu-new (no reference origin).
  */
 import { AGENTS, SCAN_ONLY_AGENTS, SCAN_ONLY_NAMES } from "../generated/agents.js";
+import { replaceAtFor, type ReplaceAtVM } from "./key-pages.js";
+import { startCommandParts, startCommands } from "./start-commands.js";
 
 // ── the record (launcher/src/scan-kept.ts LastScan), declared here so the
 //    dashboard typechecks standalone ──────────────────────────────────────────
@@ -42,6 +44,19 @@ export interface ScanExampleWire {
   project?: string;
   mandu?: "under" | "by-time" | "without";
   provider?: string;
+}
+
+/** Where a known value sits now (launcher scan-kept.ts `KeptPlace`,
+ *  lineage ★2): a chat-history file or an agent's database, home as `~`. */
+export interface ScanPlaceWire {
+  agent: string;
+  file: string;
+  mandu: "under" | "by-time" | "without";
+  first?: string;
+  last?: string;
+  sessions: number;
+  /** The Mandu sessions it ran under, by id. */
+  manduSessions?: string[];
 }
 
 export interface ScanFindingWire {
@@ -65,6 +80,13 @@ export interface ScanFindingWire {
   sentToHosts?: string[];
   /** A key-shaped value that looks like a test value (item 14). */
   looksLikeTest?: true;
+  /** When some sessions ran under Mandu and some did not: the dates and
+   *  ways of those that did not (transcript-scan.ts `outsideMandu`), the
+   *  ones the summary counts. Absent: none ran under Mandu, or every one. */
+  outsideMandu?: { first?: string; last?: string; how: Record<string, number> };
+  /** A known value's places, and how many more the scan counted. */
+  places?: ScanPlaceWire[];
+  placesMore?: number;
 }
 
 export interface ScanSendWire {
@@ -105,7 +127,7 @@ export interface LastScanWire {
   known: number;
   findings: ScanFindingWire[];
   dropped: number;
-  capped: { overTime: number; overBytes: number; tooBig: number; overFiles: number; readFailed: number };
+  capped: { overTime: number; overBytes: number; tooBig: number; overFiles: number; readFailed: number; compressed?: number };
   risk?: { skippedPrompts: number; skippedWithSecret: number; envDumps: number };
   sends?: ScanSendWire[];
   sendsDropped?: number;
@@ -171,6 +193,28 @@ function examples(v: unknown): ScanExampleWire[] | undefined {
   }
   return out;
 }
+/** A Mandu session's id as the session page takes it (scan-kept.ts). */
+const MANDU_SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/;
+function places(v: unknown): ScanPlaceWire[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: ScanPlaceWire[] = [];
+  for (const x of v.slice(0, 10)) {
+    const o = obj(x);
+    const agent = o ? str(o["agent"], 64) : undefined;
+    const file = o ? str(o["file"], 1024) : undefined;
+    const m = o?.["mandu"];
+    if (o === null || agent === undefined || file === undefined || (m !== "under" && m !== "by-time" && m !== "without")) continue;
+    const p: ScanPlaceWire = { agent, file, mandu: m, sessions: count(o["sessions"]) };
+    put(p, "first", iso(o["first"]));
+    put(p, "last", iso(o["last"]));
+    if (Array.isArray(o["manduSessions"])) {
+      const ids = (o["manduSessions"] as unknown[]).filter((s): s is string => typeof s === "string" && MANDU_SESSION_RE.test(s)).slice(0, 3);
+      if (ids.length > 0) p.manduSessions = ids;
+    }
+    out.push(p);
+  }
+  return out.length > 0 ? out : undefined;
+}
 function how(v: unknown): Record<string, number> {
   const out: Record<string, number> = {};
   for (const [k, n] of Object.entries(obj(v) ?? {}).slice(0, 16)) out[k.slice(0, 64)] = count(n);
@@ -214,12 +258,24 @@ export function parseLastScan(raw: unknown): LastScanWire | null {
     }
     if (Array.isArray(o["sentToHosts"])) f.sentToHosts = strs(o["sentToHosts"], 20, 256);
     if (o["looksLikeTest"] === true && kind !== "known") f.looksLikeTest = true;
+    const outside = obj(o["outsideMandu"]);
+    if (outside) {
+      const om: NonNullable<ScanFindingWire["outsideMandu"]> = { how: how(outside["how"]) };
+      put(om, "first", iso(outside["first"]));
+      put(om, "last", iso(outside["last"]));
+      f.outsideMandu = om;
+    }
+    if (kind === "known") {
+      put(f, "places", places(o["places"]));
+      const more = count(o["placesMore"]);
+      if (more > 0) f.placesMore = more;
+    }
     findings.push(f);
   }
   const out: LastScanWire = {
     version: 1, ranAt, sessions, duringMandu: count(r["duringMandu"]), known: count(r["known"]), findings,
     dropped: count(r["dropped"]),
-    capped: { overTime: count(capped["overTime"]), overBytes: count(capped["overBytes"]), tooBig: count(capped["tooBig"]), overFiles: count(capped["overFiles"]), readFailed: count(capped["readFailed"]) },
+    capped: { overTime: count(capped["overTime"]), overBytes: count(capped["overBytes"]), tooBig: count(capped["tooBig"]), overFiles: count(capped["overFiles"]), readFailed: count(capped["readFailed"]), ...(count(capped["compressed"]) > 0 ? { compressed: count(capped["compressed"]) } : {}) },
     suggestions: null,
   };
   put(out, "since", iso(r["since"]));
@@ -274,7 +330,8 @@ export function parseLastScan(raw: unknown): LastScanWire | null {
 
 /** The command that runs the scan, as the page writes it (code). */
 export const SCAN_COMMAND = "mandu scan";
-/** The way to stop it, as the page writes it (code). */
+/** The first of the fallback commands (start-commands.ts START_FALLBACK);
+ *  a sentence names the agents you use through `startCommands`. */
 export const PROTECT_COMMAND = "mandu claude";
 
 const AGENT_NAME: Readonly<Record<string, string>> = {
@@ -344,6 +401,21 @@ export function sessionWords(s: Record<string, number>): string {
 export function sessionsWithoutMandu(f: Pick<ScanFindingWire, "sessions" | "sessionsUnderMandu">): number {
   return Math.max(0, f.sessions - (f.sessionsUnderMandu ?? 0));
 }
+/** A finding as its summary counts it (the terminal report's `leaked`,
+ *  plan 17 §2): its sessions not under Mandu, with their dates and ways
+ *  (`outsideMandu`; a record without it keeps the finding's own); those
+ *  under Mandu, where the AI saw it masked, are the footnote's. With none
+ *  under Mandu, or every one (a finding Mandu kept), the finding itself. */
+export function reachedPart(f: ScanFindingWire): { sessions: number; first?: string; last?: string; how: Record<string, number> } {
+  const without = sessionsWithoutMandu(f);
+  if ((f.sessionsUnderMandu ?? 0) === 0 || without === 0) {
+    return { sessions: f.sessions, how: f.how, ...(f.first !== undefined ? { first: f.first } : {}), ...(f.last !== undefined ? { last: f.last } : {}) };
+  }
+  const o = f.outsideMandu;
+  const first = o ? o.first : f.first;
+  const last = o ? o.last : f.last;
+  return { sessions: without, how: o?.how ?? f.how, ...(first !== undefined ? { first } : {}), ...(last !== undefined ? { last } : {}) };
+}
 /** Your secrets (found on this computer now) that left in a session without Mandu. */
 export function leftBeforeMandu(rec: LastScanWire): ScanFindingWire[] {
   return rec.findings.filter((f) => f.kind === "known" && sessionsWithoutMandu(f) > 0);
@@ -379,9 +451,14 @@ const NAMED_ONLY = (kind: string): boolean => kind === "credential-assignment" |
 // ── the Home card ────────────────────────────────────────────────────────────
 
 /** A part of a sentence: text, or a command drawn as code. */
-export type ScanPart = { kind: "text"; text: string } | { kind: "code"; text: string };
+/** `run`: a command Mandu asks you to run, drawn with a Copy beside it
+ *  (dashboard.md §4.25b); only `mandu scan` in `againParts`. */
+/** `start`: a part of the commands that start your agent, drawn on the Scan
+ *  page from Home's `start` (start-commands.ts `startCommandParts`). */
+export type ScanPart = { kind: "text"; text: string; start?: true } | { kind: "code"; text: string; run?: true; start?: true };
 const t = (text: string): ScanPart => ({ kind: "text", text });
 const code = (text: string): ScanPart => ({ kind: "code", text });
+const runCode = (text: string): ScanPart => ({ kind: "code", text, run: true });
 const joined = (parts: readonly ScanPart[]): string => parts.map((p) => p.text).join("");
 
 export interface HomeScanTop {
@@ -428,6 +505,20 @@ export interface HomeScanCard {
   safeLine: string | null;
   /** The figure: without Mandu and with it, from the top finding's facts. */
   figure: ScanFigureVM | null;
+  /** Which kept scan this is: the opaque `rev` `/api/scan` sends (a hash
+   *  of the file's identity, never the path; null, none kept). The server
+   *  sets it (home-routes.ts); the Scan page reads again when it changed
+   *  (§4.25ai *The Scan page follows a new scan*). Absent: an older server,
+   *  or a test seam. */
+  rev?: string | null;
+  /** When the kept scan ran (the record's `ranAt`), null before one: the
+   *  page keys a fold to it, so a new scan opens the card again. */
+  ranAt: string | null;
+  /** The one line a folded card reads (§4.25ai *A card with nothing to act
+   *  on folds*), or null when the card never folds: some of your secrets
+   *  left, the scan could not read everything, a send is worth a look or a
+   *  rule waits. */
+  folded: string | null;
 }
 
 /** A color with a meaning (dashboard.md §4.25ai *Color with meaning*): red,
@@ -549,8 +640,11 @@ export function scanFigure(rec: LastScanWire): ScanFigureVM {
   };
 }
 
-/** Home's card from the kept record (null: none kept). Pure. */
-export function homeScanCard(rec: LastScanWire | null): HomeScanCard {
+/** Home's card from the kept record (null: none kept). `start`: the
+ *  commands the sentence names (start-commands.ts), Home's own list; absent
+ *  (the Scan page's build), those of this record alone, tagged `start` for
+ *  the page to draw from Home's list. Pure. */
+export function homeScanCard(rec: LastScanWire | null, start?: readonly string[]): HomeScanCard {
   if (rec === null) {
     const parts = [
       t("Your agents keep a record of every past session on this computer. "), code(SCAN_COMMAND),
@@ -558,26 +652,34 @@ export function homeScanCard(rec: LastScanWire | null): HomeScanCard {
     ];
     return {
       ran: false, headline: "Did your agents already send a secret to the AI?", parts, sentence: joined(parts), when: null, top: [], more: 0,
-      worthALook: 0, worthWords: null, suggested: null, againParts: [t("Run it in a terminal: "), code(SCAN_COMMAND)], link: null,
-      tone: null, safeLine: null, figure: null,
+      worthALook: 0, worthWords: null, suggested: null, againParts: [t("Run it in a terminal: "), runCode(SCAN_COMMAND)], link: null,
+      tone: null, safeLine: null, figure: null, ranAt: null, folded: "Did your agents already send a secret to the AI?",
     };
   }
   const left = leftBeforeMandu(rec);
   const total = Object.values(rec.sessions).reduce((x, n) => x + n, 0);
+  // The agents this person uses, not always Claude Code and Codex (§4.25ai).
+  const stop = start !== undefined ? startCommandParts(start) : startCommandParts(startCommands(rec.sessions, []), true);
+  const partly = (rec.capped.compressed ?? 0) > 0;
   const headline = left.length === 0
-    ? "None of your secrets left this computer in your agents' requests"
+    ? `None of your secrets left this computer in your agents' requests${partly ? ", in what Mandu could read" : ""}`
     : `${left.length === 1 ? "1 of your secrets" : `${left.length.toLocaleString("en-US")} of your secrets`} left this computer in your agents' requests`;
   const parts: ScanPart[] = left.length === 0
-    ? [t(`None of the ${plural(rec.known, "secret")} Mandu found on this computer was in what your agents sent to the AI in these sessions. To keep it so, start your agent with `), code(PROTECT_COMMAND), t(" (or "), code("mandu codex"), t(")."), ...unrunParts(rec)]
-    : [t(`Each went to the AI in an agent's request to its model provider, in a session without Mandu. They are still where they were found: change them where they were issued. To stop it from now on, start your agent with `), code(PROTECT_COMMAND), t(" (or "), code("mandu codex"), t(")."), ...unrunParts(rec)];
-  const top = left.slice(0, 3).map((f) => ({
-    name: f.source?.name ?? f.preview,
-    file: f.source?.path ?? "",
-    ruleFile: ruleFileOf(f),
-    how: [howShort(f.how), f.agents.map(agentName).join(" and "), `${plural(f.sessions, "session")}${f.last ? `, ${f.sessions === 1 ? "" : "last "}${dayWords(f.last)}` : ""}`].filter((x) => x !== "").join(" · "),
-  }));
+    ? [t(`None of the ${plural(rec.known, "secret")} Mandu found on this computer was in what your agents sent to the AI in these sessions. To keep it so, start your agent with `), ...stop, t("."), ...unrunParts(rec)]
+    : [t(`Each went to the AI in an agent's request to its model provider, in a session without Mandu. They are still where they were found: change them where they were issued. To stop it from now on, start your agent with `), ...stop, t("."), ...unrunParts(rec)];
+  // Counted: the sessions without Mandu (a session under it is no leak).
+  const top = left.slice(0, 3).map((f) => {
+    const p = reachedPart(f);
+    return {
+      name: f.source?.name ?? f.preview,
+      file: f.source?.path ?? "",
+      ruleFile: ruleFileOf(f),
+      how: [howShort(p.how), f.agents.map(agentName).join(" and "), `${plural(p.sessions, "session")}${p.last ? `, ${p.sessions === 1 ? "" : "last "}${dayWords(p.last)}` : ""}`].filter((x) => x !== "").join(" · "),
+    };
+  });
   const worth = worthALook(rec);
   const pending = rec.suggestions?.pending ?? 0;
+  const tone: ScanTone = left.length > 0 ? "bad" : partly ? "warn" : "ok";
   return {
     ran: true,
     headline,
@@ -589,11 +691,15 @@ export function homeScanCard(rec: LastScanWire | null): HomeScanCard {
     worthALook: worth,
     worthWords: worth === 0 ? null : `${plural(worth, "send")} to a host Mandu cannot tie to the key's own service ${worth === 1 ? "is" : "are"} worth a look.`,
     suggested: pending === 0 ? null : `${pending === 1 ? "1 file that holds them has" : `${pending} files that hold them have`} no rule yet: Mandu suggests one for each, and nothing changes until you save it.`,
-    againParts: [t("Run it again: "), code(SCAN_COMMAND)],
+    againParts: [t("Run it again: "), runCode(SCAN_COMMAND)],
     link: "scan",
-    tone: left.length > 0 ? "bad" : "ok",
+    tone,
     safeLine: safeLineOf(rec, left.length),
     figure: scanFigure(rec),
+    ranAt: rec.ranAt,
+    // Nothing left to act on: none left, all read, nothing worth a look,
+    // no rule waiting. Every other card stays open.
+    folded: tone === "ok" && worth === 0 && pending === 0 ? `Last scan, ${dayWords(rec.ranAt)}: none of your secrets left this computer.` : null,
   };
 }
 
@@ -647,14 +753,53 @@ export interface ScanItemVM {
   /** The small flow under the title (your secrets and those Mandu kept),
    *  or null. */
   flow: ScanFlowVM | null;
-  /** The detail panel: the date range, the projects, the examples by way. */
-  detail: { range: string | null; projects: string | null; groups: ScanExampleGroupVM[] };
+  /** The detail panel: where the real value is now (one of your secrets),
+   *  the date range, the projects, the examples by way. */
+  detail: { range: string | null; projects: string | null; groups: ScanExampleGroupVM[]; where: ScanWhereVM | null };
   /** The file its secret lives in, for *Change it in Rules*
    *  (`/rules?file=`): a known secret's or a send's `~/…` or absolute
    *  path; null for a key not in your files, a relative path, or none. */
   file: string | null;
+  /** Where its company replaces such a key (key-pages.ts), under the
+   *  story: a key-shaped value not in your files (section `looks`) or a
+   *  send of one, unless it looks like a test value; empty otherwise
+   *  (dashboard.md §4.25ai *A key links to where it is replaced*). */
+  replaceAt: ReplaceAtVM[];
   /** Lower-case words the page's filter matches. */
   filter: string;
+}
+
+/** One place of *Where the real value is now* (dashboard.md §4.25ai, the
+ *  lineage mock's ★2): where it belongs, the AI service that got it, and
+ *  each chat-history file it sits in. Names, paths, days and counts only. */
+export interface ScanWhereRowVM {
+  /** `belongs` its file; `provider` the AI service; `history` a chat
+   *  history without Mandu (or only marked by time); `under` one under it. */
+  kind: "belongs" | "provider" | "history" | "under";
+  /** "Where it belongs", "OpenAI", "OpenClaw's chat history". */
+  where: string;
+  /** The file, drawn as code; null for none. */
+  file: string | null;
+  /** How it got there, one line. */
+  how: string;
+  /** When it was first seen there ("27 Oct"), or null. */
+  first: string | null;
+  /** What it is now: a few words, and their tone. */
+  now: string;
+  tone: ScanTone;
+  /** The Mandu sessions it ran under: each a link to its session page. */
+  sessions: string[];
+  /** A file the server checks is still there (`withPresence`): the
+   *  chat-history rows' own, `~/…` or absolute. Absent: none to check. */
+  check?: string;
+}
+
+export interface ScanWhereVM {
+  rows: ScanWhereRowVM[];
+  /** "And 4 more chat-history files the scan counted." or null. */
+  more: string | null;
+  /** What to do, under the rows. */
+  advice: string;
 }
 
 export interface ScanSectionVM {
@@ -694,6 +839,10 @@ export interface ScanPageVM {
   /** Rules waiting for the files, or null. */
   suggested: string | null;
   againParts: ScanPart[];
+  /** Before any scan, the line under its step (`againParts`, drawn first,
+   *  dashboard.md §4.25ai *Before any scan, the step comes first*): what the
+   *  page does once it runs. Null after a scan. */
+  stepNote: string | null;
   /** The headline's color: `bad` some of your secrets reached the AI, `ok`
    *  none did; null with no scan. */
   tone: ScanTone | null;
@@ -859,7 +1008,96 @@ function detailOf(f: { first?: string; last?: string; projects?: string[]; proje
     range: span(f.first, f.last) || null,
     projects: n === 0 ? null : `${plural(n, "project")}${shown.length ? `: ${shown.join(", ")}${n > shown.length ? ", …" : ""}` : ""}`,
     groups,
+    where: null,
   };
+}
+
+/** A path the server can check: `~/…` or absolute. */
+const checkable = (p: string): boolean => p.startsWith("~/") || p.startsWith("/");
+
+/**
+ * *Where the real value is now* (dashboard.md §4.25ai, lineage ★2): one of
+ * your secrets' places from the kept scan. Where it belongs (its file);
+ * the AI service that got its real value in a session without Mandu
+ * (which cannot be taken back); each chat-history file the scan found it
+ * in, those without Mandu first, and those under Mandu with their
+ * sessions linked. Null for a key that is not yours, or a scan kept
+ * before places were. Mandu only shows them: it never changes an agent's
+ * chat history (plan 17 §7 item 2). Pure.
+ */
+export function whereNow(f: ScanFindingWire): ScanWhereVM | null {
+  if (f.kind !== "known" || f.places === undefined || f.places.length === 0) return null;
+  const rows: ScanWhereRowVM[] = [];
+  if (f.source) {
+    const file = checkable(f.source.path) ? f.source.path : null;
+    rows.push({ kind: "belongs", where: "Where it belongs", file, how: file === null ? `In ${f.source.path}${f.source.name ? ` as ${f.source.name}` : ""}` : f.source.name ? `As ${f.source.name}` : "The whole file", first: null, now: "You keep it here", tone: "plain", sessions: [] });
+  }
+  const without = sessionsWithoutMandu(f);
+  let provider: string | null = null;
+  if (without > 0) {
+    const part = reachedPart(f);
+    const ex = [...(f.examples ?? []), ...Object.values(f.examplesByHow ?? {}).flat()].find((e) => e.mandu !== "under") ?? storyExample(f);
+    provider = providerOf(ex);
+    rows.push({
+      kind: "provider", where: provider === "the model provider" ? "The AI's provider" : provider, file: null,
+      how: `Got its real value, in ${plural(without, "session")} without Mandu`,
+      first: dayWords(part.first) || null, now: "Can't be taken back", tone: "bad", sessions: [],
+    });
+  }
+  for (const p of f.places) {
+    const under = p.mandu === "under";
+    const n = p.sessions > 1 ? ` (${plural(p.sessions, "session")})` : "";
+    rows.push({
+      kind: under ? "under" : "history",
+      where: `${agentName(p.agent)}'s chat history`,
+      file: p.file,
+      how: under ? `Saved on your computer; the AI got only its masked version, under Mandu${n}`
+        : p.mandu === "by-time" ? `Saved as the AI got it, while Mandu ran but not provably under it${n}`
+          : `Saved as the AI got it, without Mandu${n}`,
+      first: dayWords(p.first) || null,
+      now: "In it when the scan ran",
+      tone: under ? "ok" : p.mandu === "by-time" ? "warn" : "bad",
+      sessions: p.manduSessions ?? [],
+      ...(checkable(p.file) ? { check: p.file } : {}),
+    });
+  }
+  const more = f.placesMore ?? 0;
+  const advice = without > 0
+    ? `What reached ${provider === null || provider === "the model provider" ? "the AI's provider" : provider} can't be taken back: change the secret where it was issued. Mandu only shows these places; it never changes an agent's chat history.`
+    : "Mandu only shows these places; it never changes an agent's chat history.";
+  return { rows, more: more > 0 ? `And ${plural(more, "more chat-history file")} the scan counted.` : null, advice };
+}
+
+/**
+ * The detail's places with what the server sees now (dashboard.md §4.25ai
+ * *Where the real value is now*): a chat-history file still there says
+ * so, one gone since the scan says that, in green. `exists` answers for a
+ * `~/…` or absolute path; null: it could not tell (the row keeps "In it
+ * when the scan ran"). Pure over `exists`.
+ */
+export function withPresence<D extends { where: ScanWhereVM | null }>(detail: D, exists: (path: string) => boolean | null): D {
+  if (detail.where === null) return detail;
+  const rows = detail.where.rows.map((r): ScanWhereRowVM => {
+    if (r.check === undefined) return r;
+    const here = exists(r.check);
+    if (here === null) return r;
+    if (!here) return { ...r, now: "Gone from this computer", tone: "ok" };
+    return { ...r, now: r.kind === "under" ? "Still there, on your computer only" : "Still there" };
+  });
+  return { ...detail, where: { ...detail.where, rows } };
+}
+
+/** The Scan page's row id of one of your secrets that reached the AI (its
+ *  section `yours`, numbered first), for a link that opens it; null for a
+ *  finding not on that list. Pure. */
+export function scanItemIdOf(rec: LastScanWire, f: ScanFindingWire): string | null {
+  let i = 0;
+  for (const x of rec.findings) {
+    if (x.kind !== "known" || keptByMandu(x)) continue;
+    if (x === f) return `f${i}`;
+    i++;
+  }
+  return null;
 }
 
 function step(s: ScanStoryStep["step"], parts: ScanPart[], tone: ScanTone = "plain"): ScanStoryStep {
@@ -897,7 +1135,10 @@ function findingItem(f: ScanFindingWire, i: number, sends: readonly ScanSendWire
   const d = didOf(e);
   const story = [lived];
   const head = exampleHead(e);
-  if (head !== "") story.push(step("when", [t(f.sessions > 1 ? `The newest: ${head}` : head)]));
+  // The summary counts the sessions without Mandu (reachedPart); the
+  // footnote says those under it apart. The story is the newest of them.
+  const part = reachedPart(f);
+  if (head !== "") story.push(step("when", [t(part.sessions > 1 ? `The newest: ${head}` : head)]));
   story.push(step("did", d.code === null ? [t(d.lead)] : [t(`${d.lead} `), code(d.code)]));
   const looksTest = f.looksLikeTest === true && f.kind !== "known";
   story.push(step("went", [t(wentText(e, f))], e.mandu === "under" ? "ok" : e.mandu === "by-time" ? "warn" : looksTest ? "plain" : "bad"));
@@ -912,7 +1153,7 @@ function findingItem(f: ScanFindingWire, i: number, sends: readonly ScanSendWire
   // hold, or an agent it does not run, is said plainly.
   const unrun = unrunAgent(e.agent);
   story.push(step("instead", [t(f.kind !== "known" ? INSTEAD_KEY : unrun ? `Mandu does not run ${agentName(e.agent)} yet, so there it could not have kept the secret from the AI.` : insteadText(e.how))], f.kind === "known" && !unrun ? "ok" : "plain"));
-  const ways = howsByCount(f.how).slice(0, 2).map((h) => HOW_SHORT[h] ?? h).join(", ");
+  const ways = howsByCount(part.how).slice(0, 2).map((h) => HOW_SHORT[h] ?? h).join(", ");
   const ex = [...(f.examples ?? []), ...Object.values(f.examplesByHow ?? {}).flat()];
   const p = providerOf(e);
   const flow: ScanFlowVM | null = (section === "yours" || section === "kept") && e.agent !== ""
@@ -921,14 +1162,17 @@ function findingItem(f: ScanFindingWire, i: number, sends: readonly ScanSendWire
   return {
     id: `f${i}`,
     title: f.preview,
-    summary: [spread(f), ways, f.agents.map(agentName).join(" and ")].filter((x) => x !== "").join(" · "),
+    summary: [spread({ sessions: part.sessions, ...(part.first !== undefined ? { first: part.first } : {}), ...(part.last !== undefined ? { last: part.last } : {}), projects: f.projects, ...(f.projectCount !== undefined ? { projectCount: f.projectCount } : {}) }), ways, f.agents.map(agentName).join(" and ")].filter((x) => x !== "").join(" · "),
     story,
     footnote: manduFootnote(f),
     footnoteParts: manduFootnoteParts(f),
     ...(looksTest ? TEST_ROW : ROW_TONE[section]),
     flow,
-    detail: detailOf(f),
+    detail: { ...detailOf(f), where: section === "yours" || section === "kept" ? whereNow(f) : null },
     file: ruleFileOf(f),
+    // Whose key it is is not known here, so the lead is conditional; a key
+    // Mandu kept never reached the AI, and one of your files names no detector.
+    replaceAt: section === "looks" && !looksTest ? replaceAtFor([f.kind], { unsure: true }) : [],
     filter: [f.preview, f.kind, SHAPE_WORDS[f.kind] ?? "", ...f.projects, ...f.agents.map(agentName), ...ex.map((x) => `${x.command ?? ""} ${x.file ?? ""} ${x.url ?? ""} ${x.project ?? ""}`)].join(" ").toLowerCase(),
   };
 }
@@ -965,6 +1209,7 @@ function sendItem(s: ScanSendWire, i: number): ScanItemVM {
     ...ROW_TONE[section],
     flow: null,
     file: ruleFileOf(s),
+    replaceAt: s.kind !== "known" && s.looksLikeTest !== true ? replaceAtFor([s.kind], { unsure: true }) : [],
     detail: detailOf({ ...(s.last !== undefined ? { last: s.last } : {}), ...(s.examples !== undefined ? { examples: s.examples } : {}) }),
     filter: [s.preview, s.host, ...urls, ...s.via, ...s.agents.map(agentName)].join(" ").toLowerCase(),
   };
@@ -978,6 +1223,7 @@ function cappedNotes(c: LastScanWire["capped"]): string[] {
   if (c.tooBig > 0) out.push(`${plural(c.tooBig, "session record")} over 512 MiB not read.`);
   if (c.overFiles > 0) out.push(`${plural(c.overFiles, "session record")} past the file cap not read.`);
   if (c.readFailed > 0) out.push(`${plural(c.readFailed, "session record")} could not be read.`);
+  if ((c.compressed ?? 0) > 0) out.push(`${plural(c.compressed!, "OpenClaw session")} not read in full: OpenClaw keeps its longer messages compressed, and Mandu reads those on Node 22.15 or later.`);
   return out;
 }
 
@@ -988,12 +1234,14 @@ export function keptByMandu(f: ScanFindingWire): boolean {
   return (f.sessionsUnderMandu ?? 0) > 0 && sessionsWithoutMandu(f) === 0;
 }
 
-/** The Scan page from the kept record (null: none kept). Pure. */
+/** The Scan page from the kept record (null: none kept). Pure. Built once
+ *  per kept file, so its start commands are those of the record alone,
+ *  tagged `start`: the page draws them from Home's `start` (§4.25ai). */
 export function scanPageVM(rec: LastScanWire | null): ScanPageVM {
-  const stopParts = [t("To keep your secrets from the AI from now on, start your agent with "), code(PROTECT_COMMAND), t(" (or "), code("mandu codex"), t(")."), ...(rec !== null ? unrunParts(rec) : [])];
+  const stopParts = [t("To keep your secrets from the AI from now on, start your agent with "), ...startCommandParts(startCommands(rec?.sessions, []), true), t("."), ...(rec !== null ? unrunParts(rec) : [])];
   if (rec === null) {
     const card = homeScanCard(null);
-    return { ran: false, headline: card.headline, parts: card.parts, sentence: card.sentence, read: null, notes: [], sections: [], risk: [], stopParts, suggested: null, againParts: card.againParts, tone: null, safeLine: null, figure: null };
+    return { ran: false, headline: card.headline, parts: card.parts, sentence: card.sentence, read: null, notes: [], sections: [], risk: [], stopParts, suggested: null, againParts: card.againParts, stepNote: "This page shows what it found when it finishes.", tone: null, safeLine: null, figure: null };
   }
   const card = homeScanCard(rec);
   const sends = rec.sends ?? [];
@@ -1013,8 +1261,10 @@ export function scanPageVM(rec: LastScanWire | null): ScanPageVM {
       id: "yours", heading: "Your secrets that reached the AI",
       sentence: "Values Mandu found on this computer now, exactly as they are in your files.",
       items: yours, folded: false, filter: false,
-      empty: `None of the ${plural(rec.known, "secret")} Mandu found on this computer reached the AI in these sessions.`,
-      tone: yours.length > 0 ? "bad" : "plain", emptyTone: "ok",
+      empty: (rec.capped.compressed ?? 0) > 0
+        ? `None of the ${plural(rec.known, "secret")} Mandu found on this computer reached the AI in what it could read of these sessions (see the notes).`
+        : `None of the ${plural(rec.known, "secret")} Mandu found on this computer reached the AI in these sessions.`,
+      tone: yours.length > 0 ? "bad" : "plain", emptyTone: (rec.capped.compressed ?? 0) > 0 ? "warn" : "ok",
     },
     {
       id: "looks", heading: `Values that look like keys (${looks.length.toLocaleString("en-US")})`,
@@ -1075,6 +1325,7 @@ export function scanPageVM(rec: LastScanWire | null): ScanPageVM {
     stopParts,
     suggested: card.suggested,
     againParts: card.againParts,
+    stepNote: null,
     tone: card.tone,
     safeLine: card.safeLine,
     figure: card.figure,

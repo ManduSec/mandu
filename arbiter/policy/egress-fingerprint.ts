@@ -76,6 +76,12 @@ export interface ValueTwin {
    *  and the line's label is in the twin. */
   nameLines?: readonly string[];
   names?: readonly string[];
+  /** Values the file's shape knows are its structure, shown as they are in
+   *  the twin and sent by its own client in every request (a kubeconfig's
+   *  server URL, namespace and entry names: kubeconfig.ts
+   *  `kubeconfigPublicValues`, live-clients.md §3.3): no bare-token piece of
+   *  the base row unless one holds a secret text ({@link withoutTwinTokens}). */
+  publicTokens?: readonly string[];
 }
 
 /** A tripwire hit: a secret value found verbatim in the egress body, bound for
@@ -492,7 +498,13 @@ function withoutTwinTokens(tokens: readonly string[], twin: ValueTwin | undefine
     const i = t.search(/[=:]/);
     return i < 0 ? "" : t.slice(i + 1);
   };
-  return tokens.filter((t) => !lines.has(t) || holdsSecretText(t, twin.secrets) || looksLikeSecretValue(valueOf(t)));
+  // A value the file's shape knows is its structure (ValueTwin.publicTokens:
+  // a kubeconfig's server URL, namespace and names) is no piece unless it
+  // holds a secret text.
+  const pub = new Set(twin.publicTokens ?? []);
+  return tokens.filter((t) => (pub.has(t)
+    ? holdsSecretText(t, twin.secrets)
+    : !lines.has(t) || holdsSecretText(t, twin.secrets) || looksLikeSecretValue(valueOf(t))));
 }
 
 /** Does `text` carry the secret: the whole value verbatim, or any of its

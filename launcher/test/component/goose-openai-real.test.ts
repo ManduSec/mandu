@@ -16,7 +16,7 @@
  *   invariant (SECURITY) the scripted model asks for `cat` of a labelled
  *             (no-model) file: the shell runs, and its output reaches the
  *             upstream ONLY as a `$MDU:` symbol; no request carries the value;
- *   refused   GOOSE_PROVIDER naming a provider Mandu does not route (google),
+ *   refused   GOOSE_PROVIDER naming a provider Mandu does not route (gcp_vertex_ai),
  *             openai at an endpoint the proxy cannot reach (plain http off
  *             this machine), or openai beside anthropic subagents at the
  *             user's own undeclared ANTHROPIC_HOST (which skips the proxy):
@@ -216,7 +216,7 @@ for (const [model, wire] of [["gpt-4o", "/v1/chat/completions"], ["gpt-5", "/v1/
 test("refused before goose starts: a provider Mandu does not route, openai at an endpoint the proxy cannot reach, openai where the proxy would be skipped", { skip: SKIP, timeout: 60_000 }, async () => {
   seen.length = 0;
   for (const [extra, re] of [
-    [{ GOOSE_PROVIDER: "google", GOOSE_MODEL: "gemini-2.5-pro" }, /GOOSE_PROVIDER names the provider `google`/],
+    [{ GOOSE_PROVIDER: "gcp_vertex_ai", GOOSE_MODEL: "gemini-2.5-pro" }, /GOOSE_PROVIDER names the provider `gcp_vertex_ai`/],
     [{ OPENAI_HOST: "http://llm.corp.example:8000", GOOSE_MODEL: "gpt-4o" }, /OPENAI_HOST \(`http:\/\/llm\.corp\.example:8000`\) is not an endpoint/],
     // the subagents on anthropic at the user's own undeclared host: that
     // override skips the proxy the openai route needs

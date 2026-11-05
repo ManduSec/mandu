@@ -34,13 +34,13 @@ test("a secret at a host no rule lets it go to: the host as code, how a secret m
 
 test("each worded rule says what its branch decides, in the product's words", () => {
   const w = (id: string, host?: string) => words(blockWhy(rule(id), { outcome: "blocked", ...(host ? { host } : {}) }));
-  assert.equal(w("session:high-unbound", "evil.example"), "This session read a secret, and `evil.example` is not a place it may go. The AI could pass a secret on in its own words, which no placeholder marks.");
-  assert.equal(w("session:high-unbound"), "This session read a secret, and this place is not a place it may go. The AI could pass a secret on in its own words, which no placeholder marks.");
+  assert.equal(w("session:high-unbound", "evil.example"), "This session read a secret, and `evil.example` is not a place it may go. The AI could pass a secret on in its own words, which no mask marks.");
+  assert.equal(w("session:high-unbound"), "This session read a secret, and this place is not a place it may go. The AI could pass a secret on in its own words, which no mask marks.");
   assert.equal(w("egress:secret-https-only"), "Mandu fills this secret in only in requests it knows are HTTPS, and this one was not.");
   assert.equal(w("egress:secret-wire-position"), "Mandu fills this login secret in only in a request's Authorization header, and could not confirm that is the only place this request carried it.");
   assert.equal(w("egress:secret-unknown-destination"), "Mandu could not tell where this request was going. Mandu sends a secret only where a rule lets it go, or with your OK.");
   assert.equal(w("egress:user-rule-block"), "One of your rules blocks sending this data there.");
-  assert.equal(w("exec:symbol-in-command"), "The command would run a placeholder as code, and Mandu never runs one.");
+  assert.equal(w("exec:symbol-in-command"), "The command would run a mask as code, and Mandu never runs one.");
   assert.equal(w("exec:tainted-program-text"), "It runs code downloaded from the internet, which can do anything the site that served it wants.");
   assert.equal(w("fs:default-deny"), "The file is outside the folders this agent works in, so Mandu asks first.");
   assert.equal(w("fs:sensitive-path"), "Files like this hold keys and passwords, so Mandu asks before the AI can use one.");

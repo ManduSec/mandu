@@ -26,7 +26,11 @@
  *   R3  a click on A's tightening opens A's page (the session that read
  *       `.env`), and the one on B's row opens B's;
  *   R4  no unhandled rejection; the oracle: `.env`'s value never reached the
- *       model, and no page or answer read here carries it or a token.
+ *       model, and no page or answer read here carries it or a token;
+ *   R5  (#92, 2026-10-23) the rows name the agent Home lists for each
+ *       session ("Claude Code tightened your rules", the folder from its
+ *       system prompt after the moment), and on Rules the line under A's key
+ *       file and under `.env` names it too, both links kept.
  */
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -62,11 +66,16 @@ const LINK = "See what the agent was doing";
 const TIGHTENED = "Your agent tightened your rules";
 const APPROVED = "You approved a change your agent asked for";
 const UNDID = "You undid an earlier change";
+// What the page draws for them once Home lists the sessions (#92).
+const NAMED = { [TIGHTENED]: "Claude Code tightened your rules", [APPROVED]: "You approved a change Claude Code asked for" } as Record<string, string>;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Doc = any;
 const rowOf = (doc: Doc, id: string) => [...doc.querySelectorAll("#approvals-rule-history .row")].find((r: Doc) => r.dataset.id === id);
 const linkOf = (doc: Doc, id: string) => rowOf(doc, id)?.querySelector("a.ask-link") ?? null;
+// Rules' file rows and the one opened (as dashboard's home-js-fixtures.ts).
+const treeRow = (doc: Doc, name: RegExp) => [...doc.querySelectorAll("#files-tree .row.file-rule")].find((r: Doc) => name.test(r.querySelector("code").textContent));
+const opened = (doc: Doc) => doc.querySelector("#files-list .file-detail, #files-tree .file-detail");
 const nameOf = (doc: Doc, row: Doc) => doc.getElementById(row.getAttribute("aria-labelledby"))?.textContent;
 
 test("a rule change your agent made or asked for links that agent in Approvals' history (real arbiter, anthropic-proxy, dashboard); no secret anywhere", { timeout: 180_000 }, async () => {
@@ -113,13 +122,15 @@ test("a rule change your agent made or asked for links that agent in Approvals' 
     assert.equal(r.status, 200, `${path}: ${text}`);
     return JSON.parse(text);
   };
+  const folder: Record<string, string> = { [A]: repo, [B]: join(tmp, "home", "notes") };
   const tools = [{ name: "Read", description: "read", input_schema: { type: "object" } }];
   const turn = async (session: string, messages: unknown[], sse: string) => {
     upstream = new MockUpstream({ sse });
     const r = await pageFetch(`http://127.0.0.1:${proxyPort}/v1/messages`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-mandu-session-id": session, "user-agent": "claude-cli/2.1.289 (external, cli)" },
-      body: JSON.stringify({ model: "claude-opus-4", stream: true, system: "You are Claude Code.", tools, messages }),
+      // Claude Code's system prompt names its folder: Home's row has it (#92).
+      body: JSON.stringify({ model: "claude-opus-4", stream: true, system: `You are Claude Code.\n\n# Environment\n - Primary working directory: ${folder[session]}\n - Platform: linux`, tools, messages }),
     });
     assert.equal(r.status, 200, await r.text());
     toModel.push(upstream.requests[0]!.bodyText);
@@ -157,8 +168,11 @@ test("a rule change your agent made or asked for links that agent in Approvals' 
     // R1: each change carries its own agent's session, signed in and out.
     const want = [[undoId, UNDID, null], [approvedId, APPROVED, A], [ids.tightB, TIGHTENED, B], [ids.tightA, TIGHTENED, A]];
     const listed = (r: { changes: Array<{ id: string; sentence: string; session: string | null }> }) => r.changes.map((c) => [c.id, c.sentence, c.session]);
-    assert.deepEqual(listed(await call(CHANGES)), want);
+    const listing = await call(CHANGES);
+    assert.deepEqual(listed(listing), want);
     assert.deepEqual(listed(await call(CHANGES, { headers: {} })), want, "signed out too, as the origins listing");
+    // R1 (#92): the agent's two kinds say so, with the words around the agent.
+    assert.deepEqual(listing.changes.map((c: { who?: string }) => c.who ?? null), [null, "agent-approved", "agent", "agent"]);
 
     // Both sessions are listed (emission is best-effort and asynchronous).
     for (let i = 0; i < 200; i++) {
@@ -170,12 +184,16 @@ test("a rule change your agent made or asked for links that agent in Approvals' 
     // R2 and R3, for each agent's row: the link, and its click.
     for (const [id, session, prompt] of [[ids.tightA, A, "Read the env and tell me what it holds."], [ids.tightB, B, "Write the release notes"], [approvedId, A, "Read the env"]] as const) {
       await servedProductPage(base, "/approvals", (doc: Doc) => !!rowOf(doc, undoId), async (doc: Doc) => {
-        // R2: every row as the listing says.
+        // R2: every row as the listing says. An agent's row names the agent
+        // Home lists for its session, once Home has answered (#92).
+        await waitWhile(() => nameOf(doc, rowOf(doc, ids.tightA)) === TIGHTENED);
         for (const [rid, sentence, s] of want as Array<[string, string, string | null]>) {
           const row = rowOf(doc, rid);
-          assert.equal(nameOf(doc, row), sentence, `${rid}: named by its sentence`);
+          assert.equal(nameOf(doc, row), s === null ? sentence : NAMED[sentence], `${rid}: named by its sentence`);
           const a = linkOf(doc, rid);
           if (s === null) { assert.equal(a, null, `${rid}: no link`); continue; }
+          // The folder of that agent's session after the moment, before the link.
+          assert.equal(row.querySelector(".answered-when .ask-from")?.textContent, ` · from Claude Code in ${folder[s]}`, `${rid}: its agent's folder`);
           assert.equal(a.textContent, LINK);
           assert.equal(a.getAttribute("href"), `/agents/${s}`, `${rid}: the page of the agent that did it`);
           assert.ok(row.querySelector(".answered-when").contains(a), `${rid}: on the moment's line`);
@@ -189,11 +207,31 @@ test("a rule change your agent made or asked for links that agent in Approvals' 
         rendered.push(doc.documentElement.outerHTML);
       }, { headers: { Cookie: ADMIN_COOKIE } });
     }
+    // R5 (#92): on Rules, the line under A's key file names the agent that
+    // locked it, and under .env the agent that asked; both links stay.
+    const origins = await call("/api/policy/rules/origins");
+    bodies.push(JSON.stringify(origins));
+    await servedProductPage(base, "/rules", (doc: Doc) => !!treeRow(doc, /id_rsa/), async (doc: Doc) => {
+      for (const [name, words, change] of [[/id_rsa/, /^Claude Code added this\. It only makes your rules stricter, so it did not need your OK, /, ids.tightA], [/\.env/, /^Claude Code asked to change this and you approved it, /, approvedId]] as const) {
+        treeRow(doc, name).click();
+        await waitWhile(() => !/^Claude Code/.test(opened(doc)?.querySelector(".rule-origin")?.textContent ?? ""));
+        const line = opened(doc).querySelector(".rule-origin");
+        assert.match(line.textContent, words, `${name}: names the agent: ${line.textContent}`);
+        assert.doesNotMatch(line.textContent, /Your agent/);
+        assert.equal(line.querySelector(".ask-from")?.textContent, ` · from Claude Code in ${repo}`, `${name}: A's folder`);
+        const [agent, at] = [...line.querySelectorAll("a")] as Doc[];
+        assert.equal(agent.textContent, LINK);
+        assert.equal(agent.getAttribute("href"), `/agents/${A}`, `${name}: A's page`);
+        assert.equal(at.getAttribute("href"), `/approvals/${change}`, `${name}: its change in Approvals`);
+      }
+      rendered.push(doc.documentElement.outerHTML);
+    }, { headers: { Cookie: ADMIN_COOKIE } });
+
     await new Promise((r) => setTimeout(r, 50));
     assert.deepEqual(unhandled, [], "no unhandled rejection in the page");
 
     // R4: the oracle on every page drawn and every answer read above.
-    assert.equal(rendered.length, 6);
+    assert.equal(rendered.length, 7);
     for (const text of [...rendered, ...bodies]) {
       assert.ok(!text.includes(ENV_VALUE), "CONFIDENTIALITY VIOLATION: .env's value in a page or an answer");
       assert.doesNotMatch(text, /\$MDU/, "nor a token");

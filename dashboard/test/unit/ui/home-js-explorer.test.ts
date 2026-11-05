@@ -92,14 +92,14 @@ test("explorer: each row's menu shows the label in force; its hosts show beside 
 
 test("§4.25p two questions: each rule row has a second menu, where it may be sent; Needs your OK drops the hosts, Listed hosts opens the hosts field, Not secret is the first menu's too", async () => {
   const saves: any[] = [];
-  const row = (path: string, level: string, bindings: string[], opens?: string) => ({
+  const row = (path: string, level: string, bindings: string[], opens?: string, opensDefault?: boolean) => ({
     id: `lock:${path}`, kind: "lock", subject: path, effect: "x", reach: null, hits: null, covers: "exact", bindings, level,
     actions: { remove: true, flip: null },
-    plain: { subject: path, reach: "this file only", effect: "x", ...(opens ? { opens } : {}) },
+    plain: { subject: path, reach: "this file only", effect: "x", ...(opens ? { opens, opensDefault: opensDefault === true } : {}) },
   });
   const panel = { panel: { available: true, verdictsKnown: true, queue: [], yourRules: [
     row("/home/u/proj/.env", "no-model", ["api.stripe.com"], "deploy (your word) may open the real file. Other programs get a masked copy."),
-    row("/home/u/notes.md", "any-model", [], "Programs get a masked copy."),
+    row("/home/u/notes.md", "any-model", [], "Programs get a masked copy.", true),
     row("/home/u/pub.txt", "public", [], undefined),
   ] } };
   const { doc } = load({ url: "http://127.0.0.1:4500/mandu/rules", routes: { "GET policy/panel": panel, "POST files/labels": (b: any) => (saves.push(b), { applied: true, changeId: "pc-000012", page: 0 }) } });
@@ -121,6 +121,12 @@ test("§4.25p two questions: each rule row has a second menu, where it may be se
   // The third relation, read only: who may open the real file.
   assert.match(env().querySelector(".file-opens").textContent, /^Opens it deploy \(your word\) may open the real file\./);
   assert.equal(pub().querySelector(".file-opens"), null, "Not secret: nothing to open");
+  // A rule with no readers: draws no line; the default is said once, under the caption.
+  assert.equal(notes().querySelector(".file-opens"), null, "the default: no line on the row");
+  const note = doc.getElementById("files-opens-note");
+  assert.equal(note.hidden, false, "a secret row with no line is listed");
+  assert.equal(note.textContent, "A program that opens one of these files gets a masked copy, unless the file's rule names the program or Mandu knows the program needs that file, as ssh needs your SSH keys. Open a file to see which programs get the real one.");
+  assert.equal(doc.querySelectorAll("#files-tree .file-opens").length, 1, "only the row that names a program");
   // Needs your OK on a row with hosts: the same label, no hosts, waiting for Save.
   const pick = (r: any, v: string) => { const m = sendOf(r); m.value = v; m.dispatchEvent(new doc.defaultView.Event("change", { bubbles: true })); };
   pick(env(), "ask");
@@ -151,6 +157,44 @@ test("§4.25p two questions: each rule row has a second menu, where it may be se
   ]);
 });
 
+
+test("§4.25p Opens it: the note under Files and folders shows only while a secret row draws no Opens it line", async () => {
+  const row = (path: string, level: string, plain: Record<string, unknown>) => ({
+    id: `lock:${path}`, kind: "lock", subject: path, effect: "x", reach: null, hits: null, covers: "exact", bindings: [], level,
+    actions: { remove: true, flip: null }, plain: { subject: path, reach: "this file only", effect: "x", ...plain },
+  });
+  const named = row("/home/u/proj/.env", "no-model", { opens: "deploy (your word) may open the real file. Other programs are refused.", opensDefault: false });
+  const pub = row("/home/u/pub.txt", "public", {});
+  const dflt = row("/home/u/.aws", "no-model", { opens: "Programs get a masked copy.", opensDefault: true });
+  const older = row("/home/u/old.env", "no-model", { opens: "Programs get a masked copy." });
+  const page = async (yourRules: unknown[]) => {
+    const { doc } = load({ url: "http://127.0.0.1:4500/mandu/rules", routes: {
+      "GET policy/panel": { panel: { available: true, verdictsKnown: true, queue: [], yourRules } },
+      // No label made on this page: the rows are the panel's alone.
+      "GET secrets": { panel: { labels: [] } },
+    } });
+    await tick();
+    return doc;
+  };
+  const noteShown = (doc: any) => !doc.getElementById("files-opens-note").hidden;
+  // Only a rule that names programs, and one not secret: every secret row draws its line.
+  let doc = await page([named, pub]);
+  assert.equal(treeRows(doc).length, 2);
+  assert.equal(noteShown(doc), false, "no secret row without a line");
+  assert.equal(doc.getElementById("files-opens-note").textContent, "");
+  // No rules at all.
+  doc = await page([]);
+  assert.equal(noteShown(doc), false, "no rows");
+  // One default rule: its row has no line, and the note says the default.
+  doc = await page([named, dflt]);
+  assert.equal(treeRow(doc, /\.aws/).querySelector(".file-opens"), null);
+  assert.ok(treeRow(doc, /proj\/\.env/).querySelector(".file-opens"));
+  assert.equal(noteShown(doc), true);
+  // An older server sends no flag: the row keeps its line, as before.
+  doc = await page([older]);
+  assert.match(treeRow(doc, /old\.env/).querySelector(".file-opens").textContent, /^Opens it Programs get a masked copy\.$/);
+  assert.equal(noteShown(doc), false);
+});
 test("explorer: Enter in the hosts field queues them; the arrow keys in a menu stay the menu's; a folded tree folder stays folded", async () => {
   const { doc } = load({ url: FILES_URL, routes: { ...FILES_ROUTES, "GET policy/panel": TREE_PANEL } });
   await tick();

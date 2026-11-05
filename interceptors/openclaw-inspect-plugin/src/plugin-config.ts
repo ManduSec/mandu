@@ -46,6 +46,41 @@ export interface ResolvedPluginConfig {
    * ANTHROPIC_* keys in this SLICE are the U-LLM channel's own values mapped
    * from the dedicated config/env names above — never the host process's. */
   ullmEnv: UllmEnv;
+  /** True when the plugin runs in a resident Gateway attached to `mandu
+   *  serve` (written by `mandu openclaw install`): the hooks register
+   *  (hooks.ts), and a missing U-LLM transport drops inspect_symbol with an
+   *  error instead of failing the whole load. Absent/false: the per-run
+   *  config of `mandu openclaw` (tools only, as before). */
+  attachment: boolean;
+  /** The OpenClaw agent the attachment was installed for (the session when a
+   *  hook's context names no agent). Default `main`. */
+  agentId: string;
+  /** Mandu's own paths the tamper policy refuses (absolute), from the
+   *  installer: the Mandu home, the runtime dir. */
+  manduPaths: string[];
+  /** The confined-commands tier (openclaw-plugin.md §10), written by
+   *  `mandu openclaw install --sandbox`: the plugin registers OpenClaw's
+   *  `mandu` sandbox backend. Absent: no backend (commands run where OpenClaw
+   *  runs them, as before). Only in an attachment. */
+  sandbox?: { launcher: string[]; writeProtect: string[]; statusFile?: string };
+}
+
+/** The `sandbox` block, or undefined when absent; a block without a usable
+ *  launcher throws (the installer wrote it: a broken one is refused loudly,
+ *  never read as "off"). */
+function sandboxBlock(raw: unknown): ResolvedPluginConfig["sandbox"] {
+  if (raw === undefined || raw === null) return undefined;
+  const o = raw as Record<string, unknown>;
+  const launcher = Array.isArray(o["launcher"]) ? o["launcher"].filter((x): x is string => typeof x === "string" && x !== "") : [];
+  if (typeof raw !== "object" || launcher.length === 0 || !launcher[0]!.startsWith("/")) {
+    throw new Error(
+      "mandu-inspect: plugins.entries.mandu-inspect.config.sandbox needs `launcher`, the absolute argv of the Mandu launcher " +
+        "(run `mandu openclaw install --sandbox` again). Refusing to load the confined-commands tier half-configured (fail closed).",
+    );
+  }
+  const writeProtect = Array.isArray(o["writeProtect"]) ? o["writeProtect"].filter((x): x is string => typeof x === "string" && x.startsWith("/")) : [];
+  const statusFile = typeof o["statusFile"] === "string" && o["statusFile"].startsWith("/") ? o["statusFile"] : undefined;
+  return { launcher, writeProtect, ...(statusFile ? { statusFile } : {}) };
 }
 
 /** Read one optional string key from the (already JSON-schema-validated)
@@ -100,5 +135,14 @@ export function resolvePluginConfig(
       cfgString(pluginConfig, "ullmForwarder") ?? envString(env, "MANDU_ULLM_FORWARDER"),
   };
 
-  return { arbiterSock, scopeId, ullmEnv };
+  const attachment = pluginConfig?.["attachment"] === true;
+  const agentId = cfgString(pluginConfig, "agentId") ?? "main";
+  const rawPaths = pluginConfig?.["manduPaths"];
+  const manduPaths = Array.isArray(rawPaths)
+    ? rawPaths.filter((p): p is string => typeof p === "string" && p.startsWith("/"))
+    : [];
+
+  const sandbox = attachment ? sandboxBlock(pluginConfig?.["sandbox"]) : undefined;
+
+  return { arbiterSock, scopeId, ullmEnv, attachment, agentId, manduPaths, ...(sandbox ? { sandbox } : {}) };
 }

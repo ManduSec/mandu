@@ -16,7 +16,7 @@
  * - `findSecretValues` against `detectSecretShapes`: the same shapes and
  *   masks;
  * - the file layer over a temp home, and the Mandu windows from an event
- *   store.
+ *   store and from the attachments' periods (the OpenClaw plugin's).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -24,7 +24,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  TranscriptScanner, claudeCodeSentTexts, codexSentTexts, knownIsCredential, manduWindowsFrom,
+  OPENCLAW_MASK_MIN, TranscriptScanner, claudeCodeSentTexts, codexSentTexts, knownIsCredential, manduWindowsFrom, openclawMask,
   providersFromEnv, scanAgentTranscripts, sessionKeyOf, transcriptSources, type SentText, type SessionMeta,
 } from "../../policy/transcript-scan.js";
 import { detectSecretShapes, findSecretValues } from "../../policy/secret-detectors.js";
@@ -308,7 +308,7 @@ test("manduWindowsFrom: an agent and its time from launch_posture and session_ex
     ].join("\n") + "\n");
     writeFileSync(join(dir, "1-2.ndjson"), line({ kind: "launch_posture", target: "shell", ts: "2026-10-01T00:00:00.000Z" }) + "\n");
     writeFileSync(join(dir, "1-3.ndjson"), "garbage\n");
-    assert.deepEqual(manduWindowsFrom(dir), [{ agent: "claude-code", from: Date.parse("2026-10-01T00:00:00Z"), to: Date.parse("2026-10-01T01:00:00Z") }]);
+    assert.deepEqual(manduWindowsFrom(dir), [{ agent: "claude-code", from: Date.parse("2026-10-01T00:00:00Z"), to: Date.parse("2026-10-01T01:00:00Z"), session: "1-1" }], "the session's id is its event file's name");
     assert.deepEqual(manduWindowsFrom(join(dir, "missing")), []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -372,6 +372,84 @@ test("scanner: exact in, exact out, and the time mark only where no id settles i
   assert.deepEqual([r.sessionsUnderMandu, r.sessionsByTime, r.duringMandu], [1, 2, 3]);
   const f = r.findings[0]!;
   assert.deepEqual([f.sessions, f.sessionsUnderMandu, f.sessionsByTime, f.duringMandu], [6, 1, 2, 3]);
+  // The sessions not under Mandu (by time counts with them, plan 17 §2):
+  // their dates and ways, apart from the one under Mandu, the newest.
+  assert.equal(f.last, T(9));
+  assert.deepEqual(f.outsideMandu, { first: T(2), last: T(6), how: { "command-output": 5 } });
+});
+
+test("scanner: outsideMandu is said only when some sessions ran under Mandu and some did not", () => {
+  const T = (h: number) => `2026-10-01T0${h}:00:00Z`;
+  const s = new TranscriptScanner({ manduWindows: [{ agent: "claude-code", from: Date.parse(T(1)), to: Date.parse(T(3)), responseIds: ["msg_recorded_000001"] }] });
+  // STRIPE: under Mandu once (read the file), outside once (a command printed it).
+  s.addSession("claude-code", "/under.jsonl", [{ how: "read-file", text: STRIPE, at: T(2) }, { how: "command-output", text: AWS, at: T(2) }], { responseIds: new Set(["msg_recorded_000001"]) });
+  s.addSession("claude-code", "/outside.jsonl", [{ how: "command-output", text: STRIPE, at: T(5) }, { how: "command-output", text: GH, at: T(5) }], { responseIds: new Set(["msg_not_recorded_03"]) });
+  const r = s.result();
+  const by = (p: string) => r.findings.find((x) => x.preview.startsWith(p))!;
+  assert.deepEqual(by(STRIPE.slice(0, 8)).outsideMandu, { first: T(5), last: T(5), how: { "command-output": 1 } }, "the session outside Mandu alone");
+  assert.equal(by(AWS.slice(0, 4)).outsideMandu, undefined, "only under Mandu: none (the finding is one Mandu kept)");
+  assert.equal(by(GH.slice(0, 4)).outsideMandu, undefined, "never under Mandu: none (first, last and how say it)");
+});
+
+// ── Where the value is now (lineage ★2, plan 17 §3 item 15) ─────────────────
+test("scanner: a known value's places are the files it sits in, without Mandu first, each with its sessions' weakest mark and the Mandu sessions they ran under; a key that is not yours has none", () => {
+  const T = (h: number) => `2026-10-01T0${h}:00:00Z`;
+  const s = new TranscriptScanner({
+    home: "/home/u",
+    known: [{ value: STRIPE, path: "~/proj/.env", name: "STRIPE_KEY" }],
+    manduWindows: [{ agent: "claude-code", from: Date.parse(T(1)), to: Date.parse(T(3)), session: "mdu-1", responseIds: ["msg_recorded_000001"] }],
+  });
+  // Under Mandu, by its id: its place links the Mandu session.
+  s.addSession("claude-code", "/home/u/.claude/projects/p/under.jsonl", [{ how: "read-file", text: STRIPE, at: T(2) }], { responseIds: new Set(["msg_recorded_000001"]) });
+  // Without Mandu, older and newer; and a subagent's file of the newer session is a place of its own.
+  s.addSession("claude-code", "/home/u/.claude/projects/p/old.jsonl", [{ how: "command-output", text: STRIPE, at: T(4) }]);
+  s.addSession("claude-code", "/home/u/.claude/projects/p/new.jsonl", [{ how: "command-output", text: STRIPE, at: T(6) }]);
+  s.addSession("claude-code", "/home/u/.claude/projects/p/new.jsonl", [{ how: "command-output", text: STRIPE, at: T(7) }], {}, undefined, "/home/u/.claude/projects/p/new/subagents/a.jsonl");
+  // A database holds two sessions: one place, both counted.
+  s.addSession("opencode", "/home/u/.local/share/opencode/opencode.db#ses_1", [{ how: "command-output", text: STRIPE, at: T(5) }], {}, undefined, "/home/u/.local/share/opencode/opencode.db");
+  s.addSession("opencode", "/home/u/.local/share/opencode/opencode.db#ses_2", [{ how: "read-file", text: STRIPE, at: T(8) }], {}, undefined, "/home/u/.local/share/opencode/opencode.db");
+  // Not one of your secrets: no places.
+  s.addSession("claude-code", "/home/u/.claude/projects/p/gh.jsonl", [{ how: "command-output", text: GH, at: T(5) }]);
+  const r = s.result();
+  const f = r.findings.find((x) => x.kind === "known")!;
+  assert.deepEqual(f.places, [
+    { agent: "opencode", file: "~/.local/share/opencode/opencode.db", mandu: "without", first: T(5), last: T(8), sessions: 2 },
+    { agent: "claude-code", file: "~/.claude/projects/p/new.jsonl", mandu: "without", first: T(6), last: T(7), sessions: 1 },
+    { agent: "claude-code", file: "~/.claude/projects/p/new/subagents/a.jsonl", mandu: "without", first: T(6), last: T(7), sessions: 1 },
+    { agent: "claude-code", file: "~/.claude/projects/p/old.jsonl", mandu: "without", first: T(4), last: T(4), sessions: 1 },
+    { agent: "claude-code", file: "~/.claude/projects/p/under.jsonl", mandu: "under", first: T(2), last: T(2), sessions: 1, manduSessions: ["mdu-1"] },
+  ]);
+  assert.equal(f.placesMore, undefined);
+  assert.equal(r.findings.find((x) => x.kind !== "known")!.places, undefined, "a key not in your files has no places");
+  assert.equal(JSON.stringify(r).includes(STRIPE.slice(8, 16)), false, "no value in the answer");
+});
+
+test("scanner: places by time name the Mandu sessions their time overlaps; past the cap they are counted; a file path holding a known value is shown masked", () => {
+  const T = (h: number) => `2026-10-01T0${h}:00:00Z`;
+  const s = new TranscriptScanner({
+    home: "/home/u",
+    known: [{ value: STRIPE, path: "~/proj/.env", name: "STRIPE_KEY" }],
+    manduWindows: [{ agent: "codex", from: Date.parse(T(1)), to: Date.parse(T(3)), session: "mdu-old" }, { agent: "codex", from: Date.parse(T(1)), to: Date.parse(T(3)) }],
+  });
+  s.addSession("codex", "/home/u/.codex/sessions/by-time.jsonl", [{ how: "command-output", text: STRIPE, at: T(2) }]);
+  for (let i = 0; i < 12; i++) s.addSession("codex", `/home/u/.codex/sessions/s${i}.jsonl`, [{ how: "command-output", text: STRIPE, at: T(5) }]);
+  s.addSession("codex", `/home/u/.codex/sessions/${STRIPE}.jsonl`, [{ how: "command-output", text: STRIPE, at: T(4) }]);
+  const f = s.result().findings[0]!;
+  assert.equal(f.places!.length, 10);
+  assert.equal(f.placesMore, 4);
+  assert.ok(f.places!.every((p) => p.mandu === "without"), "those without Mandu first");
+  const all = new TranscriptScanner({
+    home: "/home/u",
+    known: [{ value: STRIPE, path: "~/proj/.env", name: "STRIPE_KEY" }],
+    manduWindows: [{ agent: "codex", from: Date.parse(T(1)), to: Date.parse(T(3)), session: "mdu-old" }],
+  });
+  all.addSession("codex", "/home/u/.codex/sessions/by-time.jsonl", [{ how: "command-output", text: STRIPE, at: T(2) }]);
+  all.addSession("codex", `/home/u/.codex/sessions/${STRIPE}.jsonl`, [{ how: "command-output", text: STRIPE, at: T(4) }]);
+  const places = all.result().findings[0]!.places!;
+  assert.deepEqual(places.map((p) => [p.file, p.mandu, p.manduSessions]), [
+    ["~/.codex/sessions/‹STRIPE_KEY›.jsonl", "without", undefined],
+    ["~/.codex/sessions/by-time.jsonl", "by-time", ["mdu-old"]],
+  ]);
 });
 
 test("scanner: a subagent's file joins its parent's session; the strongest mark wins and earlier findings are re-filed", () => {
@@ -462,13 +540,39 @@ test("scanner: a session resumed under Mandu is joined per request: what its par
   assert.deepEqual(marks("anthropic-key"), [1, 1, 0, 1], "sent only after the resume: under Mandu");
   assert.deepEqual(marks("aws-access-key-id"), [1, 0, 0, 0], "the AI wrote it in both parts");
   assert.deepEqual(marks("openai-key"), [1, 0, 1, 1], "a request no response answered: marked by time");
-  assert.deepEqual(by("stripe-key").examples?.map((e) => [e.at, e.mandu]), [[D("10:05:00"), "under"], [D("09:00:00"), "without"]], "each example has its own request's mark, the part outside Mandu told");
+  // a session's example is where the value FIRST got there (here the part
+  // outside Mandu), with that request's own mark
+  assert.deepEqual(by("stripe-key").examples?.map((e) => [e.at, e.mandu]), [[D("09:00:00"), "without"]], "each example has its own request's mark: the first sending, outside Mandu");
+  assert.deepEqual(by("stripe-key").examplesByHow?.["your-message"]?.map((e) => [e.at, e.mandu]), [[D("09:00:00"), "without"]], "per way too, the session's first");
   assert.deepEqual(by("anthropic-key").examples?.map((e) => e.mandu), ["under"]);
   assert.deepEqual(by("github-token").examples?.map((e) => e.mandu), ["without"]);
   const send = (host: string) => r.sends.find((x) => x.host === host)!;
   assert.deepEqual([send("hooks.alpha.dev").sessionsUnderMandu, send("hooks.alpha.dev").duringMandu], [0, 0], "the call outside Mandu sent it without Mandu");
   assert.deepEqual([send("hooks.beta.dev").sessionsUnderMandu, send("hooks.beta.dev").duringMandu], [1, 1], "the call after the resume ran under Mandu");
   for (const v of [STRIPE, AWS, GH, ANT, OPENAI]) assert.ok(!JSON.stringify(r).includes(v.slice(8)), "no value in the answer");
+});
+
+test("scanner: a session's example is the command that FIRST printed the value, not a later one that printed it again", () => {
+  // the OpenClaw plugin video's live run (2026-10-27): the debug run printed
+  // the value, then the model's own checks printed it again; the example
+  // must name the debug run, where it got there
+  const D = (t: string) => `2026-10-01T${t}Z`;
+  const call = (id: string, at: string, command: string, out: string) => [
+    { type: "assistant", timestamp: D(at), message: { id: `msg_${id}`, content: [{ type: "tool_use", id, name: "Bash", input: { command } }] } },
+    { type: "user", timestamp: D(at), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: out }] } },
+  ];
+  const recs = [
+    { type: "user", timestamp: D("09:00:00"), cwd: "/home/u/shop", message: { role: "user", content: "the sync broke; run it with DEBUG=1 and fix it" } },
+    ...call("t1", "09:00:05", "DEBUG=1 sh bin/sync.sh", `DEBUG: settings: KEY: ${STRIPE}`),
+    ...call("t2", "09:01:00", "git status --short && cat logs/last.txt", `M bin/sync.sh\nDEBUG: settings: KEY: ${STRIPE}`),
+  ];
+  const s = new TranscriptScanner({ home: "/home/u" });
+  const meta: SessionMeta = {};
+  s.addSession("claude-code", "/s.jsonl", claudeCodeSentTexts(recs, meta), meta, claudeCodeActs(recs));
+  const f = s.result().findings.find((x) => x.kind === "stripe-key")!;
+  assert.deepEqual(f.examples?.map((e) => [e.how, e.command, e.at]), [["command-output", "DEBUG=1 sh bin/sync.sh", D("09:00:05")]]);
+  assert.deepEqual(f.examplesByHow?.["command-output"]?.map((e) => e.command), ["DEBUG=1 sh bin/sync.sh"]);
+  assert.equal(f.last, D("09:01:00"), "the finding's dates still span every sending");
 });
 
 test("scanner: a request's id Mandu never recorded is without Mandu where every Mandu session it overlaps recorded ids; by time beside an older Mandu's session", () => {
@@ -548,7 +652,7 @@ test("manduWindowsFrom: the response ids of each session's tllm_call events; non
       line({ kind: "session_exit", ts: "2026-10-01T01:00:00.000Z" }),
     ].join("\n") + "\n");
     const [w] = manduWindowsFrom(dir);
-    assert.deepEqual(w, { agent: "codex", from: Date.parse("2026-10-01T00:00:00Z"), to: Date.parse("2026-10-01T01:00:00Z"), responseIds: ["resp_0977aaaa00000001", "resp_0977aaaa00000002"] });
+    assert.deepEqual(w, { agent: "codex", from: Date.parse("2026-10-01T00:00:00Z"), to: Date.parse("2026-10-01T01:00:00Z"), session: "2-1", responseIds: ["resp_0977aaaa00000001", "resp_0977aaaa00000002"] });
     assert.equal(manduWindowsFrom(dir, { maxFileBytes: 100 })[0]!.responseIds, undefined, "a file over the cap is read at its ends only");
     assert.equal(manduWindowsFrom(dir, { maxBytes: 100 })[0]!.responseIds, undefined, "past the store's budget, no ids");
   } finally {
@@ -573,6 +677,94 @@ test("manduWindowsFrom: OpenCode's session ids of each session's tllm_call event
     assert.equal(manduWindowsFrom(dir, { maxBytes: 100 })[0]!.agentSessionIds, undefined, "past the store's budget, no ids");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Attachment sessions: the OpenClaw plugin's (plan 17 §3 item 6) ───────────
+
+test("manduWindowsFrom: an attachment's periods are OpenClaw windows from the arbiter's rows, each with its session's tllm_call ids timed inside it; its event file alone is no window", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mdu-ev-"));
+  try {
+    const line = (o: unknown) => JSON.stringify(o);
+    const T = (hm: string) => `2026-10-01T${hm}:00.000Z`;
+    writeFileSync(join(dir, "openclaw:main.ndjson"), [
+      line({ kind: "launch_posture", emitter: "arbiter", target: "openclaw", attachment: { kind: "openclaw-plugin" }, ts: T("10:00") }),
+      line({ kind: "tllm_call", ts: T("10:30"), model: { id: "claude-x", responseId: "msg_01InFirstPeriod0001" }, input: { symbolized: 'quoting {"responseId":"msg_01QuotedForged00001"}' } }),
+      line({ kind: "tllm_call", ts: T("11:30"), model: { id: "claude-x", responseId: "msg_01BetweenPeriods001" } }),
+      line({ kind: "tllm_call", ts: T("12:05"), model: { id: "claude-x", responseId: "msg_01InSecondPeriod001" } }),
+      line({ kind: "tllm_call", model: { id: "claude-x", responseId: "msg_01NoTimeAtAll00001" } }),
+      // A claim the data socket could write once the attachment ended: no window.
+      line({ kind: "launch_posture", claimed: true, target: "openclaw", ts: T("13:00") }),
+      line({ kind: "session_exit", claimed: true, ts: T("23:00") }),
+    ].join("\n") + "\n");
+    writeFileSync(join(dir, "openclaw:other.ndjson"), line({ kind: "launch_posture", claimed: true, target: "openclaw", ts: T("09:00") }) + "\n");
+    assert.deepEqual(manduWindowsFrom(dir), [], "an attachment session's event file opens no window by itself");
+    const P = (from: string, to: string, extra: Record<string, unknown> = {}) => ({ session: "openclaw:main", kind: "openclaw-plugin", from: Date.parse(T(from)), to: Date.parse(T(to)), ...extra });
+    const periods = [P("10:00", "11:00"), P("12:00", "12:10")];
+    assert.deepEqual(manduWindowsFrom(dir, {}, periods), [
+      { agent: "openclaw", from: Date.parse(T("10:00")), to: Date.parse(T("11:00")), session: "openclaw:main", responseIds: ["msg_01InFirstPeriod0001"] },
+      { agent: "openclaw", from: Date.parse(T("12:00")), to: Date.parse(T("12:10")), session: "openclaw:main", responseIds: ["msg_01InSecondPeriod001"] },
+    ], "each period takes the ids timed inside it; one between periods, a quoted one or one with no time is not taken");
+    // A period of an unknown kind, or of a session that is not that kind's, opens none.
+    assert.deepEqual(manduWindowsFrom(dir, {}, [P("10:00", "11:00", { kind: "other-plugin" }), P("10:00", "11:00", { session: "mdu-launch-1" }), P("10:00", "11:00", { session: "openclaw:" }), P("11:00", "10:00")]), []);
+    // A period whose session has no event file, or past the budget: by time only.
+    assert.deepEqual(manduWindowsFrom(dir, {}, [P("10:00", "11:00", { session: "openclaw:none" })]), [{ agent: "openclaw", from: Date.parse(T("10:00")), to: Date.parse(T("11:00")), session: "openclaw:none" }]);
+    assert.equal(manduWindowsFrom(dir, { maxBytes: 100 }, periods)[0]!.responseIds, undefined, "past the store's budget, no ids");
+    assert.deepEqual(manduWindowsFrom(join(dir, "missing"), {}, periods).map((w) => w.responseIds), [undefined, undefined], "no event store: the periods by time");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("scanner: an OpenClaw session in an attachment's period is under Mandu by its response id, by time where the period recorded none, without outside it; a lapsed lease's window ends at its last renewal", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mdu-attach-scan-"));
+  const events = join(home, ".mandu", "events");
+  try {
+    const line = (o: unknown) => JSON.stringify(o);
+    const T = (hms: string) => `2026-10-01T${hms}.000Z`;
+    mkdirSync(events, { recursive: true });
+    writeFileSync(join(events, "openclaw:main.ndjson"), [
+      line({ kind: "tllm_call", ts: T("10:30:05"), model: { id: "claude-x", responseId: "msg_01UnderAttachment01" } }),
+      // Recorded between the periods (the service's proxy outlived its lease): not taken.
+      line({ kind: "tllm_call", ts: T("11:30:05"), model: { id: "claude-x", responseId: "msg_01BetweenPeriods002" } }),
+    ].join("\n") + "\n");
+    // The first period ended (endAttachment); the second lapsed: its window
+    // ends at its last renewal (cache-seals.ts `attachmentPeriods`), 12:10.
+    const periods = [
+      { session: "openclaw:main", kind: "openclaw-plugin", from: Date.parse(T("10:00:00")), to: Date.parse(T("11:00:00")) },
+      { session: "openclaw:main", kind: "openclaw-plugin", from: Date.parse(T("12:00:00")), to: Date.parse(T("12:10:00")) },
+    ];
+    const ocl = join(home, ".openclaw", "agents", "main", "sessions");
+    mkdirSync(ocl, { recursive: true });
+    const session = (name: string, at: string, responseId: string): void => writeFileSync(join(ocl, `${name}.jsonl`), [
+      line({ type: "session", version: 3, id: name, timestamp: T(at), cwd: "/home/u/shop" }),
+      line({ type: "message", timestamp: T(at), message: { role: "assistant", provider: "anthropic", model: "claude-x", responseId: `msg_01Before${name.padEnd(10, "x")}`, content: [{ type: "toolCall", id: "c1", name: "exec", arguments: { command: "cat .env" } }] } }),
+      line({ type: "message", timestamp: T(at), message: { role: "toolResult", toolCallId: "c1", toolName: "exec", content: [{ type: "text", text: `STRIPE_KEY=${STRIPE}` }] } }),
+      line({ type: "message", timestamp: T(at), message: { role: "assistant", provider: "anthropic", model: "claude-x", responseId, content: [{ type: "text", text: "done" }] } }),
+    ].join("\n") + "\n");
+    session("under", "10:30:00", "msg_01UnderAttachment01");
+    session("parallel", "10:30:00", "msg_01ParallelOutside01");
+    session("between", "11:30:00", "msg_01BetweenPeriods002");
+    session("bytime", "12:05:00", "msg_01NotRecorded000001");
+    session("lapsed", "12:10:30", "msg_01NotRecorded000002");
+    const sources = transcriptSources(home, {}).filter((s) => s.agent === "openclaw");
+    const scan = async (windows: ReturnType<typeof manduWindowsFrom>) => {
+      const r = await scanAgentTranscripts({ home, sources, manduWindows: windows });
+      assert.equal(r.findings.length, 1, "the one key");
+      const f = r.findings[0];
+      return { r, f };
+    };
+    const { r, f } = await scan(manduWindowsFrom(events, {}, periods));
+    assert.deepEqual(r.sessions, { openclaw: 5 });
+    assert.deepEqual([f?.sessions, f?.sessionsUnderMandu, f?.sessionsByTime], [5, 1, 1],
+      "under: its response id; by time: the lapsed period recorded none; without: a parallel session, one between the periods (its id recorded outside them), one after the last renewal");
+    assert.deepEqual([r.sessionsUnderMandu, r.sessionsByTime], [1, 1]);
+    // Without the arbiter's rows the same store is all without Mandu: the
+    // session's event file opens no window.
+    const none = await scan(manduWindowsFrom(events));
+    assert.deepEqual([none.f?.sessions, none.f?.sessionsUnderMandu, none.f?.sessionsByTime], [5, 0, 0]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
@@ -719,4 +911,54 @@ test("examples: no value in the answer, whatever the commands, outputs and here-
       assert.ok(!json.includes(piece), `the answer holds "${piece}"`);
     }
   }
+});
+
+// ── OpenClaw's saved mask (2026.7 and earlier) ───────────────────────────────
+
+const PASS = "Juniper-Harbor-6038-Wren";
+const PASS_KNOWN = { value: PASS, path: "~/orders/.env", name: "ORDERHUB_PASSPHRASE" };
+
+test("openclawMask: OpenClaw's maskToken, the first 6, `…`, the last 4; none under 18 characters (`***`) or across a surrogate pair", () => {
+  assert.equal(openclawMask(PASS), "Junipe…Wren");
+  assert.equal(OPENCLAW_MASK_MIN, 18);
+  assert.equal(openclawMask("a".repeat(17)), null);
+  assert.equal(openclawMask("a".repeat(18)), "aaaaaa…aaaa");
+  assert.equal(openclawMask(`${"x".repeat(20)}\u{1F511}`), null);
+});
+
+test("scanner: in a record saved masked (OpenClaw 2026.7), a known value is found by its mask, reported as known, the session counted as matched by the mask", () => {
+  const s = new TranscriptScanner({ home: "/home/u", known: [PASS_KNOWN] });
+  s.addSession("openclaw", "/oc/a.jsonl", [{ how: "read-file", tool: "read", text: "DEBUG: settings: ORDERHUB_PASSPHRASE: Junipe…Wren, PORT: 1" }], { savedMasked: true });
+  const r = s.result();
+  assert.equal(r.findings.length, 1, "once, as known (no second finding of its shape)");
+  const f = r.findings[0]!;
+  assert.equal(f.kind, "known");
+  assert.deepEqual(f.source, { path: "~/orders/.env", name: "ORDERHUB_PASSPHRASE" });
+  assert.equal(f.matchedMasked, 1);
+  assert.ok(!JSON.stringify(r).includes("Junipe…Wren"), "the answer holds no mask either");
+});
+
+test("scanner: a value matched as itself is not marked as matched by its mask", () => {
+  const s = new TranscriptScanner({ home: "/home/u", known: [PASS_KNOWN] });
+  s.addSession("openclaw", "/oc/a.jsonl", [{ how: "read-file", text: `ORDERHUB_PASSPHRASE: ${PASS}` }], { savedMasked: true });
+  assert.equal(s.result().findings[0]!.matchedMasked, undefined);
+});
+
+test("scanner: the mask is no match where the model got the mask (OpenClaw 2026.8+, no savedMasked), inside a longer token, or for a mask two known values share; a short value's `***` ties to nothing", () => {
+  const knownOnes = (s: TranscriptScanner): number => s.result().findings.filter((f) => f.kind === "known").length;
+  let s = new TranscriptScanner({ home: "/home/u", known: [PASS_KNOWN] });
+  s.addSession("openclaw", "/oc/db", [{ how: "read-file", text: "postgres://shop:Junipe…Wren@db.test" }]);
+  assert.equal(knownOnes(s), 0, "a SQLite-store session: the model got the mask");
+  s = new TranscriptScanner({ home: "/home/u", known: [PASS_KNOWN] });
+  s.addSession("openclaw", "/oc/a.jsonl", [{ how: "read-file", text: "xJunipe…Wrenx and Junipe…Wren-2" }], { savedMasked: true });
+  assert.equal(knownOnes(s), 0, "only a whole masked token");
+  const twin = { value: "Juniper-Garden-0000-Wren", path: "~/other/.env", name: "OTHER_PASSPHRASE" };
+  assert.equal(openclawMask(twin.value), openclawMask(PASS));
+  s = new TranscriptScanner({ home: "/home/u", known: [PASS_KNOWN, twin] });
+  s.addSession("openclaw", "/oc/a.jsonl", [{ how: "read-file", text: "pass: Junipe…Wren" }], { savedMasked: true });
+  assert.equal(knownOnes(s), 0, "a mask two known values share ties to neither");
+  const short = { value: "Short-Pass-123", path: "~/p/.env", name: "DB_PASSPHRASE" };
+  s = new TranscriptScanner({ home: "/home/u", known: [short] });
+  s.addSession("openclaw", "/oc/a.jsonl", [{ how: "read-file", text: "DB_PASSPHRASE: ***" }], { savedMasked: true });
+  assert.equal(knownOnes(s), 0);
 });

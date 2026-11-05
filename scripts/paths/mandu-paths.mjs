@@ -79,6 +79,7 @@ export const PATHS = [
   p("browser-profile", "state-root", "browser", "dir", DIR, false, null, "the Chrome profile `mandu --browser` starts the agent's browser with (devtools-relay.md §6.4): the person's logins and cookies on the sites the agent uses"),
   p("launch-logs", "state-root", "launch-logs", "dir", DIR, false, null, "one log per launch: every launch line and Mandu helper message the terminal did not show by default; the last 20 kept (packaging.md §5 \"Launch display policy\")"),
   p("dashboard-account", "state-root", "dashboard-account.json", "file", FILE, false, null, "the Mandu dashboard account: a username and a salted scrypt hash of its password, never the password (dashboard.md §6.z); `mandu dashboard --set-password` writes it"),
+  p("serve-attachments", "state-root", "serve-attachments.json", "file", FILE, false, null, "the attachment sessions `mandu serve` runs a model proxy for, each with its stable port (openclaw-plugin.md §3.2): `mandu serve attach` and `mandu openclaw install` write it, the service reads it"),
   p("last-scan", "state-root", "last-scan.json", "file", FILE, false, null, "the last `mandu scan`'s report: kinds, masks, names, files, counts, hosts, dates, never a value (confidentiality-plan-17 §3 item 12)"),
   // events/: history, holds originals
   p("events", "mandu-home", "events", "dir", DIR, false, null, "session history; holds originals"),

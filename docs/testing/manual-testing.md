@@ -41,11 +41,12 @@ files in your home folder (§6, story MS12) use fake files, and say so.
 mandu doctor --live      # must end: "Verdict: Mandu works on this machine with your configuration."
 mandu mode               # running and saved mode: both must be `secrets`
 mandu status             # the background services are up
-mandu dashboard          # prints the dashboard URL and a one-time sign-in link: open it
+mandu dashboard          # prints the dashboard URL and how to sign in: open it
 ```
 
-Open the sign-in link in your browser (each launch prints one too, on its
-dashboard line). Without it the dashboard cannot answer approvals. Keep the dashboard open in a browser tab while you test.
+Open the URL in your browser and sign in with your dashboard account
+(`mandu dashboard --set-password` makes it; `mandu dashboard` offers to on a
+terminal when there is none). Without it the dashboard cannot answer approvals. Keep the dashboard open in a browser tab while you test.
 
 If the mode is not `secrets`: run `mandu mode secrets`, then `mandu stop`. The
 mode applies from the next launch.

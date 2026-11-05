@@ -61,7 +61,7 @@ test("mandu doctor names the node on PATH: ✗ with the fix when it predates NOD
     let n = needs(r.stdout);
     assert.match(n, new RegExp(`✗ node on your PATH is v22\\.13\\.0 \\(${fakeNode.replace(/[.]/g, "\\.")}\\): Node programs in a Mandu session won't have your secrets filled in on their web requests`), r.stdout);
     assert.match(n, /fix: upgrade to Node 22\.21 or newer, or 24\.5 or newer \(nvm install 22\)/);
-    assert.match(n, /✓ Node\.js \S+ \(22\.13\.0 or newer\)/, "Mandu's own Node (the real one) is a separate, passing row");
+    assert.match(n, /✓ Node\.js \S+ \(22\.15\.0 or newer\)/, "Mandu's own Node (the real one) is a separate, passing row");
 
     fake("v24.2.0");
     n = needs((r = await doctor(withFake)).stdout);

@@ -40,6 +40,7 @@ import { ArbiterEventSource } from "../../dashboard/src/event-source.js";
 import { ADMIN_COOKIE, ADMIN_OPTS } from "../../dashboard/test/unit/admin-session.js";
 import { servedProductPage } from "../../dashboard/test/unit/ui/served-page.js";
 import { waitWhile } from "../../dashboard/test/unit/page-wait.js";
+import { turnOffTyped } from "../../dashboard/test/unit/ui/protect-off.js";
 import { stateAxes } from "../lib/axes.js";
 import { humanSockIn } from "../lib/human-plane.js";
 
@@ -139,8 +140,7 @@ test("a click with no answer says so where it was made: Rules, Settings and Home
           rendered.push(rules.body.textContent ?? "");
 
           // Settings: the switch.
-          settings.defaultView.prompt = () => "OFF";
-          settings.getElementById("switch-protection").click();
+          turnOffTyped(settings);
           await waitWhile(() => text(settings, "#settings-protect-note") !== GONE);
           assert.equal(text(settings, "#settings-protect-note"), GONE);
           assert.equal(settings.getElementById("switch-protection").getAttribute("aria-checked"), "true", "nothing changed");
